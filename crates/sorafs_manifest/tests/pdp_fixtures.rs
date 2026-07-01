@@ -131,12 +131,83 @@ fn pdp_negative_challenge_fixture_is_rejected() {
     let outcome = validate_pdp_challenge_bytes(&bytes, "duplicate_hot_leaf_challenge_v1.to", 123);
     assert!(!outcome.is_ok(), "{outcome:?}");
     assert_eq!(outcome.code, "SFS-PDP-001");
+    assert_json_hex_matches("negative/duplicate_hot_leaf_challenge_v1", &bytes);
 }
 
 #[test]
-fn pdp_negative_proof_fixture_is_rejected() {
-    let bytes = read_fixture_bytes("negative/missing_signature_proof_v1.to");
-    let outcome = validate_pdp_proof_bytes(&bytes, "missing_signature_proof_v1.to", 123);
-    assert!(!outcome.is_ok(), "{outcome:?}");
-    assert_eq!(outcome.code, "SFS-SIG-008");
+fn pdp_negative_structural_proof_fixtures_are_rejected() {
+    let cases = [
+        ("missing_signature_proof_v1", "SFS-SIG-008"),
+        ("missing_segment_path_proof_v1", "SFS-PDP-001"),
+        ("missing_hot_leaf_path_proof_v1", "SFS-PDP-001"),
+    ];
+
+    for (name, expected_code) in cases {
+        let fixture = format!("negative/{name}");
+        let bytes = read_fixture_bytes(&format!("{fixture}.to"));
+        let outcome = validate_pdp_proof_bytes(&bytes, format!("{name}.to"), 123);
+        assert!(!outcome.is_ok(), "{name}: {outcome:?}");
+        assert_eq!(outcome.code, expected_code, "{name}: {outcome:?}");
+        assert_json_hex_matches(&fixture, &bytes);
+    }
+}
+
+#[test]
+fn pdp_negative_challenge_proof_pair_fixtures_are_rejected() {
+    let challenge_bytes = read_fixture_bytes("challenge_v1.to");
+    let cases = [
+        ("late_proof_v1", "SFS-POL-002"),
+        ("wrong_provider_proof_v1", "SFS-PDP-003"),
+        ("wrong_manifest_proof_v1", "SFS-PDP-003"),
+        ("wrong_path_proof_v1", "SFS-PDP-001"),
+    ];
+
+    for (name, expected_code) in cases {
+        let fixture = format!("negative/{name}");
+        let bytes = read_fixture_bytes(&format!("{fixture}.to"));
+        let outcome = validate_pdp_challenge_proof_bytes(
+            &challenge_bytes,
+            &bytes,
+            "challenge_v1.to",
+            format!("{name}.to"),
+            123,
+        );
+        assert!(!outcome.is_ok(), "{name}: {outcome:?}");
+        assert_eq!(outcome.code, expected_code, "{name}: {outcome:?}");
+        assert_json_hex_matches(&fixture, &bytes);
+    }
+}
+
+#[test]
+fn pdp_negative_fixture_inventory_is_fully_tested() {
+    let mut fixture_names = fs::read_dir(format!("{FIXTURES_ROOT}/negative"))
+        .expect("negative fixture directory should be readable")
+        .map(|entry| {
+            entry
+                .expect("negative fixture entry should be readable")
+                .path()
+        })
+        .filter(|path| path.extension().is_some_and(|extension| extension == "to"))
+        .map(|path| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .expect("negative fixture name should be UTF-8")
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    fixture_names.sort();
+
+    assert_eq!(
+        fixture_names,
+        [
+            "duplicate_hot_leaf_challenge_v1",
+            "late_proof_v1",
+            "missing_hot_leaf_path_proof_v1",
+            "missing_segment_path_proof_v1",
+            "missing_signature_proof_v1",
+            "wrong_manifest_proof_v1",
+            "wrong_path_proof_v1",
+            "wrong_provider_proof_v1",
+        ]
+    );
 }

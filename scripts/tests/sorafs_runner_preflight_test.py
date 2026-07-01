@@ -17,6 +17,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     PLAN_RENDERED_PATH_ERROR,
     RUNNER_PASSTHROUGH_ARG_ERROR,
     RUNNER_URL_ARG_ERROR,
+    canonical_runner_plan_string,
     command_plan_steps,
     emit_runner_error_block,
     emit_runner_exception,
@@ -31,6 +32,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     render_runner_plan,
     require_existing_dirs,
     require_existing_files,
+    require_no_unrequired_evidence,
     require_runner_passthrough_args,
     require_runner_non_negative_int,
     require_runner_positive_int,
@@ -44,6 +46,10 @@ from sorafs_runner_preflight import (  # noqa: E402
     runner_path_size_open_flags,
     validate_command_plan_artifacts,
     validate_command_plan_step_shapes,
+    validate_runner_aggregate_readiness_plan,
+    validate_runner_context_evidence_plan,
+    validate_runner_evidence_plan,
+    validate_runner_fixed_evidence_plan,
     validate_runner_plan_steps,
     validate_runner_output_dir,
     validate_runner_output_parent,
@@ -60,6 +66,21 @@ class Step:
     label: str
     artifact: Path | None
     command: list[str]
+
+
+@dataclass(frozen=True)
+class Kind:
+    """Small rollout evidence kind used by shared plan validation tests."""
+
+    schema: str
+
+
+@dataclass(frozen=True)
+class Gate:
+    """Small aggregate readiness gate used by shared plan validation tests."""
+
+    schema: str
+    required_kinds: tuple[str, ...]
 
 
 def test_runner_arg_label_formats_namespace_field() -> None:
@@ -260,6 +281,83 @@ def test_require_runner_non_negative_int_rejects_malformed_field_name() -> None:
             assert errors == []
         else:
             raise AssertionError(f"accepted malformed field {field!r}")
+
+
+def test_require_no_unrequired_evidence_accepts_required_and_empty_extra_kinds() -> None:
+    errors: list[str] = []
+
+    require_no_unrequired_evidence(
+        {
+            "required": [Path("required.json")],
+            "optional": [],
+        },
+        ["required"],
+        errors,
+        diagnostic="rollout evidence supplied for unrequired kind",
+    )
+
+    assert errors == []
+
+
+def test_require_no_unrequired_evidence_rejects_extra_kind_without_leaking() -> None:
+    errors: list[str] = []
+
+    require_no_unrequired_evidence(
+        {
+            "required": [Path("required.json")],
+            "private_key_kind": [Path("operator/private-key-evidence.json")],
+        },
+        ["required"],
+        errors,
+        diagnostic="rollout evidence supplied for unrequired kind",
+    )
+
+    assert errors == ["rollout evidence supplied for unrequired kind"]
+    diagnostics = "\n".join(errors)
+    assert "private_key_kind" not in diagnostics
+    assert "private-key-evidence" not in diagnostics
+
+
+def test_require_no_unrequired_evidence_deduplicates_diagnostics() -> None:
+    errors: list[str] = []
+
+    require_no_unrequired_evidence(
+        {
+            "required": [Path("required.json")],
+            "optional_a": [Path("a.json")],
+            "optional_b": [Path("b.json")],
+        },
+        ["required"],
+        errors,
+        diagnostic="release evidence supplied for unrequired kind",
+    )
+
+    assert errors == ["release evidence supplied for unrequired kind"]
+
+
+def test_require_no_unrequired_evidence_rejects_malformed_internal_inputs() -> None:
+    malformed_inputs = [
+        ("not-a-map", ["required"], []),
+        ({"required": []}, "required", []),
+        ({"": []}, ["required"], []),
+        ({"required": []}, [""], []),
+        ({"required": []}, ["required"], ()),
+    ]
+
+    for paths_by_kind, required_kinds, errors in malformed_inputs:
+        try:
+            require_no_unrequired_evidence(
+                paths_by_kind,
+                required_kinds,
+                errors,
+                diagnostic="rollout evidence supplied for unrequired kind",
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "accepted malformed unrequired-evidence preflight inputs"
+            )
 
 
 def test_validate_runner_output_dir_rejects_non_path_without_traceback() -> None:
@@ -2008,6 +2106,807 @@ def test_validate_runner_plan_steps_rejects_unrenderable_plan(
     assert len(errors) == 1
     assert "failed to render runner plan JSON" in errors[0]
     assert "artifact.json" not in errors[0]
+
+
+def test_canonical_runner_plan_string_rejects_blank_trimmed_and_control_values() -> None:
+    assert canonical_runner_plan_string("alpha") == "alpha"
+    for value in ("", " alpha", "alpha ", "bad\nvalue", 7):
+        assert canonical_runner_plan_string(value) is None
+
+
+def test_validate_runner_evidence_plan_accepts_schema_closed_plan(
+    tmp_path: Path,
+) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "summary.json"
+    plan = [Step("gate", artifact, command)]
+    rendered = {
+        "schema": "example.plan.v1",
+        "verifier_summary_schema": "example.summary.v1",
+        "required_kinds": ["alpha"],
+        "thresholds": {
+            "max_age_secs": 0,
+            "max_latency_ms": 10,
+            "now_unix": 1800200000,
+        },
+        "external_evidence": {"alpha": [str(tmp_path / "alpha.json")]},
+        "evidence_contract": {
+            "alpha": {
+                "schema": "example.alpha.v1",
+                "required_payload_fields": ["schema", "fingerprint"],
+            }
+        },
+        "steps": [
+            {
+                "label": "gate",
+                "artifact": str(artifact),
+                "command": command,
+            }
+        ],
+    }
+
+    assert (
+        validate_runner_evidence_plan(
+            rendered,
+            plan,
+            diagnostic_prefix="example rollout runner plan",
+            plan_schema="example.plan.v1",
+            plan_fields=frozenset(rendered),
+            summary_schema="example.summary.v1",
+            required_kinds=("alpha",),
+            known_kinds={"alpha": Kind("example.alpha.v1")},
+            thresholds=rendered["thresholds"],
+            required_threshold_fields=frozenset(
+                {"max_age_secs", "max_latency_ms"}
+            ),
+            positive_threshold_fields=frozenset({"max_latency_ms", "now_unix"}),
+            non_negative_threshold_fields=frozenset({"max_age_secs"}),
+            external_evidence=rendered["external_evidence"],
+            evidence_contract=rendered["evidence_contract"],
+            evidence_required_fields={"alpha": ("schema", "fingerprint")},
+        )
+        == []
+    )
+
+
+def test_validate_runner_evidence_plan_rejects_nested_drift_without_leaking(
+    tmp_path: Path,
+) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "summary.json"
+    plan = [Step("gate", artifact, command)]
+    rendered = {
+        "schema": "bad\nplan",
+        "verifier_summary_schema": "bad\nsummary",
+        "required_kinds": ["alpha", "alpha", "unknown", "bad\nkind"],
+        "thresholds": {
+            "max_age_secs": -1,
+            "max_latency_ms": 0,
+            "now_unix": False,
+            "bad\nfield": 1,
+            "private_key": 2,
+        },
+        "external_evidence": {
+            "alpha": [],
+            "unknown": ["unknown.json"],
+            "beta": ["beta.json"],
+            "bad\nkind": ["alpha.json"],
+        },
+        "evidence_contract": {
+            "alpha": {
+                "schema": "wrong.schema.v1",
+                "required_payload_fields": ["schema", "schema", "bad\nfield"],
+                "raw_payload": True,
+                "bad\nfield": "runtime-only-key-material",
+            },
+            "unknown": {
+                "schema": "example.unknown.v1",
+                "required_payload_fields": [],
+            },
+            "beta": {
+                "schema": "example.beta.v1",
+                "required_payload_fields": ["schema"],
+            },
+            "bad\nkind": "contract-shaped-entry",
+        },
+        "steps": [],
+        "bad\nfield": "runtime-only-key-material",
+    }
+
+    errors = validate_runner_evidence_plan(
+        rendered,
+        plan,
+        diagnostic_prefix="example rollout runner plan",
+        plan_schema="example.plan.v1",
+        plan_fields=frozenset(
+            {
+                "schema",
+                "verifier_summary_schema",
+                "required_kinds",
+                "thresholds",
+                "external_evidence",
+                "evidence_contract",
+                "steps",
+            }
+        ),
+        summary_schema="example.summary.v1",
+        required_kinds=("alpha",),
+        known_kinds={
+            "alpha": Kind("example.alpha.v1"),
+            "beta": Kind("example.beta.v1"),
+        },
+        thresholds={"max_age_secs": 0, "max_latency_ms": 10},
+        required_threshold_fields=frozenset({"max_age_secs", "max_latency_ms"}),
+        positive_threshold_fields=frozenset({"max_latency_ms", "now_unix"}),
+        non_negative_threshold_fields=frozenset({"max_age_secs"}),
+        external_evidence={"alpha": [str(tmp_path / "alpha.json")]},
+        evidence_contract={
+            "alpha": {
+                "schema": "example.alpha.v1",
+                "required_payload_fields": ["schema", "fingerprint"],
+            }
+        },
+        evidence_required_fields={
+            "alpha": ("schema", "fingerprint"),
+            "beta": ("schema",),
+        },
+    )
+    diagnostics = "\n".join(errors)
+
+    assert "example rollout runner plan fields must be canonical strings" in diagnostics
+    assert "example rollout runner plan schema must be canonical" in diagnostics
+    assert (
+        "example rollout runner plan verifier schema must be canonical"
+        in diagnostics
+    )
+    assert (
+        "example rollout runner plan required_kinds must not contain duplicate kinds"
+        in diagnostics
+    )
+    assert (
+        "example rollout runner plan required_kinds must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "example rollout runner plan thresholds keys must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "example rollout runner plan thresholds must contain only configured threshold fields"
+        in diagnostics
+    )
+    assert (
+        "example rollout runner plan thresholds.max_age_secs must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "example rollout runner plan thresholds.max_latency_ms must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "example rollout runner plan thresholds.now_unix must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "example rollout runner plan external_evidence must contain only required kinds"
+        in diagnostics
+    )
+    assert (
+        "example rollout runner plan evidence_contract must contain only required kinds"
+        in diagnostics
+    )
+    assert (
+        "example rollout runner plan evidence_contract required_payload_fields must match checker fields"
+        in diagnostics
+    )
+    assert "runner plan steps must match command plan" in diagnostics
+    assert "unknown" not in diagnostics
+    assert "bad\nkind" not in diagnostics
+    assert "bad\nfield" not in diagnostics
+    assert "runtime-only-key-material" not in diagnostics
+    assert "private_key" not in diagnostics
+    assert "wrong.schema.v1" not in diagnostics
+
+
+def test_validate_runner_fixed_evidence_plan_accepts_schema_closed_plan(
+    tmp_path: Path,
+) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "summary.json"
+    plan = [Step("gate", artifact, command)]
+    rendered = {
+        "schema": "example.fixed.plan.v1",
+        "verifier_summary_schema": "example.fixed.summary.v1",
+        "external_evidence": {"metrics": str(tmp_path / "metrics.json")},
+        "evidence_contract": {
+            "metrics": {
+                "schema": "example.metrics.v1",
+                "required_payload_fields": ["schema", "metrics"],
+            }
+        },
+        "steps": [
+            {
+                "label": "gate",
+                "artifact": str(artifact),
+                "command": command,
+            }
+        ],
+    }
+
+    assert (
+        validate_runner_fixed_evidence_plan(
+            rendered,
+            plan,
+            diagnostic_prefix="example fixed rollout runner plan",
+            plan_schema="example.fixed.plan.v1",
+            plan_fields=frozenset(rendered),
+            summary_schema="example.fixed.summary.v1",
+            external_evidence=rendered["external_evidence"],
+            external_evidence_fields=frozenset({"metrics"}),
+            known_kinds={"metrics": Kind("example.metrics.v1")},
+            evidence_contract=rendered["evidence_contract"],
+            evidence_required_fields={"metrics": ("schema", "metrics")},
+        )
+        == []
+    )
+
+
+def test_validate_runner_fixed_evidence_plan_rejects_nested_drift_without_leaking(
+    tmp_path: Path,
+) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "summary.json"
+    plan = [Step("gate", artifact, command)]
+    rendered = {
+        "schema": "bad\nplan",
+        "verifier_summary_schema": "bad\nsummary",
+        "external_evidence": {
+            "metrics": "bad\npath",
+            "transport": ["transport.json"],
+            "unknown": "unknown.json",
+            "bad\nkind": "metrics.json",
+            "private_key": "runtime-only-key-material",
+        },
+        "evidence_contract": {
+            "metrics": {
+                "schema": "wrong.schema.v1",
+                "required_payload_fields": ["schema", "schema", "bad\nfield"],
+                "raw_payload": True,
+                "bad\nfield": "runtime-only-key-material",
+            },
+            "unknown": {
+                "schema": "example.unknown.v1",
+                "required_payload_fields": [],
+            },
+            "bad\nkind": "contract-shaped-entry",
+        },
+        "steps": [],
+        "bad\nfield": "runtime-only-key-material",
+    }
+
+    errors = validate_runner_fixed_evidence_plan(
+        rendered,
+        plan,
+        diagnostic_prefix="example fixed rollout runner plan",
+        plan_schema="example.fixed.plan.v1",
+        plan_fields=frozenset(
+            {
+                "schema",
+                "verifier_summary_schema",
+                "external_evidence",
+                "evidence_contract",
+                "steps",
+            }
+        ),
+        summary_schema="example.fixed.summary.v1",
+        external_evidence={"metrics": str(tmp_path / "metrics.json")},
+        external_evidence_fields=frozenset({"metrics"}),
+        known_kinds={
+            "metrics": Kind("example.metrics.v1"),
+            "transport": Kind("example.transport.v1"),
+        },
+        evidence_contract={
+            "metrics": {
+                "schema": "example.metrics.v1",
+                "required_payload_fields": ["schema", "metrics"],
+            }
+        },
+        evidence_required_fields={
+            "metrics": ("schema", "metrics"),
+            "transport": ("schema",),
+        },
+    )
+    diagnostics = "\n".join(errors)
+
+    assert "example fixed rollout runner plan fields must be canonical strings" in diagnostics
+    assert "example fixed rollout runner plan schema must be canonical" in diagnostics
+    assert (
+        "example fixed rollout runner plan verifier schema must be canonical"
+        in diagnostics
+    )
+    assert (
+        "example fixed rollout runner plan external_evidence keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "example fixed rollout runner plan external_evidence keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "example fixed rollout runner plan external_evidence must contain only configured evidence fields"
+        in diagnostics
+    )
+    assert (
+        "example fixed rollout runner plan external_evidence values must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "example fixed rollout runner plan external_evidence must match configured fields"
+        in diagnostics
+    )
+    assert (
+        "example fixed rollout runner plan evidence_contract keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "example fixed rollout runner plan evidence_contract keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "example fixed rollout runner plan evidence_contract required_payload_fields must match checker fields"
+        in diagnostics
+    )
+    assert "runner plan steps must match command plan" in diagnostics
+    assert "unknown" not in diagnostics
+    assert "bad\nkind" not in diagnostics
+    assert "bad\nfield" not in diagnostics
+    assert "runtime-only-key-material" not in diagnostics
+    assert "private_key" not in diagnostics
+    assert "wrong.schema.v1" not in diagnostics
+
+
+def test_validate_runner_context_evidence_plan_accepts_schema_closed_plan(
+    tmp_path: Path,
+) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "summary.json"
+    plan = [Step("gate", artifact, command)]
+    rendered = {
+        "schema": "example.context.plan.v1",
+        "verifier_summary_schema": "example.context.summary.v1",
+        "deployment_context": {
+            "deployment_id": "deployment-staging-a",
+            "environment": "staging",
+            "deployment_context_reviewed": True,
+        },
+        "evidence_contract": {
+            "publication": {
+                "schema": "example.publication.v1",
+                "required_payload_fields": ["schema", "deployment_id"],
+            }
+        },
+        "steps": [
+            {
+                "label": "gate",
+                "artifact": str(artifact),
+                "command": command,
+            }
+        ],
+    }
+
+    assert (
+        validate_runner_context_evidence_plan(
+            rendered,
+            plan,
+            diagnostic_prefix="example context rollout runner plan",
+            plan_schema="example.context.plan.v1",
+            plan_fields=frozenset(rendered),
+            summary_schema="example.context.summary.v1",
+            deployment_context=rendered["deployment_context"],
+            deployment_context_fields=frozenset(
+                {"deployment_id", "environment", "deployment_context_reviewed"}
+            ),
+            deployment_context_errors=(),
+            known_kinds={"publication": Kind("example.publication.v1")},
+            evidence_contract=rendered["evidence_contract"],
+            evidence_required_fields={"publication": ("schema", "deployment_id")},
+        )
+        == []
+    )
+
+
+def test_validate_runner_context_evidence_plan_rejects_nested_drift_without_leaking(
+    tmp_path: Path,
+) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "summary.json"
+    plan = [Step("gate", artifact, command)]
+    expected_context = {
+        "deployment_id": "deployment-staging-a",
+        "environment": "staging",
+        "deployment_context_reviewed": True,
+    }
+    rendered = {
+        "schema": "bad\nplan",
+        "verifier_summary_schema": "bad\nsummary",
+        "deployment_context": {
+            "deployment_id": "bad\ndeployment",
+            "environment": False,
+            "deployment_context_reviewed": False,
+            "bad\nfield": "runtime-only-key-material",
+            "private_key": "runtime-only-key-material",
+        },
+        "evidence_contract": {
+            "publication": {
+                "schema": "wrong.schema.v1",
+                "required_payload_fields": ["schema", "schema", "bad\nfield"],
+                "raw_payload": True,
+                "bad\nfield": "runtime-only-key-material",
+            },
+            "unknown": {
+                "schema": "example.unknown.v1",
+                "required_payload_fields": [],
+            },
+            "bad\nkind": "contract-shaped-entry",
+        },
+        "steps": [],
+        "bad\nfield": "runtime-only-key-material",
+    }
+
+    errors = validate_runner_context_evidence_plan(
+        rendered,
+        plan,
+        diagnostic_prefix="example context rollout runner plan",
+        plan_schema="example.context.plan.v1",
+        plan_fields=frozenset(
+            {
+                "schema",
+                "verifier_summary_schema",
+                "deployment_context",
+                "evidence_contract",
+                "steps",
+            }
+        ),
+        summary_schema="example.context.summary.v1",
+        deployment_context=expected_context,
+        deployment_context_fields=frozenset(
+            {"deployment_id", "environment", "deployment_context_reviewed"}
+        ),
+        deployment_context_errors=("deployment context policy failed",),
+        known_kinds={"publication": Kind("example.publication.v1")},
+        evidence_contract={
+            "publication": {
+                "schema": "example.publication.v1",
+                "required_payload_fields": ["schema", "deployment_id"],
+            }
+        },
+        evidence_required_fields={"publication": ("schema", "deployment_id")},
+    )
+    diagnostics = "\n".join(errors)
+
+    assert "example context rollout runner plan fields must be canonical strings" in diagnostics
+    assert "example context rollout runner plan schema must be canonical" in diagnostics
+    assert (
+        "example context rollout runner plan verifier schema must be canonical"
+        in diagnostics
+    )
+    assert (
+        "example context rollout runner plan deployment_context keys must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "example context rollout runner plan deployment_context fields must match configured fields"
+        in diagnostics
+    )
+    assert (
+        "example context rollout runner plan deployment_context values must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "example context rollout runner plan deployment_context must be reviewed"
+        in diagnostics
+    )
+    assert (
+        "example context rollout runner plan deployment_context must match args"
+        in diagnostics
+    )
+    assert (
+        "example context rollout runner plan evidence_contract keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "example context rollout runner plan evidence_contract keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "example context rollout runner plan evidence_contract required_payload_fields must match checker fields"
+        in diagnostics
+    )
+    assert "runner plan steps must match command plan" in diagnostics
+    assert "deployment context policy failed" not in diagnostics
+    assert "bad\ndeployment" not in diagnostics
+    assert "unknown" not in diagnostics
+    assert "bad\nkind" not in diagnostics
+    assert "bad\nfield" not in diagnostics
+    assert "runtime-only-key-material" not in diagnostics
+    assert "private_key" not in diagnostics
+    assert "wrong.schema.v1" not in diagnostics
+
+
+def test_validate_runner_context_evidence_plan_includes_expected_context_errors(
+    tmp_path: Path,
+) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "summary.json"
+    plan = [Step("gate", artifact, command)]
+    rendered = {
+        "schema": "example.context.plan.v1",
+        "verifier_summary_schema": "example.context.summary.v1",
+        "deployment_context": {
+            "deployment_id": "deployment-dev-a",
+            "environment": "dev",
+            "deployment_context_reviewed": True,
+        },
+        "evidence_contract": {
+            "publication": {
+                "schema": "example.publication.v1",
+                "required_payload_fields": ["schema"],
+            }
+        },
+        "steps": [
+            {
+                "label": "gate",
+                "artifact": str(artifact),
+                "command": command,
+            }
+        ],
+    }
+
+    errors = validate_runner_context_evidence_plan(
+        rendered,
+        plan,
+        diagnostic_prefix="example context rollout runner plan",
+        plan_schema="example.context.plan.v1",
+        plan_fields=frozenset(rendered),
+        summary_schema="example.context.summary.v1",
+        deployment_context=rendered["deployment_context"],
+        deployment_context_fields=frozenset(
+            {"deployment_id", "environment", "deployment_context_reviewed"}
+        ),
+        deployment_context_errors=("deployment context policy failed",),
+        known_kinds={"publication": Kind("example.publication.v1")},
+        evidence_contract=rendered["evidence_contract"],
+        evidence_required_fields={"publication": ("schema",)},
+    )
+
+    assert errors == ["deployment context policy failed"]
+
+
+def test_validate_runner_aggregate_readiness_plan_accepts_schema_closed_plan(
+    tmp_path: Path,
+) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "summary.json"
+    summary = tmp_path / "gateway-load.json"
+    plan = [Step("gate", artifact, command)]
+    rendered = {
+        "schema": "example.aggregate.plan.v1",
+        "verifier_summary_schema": "example.aggregate.summary.v1",
+        "required_gates": ["gateway_load"],
+        "thresholds": {
+            "max_summary_artifact_age_secs": 0,
+            "now_unix": 1800800000,
+        },
+        "deployment_context": {
+            "deployment_id": "sorafs-mainnet-2026-06",
+            "environment": "production",
+        },
+        "external_summaries": {"gateway_load": [str(summary)]},
+        "summary_contract": {
+            "gateway_load": {
+                "schema": "example.gateway_load.summary.v1",
+                "required_kinds": ["probe", "metrics"],
+            }
+        },
+        "steps": [
+            {
+                "label": "gate",
+                "artifact": str(artifact),
+                "command": command,
+            }
+        ],
+    }
+
+    assert (
+        validate_runner_aggregate_readiness_plan(
+            rendered,
+            plan,
+            diagnostic_prefix="example aggregate runner plan",
+            plan_schema="example.aggregate.plan.v1",
+            plan_fields=frozenset(rendered),
+            summary_schema="example.aggregate.summary.v1",
+            required_gates=("gateway_load",),
+            known_gates={
+                "gateway_load": Gate(
+                    "example.gateway_load.summary.v1",
+                    ("probe", "metrics"),
+                )
+            },
+            thresholds=rendered["thresholds"],
+            required_threshold_fields=frozenset({"max_summary_artifact_age_secs"}),
+            positive_threshold_fields=frozenset({"now_unix"}),
+            non_negative_threshold_fields=frozenset(
+                {"max_summary_artifact_age_secs"}
+            ),
+            threshold_fields_label="max_summary_artifact_age_secs and optional now_unix",
+            deployment_context=rendered["deployment_context"],
+            deployment_context_fields=frozenset({"deployment_id", "environment"}),
+            deployment_context_value_errors=lambda _context: (),
+            external_summaries=rendered["external_summaries"],
+            summary_contract=rendered["summary_contract"],
+        )
+        == []
+    )
+
+
+def test_validate_runner_aggregate_readiness_plan_rejects_nested_drift_without_leaking(
+    tmp_path: Path,
+) -> None:
+    command = [sys.executable, "-c", "pass"]
+    artifact = tmp_path / "summary.json"
+    plan = [Step("gate", artifact, command)]
+    rendered = {
+        "schema": "bad\nplan",
+        "verifier_summary_schema": "bad\nsummary",
+        "required_gates": [
+            "gateway_load",
+            "gateway_load",
+            "unknown_gate",
+            "bad\ngate",
+        ],
+        "thresholds": {
+            "max_summary_artifact_age_secs": -1,
+            "now_unix": False,
+            "bad\nfield": 1,
+            "private_key": 2,
+        },
+        "deployment_context": {
+            "deployment_id": "bad\ndeployment",
+            "environment": False,
+            "private_key": "runtime-only-key-material",
+            "bad\nfield": "runtime-only-key-material",
+        },
+        "external_summaries": {
+            "gateway_load": [],
+            "reputation": ["reputation.json"],
+            "unknown_gate": ["unknown.json"],
+            "bad\ngate": ["summary.json"],
+            "repair": "repair.json",
+            "por": [7],
+        },
+        "summary_contract": {
+            "gateway_load": {
+                "schema": "wrong.schema.v1",
+                "required_kinds": ["probe", "probe", "bad\nkind"],
+                "raw_payload": True,
+                "bad\nfield": "runtime-only-key-material",
+            },
+            "reputation": {
+                "schema": "example.reputation.summary.v1",
+                "required_kinds": ["snapshot"],
+            },
+            "unknown_gate": {"schema": "example.unknown.v1", "required_kinds": []},
+            "bad\ngate": {
+                "schema": "example.gateway_load.summary.v1",
+                "required_kinds": ["probe"],
+            },
+            "repair": "contract-shaped-entry",
+        },
+        "steps": [
+            {
+                "label": "bad\nlabel",
+                "artifact": 7,
+                "command": [sys.executable, "bad\nargument"],
+                "raw_payload": True,
+                "bad\nfield": "runtime-only-key-material",
+            },
+            "step-shaped-entry",
+            {"label": "empty_command", "artifact": None, "command": []},
+        ],
+        "bad\nfield": "runtime-only-key-material",
+    }
+
+    errors = validate_runner_aggregate_readiness_plan(
+        rendered,
+        plan,
+        diagnostic_prefix="example aggregate runner plan",
+        plan_schema="example.aggregate.plan.v1",
+        plan_fields=frozenset(
+            {
+                "schema",
+                "verifier_summary_schema",
+                "required_gates",
+                "thresholds",
+                "deployment_context",
+                "external_summaries",
+                "summary_contract",
+                "steps",
+            }
+        ),
+        summary_schema="example.aggregate.summary.v1",
+        required_gates=("gateway_load",),
+        known_gates={
+            "gateway_load": Gate(
+                "example.gateway_load.summary.v1",
+                ("probe", "metrics"),
+            ),
+            "reputation": Gate("example.reputation.summary.v1", ("snapshot",)),
+            "repair": Gate("example.repair.summary.v1", ("repair",)),
+            "por": Gate("example.por.summary.v1", ("por",)),
+        },
+        thresholds={"max_summary_artifact_age_secs": 0},
+        required_threshold_fields=frozenset({"max_summary_artifact_age_secs"}),
+        positive_threshold_fields=frozenset({"now_unix"}),
+        non_negative_threshold_fields=frozenset({"max_summary_artifact_age_secs"}),
+        threshold_fields_label="max_summary_artifact_age_secs and optional now_unix",
+        deployment_context={
+            "deployment_id": "sorafs-mainnet-2026-06",
+            "environment": "production",
+        },
+        deployment_context_fields=frozenset({"deployment_id", "environment"}),
+        deployment_context_value_errors=lambda _context: (
+            "deployment context policy failed",
+        ),
+        external_summaries={"gateway_load": [str(tmp_path / "gateway-load.json")]},
+        summary_contract={
+            "gateway_load": {
+                "schema": "example.gateway_load.summary.v1",
+                "required_kinds": ["probe", "metrics"],
+            }
+        },
+    )
+    diagnostics = "\n".join(errors)
+
+    assert "example aggregate runner plan fields must be canonical strings" in diagnostics
+    assert "example aggregate runner plan schema must be canonical" in diagnostics
+    assert (
+        "example aggregate runner plan verifier schema must be canonical"
+        in diagnostics
+    )
+    assert (
+        "example aggregate runner plan required_gates must not contain duplicate gates"
+        in diagnostics
+    )
+    assert (
+        "example aggregate runner plan thresholds.max_summary_artifact_age_secs must be a non-negative integer"
+        in diagnostics
+    )
+    assert (
+        "example aggregate runner plan thresholds.now_unix must be a positive integer"
+        in diagnostics
+    )
+    assert (
+        "example aggregate runner plan deployment_context must be canonical"
+        in diagnostics
+    )
+    assert (
+        "example aggregate runner plan external_summaries must contain exactly one summary per required gate"
+        in diagnostics
+    )
+    assert (
+        "example aggregate runner plan summary_contract required_kinds must match gate contract"
+        in diagnostics
+    )
+    assert "example aggregate runner plan steps must contain objects" in diagnostics
+    assert "example aggregate runner plan steps must match command plan" in diagnostics
+    assert "deployment context policy failed" not in diagnostics
+    assert "unknown_gate" not in diagnostics
+    assert "bad\ngate" not in diagnostics
+    assert "bad\nfield" not in diagnostics
+    assert "runtime-only-key-material" not in diagnostics
+    assert "private_key" not in diagnostics
+    assert "wrong.schema.v1" not in diagnostics
+    assert "bad\nargument" not in diagnostics
 
 
 def test_write_runner_plan_reports_non_finite_plan_without_stdout(capsys) -> None:

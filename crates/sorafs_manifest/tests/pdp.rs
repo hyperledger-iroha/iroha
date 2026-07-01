@@ -165,7 +165,7 @@ fn challenge_proof_pair_rejects_wrong_provider() {
 
     let outcome = validate_pair(&challenge, &proof);
 
-    assert_eq!(outcome.code, "SFS-PDP-001");
+    assert_eq!(outcome.code, "SFS-PDP-003");
     assert!(!outcome.is_ok(), "{outcome:?}");
 }
 
@@ -177,7 +177,7 @@ fn challenge_proof_pair_rejects_wrong_manifest() {
 
     let outcome = validate_pair(&challenge, &proof);
 
-    assert_eq!(outcome.code, "SFS-PDP-001");
+    assert_eq!(outcome.code, "SFS-PDP-003");
     assert!(!outcome.is_ok(), "{outcome:?}");
 }
 

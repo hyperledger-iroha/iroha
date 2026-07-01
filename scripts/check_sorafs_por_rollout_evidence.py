@@ -64,7 +64,6 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
-    require_string_in,
 )
 from sorafs_required_kinds import (  # noqa: E402
     parse_required_kinds as parse_required_evidence_kinds,
@@ -97,6 +96,7 @@ REQUIRED_RUNTIME_ROUTES = (
     "capacity_por_verdict",
 )
 REQUIRED_REPORTING_ROUTES = ("por_status", "por_export", "por_report")
+ALLOWED_ARCHIVE_BACKENDS = ("sql", "parquet")
 REQUIRED_METRICS = (
     "torii_sorafs_por_challenges_total",
     "torii_sorafs_por_forced_challenges_total",
@@ -107,7 +107,8 @@ REQUIRED_METRICS = (
     "sorafs_vrf_missing_total",
     "sorafs_por_seed_verification_failures_total",
 )
-ALLOWED_MANUAL_TRIGGER_STATES = ("wired", "retired")
+REQUIRED_MANUAL_TRIGGER_STATE = "retired"
+ALLOWED_MANUAL_TRIGGER_STATES = (REQUIRED_MANUAL_TRIGGER_STATE,)
 SEED_REPLAY_BOUND_KINDS = (
     "scheduler_runtime",
     "validator_replay",
@@ -115,6 +116,7 @@ SEED_REPLAY_BOUND_KINDS = (
     "observability",
     "governance_approval",
 )
+POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -197,6 +199,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "provider_count",
         "challenge_count",
         "seed_replay_digest_hex",
+        "policy_digest_hex",
         "raw_randomness_included",
         "raw_vrf_included",
     ),
@@ -239,6 +242,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "governance_archive_handoff_verified",
         "archive_retention_bound",
         "operator_archive_decision_recorded",
+        "archive_backend",
         "manual_trigger_route_decided",
         "manual_trigger_route_state",
         "report_latency_ms",
@@ -296,6 +300,7 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "environment",
     "deployment_context_reviewed",
     "seed_replay_digest_hex",
+    "policy_digest_hex",
 )
 
 
@@ -344,6 +349,7 @@ def validate_randomness(
     require_minimum_int(payload, "provider_count", options.min_providers, errors)
     require_minimum_int(payload, "challenge_count", options.min_challenges, errors)
     require_hex(payload, "seed_replay_digest_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
     require_false(payload, "raw_randomness_included", errors)
     require_false(payload, "raw_vrf_included", errors)
 
@@ -398,11 +404,14 @@ def validate_reporting_archive(
     require_bool_true(payload, "governance_archive_handoff_verified", errors)
     require_bool_true(payload, "archive_retention_bound", errors)
     require_bool_true(payload, "operator_archive_decision_recorded", errors)
+    archive_backend = require_string(payload, "archive_backend", errors)
+    if archive_backend and archive_backend not in ALLOWED_ARCHIVE_BACKENDS:
+        errors.append("archive_backend must be `sql` or `parquet`")
     require_bool_true(payload, "manual_trigger_route_decided", errors)
-    require_string_in(
+    require_string_equal(
         payload,
         "manual_trigger_route_state",
-        ALLOWED_MANUAL_TRIGGER_STATES,
+        REQUIRED_MANUAL_TRIGGER_STATE,
         errors,
     )
     require_maximum_number(
@@ -499,7 +508,9 @@ def build_summary(
 
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
     valid_seed_replay_digests: set[str] = set()
+    valid_policy_digests: set[str] = set()
     valid_seed_replay_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -534,6 +545,13 @@ def build_summary(
                 valid_seed_replay_digests.add(digest.lower())
             elif kind_name in SEED_REPLAY_BOUND_KINDS:
                 valid_seed_replay_bound_artifacts.append((kind_name, artifact))
+            policy_digest = evidence_artifact_fingerprint(artifact).get(
+                "policy_digest_hex"
+            )
+            if kind_name == "randomness" and isinstance(policy_digest, str):
+                valid_policy_digests.add(policy_digest.lower())
+            elif kind_name in POLICY_BOUND_KINDS:
+                valid_policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
@@ -551,6 +569,22 @@ def build_summary(
         missing_anchor_error_template=(
             "{kind_name} seed_replay_digest_hex requires a valid randomness "
             "seed_replay_digest_hex"
+        ),
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("randomness",) + POLICY_BOUND_KINDS,
+        bound_artifacts=valid_policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must reference a valid "
+            "randomness policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex requires a valid randomness "
+            "policy_digest_hex"
         ),
     )
 
@@ -578,6 +612,7 @@ def build_summary(
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_seed_replay_digests": sorted(valid_seed_replay_digests),
+        "valid_policy_digests": sorted(valid_policy_digests),
         "required": required,
         "errors": errors,
     }

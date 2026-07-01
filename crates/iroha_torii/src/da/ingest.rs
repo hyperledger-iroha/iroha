@@ -133,10 +133,10 @@ pub async fn handler_post_da_ingest(
         ResponseError::from(build_error_response(status, message, format))
     })?;
 
-    let proof_scheme =
-        lane_proof_scheme(&nexus, request.lane_id).map_err(|(status, message)| {
-            ResponseError::from(build_error_response(status, &message, format))
-        })?;
+    let committed_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    let proof_scheme = lane_proof_scheme(&nexus, request.lane_id, committed_height).map_err(
+        |(status, message)| ResponseError::from(build_error_response(status, &message, format)),
+    )?;
 
     let mut metadata = encrypt_governance_metadata(
         &request.metadata,
@@ -1245,8 +1245,9 @@ fn validate_request(
 fn lane_proof_scheme(
     nexus: &ConfigNexus,
     lane_id: LaneId,
+    block_height: u64,
 ) -> Result<DaProofScheme, (StatusCode, String)> {
-    iroha_core::da::active_lane_proof_policy(nexus, lane_id)
+    iroha_core::da::active_lane_proof_policy_at_height(nexus, lane_id, block_height)
         .map(|policy| policy.proof_scheme)
         .map_err(|_| {
             (

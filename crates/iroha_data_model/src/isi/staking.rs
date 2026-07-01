@@ -48,7 +48,7 @@ isi! {
 }
 
 isi! {
-    /// Register a validator for a public Nexus lane and bond initial stake.
+    /// Register a validator for a public Nexus lane and bond validator-owned initial stake.
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -60,7 +60,7 @@ isi! {
         pub validator: AccountId,
         /// Peer identity that signs consensus messages for the lane.
         pub peer_id: PeerId,
-        /// Account whose funds are locked as stake.
+        /// Validator account whose funds are locked as initial self-stake.
         pub stake_account: AccountId,
         /// Amount of stake bonded during registration.
         pub initial_stake: Numeric,

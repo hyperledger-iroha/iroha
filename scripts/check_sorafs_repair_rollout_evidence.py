@@ -128,6 +128,7 @@ FAILURE_BOUND_KINDS = (
     "event_streams",
     "governance_handoff",
 )
+POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -270,6 +271,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "reputation_handoff_verified",
         "handoff_targets",
         "handoff_digest_hex",
+        "policy_digest_hex",
         "raw_ledger_included",
     ),
     "observability": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -290,6 +292,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "auditor_roster_bound",
         "roster_digest_hex",
         "slash_policy_bound",
+        "handoff_digest_hex",
         "config_source",
         "policy_digest_hex",
     ),
@@ -317,6 +320,8 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_context_reviewed",
     "roster_digest_hex",
     "evidence_bundle_digest_hex",
+    "handoff_digest_hex",
+    "policy_digest_hex",
 )
 
 
@@ -442,6 +447,7 @@ def validate_governance_handoff(payload: dict[str, Any], errors: list[str]) -> N
     require_bool_true(payload, "reputation_handoff_verified", errors)
     require_string_coverage(payload, "handoff_targets", "", REQUIRED_GOVERNANCE_TARGETS, errors)
     require_hex(payload, "handoff_digest_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
     require_false(payload, "raw_ledger_included", errors)
 
 
@@ -460,6 +466,7 @@ def validate_governance_approval(payload: dict[str, Any], errors: list[str]) -> 
     require_bool_true(payload, "auditor_roster_bound", errors)
     require_hex(payload, "roster_digest_hex", HEX64_LEN, errors)
     require_bool_true(payload, "slash_policy_bound", errors)
+    require_hex(payload, "handoff_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
 
 
@@ -527,8 +534,12 @@ def build_summary(
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
     valid_roster_digests: set[str] = set()
     valid_failure_bundle_digests: set[str] = set()
+    valid_handoff_digests: set[str] = set()
+    valid_policy_digests: set[str] = set()
     valid_roster_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_failure_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_handoff_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -562,6 +573,7 @@ def build_summary(
             fingerprint = evidence_artifact_fingerprint(artifact)
             roster_digest = fingerprint.get("roster_digest_hex")
             failure_digest = fingerprint.get("evidence_bundle_digest_hex")
+            handoff_digest = fingerprint.get("handoff_digest_hex")
             if kind_name == "auditor_roster" and isinstance(roster_digest, str):
                 valid_roster_digests.add(roster_digest.lower())
             elif kind_name in ROSTER_BOUND_KINDS:
@@ -570,6 +582,15 @@ def build_summary(
                 valid_failure_bundle_digests.add(failure_digest.lower())
             elif kind_name in FAILURE_BOUND_KINDS:
                 valid_failure_bound_artifacts.append((kind_name, artifact))
+            if kind_name == "governance_handoff" and isinstance(handoff_digest, str):
+                valid_handoff_digests.add(handoff_digest.lower())
+                policy_digest = fingerprint.get("policy_digest_hex")
+                if isinstance(policy_digest, str):
+                    valid_policy_digests.add(policy_digest.lower())
+            if kind_name == "governance_approval":
+                valid_handoff_bound_artifacts.append((kind_name, artifact))
+            if kind_name in POLICY_BOUND_KINDS:
+                valid_policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_validation_errors(path, validation_errors, errors)
 
     validate_bound_evidence_digest_references(
@@ -591,6 +612,23 @@ def build_summary(
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
+        missing_anchor_required_kinds=("governance_handoff",) + POLICY_BOUND_KINDS,
+        bound_artifacts=valid_policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must reference a valid "
+            "governance_handoff policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex requires a valid governance_handoff "
+            "policy_digest_hex"
+        ),
+    )
+
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
         missing_anchor_required_kinds=("failure_capture",) + FAILURE_BOUND_KINDS,
         bound_artifacts=valid_failure_bound_artifacts,
         valid_anchor_digests=valid_failure_bundle_digests,
@@ -603,6 +641,23 @@ def build_summary(
         missing_anchor_error_template=(
             "{kind_name} evidence_bundle_digest_hex requires a valid failure_capture "
             "evidence_bundle_digest_hex"
+        ),
+    )
+
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("governance_handoff", "governance_approval"),
+        bound_artifacts=valid_handoff_bound_artifacts,
+        valid_anchor_digests=valid_handoff_digests,
+        digest_field="handoff_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} handoff_digest_hex must reference a valid governance_handoff "
+            "handoff_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} handoff_digest_hex requires a valid governance_handoff "
+            "handoff_digest_hex"
         ),
     )
 
@@ -630,6 +685,8 @@ def build_summary(
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_roster_digests": sorted(valid_roster_digests),
         "valid_failure_bundle_digests": sorted(valid_failure_bundle_digests),
+        "valid_handoff_digests": sorted(valid_handoff_digests),
+        "valid_policy_digests": sorted(valid_policy_digests),
         "required": required,
         "errors": errors,
     }

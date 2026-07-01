@@ -303,6 +303,11 @@ fn sign_contract_call_transaction(
         .wrap_err("failed to sign contract call transaction")
 }
 
+fn payload_digest_hex(payload: Option<&Json>) -> String {
+    let payload_json = payload.map_or("", |payload| payload.get().as_str());
+    hex::encode(blake3::hash(payload_json.as_bytes()).as_bytes())
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -334,15 +339,7 @@ fn main() -> Result<()> {
         args.status_timeout_ms,
     )?;
     let payload = parse_payload(args.payload_json.as_deref(), args.payload_file.as_deref())?;
-    let payload_digest_hex = hex::encode(
-        blake3::hash(
-            payload
-                .as_ref()
-                .map_or("", |json| json.get().as_str())
-                .as_bytes(),
-        )
-        .as_bytes(),
-    );
+    let payload_digest_hex = payload_digest_hex(payload.as_ref());
     let transaction_ttl = args.transaction_ttl_ms.map(Duration::from_millis);
     let metadata = contract_call_metadata(
         &contract_address,
@@ -403,4 +400,27 @@ fn main() -> Result<()> {
     });
     println!("{}", norito::json::to_json_pretty(&result)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payload_digest_hex_hashes_empty_payload_when_absent() {
+        assert_eq!(
+            payload_digest_hex(None),
+            hex::encode(blake3::hash(b"").as_bytes())
+        );
+    }
+
+    #[test]
+    fn payload_digest_hex_hashes_json_payload_contents() {
+        let payload = Json::new(norito::json!({"action": "call"}));
+
+        assert_eq!(
+            payload_digest_hex(Some(&payload)),
+            hex::encode(blake3::hash(payload.get().as_bytes()).as_bytes())
+        );
+    }
 }

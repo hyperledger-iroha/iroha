@@ -30,6 +30,7 @@ local payload-free operator workflow canary evidence tooling,
 local AI pre-screening rollout evidence gate tooling,
 local AI pre-screening rollout evidence collection planning,
 local AI pre-screening dry-run evidence-contract export,
+local AI pre-screening payload-free canary artifact builder,
 standalone persistent model-registry service foundation, deterministic local
 runner CLI output, HTTP service mode, unary gRPC service mode, supervised
 bundle generation, HTTP canary evidence, deterministic local committee
@@ -50,9 +51,18 @@ subject digest, and requires operator workflow, notification transport,
 commit/reveal executor, transparency publication, and Governance DAG evidence
 to carry the same `workflow_digest_hex` as the end-to-end workflow artifact, so
 promotion packets cannot mix screening, operator, executor, transparency, or
-governance records from different deployed moderation runs. Runner-bound and
-workflow-bound mismatches mark the offending artifact invalid in the summary
-instead of only blocking the top-level promotion status.
+governance records from different deployed moderation runs. Governance DAG
+evidence must also carry a `policy_digest_hex` matching a valid runner
+artifact, so the DAG policy surface is tied to the screening policy that was
+actually deployed. Runner-bound, workflow-bound, and policy-bound mismatches
+mark the offending artifact invalid in the summary instead of only blocking the
+top-level promotion status. Valid juror-notification transport artifacts now
+also surface their `manifest_body_blake3` values as
+`valid_notification_manifest_digests`, and valid commit/reveal executor
+artifacts surface their execution-summary digests as
+`valid_executor_summary_digests`, so the final aggregate production gate can
+bind deployed transport and executor proof facts back to recognized artifact
+fingerprints instead of trusting summary-only metadata.
 
 Implemented locally:
 
@@ -827,7 +837,25 @@ Completed local foundations:
   collection planner/runner that composes existing runner, committee, operator,
   notification, executor, and transparency canaries before invoking the gate;
   its dry-run JSON includes the checker-backed `evidence_contract` map with the
-  schema and required payload fields for every SFM-4a evidence kind.
+  schema and required payload fields for every SFM-4a evidence kind, and the
+  runner validates the schema-closed collection plan, external evidence map,
+  evidence contract, and command steps before dry-run output or live canaries.
+  It also rejects duplicate or unsupported `--source-entry` kinds before
+  dry-run output or live canaries.
+- Provide `scripts/build_sorafs_ai_prescreen_canary.py` as a fail-closed
+  payload-free SFM-4a canary builder for individual runner, committee,
+  operator workflow, juror notification transport, commit/reveal executor,
+  transparency publication, Governance DAG, and end-to-end workflow artifacts.
+  The builder requires reviewed deployment context, runner tuple digests,
+  workflow digest bindings, complete operator route/transparency
+  source/Governance DAG producer/workflow-step coverage where applicable, and
+  validates every generated artifact through
+  `scripts/check_sorafs_ai_prescreen_rollout_evidence.py` before writing.
+  Checked-in response-file examples cover the end-to-end workflow anchor,
+  juror notification transport, and commit/reveal executor canaries. Valid
+  transport and executor artifacts publish their notification-manifest and
+  execution-summary digests in the lane summary for aggregate production
+  binding checks.
 - Provide moderation validation CLI commands.
 - Provide standalone persistent HTTP model-registry service admission/status and
   bounded snapshot endpoints backed by a Norito checkpoint.
@@ -865,6 +893,7 @@ payload-free commit/reveal coordination status, local commit/reveal executor
 CLI automation, local supervised commit/reveal executor job bundle generation,
 local commit/reveal executor canary evidence tooling, local operator workflow
 canary evidence tooling, local AI pre-screening rollout evidence gate and
-collection planner/dry-run evidence-contract export, documented operator
-role-provisioning runbook, GAR policy plumbing, bounded denylist catalog
-readback, or observability fixtures.
+collection planner/dry-run evidence-contract export, local AI pre-screening
+payload-free canary artifact builder, documented operator role-provisioning
+runbook, GAR policy plumbing, bounded denylist catalog readback, or
+observability fixtures.

@@ -2979,7 +2979,7 @@ impl Actor {
         );
         let da_bundle_ms = if let Some(bundle) = block.da_commitments() {
             let da_start = Instant::now();
-            self.validate_da_bundle(bundle)?;
+            self.validate_da_bundle(bundle, height)?;
             u64::try_from(da_start.elapsed().as_millis()).unwrap_or(u64::MAX)
         } else {
             0

@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_dns_design_attendance.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 20e4dbd95067574ead4e1e9afc8875739e83813b2ff6b7b1e4850655906021c5
+source_hash: f0e4088baf9aee69528681a6355f01256c33bf000e69651698e547bebc8357e1
 source_last_modified: "2025-12-29T18:16:36.142844+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS Gateway & DNS Kickoff — Attendance Tracker

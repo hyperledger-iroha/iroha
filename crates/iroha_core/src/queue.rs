@@ -63,14 +63,15 @@ use journal::{QueuePlanJournal, QueuePlanJournalFlush, QueuePlanJournalRecordV1}
 #[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
+pub(crate) use router::routable_lane_ids_for_nexus_at_height;
 pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
     RoutingPlan, RoutingResolveError, SingleLaneRouter, evaluate_policy,
     evaluate_policy_plan_with_catalog, evaluate_policy_plan_with_catalog_and_world,
     evaluate_policy_plan_with_catalog_and_world_at, evaluate_policy_plan_with_nexus_and_world_at,
-    evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world,
-    evaluate_policy_with_catalog_and_world_at, resolve_query_routing_decision,
-    resolve_routing_decision,
+    evaluate_policy_plan_with_nexus_and_world_at_block_height, evaluate_policy_with_catalog,
+    evaluate_policy_with_catalog_and_world, evaluate_policy_with_catalog_and_world_at,
+    resolve_query_routing_decision, resolve_routing_decision,
 };
 use thiserror::Error;
 use tokio::{
@@ -562,6 +563,11 @@ struct PreparedQueueAdmission {
     enqueued_at_ms: u64,
     #[cfg(feature = "telemetry")]
     pending_teu: u64,
+}
+
+struct ExpiredQueueTransaction {
+    tx: AcceptedTransaction<'static>,
+    routing: RoutingDecision,
 }
 
 fn first_batch_duplicate_index(prepared: &[PreparedQueueAdmission]) -> Option<usize> {
@@ -1682,7 +1688,12 @@ impl Queue {
                     format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
                 )
             })?;
-            approvals.insert(canonical);
+            if !approvals.insert(canonical) {
+                return Err(Self::enforcement_error(
+                    alias,
+                    "`gov_manifest_approvers` metadata must not duplicate approvers",
+                ));
+            }
         }
         Ok(approvals)
     }
@@ -1699,7 +1710,12 @@ impl Queue {
                     format!("failed to encode validator `{validator}` as i105: {err}"),
                 )
             })?;
-            validators.insert(i105);
+            if !validators.insert(i105) {
+                return Err(Self::enforcement_error(
+                    alias,
+                    "lane manifest validator set contains duplicate validators",
+                ));
+            }
         }
         Ok(validators)
     }
@@ -2488,6 +2504,30 @@ impl Queue {
         Ok(plan)
     }
 
+    fn remove_routing_metadata_plan_first(
+        &self,
+        hash: SignedTxHash,
+    ) -> (RoutingDecision, Option<RoutingPlan>) {
+        if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+            self.routing_decisions.remove(&hash);
+            let _ = routing_ledger::take_route(&hash);
+            return (plan.coordinator_route(), Some(plan));
+        }
+
+        if let Some(plan) = routing_ledger::take_plan(&hash) {
+            self.routing_decisions.remove(&hash);
+            let _ = routing_ledger::take(&hash);
+            return (plan.coordinator_route(), Some(plan));
+        }
+
+        if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+            routing_ledger::discard_if_matches(&hash, decision);
+            return (decision, None);
+        }
+
+        (routing_ledger::take_route(&hash).unwrap_or_default(), None)
+    }
+
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
     fn reject_queued_transaction_for_unresolved_route(
         &self,
@@ -2495,22 +2535,9 @@ impl Queue {
         reason: String,
         telemetry: Option<&StateTelemetry>,
     ) {
-        let routing = if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-            routing_ledger::discard_if_matches(&hash, decision);
-            decision
-        } else {
-            routing_ledger::take(&hash).unwrap_or_default()
-        };
-        let removed_plan = self
-            .routing_plans
-            .remove(&hash)
-            .map(|(_, plan)| plan)
-            .or_else(|| routing_ledger::take_plan(&hash));
+        let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
         if let Some(plan) = removed_plan.as_ref() {
             self.record_plan_journal_remove(hash, plan);
-            routing_ledger::discard_plan_if_matches(&hash, plan);
-        } else {
-            let _ = routing_ledger::take_plan(&hash);
         }
 
         let removed_tx = self.txs.remove(&hash).map(|(_, tx)| tx);
@@ -2894,7 +2921,22 @@ impl Queue {
                 let governance_sensitive =
                     Self::tx_requires_manifest_validator_gating(rules, &checked);
                 if governance_sensitive {
-                    if !rules.validators.is_empty() && checked.as_ref().authority_opt().is_none() {
+                    let manifest_validators = if rules.validators.is_empty() {
+                        None
+                    } else {
+                        match Self::canonical_manifest_validators(&alias, rules) {
+                            Ok(validators) => Some(validators),
+                            Err(err) => {
+                                #[cfg(feature = "telemetry")]
+                                telemetry_handle.record_manifest_admission("malformed_validators");
+                                return Err(Failure {
+                                    tx: Box::new(checked.as_accepted().clone()),
+                                    err,
+                                });
+                            }
+                        }
+                    };
+                    if manifest_validators.is_some() && checked.as_ref().authority_opt().is_none() {
                         #[cfg(feature = "telemetry")]
                         telemetry_handle.record_manifest_admission("missing_authority");
                         return Err(Failure {
@@ -2907,27 +2949,39 @@ impl Queue {
                         });
                     }
                     if let Some(authority) = checked.as_ref().authority_opt()
-                        && !rules.validators.is_empty()
+                        && let Some(validators) = manifest_validators.as_ref()
                         && !allows_multisig_envelope_authority
-                        && !rules
-                            .validators
-                            .iter()
-                            .any(|validator| validator == authority)
                     {
-                        iroha_logger::warn!(
-                            lane = %alias,
-                            authority = %authority,
-                            "rejecting transaction not signed by governance validator"
-                        );
-                        #[cfg(feature = "telemetry")]
-                        telemetry_handle.record_manifest_admission("non_validator_authority");
-                        return Err(Failure {
-                            tx: Box::new(checked.as_accepted().clone()),
-                            err: Error::GovernanceNotPermitted {
-                                alias: alias.clone(),
-                                reason: "authority not part of lane validator set".to_string(),
-                            },
-                        });
+                        let authority_i105 = match authority.canonical_i105() {
+                            Ok(value) => value,
+                            Err(err) => {
+                                return Err(Failure {
+                                    tx: Box::new(checked.as_accepted().clone()),
+                                    err: Self::enforcement_error(
+                                        &alias,
+                                        format!(
+                                            "failed to encode authority `{authority}` as i105: {err}"
+                                        ),
+                                    ),
+                                });
+                            }
+                        };
+                        if !validators.contains(&authority_i105) {
+                            iroha_logger::warn!(
+                                lane = %alias,
+                                authority = %authority,
+                                "rejecting transaction not signed by governance validator"
+                            );
+                            #[cfg(feature = "telemetry")]
+                            telemetry_handle.record_manifest_admission("non_validator_authority");
+                            return Err(Failure {
+                                tx: Box::new(checked.as_accepted().clone()),
+                                err: Error::GovernanceNotPermitted {
+                                    alias: alias.clone(),
+                                    reason: "authority not part of lane validator set".to_string(),
+                                },
+                            });
+                        }
                     }
                     let quorum_required = !allows_multisig_envelope_authority
                         && rules.quorum.unwrap_or(0).saturating_sub(1) > 0
@@ -3945,7 +3999,7 @@ impl Queue {
     fn pop_from_queue(
         self: &Arc<Self>,
         state_view: &StateView,
-        expired_transactions: &mut Vec<AcceptedTransaction<'static>>,
+        expired_transactions: &mut Vec<ExpiredQueueTransaction>,
     ) -> Option<TransactionGuard> {
         #[cfg(feature = "telemetry")]
         let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
@@ -3995,15 +4049,9 @@ impl Queue {
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
-                    if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                        routing_ledger::discard_plan_if_matches(&hash, &plan);
-                        self.routing_decisions.remove(&hash);
-                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                        routing_ledger::discard_if_matches(&hash, decision);
-                    } else {
-                        // Ensure we do not leak entries when the queue-side cache missed the remove.
-                        let _ = routing_ledger::take(&hash);
-                        let _ = routing_ledger::take_plan(&hash);
+                    let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
+                    if let Some(plan) = removed_plan.as_ref() {
+                        self.record_plan_journal_remove(hash, plan);
                     }
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(state_view.telemetry));
@@ -4012,7 +4060,10 @@ impl Queue {
                     if let Error::Expired = e
                         && let Ok(tx) = Arc::try_unwrap(removed_tx)
                     {
-                        expired_transactions.push(tx.into_accepted());
+                        expired_transactions.push(ExpiredQueueTransaction {
+                            tx: tx.into_accepted(),
+                            routing,
+                        });
                     }
                 }
                 self.remove_tx_encoded_len(&hash);
@@ -4064,18 +4115,10 @@ impl Queue {
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
-                    let routing = if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                        let routing = plan.coordinator_route();
-                        routing_ledger::discard_plan_if_matches(&hash, &plan);
-                        self.routing_decisions.remove(&hash);
-                        routing
-                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                        routing_ledger::discard_if_matches(&hash, decision);
-                        decision
-                    } else {
-                        let _ = routing_ledger::take_plan(&hash);
-                        routing_ledger::take(&hash).unwrap_or_default()
-                    };
+                    let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
+                    if let Some(plan) = removed_plan.as_ref() {
+                        self.record_plan_journal_remove(hash, plan);
+                    }
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(state_view.telemetry));
                     self.tx_enqueued_at_ms.remove(&hash);
@@ -4137,7 +4180,7 @@ impl Queue {
     fn pop_from_queue_with_state(
         self: &Arc<Self>,
         state: &State,
-        expired_transactions: &mut Vec<AcceptedTransaction<'static>>,
+        expired_transactions: &mut Vec<ExpiredQueueTransaction>,
     ) -> Option<TransactionGuard> {
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state.metrics();
@@ -4187,15 +4230,9 @@ impl Queue {
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
-                    if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                        routing_ledger::discard_plan_if_matches(&hash, &plan);
-                        self.routing_decisions.remove(&hash);
-                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                        routing_ledger::discard_if_matches(&hash, decision);
-                    } else {
-                        // Ensure we do not leak entries when the queue-side cache missed the remove.
-                        let _ = routing_ledger::take(&hash);
-                        let _ = routing_ledger::take_plan(&hash);
+                    let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
+                    if let Some(plan) = removed_plan.as_ref() {
+                        self.record_plan_journal_remove(hash, plan);
                     }
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(telemetry_handle));
@@ -4204,7 +4241,10 @@ impl Queue {
                     if let Error::Expired = e
                         && let Ok(tx) = Arc::try_unwrap(removed_tx)
                     {
-                        expired_transactions.push(tx.into_accepted());
+                        expired_transactions.push(ExpiredQueueTransaction {
+                            tx: tx.into_accepted(),
+                            routing,
+                        });
                     }
                 }
                 self.remove_tx_encoded_len(&hash);
@@ -4254,18 +4294,10 @@ impl Queue {
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
-                    let routing = if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                        let routing = plan.coordinator_route();
-                        routing_ledger::discard_plan_if_matches(&hash, &plan);
-                        self.routing_decisions.remove(&hash);
-                        routing
-                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                        routing_ledger::discard_if_matches(&hash, decision);
-                        decision
-                    } else {
-                        let _ = routing_ledger::take_plan(&hash);
-                        routing_ledger::take(&hash).unwrap_or_default()
-                    };
+                    let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
+                    if let Some(plan) = removed_plan.as_ref() {
+                        self.record_plan_journal_remove(hash, plan);
+                    }
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(telemetry_handle));
                     self.tx_enqueued_at_ms.remove(&hash);
@@ -4562,7 +4594,7 @@ impl Queue {
         transactions: &mut Vec<TransactionGuard>,
         mut pop_next: F,
     ) where
-        F: FnMut(&mut Vec<AcceptedTransaction<'static>>) -> Option<TransactionGuard>,
+        F: FnMut(&mut Vec<ExpiredQueueTransaction>) -> Option<TransactionGuard>,
     {
         if transactions.len() >= max_txs_in_block.get() {
             return;
@@ -4584,25 +4616,9 @@ impl Queue {
 
         expired_transactions
             .into_iter()
-            .map(|tx| {
-                let hash = tx.as_ref().hash();
-                let routing = self
-                    .routing_decisions
-                    .remove(&hash)
-                    .map(|(_, decision)| decision)
-                    .or_else(|| routing_ledger::take(&hash))
-                    .unwrap_or_default();
-                let removed_plan = self
-                    .routing_plans
-                    .remove(&hash)
-                    .map(|(_, plan)| plan)
-                    .or_else(|| routing_ledger::take_plan(&hash));
-                if let Some(plan) = removed_plan.as_ref() {
-                    self.record_plan_journal_remove(hash, plan);
-                    routing_ledger::discard_plan_if_matches(&hash, plan);
-                } else {
-                    let _ = routing_ledger::take_plan(&hash);
-                }
+            .map(|expired| {
+                let hash = expired.tx.as_ref().hash();
+                let routing = expired.routing;
                 TransactionEvent {
                     hash,
                     block_height: None,
@@ -4951,14 +4967,10 @@ impl Queue {
         for hash in to_remove {
             if let Some((_, tx_arc)) = self.txs.remove(&hash) {
                 self.untrack_active_transaction();
-                let routing = self
-                    .routing_decisions
-                    .remove(&hash)
-                    .map(|(_, decision)| decision)
-                    .or_else(|| routing_ledger::take(&hash))
-                    .unwrap_or_default();
-                self.routing_plans.remove(&hash);
-                let _ = routing_ledger::take_plan(&hash);
+                let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
+                if let Some(plan) = removed_plan.as_ref() {
+                    self.record_plan_journal_remove(hash, plan);
+                }
                 self.removed_hashes.insert(hash, ());
                 self.untrack_expiry_hash(&hash);
                 if let Some(authority) = tx_arc.as_ref().as_ref().authority_opt() {
@@ -6025,6 +6037,21 @@ pub mod tests {
 
     static NEXT_TEST_DOMAIN_SUFFIX: AtomicU64 = AtomicU64::new(1);
 
+    fn seed_committed_height_for_queue_test(state: &State, height: u64) {
+        let mut block_hashes = state.block_hashes.block();
+        while u64::try_from(block_hashes.len()).unwrap_or(u64::MAX) < height {
+            let next = u8::try_from(block_hashes.len() % usize::from(u8::MAX))
+                .expect("modulo u8::MAX fits u8")
+                .saturating_add(1);
+            block_hashes.push_for_tests(
+                HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                    Hash::prehashed([next; Hash::LENGTH]),
+                ),
+            );
+        }
+        block_hashes.commit_for_tests();
+    }
+
     fn unique_test_domain_name(prefix: &str) -> String {
         let suffix = NEXT_TEST_DOMAIN_SUFFIX.fetch_add(1, Ordering::Relaxed);
         format!("{prefix}{suffix}")
@@ -6559,6 +6586,7 @@ pub mod tests {
             nexus.autoscale.enabled = true;
             nexus.autoscale.last_transition_height = 2;
         }
+        seed_committed_height_for_queue_test(&state, 2);
         let committed_nexus = state.nexus_snapshot();
 
         assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
@@ -6638,6 +6666,7 @@ pub mod tests {
             nexus.autoscale.max_lanes = nonzero!(8_u32);
             nexus.autoscale.last_transition_height = 3;
         }
+        seed_committed_height_for_queue_test(&state, 3);
         let initial_nexus = state.nexus_snapshot();
 
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -7292,6 +7321,40 @@ pub mod tests {
             1
         );
 
+        // Duplicate metadata approvals are malformed even when the unique approver set
+        // would satisfy quorum.
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+        metadata.insert(
+            (*super::GOV_APPROVERS_METADATA_KEY).clone(),
+            Json::new(vec![
+                validator_secondary.to_string(),
+                validator_secondary.to_string(),
+            ]),
+        );
+        let tx = accepted_tx_with(
+            validator_primary.clone(),
+            &primary_keypair,
+            &time_source,
+            vec![activate.clone()],
+            metadata,
+        );
+        let err = queue
+            .push(tx, state.view())
+            .expect_err("duplicate manifest approvers should reject");
+        match err.err {
+            Error::GovernanceNotPermitted { reason, .. } => {
+                assert!(
+                    reason.contains("duplicate approvers"),
+                    "expected duplicate approver rejection, got {reason}"
+                );
+            }
+            other => panic!("expected governance rejection, got {other:?}"),
+        }
+
         // Attach metadata listing the secondary validator so the quorum threshold is satisfied.
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -7409,6 +7472,97 @@ pub mod tests {
             metrics
                 .governance_manifest_admission_total
                 .with_label_values(&["non_validator_authority"])
+                .get(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn governance_manifest_rejects_duplicate_validator_set_for_protected_contract_ops() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        #[cfg(feature = "telemetry")]
+        let metrics = Arc::new(Metrics::default());
+        #[cfg(feature = "telemetry")]
+        let state = Arc::new(State::with_telemetry(
+            world_with_test_domains(),
+            kura.clone(),
+            query_handle.clone(),
+            StateTelemetry::new(metrics.clone(), true),
+        ));
+        #[cfg(not(feature = "telemetry"))]
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+
+        let (validator_id, validator_keypair) = gen_account_in("wonderland");
+        let mut protected = BTreeSet::new();
+        protected.insert(Name::from_str("apps").expect("static namespace"));
+
+        let mut statuses = BTreeMap::new();
+        let rules = GovernanceRules {
+            validators: vec![validator_id.clone(), validator_id.clone()],
+            protected_namespaces: protected,
+            ..GovernanceRules::default()
+        };
+        let status = LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "gov".to_string(),
+            dataspace: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("parliament".to_string()),
+            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        };
+        statuses.insert(LaneId::SINGLE, status);
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        queue.install_lane_manifests(&manifests);
+
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator_id,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let code_hash = iroha_crypto::Hash::new(b"demo");
+        let activate = InstructionBox::from(ActivateContractInstance {
+            contract_address: contract_address.clone(),
+            code_hash,
+        });
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+
+        let tx = accepted_tx_with(
+            validator_id,
+            &validator_keypair,
+            &time_source,
+            vec![activate],
+            metadata,
+        );
+        let err = queue
+            .push(tx, state.view())
+            .expect_err("duplicate manifest validators must fail closed");
+        match err.err {
+            Error::GovernanceNotPermitted { reason, .. } => {
+                assert!(
+                    reason.contains("duplicate validators"),
+                    "expected duplicate validator rejection, got {reason}"
+                );
+            }
+            other => panic!("expected governance rejection, got {other:?}"),
+        }
+        #[cfg(feature = "telemetry")]
+        assert_eq!(
+            metrics
+                .governance_manifest_admission_total
+                .with_label_values(&["malformed_validators"])
                 .get(),
             1
         );
@@ -8606,6 +8760,7 @@ pub mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         }
+        seed_committed_height_for_queue_test(&state, 2);
 
         let queue = Queue::test(config_factory(), &time_source);
         queue
@@ -13128,6 +13283,155 @@ pub mod tests {
         assert!(
             saw_rejected,
             "expected rejected pipeline event for unroutable queued tx"
+        );
+    }
+
+    #[test]
+    fn expired_event_prefers_full_plan_over_divergent_legacy_route() {
+        let expected = RoutingDecision::new(LaneId::new(5), DataSpaceId::new(13));
+        let stale = RoutingDecision::default();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(expected.lane_id, expected.dataspace_id)]);
+        let state = Arc::new(state);
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut queue = Queue::test_with_router_for_routes(
+            Config {
+                transaction_time_to_live: Duration::from_millis(10),
+                ..config_factory()
+            },
+            &time_source,
+            Arc::new(MutableRouter::new(expected)),
+            &[(expected.lane_id, expected.dataspace_id)],
+        );
+        let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
+        queue.events_sender = event_sender;
+        let queue = Arc::new(queue);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push tx");
+        while event_receiver.try_recv().is_ok() {}
+
+        queue.routing_decisions.insert(hash, stale);
+        crate::queue::routing_ledger::record(hash, stale);
+        queue
+            .routing_plans
+            .insert(hash, RoutingPlan::single(expected));
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            RoutingPlan::single(expected),
+            queue.capacity.get(),
+        );
+        crate::queue::routing_ledger::record(hash, stale);
+
+        time_handle.advance(Duration::from_millis(11));
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
+
+        assert!(guards.is_empty());
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(crate::queue::routing_ledger::get_plan(&hash), None);
+        assert_eq!(crate::queue::routing_ledger::get(&hash), None);
+
+        let mut saw_expired = false;
+        while let Ok(event) = event_receiver.try_recv() {
+            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
+                continue;
+            };
+            if event.hash != hash {
+                continue;
+            }
+            if !matches!(event.status, TransactionStatus::Expired) {
+                continue;
+            }
+            assert_eq!(event.lane_id, expected.lane_id);
+            assert_eq!(event.dataspace_id, expected.dataspace_id);
+            saw_expired = true;
+            break;
+        }
+        assert!(
+            saw_expired,
+            "expected expired event to carry full-plan route"
+        );
+    }
+
+    #[test]
+    fn unresolved_route_event_prefers_full_plan_over_divergent_legacy_route() {
+        let expected = RoutingDecision::new(LaneId::new(5), DataSpaceId::new(13));
+        let stale = RoutingDecision::default();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(expected.lane_id, expected.dataspace_id)]);
+        let state = Arc::new(state);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router = Arc::new(MutableRouter::new(expected));
+        let mut queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router.clone(),
+            &[(expected.lane_id, expected.dataspace_id)],
+        );
+        let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
+        queue.events_sender = event_sender;
+        let queue = Arc::new(queue);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push tx");
+        while event_receiver.try_recv().is_ok() {}
+
+        queue.routing_decisions.insert(hash, stale);
+        crate::queue::routing_ledger::record(hash, stale);
+        queue
+            .routing_plans
+            .insert(hash, RoutingPlan::single(expected));
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            RoutingPlan::single(expected),
+            queue.capacity.get(),
+        );
+        crate::queue::routing_ledger::record(hash, stale);
+        router.set_error(RoutingResolveError::UnknownLane {
+            lane_id: LaneId::new(99),
+        });
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
+
+        assert!(guards.is_empty());
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(crate::queue::routing_ledger::get_plan(&hash), None);
+        assert_eq!(crate::queue::routing_ledger::get(&hash), None);
+
+        let mut saw_rejected = false;
+        while let Ok(event) = event_receiver.try_recv() {
+            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
+                continue;
+            };
+            if event.hash != hash {
+                continue;
+            }
+            let TransactionStatus::Rejected(reason) = &event.status else {
+                continue;
+            };
+            assert_eq!(event.lane_id, expected.lane_id);
+            assert_eq!(event.dataspace_id, expected.dataspace_id);
+            assert!(matches!(
+                reason.as_ref(),
+                TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::InternalError(message)
+                ) if message.contains("transaction routing could not be resolved")
+                    && message.contains("lane 99")
+            ));
+            saw_rejected = true;
+            break;
+        }
+        assert!(
+            saw_rejected,
+            "expected rejected event to carry full-plan route"
         );
     }
 

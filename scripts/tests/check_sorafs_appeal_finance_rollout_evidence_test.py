@@ -59,6 +59,7 @@ def pricing_config() -> dict:
         "config_digest_hex": DIGEST,
         "config_version": "baseline-v1",
         "config_source": "iroha_config",
+        "policy_digest_hex": DIGEST,
         "class_count": 4,
         "pricing_config_present": True,
         "settlement_config_present": True,
@@ -353,6 +354,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
             "config_digest_hex": DIGEST,
         }
     ]
+    assert payload["valid_policy_digests"] == [DIGEST]
     assert payload["required"]["pricing_config"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
@@ -426,6 +428,22 @@ def test_quote_api_requires_config_digest_binding(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_pricing_config_requires_policy_digest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = pricing_config()
+    del payload["policy_digest_hex"]
+    write_json(tmp_path / "pricing-config.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["pricing_config"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+    assert result["valid_policy_digests"] == []
+
+
 def test_settlement_execution_config_digest_must_match_pricing(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = settlement_execution()
@@ -443,6 +461,29 @@ def test_settlement_execution_config_digest_must_match_pricing(tmp_path: Path) -
     assert artifact["errors"] == [
         "settlement_execution config_digest_hex must reference a valid "
         "pricing_config config_digest_hex"
+    ]
+
+
+def test_governance_approval_policy_digest_must_match_pricing(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    required = result["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert result["valid_policy_digests"] == [DIGEST]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval policy_digest_hex must reference a valid "
+        "pricing_config policy_digest_hex"
     ]
 
 
@@ -464,6 +505,29 @@ def test_stale_pricing_config_does_not_anchor_config_bound_evidence(tmp_path: Pa
     assert artifact["errors"] == [
         "quote_api config_digest_hex requires a valid pricing_config config_digest_hex"
     ]
+
+
+def test_stale_pricing_config_does_not_anchor_policy_bound_evidence(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = pricing_config()
+    payload["generated_at_unix"] = NOW_UNIX - MODULE.DEFAULT_MAX_CANARY_AGE_SECS - 1
+    write_json(tmp_path / "pricing-config.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    required = result["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert result["valid_policy_digests"] == []
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert (
+        "governance_approval policy_digest_hex requires a valid pricing_config "
+        "policy_digest_hex"
+    ) in artifact["errors"]
 
 
 def test_missing_required_metric_fails(tmp_path: Path) -> None:

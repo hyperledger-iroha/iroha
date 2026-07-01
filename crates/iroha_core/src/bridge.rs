@@ -1384,36 +1384,29 @@ mod tests {
         let chain_id: ChainId = iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1
             .parse()
             .expect("chain id");
+        let validator_keypair = checked_bls_keypair();
+        let validator_public_keys = vec![validator_keypair.public_key().to_string()];
+        let validator_set = vec![PeerId::new(validator_keypair.public_key().clone())];
+        let validator_set_hash = HashOf::new(&validator_set);
+        let mut validator_set_hash_bytes = [0u8; 32];
+        validator_set_hash_bytes.copy_from_slice(validator_set_hash.as_ref().as_ref());
         let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
             7,
             b"0x0000000000000000000000000000000000000007",
         ));
         let (block, _) = signed_block_with_sccp_payloads(&[payload], 7);
-        let block_header = block.header();
-        let block_hash = block.hash();
-        let block_hash_h256 = sccp_hash_to_h256(&block_hash);
-        let commitment_root = block_header
-            .sccp_commitment_root()
-            .expect("sample block should carry SCCP commitment root");
-        let block_header_bytes =
-            norito::to_bytes(&block_header).expect("sample block header should encode");
-        let validator_public_keys = vec![checked_bls_keypair().public_key().to_string()];
-        let validator_set = validator_public_keys
-            .iter()
-            .map(|key| {
-                key.parse::<PublicKey>()
-                    .expect("BLS fixture public key should parse")
-            })
-            .map(PeerId::from)
-            .collect::<Vec<_>>();
-        let mut validator_set_hash = [0; 32];
-        validator_set_hash
-            .copy_from_slice(HashOf::<Vec<PeerId>>::new(&validator_set).as_ref().as_ref());
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        let commitment_root =
+            sccp_commitment_root_from_messages(&messages).expect("commitment root");
+        let mut block_header = block.header().clone();
+        block_header.set_sccp_commitment_root(Some(commitment_root));
+        let block_hash = sccp_block_hash_to_h256(&block_header.hash());
+        let block_header_bytes = norito::to_bytes(&block_header).expect("encode block header");
         let finality = NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: chain_id.to_string(),
             height: 7,
-            block_hash: block_hash_h256,
+            block_hash,
             commitment_root,
             block_header_bytes,
             commit_qc: iroha_sccp::NexusCommitQcV1 {
@@ -1423,13 +1416,13 @@ mod tests {
                 view: 0,
                 epoch: 0,
                 mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_owned(),
-                subject_block_hash: block_hash_h256,
+                subject_block_hash: block_hash,
                 parent_state_root: [1; 32],
                 post_state_root: [2; 32],
                 chain_order_hash: [3; 32],
                 rechain_seq: 0,
                 highest_qc: None,
-                validator_set_hash,
+                validator_set_hash: validator_set_hash_bytes,
                 validator_set_hash_version: 1,
                 validator_public_keys,
                 validator_set_pops: vec![vec![1; 48]],

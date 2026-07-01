@@ -23,6 +23,7 @@ NOW_UNIX = 1_800_900_000
 GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
+POLICY_DIGEST = "ef" * 32
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -64,6 +65,7 @@ def feed_promotion(*, ack_count: int = 3) -> dict:
             "gateway_ack_count": ack_count,
             "denylist_entry_count": 5,
             "bundle_digest_hex": DIGEST,
+            "policy_digest_hex": POLICY_DIGEST,
             "raw_feeds_included": False,
             "feed_payloads_included": False,
         }
@@ -250,7 +252,7 @@ def governance_approval() -> dict:
             "operator_roles_bound": True,
             "retention_policy_bound": True,
             "config_source": "iroha_config",
-            "policy_digest_hex": DIGEST,
+            "policy_digest_hex": POLICY_DIGEST,
         }
     )
     return payload
@@ -292,6 +294,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["status"] == "ready"
     assert payload["required"]["feed_promotion"]["valid"] is True
     assert payload["valid_bundle_digests"] == [DIGEST]
+    assert payload["valid_policy_digests"] == [POLICY_DIGEST]
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -354,6 +357,45 @@ def test_controller_runtime_bundle_binding_must_match_feed_promotion(tmp_path: P
     assert artifact["errors"] == [
         "controller_runtime bundle_digest_hex must match a valid feed_promotion bundle_digest_hex"
     ]
+
+
+def test_feed_promotion_policy_digest_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_promotion()
+    payload.pop("policy_digest_hex")
+    write_json(tmp_path / "feed-promotion.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["feed_promotion"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+    assert payload["valid_policy_digests"] == []
+
+
+def test_governance_approval_policy_digest_must_match_feed_promotion(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert payload["valid_policy_digests"] == [POLICY_DIGEST]
+    assert (
+        "governance_approval policy_digest_hex must match a valid "
+        "feed_promotion policy_digest_hex"
+    ) in artifact["errors"]
 
 
 def test_moderation_toggle_requires_approved_toggle_count_equality(

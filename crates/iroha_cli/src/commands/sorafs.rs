@@ -1106,7 +1106,7 @@ impl TransparencyCyclesGetArgs {
         C: RunContext,
         F: FnOnce(&Client, &str, SorafsTransparencyReadbackFilter) -> Result<Response<Vec<u8>>>,
     {
-        let cycle_id = required_trimmed_text(&self.cycle_id, "--cycle-id")?;
+        let cycle_id = normalize_hex_16_lower(&self.cycle_id, "--cycle-id")?;
         let filter = SorafsTransparencyReadbackFilter { limit: self.limit };
         let client = context.client_from_config();
         let response = get(&client, &cycle_id, filter)?;
@@ -1136,8 +1136,8 @@ impl TransparencyCyclesEntryArgs {
         C: RunContext,
         F: FnOnce(&Client, &str, &str) -> Result<Response<Vec<u8>>>,
     {
-        let cycle_id = required_trimmed_text(&self.cycle_id, "--cycle-id")?;
-        let entry_id = required_trimmed_text(&self.entry_id, "--entry-id")?;
+        let cycle_id = normalize_hex_16_lower(&self.cycle_id, "--cycle-id")?;
+        let entry_id = normalize_hex_16_lower(&self.entry_id, "--entry-id")?;
         let client = context.client_from_config();
         let response = get(&client, &cycle_id, &entry_id)?;
         render_json_response(context, response)
@@ -1282,7 +1282,7 @@ impl TransparencyPublicationCanaryArgs {
         let cycle_ids = self
             .cycle_ids
             .iter()
-            .map(|cycle_id| required_trimmed_text(cycle_id, "--cycle-id"))
+            .map(|cycle_id| normalize_hex_16_lower(cycle_id, "--cycle-id"))
             .collect::<Result<Vec<_>>>()?;
         let evidence = transparency_publication_canary_evidence_json(
             &torii_url,
@@ -20592,15 +20592,23 @@ fn moderation_operator_status_reason(status: StatusCode) -> &'static str {
     }
 }
 
-fn normalize_hex_32_lower(value: &str, flag: &str) -> Result<String> {
+fn normalize_hex_lower(value: &str, flag: &str, byte_len: usize) -> Result<String> {
     let trimmed = required_trimmed_text(value, flag)?;
     let hex_value = trimmed.strip_prefix("0x").unwrap_or(&trimmed);
-    let bytes =
-        decode(hex_value).wrap_err_with(|| format!("{flag} must be a 32-byte hex string"))?;
-    if bytes.len() != 32 {
-        return Err(eyre!("{flag} must be a 32-byte hex string"));
+    let bytes = decode(hex_value)
+        .wrap_err_with(|| format!("{flag} must be a {byte_len}-byte hex string"))?;
+    if bytes.len() != byte_len {
+        return Err(eyre!("{flag} must be a {byte_len}-byte hex string"));
     }
     Ok(encode(bytes))
+}
+
+fn normalize_hex_16_lower(value: &str, flag: &str) -> Result<String> {
+    normalize_hex_lower(value, flag, 16)
+}
+
+fn normalize_hex_32_lower(value: &str, flag: &str) -> Result<String> {
+    normalize_hex_lower(value, flag, 32)
 }
 
 fn build_reserve_movement_request_value<C: RunContext>(
@@ -22818,15 +22826,15 @@ mod tests {
     }
 
     #[test]
-    fn transparency_cycles_get_trims_cycle_id() {
+    fn transparency_cycles_get_normalizes_cycle_id() {
         let args = TransparencyCyclesGetArgs {
-            cycle_id: " 0xAAAA ".to_string(),
+            cycle_id: format!(" 0x{} ", "AA".repeat(16)),
             limit: Some(3),
         };
         let mut ctx = TestContext::new();
 
         args.run_with(&mut ctx, |_client, cycle_id, filter| {
-            assert_eq!(cycle_id, "0xAAAA");
+            assert_eq!(cycle_id, "aa".repeat(16));
             assert_eq!(filter.limit, Some(3));
             Ok(Response::builder()
                 .status(StatusCode::OK)
@@ -22843,16 +22851,16 @@ mod tests {
     }
 
     #[test]
-    fn transparency_cycles_entry_trims_identifiers() {
+    fn transparency_cycles_entry_normalizes_identifiers() {
         let args = TransparencyCyclesEntryArgs {
-            cycle_id: " cycle-hex ".to_string(),
-            entry_id: " entry-hex ".to_string(),
+            cycle_id: format!(" 0x{} ", "AB".repeat(16)),
+            entry_id: format!(" 0x{} ", "CD".repeat(16)),
         };
         let mut ctx = TestContext::new();
 
         args.run_with(&mut ctx, |_client, cycle_id, entry_id| {
-            assert_eq!(cycle_id, "cycle-hex");
-            assert_eq!(entry_id, "entry-hex");
+            assert_eq!(cycle_id, "ab".repeat(16));
+            assert_eq!(entry_id, "cd".repeat(16));
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
@@ -23206,6 +23214,31 @@ mod tests {
             written.get("schema").and_then(Value::as_str),
             Some("sorafs.transparency.publication_canary.v1")
         );
+    }
+
+    #[test]
+    fn transparency_publication_canary_rejects_malformed_cycle_id_before_fetch() {
+        let args = TransparencyPublicationCanaryArgs {
+            torii_url: Some("https://torii.test/root".to_string()),
+            cycle_ids: vec!["not-a-cycle-id".to_string()],
+            limit: Some(3),
+            timeout_secs: 1,
+            allow_missing_publisher_identity: false,
+            out: None,
+        };
+        let mut ctx = TestContext::new();
+
+        let err = args
+            .run_with_fetch(&mut ctx, |_url| {
+                panic!("malformed cycle id must fail before HTTP fetch")
+            })
+            .expect_err("malformed cycle id must be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("--cycle-id must be a 16-byte hex string")
+        );
+        assert!(ctx.printed.is_empty());
     }
 
     #[test]

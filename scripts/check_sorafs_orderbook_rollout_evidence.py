@@ -132,7 +132,9 @@ CONTRACT_BOUND_KINDS = (
     "sdk_release",
     "observability",
     "reconciliation",
+    "governance_approval",
 )
+POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -210,6 +212,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "capability_policy_configured",
         "contract_state_source",
         "contract_digest_hex",
+        "policy_digest_hex",
         "raw_contract_state_included",
     ),
     "matcher_service": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -301,6 +304,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "emergency_pause_tested",
         "capability_policy_bound",
         "treasury_policy_bound",
+        "contract_digest_hex",
         "config_source",
         "policy_digest_hex",
     ),
@@ -327,6 +331,7 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "environment",
     "deployment_context_reviewed",
     "contract_digest_hex",
+    "policy_digest_hex",
 )
 
 
@@ -361,6 +366,7 @@ def validate_contract_surface(payload: dict[str, Any], errors: list[str]) -> Non
     require_bool_true(payload, "capability_policy_configured", errors)
     require_string_equal(payload, "contract_state_source", "on-chain", errors)
     require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
     require_false(payload, "raw_contract_state_included", errors)
 
 
@@ -493,6 +499,7 @@ def validate_governance_approval(payload: dict[str, Any], errors: list[str]) -> 
     require_bool_true(payload, "emergency_pause_tested", errors)
     require_bool_true(payload, "capability_policy_bound", errors)
     require_bool_true(payload, "treasury_policy_bound", errors)
+    require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
 
 
@@ -561,7 +568,9 @@ def build_summary(
 
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
     valid_contract_digests: set[str] = set()
+    valid_policy_digests: set[str] = set()
     valid_contract_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -594,10 +603,16 @@ def build_summary(
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
             digest = fingerprint.get("contract_digest_hex")
-            if kind_name == "contract_surface" and isinstance(digest, str):
-                valid_contract_digests.add(digest.lower())
-            elif kind_name in CONTRACT_BOUND_KINDS:
+            if kind_name == "contract_surface":
+                if isinstance(digest, str):
+                    valid_contract_digests.add(digest.lower())
+                policy_digest = fingerprint.get("policy_digest_hex")
+                if isinstance(policy_digest, str):
+                    valid_policy_digests.add(policy_digest.lower())
+            if kind_name in CONTRACT_BOUND_KINDS:
                 valid_contract_bound_artifacts.append((kind_name, artifact))
+            if kind_name in POLICY_BOUND_KINDS:
+                valid_policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_validation_errors(path, validation_errors, errors)
 
     validate_bound_evidence_digest_references(
@@ -614,6 +629,23 @@ def build_summary(
         missing_anchor_error_template=(
             "{kind_name} contract_digest_hex requires a valid contract_surface "
             "contract_digest_hex"
+        ),
+    )
+
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("contract_surface",) + POLICY_BOUND_KINDS,
+        bound_artifacts=valid_policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must reference a valid "
+            "contract_surface policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex requires a valid contract_surface "
+            "policy_digest_hex"
         ),
     )
 
@@ -640,6 +672,7 @@ def build_summary(
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_contract_digests": sorted(valid_contract_digests),
+        "valid_policy_digests": sorted(valid_policy_digests),
         "required": required,
         "errors": errors,
     }

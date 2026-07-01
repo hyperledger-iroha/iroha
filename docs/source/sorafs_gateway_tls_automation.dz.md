@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_tls_automation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fd97ee9a4a923b734a3624afbe33b498bb0f3b3d042f6e87bef88667db66a26e
+source_hash: e15a94ab40ca2ad0a110845c9af116ee4d020906c8daa43a04cadf99af593ad3
 source_last_modified: "2026-01-22T14:35:37.640084+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS Gateway TLS & ECH Operator Guide

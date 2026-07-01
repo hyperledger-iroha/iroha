@@ -10,7 +10,7 @@
   "file_count": 1,
   "input_bytes": 18,
   "input_kind": "file",
-  "input_path": "/private/var/folders/gh/ws0ncy4j4bsfklwm8684lwxr0000gn/T/.tmpE7tMWs/payload.bin",
+  "input_path": "/private/var/folders/gh/ws0ncy4j4bsfklwm8684lwxr0000gn/T/.tmpcActyr/payload.bin",
   "output_car": ".sorafs/deploy/payload.bin/payload.bin.car",
   "payload_bytes": 18,
   "root_cids_hex": [
