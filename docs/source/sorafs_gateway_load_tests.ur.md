@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_gateway_load_tests.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fbdb35ca448a6f30e15d2a7d258ce9e40614672089bc6b578021579f7ecc1b9f
+source_hash: fcce5c73da9dbdb30bb81268d8b101e0f306da1e8291dcb71206967b47136e35
 source_last_modified: "2026-01-03T18:07:58.686488+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -29,6 +29,11 @@ cargo test -p integration_tests --test nexus_and_streaming sorafs_gateway_confor
 
 Operators can reuse the JSON emitted by `SuiteReport::to_json_value()` and sign it
 with the gateway attestation helpers when collecting governance evidence.
+The SF-5a rollout evidence gate also requires staging-load artifacts to carry a
+`policy_digest_hex`, and governance approval artifacts must match that staged
+policy digest before promotion. Suite, staging, and policy digest mismatches
+mark the offending artifact invalid in the emitted summary before the gate can
+report ready.
 
 ## Objectives
 

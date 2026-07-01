@@ -275,7 +275,23 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
     }
 
     public func buildTransferInstructionBox(input: NexusTransferInput) throws -> Data {
-        try SwiftNexusTransferPayloadEncoder.encodeInstructionBox(input: input)
+        if let parsed = OfflineNorito.parsePublicAssetIdLiteral(input.sourceAssetID) {
+            let nativeAssetDefinitionId: String
+            if let dataspaceId = parsed.dataspaceId {
+                nativeAssetDefinitionId = "\(parsed.assetDefinitionId)#dataspace:\(dataspaceId)"
+            } else {
+                nativeAssetDefinitionId = parsed.assetDefinitionId
+            }
+            if let nativeInstruction = try NoritoNativeBridge.shared.encodeTransferInstructionBox(
+                authority: parsed.accountId,
+                assetDefinitionId: nativeAssetDefinitionId,
+                quantity: input.quantity,
+                destination: input.destinationAccountID
+            ) {
+                return nativeInstruction
+            }
+        }
+        return try SwiftNexusTransferPayloadEncoder.encodeInstructionBox(input: input)
     }
 
     public func finalizeSignedTransaction(signable: NexusSignableTransaction,
@@ -728,7 +744,7 @@ private enum SwiftNexusTransferPayloadEncoder {
 
 }
 
-private func normalizedValidationFeePolicyHash(_ value: String) throws -> String {
+fileprivate func normalizedValidationFeePolicyHash(_ value: String) throws -> String {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     let hexDigits = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
     guard trimmed == value,

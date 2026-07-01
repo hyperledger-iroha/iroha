@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_gateway_dns_owner_runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 93e964470884486630328eee9eb06c6fbbf020a4030958c444ad6c5ea0de70b4
+source_hash: 17d45bd15ed73f59323ef94510d93e80dfcb8591a67a548747308aaa002b39c4
 source_last_modified: "2026-01-22T15:38:30.711387+00:00"
 translation_last_reviewed: 2026-01-30
 ---

@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_repair_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: dc4d510176f12b96075467cdef53e54e186c67affa3128eee429f4eef5200196
+source_hash: 79361847387bd036acab39be2e4354b154704ff8357b8179c5c9d101856a401c
 source_last_modified: "2026-06-25T17:31:52+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -39,12 +39,15 @@ SF-8b rollout evidence gate for deployed repair promotion packets, and
 evidence collection planner/runner. The checker exports its required top-level
 payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the planner includes the
 checker-backed `evidence_contract` map in dry-run output for the selected
-required kinds. Signed auditor API, worker lifecycle,
+required kinds, and validates the schema-closed collection plan, required
+kinds, thresholds, external evidence map, evidence contract, and command steps
+before dry-run output or verifier execution. Signed auditor API, worker lifecycle,
 event stream, governance handoff, and approval artifacts must bind to a valid
 auditor roster digest; worker, event stream, and handoff artifacts must also
-bind to a valid failure-capture evidence bundle digest. Roster or failure
-bundle mismatches are recorded on the offending artifact in the JSON summary
-before required-kind validity is reported.
+bind to a valid failure-capture evidence bundle digest; governance approval
+artifacts must additionally bind to the valid governance handoff digest. Roster,
+failure-bundle, or handoff-digest mismatches are recorded on the offending
+artifact in the JSON summary before required-kind validity is reported.
 
 ## Component Overview
 | Component | Responsibilities | Implementation Notes |
@@ -389,9 +392,13 @@ auditor roster meets the configured minimum, governance is bound to
 handoff / governance approval artifacts carry a `roster_digest_hex` that
 matches a valid auditor-roster artifact, and worker lifecycle / event stream /
 governance handoff artifacts carry an `evidence_bundle_digest_hex` that matches
-a valid PoR/PoTR failure-capture artifact in the same rollout bundle. Its
+a valid PoR/PoTR failure-capture artifact in the same rollout bundle, and
+governance approval artifacts carry a `handoff_digest_hex` that matches a valid
+governance handoff artifact. Its
 collection planner exposes those exact required payload fields through
-`--dry-run` without touching live repair services.
+`--dry-run` and validates the schema-closed collection plan, required kinds,
+thresholds, external evidence map, evidence contract, and command steps before
+touching live repair services.
 
 ## Rollout Status
 Implemented engineering coverage:
@@ -403,7 +410,7 @@ Implemented engineering coverage:
 - The SF-8b rollout evidence gate, collection planner, operator argfile
   templates, and focused tests are implemented for payload-free deployed
   evidence review, including cross-artifact auditor-roster and failure-bundle
-  digest binding.
+  digest binding plus governance handoff digest binding.
 
 Remaining rollout work is live operator evidence: collect production PoR
 failure, repair, and governance handoff artifacts once the deployed auditor

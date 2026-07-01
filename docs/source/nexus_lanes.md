@@ -170,6 +170,11 @@ LaneConfigEntry {
   after filtering for active consensus keys unless an explicit lane manifest
   binding exists, so consensus-created elastic lanes are immediately routable
   without giving ordinary public or restricted lanes a commit-topology fallback.
+  Manifest validators and explicit bindings are exposed only when the declared
+  validator list is duplicate-free, each binding names a declared validator, and
+  the binding list has no duplicate validators or peers, so undeclared,
+  duplicate validator, or duplicate peer entries cannot inflate route authority
+  or public validator listings.
   The configured default lane itself must stay outside the autoscale-owned
   elastic id range so it remains a stable base anchor. Live-state routing also
   requires `nexus.enabled = true` and `autoscale.enabled = true` and filters
@@ -225,10 +230,13 @@ LaneConfigEntry {
   Catalog-only routing without a live Nexus state view does not shard over
   elastic lanes; it keeps ordinary no-target traffic on the configured base
   default lane until live autoscale enablement and bounds are available.
-  State-free router fast paths also defer unmatched no-target default traffic
-  to live-state routing even when unrelated policy rules exist, so an
-  unmatched rule cannot accidentally pin autoscaled default traffic to the base
-  lane.
+  State-free router fast paths also defer unmatched no-target default traffic,
+  including no-target IVM/proved-VM traffic, to live-state routing even when
+  unrelated policy rules exist, so an unmatched rule cannot accidentally pin
+  autoscaled default traffic to the base lane. State-free query routing,
+  non-fallible state-free hints, and live non-fallible routing fallbacks reject
+  autoscale-owned default or explicit-rule lanes instead of treating elastic
+  lanes as operator-configured anchors.
   Fallible default-route resolution also rejects a corrupted policy whose
   configured default lane claims autoscale ownership, so elastic lanes cannot
   become the default anchor even when in-memory policy construction bypasses
@@ -238,8 +246,8 @@ LaneConfigEntry {
   even when the claim is malformed, so elastic capacity cannot become the
   canonical lane for a dataspace. A dataspace with only autoscale-owned lanes
   fails closed with `no_lane_for_dataspace`.
-  Disabled Nexus, corrupted runtime autoscale bounds, or a default lane that
-  falls inside the elastic range disable elastic sharding for routing and keep
+  Disabled Nexus, corrupted runtime autoscale bounds, or a default lane at or
+  above `autoscale.min_lanes` disable elastic sharding for routing and keep
   no-target default traffic on the configured default lane.
   Scale-out also requires a free id in the configured
   `autoscale.min_lanes..autoscale.max_lanes` elastic range; hot windows fail
@@ -277,11 +285,12 @@ LaneConfigEntry {
   pruning explicit cache entries whose target lane no longer exists. Scale-in
   uses the same resolved
   default-route capacity and complete historical sample-window preconditions as
-  scale-out, and only retires when that capacity is strictly above the base
-  default-route lane, so stale routing state or unrelated manual lanes cannot
-  retire an elastic lane. The `autoscale.min_lanes` and `autoscale.max_lanes`
-  values bound the autoscaler-owned elastic id range; they do not count
-  unrelated public-profile base lanes as default-route capacity.
+  scale-out, and only retires when router-owned capacity is strictly above the
+  configured default-route lane, so stale routing state or unrelated manual
+  lanes cannot retire an elastic lane. The `autoscale.min_lanes` and
+  `autoscale.max_lanes` values bound the autoscaler-owned elastic id range;
+  they do not count unrelated public-profile base lanes as default-route
+  capacity.
 - Autoscale utilization samples count committed fragments, not just external
   transaction envelopes. Current-block decisions use the in-flight execution
   counter, and historical window samples read the persisted committed-fragment
@@ -293,8 +302,8 @@ LaneConfigEntry {
   cannot wrap or make an overloaded sample look cold. Utilization is divided by
   the same default-route capacity that the router can actually use:
   the configured default lane plus valid managed elastic lanes in the default
-  dataspace and configured autoscale id range, not unrelated governance, zk,
-  manually managed lanes, or out-of-range managed lanes. The scale-out capacity
+  dataspace and configured autoscale id range, not unrelated base/governance/zk,
+  manually managed, malformed, or out-of-range lanes. The scale-out capacity
   bound uses the same default-route count, so unrelated manual catalog lanes and
   corrupted out-of-range managed lanes outside the autoscaler-managed candidate
   set do not inflate capacity or receive default traffic. Runtime autoscale
@@ -307,8 +316,9 @@ LaneConfigEntry {
   samples.
 - Autoscale configuration fails closed before runtime: lane bounds, block
   targets, decision windows, cooldown, and per-lane TPS must be positive;
-  `min_lanes <= max_lanes`; and scale-in thresholds must stay below scale-out
-  thresholds so hysteresis cannot collapse into repeated lane churn. The block
+  `min_lanes < max_lanes` so the elastic id range is non-empty; and scale-in
+  thresholds must stay below scale-out thresholds so hysteresis cannot collapse
+  into repeated lane churn. The block
   transition path repeats the lane-bound safety-cap and ratio sanity checks
   against the effective runtime state, so programmatic config swaps or
   corrupted actual state cannot raise `max_lanes` above the compiled cap or
@@ -369,11 +379,11 @@ LaneConfigEntry {
   configured `autoscale.min_lanes..autoscale.max_lanes` elastic id range; base,
   governance, zk, or other operator-managed lanes must sit outside that range
   so they cannot consume deterministic scale-out capacity. The routing
-  `default_lane` must also remain outside the elastic range, preventing an
-  autoscale-owned lane from becoming the default-route anchor. Config swaps may
-  preserve an active autoscale-managed lane unchanged, but swaps that add,
-  mutate, omit, or replace one fail atomically instead of silently converting it
-  into a manual lane change. Preserved autoscale-managed lanes must stay inside
+  `default_lane` must also remain below `autoscale.min_lanes`, giving the
+  default route a base anchor below the autoscale-owned elastic range. Config
+  swaps may preserve an active autoscale-managed lane unchanged, but swaps that
+  add, mutate, omit, or replace one fail atomically instead of silently converting
+  it into a manual lane change. Preserved autoscale-managed lanes must stay inside
   the configured `autoscale.min_lanes..autoscale.max_lanes` id range and remain
   bound to `nexus.routing_policy.default_dataspace` so ownership cannot be
   stranded outside the autoscaler's create/retire range or default dataspace.
@@ -386,10 +396,16 @@ LaneConfigEntry {
   elastic id range before runtime for the same ownership boundary. The internal
   autoscale lifecycle path must create
   deterministic public elastic lanes in the configured default dataspace
-  (`autoscale.managed = true`, positive
-  `autoscale.created_height`, and `elastic-lane-{id}` alias) and cannot add or
+  (`autoscale.managed = true`, `autoscale.created_height` equal to the current
+  transition block height, and `elastic-lane-{id}` alias) and cannot add or
   retire unmanaged/manual lanes, malformed autoscale-owned lanes, or managed
-  lanes outside the configured elastic id range or default dataspace. Runtime
+  lanes outside the configured elastic id range or default dataspace. Internal
+  transition metadata must also match the plan shape exactly: scale-out stages
+  one addition for the logged lane, while scale-in stages one retirement for the
+  logged lane. Its `active_lanes` and `autoscale_capacity_lanes` fields must
+  also match the current default-route autoscale capacity before the plan is
+  staged, and the same pending transition metadata is revalidated at block
+  commit before storage geometry is published. Runtime
   lifecycle validation also checks every lane in the resulting catalog, so
   unrelated plans cannot preserve a pre-existing manual lane inside the active
   elastic range or an autoscale-owned lane with malformed metadata, a disabled
@@ -438,7 +454,14 @@ LaneConfigEntry {
   Block requeue discards a stale process-global routing-ledger plan after a
   failed ledger-sourced reinsertion, so the next recovery pass recomputes
   Native AMX participant legs from current committed state instead of replaying
-  the same stale hint.
+  the same stale hint. Commit event production consumes the full routing plan
+  before any legacy coordinator-only hint, so partial ledger cleanup or a stale
+  single-route shadow cannot override the digest-checked plan metadata.
+  Queue-side expiry and unresolved-route rejection events apply the same
+  full-plan-first cleanup before terminal events are emitted, so stale
+  coordinator-only shadows cannot mislabel removed transactions. Shared
+  routing-ledger plan discard also clears same-hash legacy shadows once the
+  expected full plan is removed.
   Lane TEU deferral also returns the full routing plan for consensus requeue, so
   deferred Native AMX transactions keep participant legs instead of requeueing
   as coordinator-only work.
@@ -466,7 +489,12 @@ LaneConfigEntry {
   Native AMX proposal vectors also replace stale participant legs even when the
   coordinator route is unchanged. Proposal size-cap trimming preserves full
   routing plans for removed transactions too, so overflow requeue keeps Native
-  AMX participant metadata.
+  AMX participant metadata. Proposal lookahead is enabled only when the
+  committed Nexus snapshot has more than one policy-reachable active lane at the
+  candidate block height. Default-route autoscale candidates, canonical
+  dataspace routes, and explicit rule lanes count; unrouted same-dataspace
+  sidecar lanes and future-created autoscale lanes cannot trigger scan-budget
+  overfetch before routing policy can select them.
 - Block validation and block execution use that same live Nexus autoscale range
   when recomputing execution-context routing and per-lane transaction
   summaries. Validators therefore accept matching elastic execution contexts
@@ -554,7 +582,28 @@ LaneConfigEntry {
   using explicit `{ validator, peer_id }` bindings; stake-elected lanes derive
   their validator pool from public-lane staking records. In both modes,
   authoritative routing and roster selection use the stored `peer_id` rather
-  than deriving peers from validator account signatories.
+  than deriving peers from validator account signatories. Explicit manifest
+  validators and bindings are exposed only when the declared validator list is
+  duplicate-free, each binding names a declared validator, and the binding list
+  has no duplicate validators or peers before public or routing authority reads
+  consume them, so undeclared or duplicate manifest rows cannot multiply
+  validator or peer weight. Protected governance admission and transaction
+  state validation canonicalize the same duplicate-free validator set before
+  authority or quorum checks, so duplicate validator rows fail closed instead
+  of being silently collapsed at one boundary. Governance quorum metadata
+  (`gov_manifest_approvers`) is duplicate-free as well; duplicate approver
+  claims reject the transaction instead of being collapsed into one approval.
+  Manifest loading likewise rejects duplicate protected namespaces and duplicate
+  runtime-upgrade allowlist ids after trimming. Duplicate manifest filenames
+  that resolve to the same lane alias in one source directory invalidate that
+  alias so the governed lane remains locked until the duplicate source is
+  removed.
+- Public-lane staking mutations bind the transaction authority to the economic
+  owner they mutate. Validator registration and exit must be submitted by the
+  validator account itself, initial registration stake must come from that same
+  validator account, and bond/schedule-unbond/finalize-unbond operations must
+  be submitted by the staker account whose balance or pending withdrawal is
+  being changed.
 - Live NPoS lane-scope inference uses only `Active` public-lane validator
   records. Jailed, exiting, exited, pending, or slashed historical records stay
   available for audit and staking lifecycle queries but cannot pin recovery

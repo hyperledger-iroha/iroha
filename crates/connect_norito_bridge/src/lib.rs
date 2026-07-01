@@ -86,7 +86,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 14;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
 const SORAFS_ORDERBOOK_SIDE_ASK: u32 = 2;
@@ -10468,7 +10468,7 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_abi_version_advertises_sorafs_hedging_validation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 13);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 14);
     }
 
     #[test]
@@ -15382,6 +15382,48 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_transfer_instruction_box(
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    asset_definition_ptr: *const c_char,
+    asset_definition_len: c_ulong,
+    quantity_ptr: *const c_char,
+    quantity_len: c_ulong,
+    destination_ptr: *const c_char,
+    destination_len: c_ulong,
+    out_instruction_ptr: *mut *mut c_uchar,
+    out_instruction_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_instruction_ptr.is_null() || out_instruction_len.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let authority =
+            parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
+        let asset_definition =
+            unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
+        let quantity = parse_quantity(unsafe { read_string_bridge(quantity_ptr, quantity_len) }?)?;
+        let destination =
+            parse_destination(unsafe { read_string_bridge(destination_ptr, destination_len) }?)?;
+        let (asset_definition, asset_scope) =
+            parse_asset_definition_with_balance_scope(asset_definition)?;
+        let asset_id = AssetId::with_scope(asset_definition, authority, asset_scope);
+        let instruction =
+            InstructionBox::from(Transfer::asset_numeric(asset_id, quantity, destination));
+        let instruction_bytes =
+            norito::core::to_bytes(&instruction).map_err(|_| BridgeError::JsonSerialize)?;
+
+        unsafe {
+            write_bytes_bridge(out_instruction_ptr, out_instruction_len, &instruction_bytes)
+        }?;
         Ok(())
     })();
 

@@ -37,9 +37,25 @@ from sorafs_runner_preflight import (  # noqa: E402
     require_runner_passthrough_args,
     require_runner_positive_int,
     require_runner_url_args,
+    validate_runner_fixed_evidence_plan,
     validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
+)
+
+
+PLAN_SCHEMA = "sorafs.moderation.ai_prescreen.rollout_evidence_collection_plan.v1"
+PLAN_FIELDS = frozenset(
+    {
+        "schema",
+        "verifier_summary_schema",
+        "external_evidence",
+        "evidence_contract",
+        "steps",
+    }
+)
+PLAN_EXTERNAL_EVIDENCE_FIELDS = frozenset(
+    {"governance_dag", "end_to_end_workflow"}
 )
 
 
@@ -50,8 +66,6 @@ class CommandPlan:
     label: str
     artifact: Path | None
     command: list[str]
-
-
 
 
 def normalize_iroha_arg_values(args: Sequence[str]) -> list[str]:
@@ -106,12 +120,22 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         except ValueError as error:
             errors.append(error_diagnostic_label(error))
 
-    present_source_kinds = {source_kind for source_kind, _ in source_entries}
+    allowed_source_kinds = set(REQUIRED_TRANSPARENCY_SOURCE_KINDS)
+    present_source_kinds: set[str] = set()
+    source_paths: list[Path] = []
+    for source_kind, path in source_entries:
+        if source_kind not in allowed_source_kinds:
+            errors.append("source-entry supplied for unsupported kind")
+            continue
+        if source_kind in present_source_kinds:
+            errors.append("duplicate source-entry kind")
+            continue
+        present_source_kinds.add(source_kind)
+        source_paths.append(path)
     for source_kind in REQUIRED_TRANSPARENCY_SOURCE_KINDS:
         if source_kind not in present_source_kinds:
             errors.append("missing required source-entry coverage")
 
-    source_paths = [path for _, path in source_entries]
     errors.extend(require_existing_files([args.manifest], "--manifest", seen=seen_input_files))
     errors.extend(require_existing_files([args.runner_payload], "--runner-payload", seen=seen_input_files))
     errors.extend(require_existing_files(args.committee_result, "--committee-result", seen=seen_input_files))
@@ -277,21 +301,33 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     ]
 
 
+def external_evidence(args: argparse.Namespace) -> dict[str, str]:
+    """Return reviewed external evidence paths rendered in dry-run plans."""
+
+    return {
+        "governance_dag": str(args.governance_dag_evidence),
+        "end_to_end_workflow": str(args.e2e_evidence),
+    }
+
+
+def evidence_contract() -> dict[str, dict[str, object]]:
+    """Return the checker-backed evidence contract rendered in dry-run plans."""
+
+    return {
+        kind: {
+            "schema": KIND_BY_NAME[kind].schema,
+            "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+        }
+        for kind in DEFAULT_REQUIRED_KINDS
+    }
+
+
 def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
     return {
-        "schema": "sorafs.moderation.ai_prescreen.rollout_evidence_collection_plan.v1",
+        "schema": PLAN_SCHEMA,
         "verifier_summary_schema": SUMMARY_SCHEMA,
-        "external_evidence": {
-            "governance_dag": str(args.governance_dag_evidence),
-            "end_to_end_workflow": str(args.e2e_evidence),
-        },
-        "evidence_contract": {
-            kind: {
-                "schema": KIND_BY_NAME[kind].schema,
-                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
-            }
-            for kind in DEFAULT_REQUIRED_KINDS
-        },
+        "external_evidence": external_evidence(args),
+        "evidence_contract": evidence_contract(),
         "steps": [
             {
                 "label": step.label,
@@ -301,6 +337,28 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
             for step in plan
         ],
     }
+
+
+def validate_plan_json(
+    rendered: object,
+    plan: Sequence[CommandPlan],
+    args: argparse.Namespace,
+) -> list[str]:
+    """Validate the AI pre-screen collection-plan envelope before use."""
+
+    return validate_runner_fixed_evidence_plan(
+        rendered,
+        plan,
+        diagnostic_prefix="AI pre-screen rollout runner plan",
+        plan_schema=PLAN_SCHEMA,
+        plan_fields=PLAN_FIELDS,
+        summary_schema=SUMMARY_SCHEMA,
+        external_evidence=external_evidence(args),
+        external_evidence_fields=PLAN_EXTERNAL_EVIDENCE_FIELDS,
+        known_kinds=KIND_BY_NAME,
+        evidence_contract=evidence_contract(),
+        evidence_required_fields=EVIDENCE_REQUIRED_FIELDS,
+    )
 
 
 def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:
@@ -440,7 +498,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     plan = build_command_plan(args)
     rendered_plan = plan_json(plan, args)
-    plan_errors = validate_runner_plan_steps(rendered_plan, plan)
+    plan_errors = validate_plan_json(rendered_plan, plan, args)
     if plan_errors:
         emit_runner_error_lines(plan_errors)
         return 2

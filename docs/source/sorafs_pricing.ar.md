@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_pricing.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b30eef1206d7287de2c0719f0bfef3502a550af296f0989bf41079f75afaf376
+source_hash: 695f63e3ef2ff39b17647c4c1e685f6ca5efdd5997a15a65b60da49cba64b121
 source_last_modified: "2026-01-03T18:07:57.737132+00:00"
 translation_last_reviewed: 2026-01-30
 ---

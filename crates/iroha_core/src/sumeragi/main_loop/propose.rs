@@ -455,6 +455,7 @@ fn refresh_proposal_routing_from_state(
     routing_plan_batch: &mut Vec<crate::queue::RoutingPlan>,
     state_view: &crate::state::StateView<'_>,
     ledger_time_ms: u64,
+    proposal_height: u64,
 ) -> Result<bool> {
     if tx_batch.len() != routing_batch.len() || tx_batch.len() != routing_plan_batch.len() {
         return Err(eyre!(
@@ -472,15 +473,19 @@ fn refresh_proposal_routing_from_state(
     let mut refreshed_routing = Vec::with_capacity(tx_batch.len());
     let mut refreshed_plans = Vec::with_capacity(tx_batch.len());
     for (idx, tx) in tx_batch.iter().enumerate() {
-        let refreshed_plan = crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
-            nexus,
-            tx,
-            state_view.world(),
-            ledger_time_ms,
-        )
-        .map_err(|err| {
-            eyre!("proposal routing cannot be resolved from committed state at index {idx}: {err}")
-        })?;
+        let refreshed_plan =
+            crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                nexus,
+                tx,
+                state_view.world(),
+                ledger_time_ms,
+                proposal_height,
+            )
+            .map_err(|err| {
+                eyre!(
+                    "proposal routing cannot be resolved from committed state at index {idx}: {err}"
+                )
+            })?;
         refreshed_routing.push(refreshed_plan.coordinator_route());
         refreshed_plans.push(refreshed_plan);
     }
@@ -1151,6 +1156,14 @@ impl Actor {
         }
     }
 
+    pub(super) fn proposal_multilane_lookahead_enabled(
+        nexus: &iroha_config::parameters::actual::Nexus,
+        block_height: u64,
+    ) -> bool {
+        nexus.enabled
+            && crate::queue::routable_lane_ids_for_nexus_at_height(nexus, block_height).len() > 1
+    }
+
     pub(super) fn pull_transactions_for_proposal(
         &self,
         state: &State,
@@ -1177,7 +1190,7 @@ impl Actor {
         let scan_budget = scan_budget.max(1);
         let committed_nexus = state.nexus_snapshot();
         let multilane_lookahead =
-            committed_nexus.enabled && committed_nexus.uses_multilane_catalogs();
+            Self::proposal_multilane_lookahead_enabled(&committed_nexus, height);
         if self.queue.reconfigure_nexus_with_state_if_needed(
             &committed_nexus,
             state,
@@ -1256,7 +1269,7 @@ impl Actor {
                     }
                 };
 
-            for idx in order {
+            for (order_pos, idx) in order.iter().copied().enumerate() {
                 let Some(guard) = fetched_slots.get_mut(idx).and_then(Option::take) else {
                     continue;
                 };
@@ -1286,7 +1299,24 @@ impl Actor {
                     let allow_oversized =
                         gas_used_in_block == 0 && tx_guards.is_empty() && accepted.is_empty();
 
-                    if would_exceed && !allow_oversized {
+                    let fitting_later_candidate = would_exceed
+                        && allow_oversized
+                        && order.iter().skip(order_pos + 1).any(|candidate_idx| {
+                            fetched_slots
+                                .get(*candidate_idx)
+                                .and_then(Option::as_ref)
+                                .is_some_and(|candidate| {
+                                    let candidate_is_ivm_heavy = Self::is_ivm_heavy_transaction(
+                                        candidate.as_accepted(),
+                                        replay_ivm_proved,
+                                    );
+                                    max_ivm_transactions.is_none_or(|max| {
+                                        !candidate_is_ivm_heavy || ivm_transactions_included < max
+                                    }) && candidate.gas_cost() <= remaining_gas
+                                })
+                        });
+
+                    if would_exceed && (!allow_oversized || fitting_later_candidate) {
                         release_lane_consumption(&guard, &mut lane_consumption);
                         deferred_accumulator.push((guard.clone_accepted(), guard.routing_plan()));
                         continue;
@@ -3292,6 +3322,7 @@ impl Actor {
                         &mut routing_plan_batch,
                         &state_view,
                         routing_ledger_time_ms,
+                        proposal_height,
                     )? {
                         info!(
                             height = proposal_height,
@@ -3456,7 +3487,7 @@ impl Actor {
                     if bundle.is_empty() {
                         bundle_opt = None;
                     } else {
-                        self.validate_da_bundle(bundle)?;
+                        self.validate_da_bundle(bundle, proposal_height)?;
                     }
 
                     if let Some(bundle) = bundle_opt.as_ref() {
@@ -3530,11 +3561,13 @@ impl Actor {
                     let account_exists = |account: &iroha_data_model::account::AccountId| -> bool {
                         world.accounts().get(account).is_some()
                     };
-                    let (mut intents, rejected) = crate::da::sanitize_pin_intents_against_nexus(
-                        bundle.intents,
-                        &nexus,
-                        account_exists,
-                    );
+                    let (mut intents, rejected) =
+                        crate::da::sanitize_pin_intents_against_nexus_at_height(
+                            bundle.intents,
+                            &nexus,
+                            proposal_height,
+                            account_exists,
+                        );
                     if let Some(first_rejection) = rejected.first().cloned() {
                         for reason in &rejected {
                             #[cfg(feature = "telemetry")]
@@ -3596,7 +3629,8 @@ impl Actor {
                     }
                 }
 
-                let proof_policy_bundle = crate::da::active_proof_policy_bundle(&nexus);
+                let proof_policy_bundle =
+                    crate::da::active_proof_policy_bundle_at_height(&nexus, proposal_height);
                 builder = builder.with_da_proof_policies(Some(proof_policy_bundle));
 
                 if !tx_batch.is_empty() {
@@ -3616,6 +3650,7 @@ impl Actor {
                             &mut routing_plan_batch,
                             &state_view,
                             routing_ledger_time_ms,
+                            proposal_height,
                         )?;
                         (state_height, refreshed)
                     };
@@ -4125,7 +4160,11 @@ impl Actor {
     /// The current `PoR` proof bundle is tracked by commitments only; we bound proof
     /// openings by the same count until proof summaries are threaded through the
     /// consensus path.
-    pub(super) fn validate_da_bundle(&mut self, bundle: &DaCommitmentBundle) -> Result<()> {
+    pub(super) fn validate_da_bundle(
+        &mut self,
+        bundle: &DaCommitmentBundle,
+        proposal_height: u64,
+    ) -> Result<()> {
         let nexus = self.state.nexus_snapshot();
         let lane_config = nexus.lane_config.clone();
         validate_da_bundle_caps(
@@ -4135,7 +4174,8 @@ impl Actor {
         )?;
 
         for record in &bundle.commitments {
-            crate::da::active_lane_proof_policy(&nexus, record.lane_id).map_err(|err| {
+            crate::da::active_lane_proof_policy_at_height(&nexus, record.lane_id, proposal_height)
+                .map_err(|err| {
                 eyre!(
                     "DA commitment active lane validation failed for lane {} epoch {} seq {}: {err}",
                     record.lane_id.as_u32(),
@@ -4190,8 +4230,12 @@ impl Actor {
             )?;
         }
 
-        crate::da::validate_commitment_bundle_against_nexus(bundle, &nexus)
-            .map_err(|err| eyre!("DA commitment bundle failed validation: {err}"))?;
+        crate::da::validate_commitment_bundle_against_nexus_at_height(
+            bundle,
+            &nexus,
+            proposal_height,
+        )
+        .map_err(|err| eyre!("DA commitment bundle failed validation: {err}"))?;
 
         Ok(())
     }
@@ -7532,6 +7576,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            1,
         )
         .expect("refresh should use committed state routing");
 
@@ -7545,6 +7590,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            1,
         )
         .expect("second refresh should remain valid");
 
@@ -7596,6 +7642,7 @@ mod tests {
                 &mut routing_plan_batch,
                 &state.view(),
                 0,
+                2,
             )
             .expect("proposal refresh should resolve autoscale candidates");
             if routing_batch[0].lane_id == LaneId::new(1) {
@@ -7613,6 +7660,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            2,
         )
         .expect("proposal refresh should use live Nexus autoscale range");
 
@@ -7676,6 +7724,7 @@ mod tests {
                 &mut routing_plan_batch,
                 &state.view(),
                 0,
+                2,
             )
             .expect("enabled Nexus should resolve autoscale candidates");
             if routing_batch == vec![stale_elastic_route] {
@@ -7700,6 +7749,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            2,
         )
         .expect("disabled Nexus should refresh stale elastic proposal vectors");
 
@@ -7832,6 +7882,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            1,
         )
         .expect("proposal refresh should replace stale Native AMX participant legs");
 
@@ -7856,6 +7907,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            1,
         )
         .expect_err("routing vector drift must fail closed");
 

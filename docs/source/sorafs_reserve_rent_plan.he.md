@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_reserve_rent_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fe30132592db1a078d052725a719009f3330e9a8bc8ef0fc1e73ccbd142b4f75
+source_hash: 114a0c842fc23f56396f3cb070e94530b2fc56e1d3aaf1a621244976bf3aa254
 source_last_modified: "2026-06-25T18:08:03+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -301,3 +301,5 @@ or reserve top-up transfers.
 - Remaining: live chain custody submission and automatic finality polling for signed movement intents, live account mutation for local credit-line state, broader downstream compliance application evidence for governance source entries, and staged provider bake evidence, including live scheduled lifecycle canaries, that passes the rollout gate.
 
 The SFM-6 rollout gate remains fail-closed: provider-bake artifacts prove the config-backed reserve lifecycle scheduler canary ran recently enough before bake completion, advanced defaulting providers, synced gateway compliance, and preserved orderbook rejection; reserve-movement artifacts prove live chain submission coverage, submitted transaction-hash readback, automatic finality polling, confirmed-status polling, timeout rejection, and submitted/confirmed/rejected custody evidence; credit-line artifacts prove live account-state mutation/readback, accrual posting, manual-approval tier non-mutation, and account-state reconciliation; governance approval artifacts prove source-entry publication, downstream compliance application, consumer coverage, handoff verification, and non-reserve compliance-entry preservation.
+
+The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.

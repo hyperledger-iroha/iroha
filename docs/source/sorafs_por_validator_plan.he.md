@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_por_validator_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 59681c3f49093f091d40a455fa21f24faf442a2ce9af0d63dcde3bac6b6a9d3b
+source_hash: 543f6c80a6a914753e94ccf1e29ae7aceba2af89a36290f2a0b0f94ceb827acc
 source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -33,12 +33,17 @@ handoff, and any richer proof-bundle inspection commands required by operators.
 The shared SF-9 rollout gate in
 `scripts/check_sorafs_por_rollout_evidence.py` now covers the validator replay,
 reporting/archive, observability, and governance-approval evidence needed before
-operators treat the local PoR validator/reporting surface as released, while
+operators treat the local PoR validator/reporting surface as released, including
+the exact `archive_backend` value (`sql` or `parquet`) for deployment-specific
+archive handoff, while
 `scripts/run_sorafs_por_rollout_evidence.py` provides the reviewed collection
 planner. The shared checker exports its required top-level payload fields as
 `EVIDENCE_REQUIRED_FIELDS`, and the planner includes the checker-backed
 `evidence_contract` map in `--dry-run` output so validator/reporting operators
-can review the exact SF-9 artifact contract before promotion.
+can review the exact SF-9 artifact contract before promotion, and the runner
+validates the schema-closed collection plan, required kinds, thresholds,
+external evidence map, evidence contract, and command steps before dry-run
+output or verifier execution.
 
 ## Validator Personas
 - **Auditor:** Independent or council-appointed reviewer validating provider proofs, filing slashing proposals, and verifying remediation.
@@ -208,8 +213,9 @@ The validator-specific evidence must prove `sorafs-validate por` challenge/proof
 replay, challenge/proof binding, exact sample coverage, deadline policy,
 Merkle/archive replay, `ValidationOutcomeV1` schema compatibility, bounded
 status/export/report route latency, weekly report generation, archive-retention
-policy, governance archive handoff, and the explicit `retired` decision for the
-manual-trigger server route. Raw challenge, proof, report,
+policy, governance archive handoff, the exact `archive_backend` value (`sql` or
+`parquet`), and the explicit `retired` decision for the manual-trigger server
+route. Raw challenge, proof, report,
 export, response-body, token, transaction, and secret material is rejected.
 
 ## Rollout Status
@@ -225,10 +231,12 @@ Implemented locally:
 - Focused tests for CLI status/export/report/trigger behavior and Torii
   status/export/report handlers.
 - Shared fail-closed SF-9 rollout evidence gate, collection planner, operator
-  argfile templates, and focused Python tests for validator/reporting evidence.
+  argfile templates, and focused Python tests for validator/reporting evidence,
+  including exact `retired` state enforcement for the legacy manual-trigger
+  route and exact SQL/Parquet archive backend enforcement for reporting/archive
+  evidence.
 
 Remaining production gates:
-- Include the manual-trigger route retirement decision in the SF-9 gate evidence.
 - Add proof-bundle fetch/show/offline replay commands if operators need them
   beyond `sorafs-validate por`.
 - Archive live auditor, drand, VRF, report, and export evidence before treating

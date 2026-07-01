@@ -256,7 +256,7 @@ base_fee = "0"
 per_byte_fee = "0"
 per_instruction_fee = "0.001"
 per_gas_unit_fee = "0.00005"
-sponsorship_enabled = false
+sponsorship_enabled = true
 sponsor_max_fee = "0"
 
 [[nexus.lane_catalog]]
@@ -310,6 +310,8 @@ alias = "is"
 id = 6647857470246403404
 manifest_hash = "4cbd76b725ef415c000000000000000000000000000000000000000000000000"
 description = "External PoC data space"
+fee_sponsor_account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+fee_sponsor_policy = "default"
 
 [nexus.governance]
 default_module = "parliament"
@@ -338,6 +340,41 @@ dataspace = "is"
 [nexus.routing_policy.rules.matcher]
 instruction = "smartcontract::deploy"
 description = "Route contract deployments to the external IS lane for PoC proof tracking"
+
+[[nexus.routing_policy.rules]]
+lane = 3
+dataspace = "is"
+[nexus.routing_policy.rules.matcher]
+instruction = "shield"
+description = "Route shield instructions to the external IS lane for dataspace-scoped balances"
+
+[[nexus.routing_policy.rules]]
+lane = 3
+dataspace = "is"
+[nexus.routing_policy.rules.matcher]
+instruction = "zk::zk_transfer"
+description = "Route private ZK transfers to the external IS lane for dataspace-scoped balances"
+
+[[nexus.routing_policy.rules]]
+lane = 3
+dataspace = "is"
+[nexus.routing_policy.rules.matcher]
+instruction = "unshield"
+description = "Route unshield instructions to the external IS lane for dataspace-scoped balances"
+
+[[nexus.routing_policy.rules]]
+lane = 3
+dataspace = "is"
+[nexus.routing_policy.rules.matcher]
+instruction = "register_asset_hidden_zk_pool"
+description = "Route asset-hidden pool registration to the external IS lane"
+
+[[nexus.routing_policy.rules]]
+lane = 3
+dataspace = "is"
+[nexus.routing_policy.rules.matcher]
+instruction = "asset_hidden_zk_transfer"
+description = "Route asset-hidden ZK transfers to the external IS lane"
 
 [nexus.fusion]
 floor_teu = 2500

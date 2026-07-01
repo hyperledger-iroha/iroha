@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_chunk_range_smoketest.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bf6279ce239a097aaf93c11264e422ebde0e579087a0b8c0760209ff2195bf3c
+source_hash: e2a92e903c7d9b56c424273cbd7a857b0bf19619ed3fb1264341dab9d0e7bd8d
 source_last_modified: "2026-01-22T14:35:37.504781+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS Chunk-Range Smoketest Plan

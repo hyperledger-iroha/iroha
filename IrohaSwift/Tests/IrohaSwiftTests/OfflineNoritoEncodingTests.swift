@@ -130,16 +130,16 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         var payload = Data()
         payload.append(compactField(OfflineCompactNorito.encodeString(OfflineNoteV2Constants.keyCertificatePayloadDomain)))
         payload.append(compactField(OfflineCompactNorito.encodeUInt16(OfflineNoteV2Constants.keyCertificateVersion)))
-        payload.append(compactField(OfflineCompactNorito.encodeString("ios")))
+        payload.append(compactField(OfflineCompactNorito.encodeString(OfflineNoteV2Constants.iosAppAttestPlatform)))
         payload.append(compactField(OfflineCompactNorito.encodeString("sdk-multisig-key")))
         payload.append(compactField(OfflineCompactNorito.encodeString("sdk-device")))
         payload.append(compactField(accountIdPayload))
         payload.append(compactField(OfflineNorito.encodeBytesVec(Data(repeating: 0x11, count: 32))))
-        payload.append(compactField(OfflineCompactNorito.encodeString("apple-appattest-counter-v1")))
-        payload.append(compactField(OfflineCompactNorito.encodeString("app-attest-p256")))
-        payload.append(compactField(OfflineNorito.encodeBytesVec(Data(repeating: 0x22, count: 65))))
+        payload.append(compactField(OfflineCompactNorito.encodeString(OfflineNoteV2Constants.iosAppAttestAssertionScheme)))
+        payload.append(compactField(OfflineCompactNorito.encodeString(OfflineNoteV2Constants.iosAppAttestAssertionKeyAlgorithm)))
+        payload.append(compactField(OfflineNorito.encodeBytesVec(p256AssertionPublicKey())))
         payload.append(compactField(
-            try OfflineCompactNorito.encodeOption(UInt32(1), encode: OfflineCompactNorito.encodeUInt32)
+            try OfflineCompactNorito.encodeOption(Optional<UInt32>.none, encode: OfflineCompactNorito.encodeUInt32)
         ))
         payload.append(compactField(OfflineNorito.encodeBool(true)))
         return noritoEncode(
@@ -173,6 +173,20 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         account.append(uint32LE(1))
         account.append(compactField(policyPayload))
         return account
+    }
+
+    private func p256AssertionPublicKey() -> Data {
+        Data([
+            0x04,
+            0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47,
+            0xf8, 0xbc, 0xe6, 0xe5, 0x63, 0xa4, 0x40, 0xf2,
+            0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0,
+            0xf4, 0xa1, 0x39, 0x45, 0xd8, 0x98, 0xc2, 0x96,
+            0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b,
+            0x8e, 0xe7, 0xeb, 0x4a, 0x7c, 0x0f, 0x9e, 0x16,
+            0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e, 0xce,
+            0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf, 0x51, 0xf5
+        ])
     }
 
     private func compactConstVec(_ bytes: Data) -> Data {

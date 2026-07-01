@@ -69,8 +69,9 @@ use iroha_data_model::{
     isi::{Instruction, InstructionBox, Log, ram_lfe::RegisterRamLfeProgramPolicy},
     merge::MergeCommitteeSignature,
     nexus::{
-        DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneFastpqProofMaterial, LaneId,
-        LaneRelayEnvelope, LaneStorageProfile, LaneVisibility,
+        AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
+        LaneConfig as ModelLaneConfig, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope,
+        LaneStorageProfile, LaneVisibility,
         staking::{PublicLaneValidatorRecord, PublicLaneValidatorStatus},
     },
     parameter::TransactionParameters,
@@ -2382,6 +2383,37 @@ fn install_stale_runtime_lane_geometry(state: &State, stale_lane: LaneId) {
     assert!(
         nexus.lane_config.entry(stale_lane).is_some(),
         "fixture must retain stale runtime geometry for removed lane"
+    );
+}
+
+fn install_future_created_autoscale_lane(state: &State, lane_id: LaneId, created_height: u64) {
+    let mut elastic_lane = ModelLaneConfig {
+        id: lane_id,
+        alias: format!("elastic-lane-{}", lane_id.as_u32()),
+        ..ModelLaneConfig::default()
+    };
+    elastic_lane
+        .metadata
+        .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+    elastic_lane.metadata.insert(
+        AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+        created_height.to_string(),
+    );
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![ModelLaneConfig::default(), elastic_lane],
+    )
+    .expect("future-created autoscale lane catalog");
+    let mut nexus = state.nexus.write();
+    nexus.enabled = true;
+    nexus.autoscale.enabled = true;
+    nexus.autoscale.min_lanes = nonzero!(1_u32);
+    nexus.autoscale.max_lanes = nonzero!(3_u32);
+    nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    nexus.lane_catalog = lane_catalog;
+    assert!(
+        nexus.lane_config.entry(lane_id).is_some(),
+        "fixture must retain committed geometry for the future-created autoscale lane"
     );
 }
 
@@ -71935,6 +71967,67 @@ async fn assemble_proposal_rejects_stale_geometry_da_pin_intent_file() {
             intent.sequence
         )),
         "stale-lane pin intent must not be marked sealed after assembly rejection"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_rejects_future_created_autoscale_da_pin_intent_file() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let future_created_lane = LaneId::new(1);
+    install_future_created_autoscale_lane(
+        actor.state.as_ref(),
+        future_created_lane,
+        height.saturating_add(4),
+    );
+
+    let spool_dir = actor.subsystems.da_rbc.spool_dir.clone();
+    let intent = DaPinIntent::new(
+        future_created_lane,
+        1,
+        5,
+        StorageTicketId::new([0x97; 32]),
+        ManifestDigest::new([0x98; 32]),
+    );
+    write_da_pin_intent_spool_file(&spool_dir, &intent, [0x99; 32]);
+
+    let view = 0_u64;
+    let highest_qc = sample_qc_ref(0, 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+
+    let err = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            0,
+            0,
+            None,
+            Instant::now(),
+        )
+        .expect_err("future-created autoscale DA pin intent lane must fail proposal assembly");
+    let message = err.to_string();
+    assert!(
+        message.contains("invalid DA pin intent in spool"),
+        "expected DA pin-intent validation failure, got {message}"
+    );
+    assert!(
+        message.contains("configured lane catalog"),
+        "error should identify the inactive lane catalog: {message}"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.da.sealed_pin_intents.contains(&(
+            intent.lane_id.as_u32(),
+            intent.epoch,
+            intent.sequence
+        )),
+        "future-created lane pin intent must not be marked sealed after assembly rejection"
     );
 
     harness.shutdown.send();
@@ -141871,6 +141964,152 @@ async fn proposal_queue_scan_budget_does_not_overfetch_single_lane_slots() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_queue_scan_budget_ignores_future_created_autoscale_lane_for_lookahead() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    install_future_created_autoscale_lane(
+        actor.state.as_ref(),
+        LaneId::new(1),
+        /*created_height*/ 10,
+    );
+    {
+        let mut nexus = actor.state.nexus.write();
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+    }
+
+    for _ in 0..5 {
+        actor
+            .queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+                actor.state.view(),
+            )
+            .expect("push tx");
+    }
+
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        4,
+        None,
+        None,
+        false,
+        &mut tx_guards,
+        /*height*/ 6,
+        0,
+    );
+
+    assert_eq!(
+        tx_guards.len(),
+        1,
+        "single active lane should fill one slot"
+    );
+    assert!(
+        deferred.is_empty(),
+        "future-created autoscale lanes must not enable multilane lookahead overfetch"
+    );
+
+    drop(tx_guards);
+
+    assert_eq!(
+        actor.queue.queued_len(),
+        4,
+        "inactive autoscale lane must not cause extra transactions to be popped for requeue"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_queue_scan_budget_ignores_unrouted_same_dataspace_sidecar_for_lookahead() {
+    use iroha_config::parameters::actual::LaneRoutingPolicy;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
+                id: LaneId::new(1),
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                alias: "unrouted-sidecar".to_string(),
+                ..ModelLaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog;
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    nexus.routing_policy = LaneRoutingPolicy::default();
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+
+    for _ in 0..5 {
+        actor
+            .queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+                actor.state.view(),
+            )
+            .expect("push tx");
+    }
+
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        4,
+        None,
+        None,
+        false,
+        &mut tx_guards,
+        1,
+        0,
+    );
+
+    assert_eq!(
+        tx_guards.len(),
+        1,
+        "single routable lane should fill one slot"
+    );
+    assert!(
+        deferred.is_empty(),
+        "unrouted sidecar lanes must not enable multilane lookahead overfetch"
+    );
+
+    drop(tx_guards);
+
+    assert_eq!(
+        actor.queue.queued_len(),
+        4,
+        "unrouted sidecar lane must not cause extra transactions to be popped for requeue"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_queue_scan_budget_looks_ahead_for_rotated_lane() {
     use iroha_config::parameters::actual::{
         LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
@@ -142014,6 +142253,239 @@ async fn proposal_queue_scan_budget_looks_ahead_for_rotated_lane() {
             .expect("requeue deferred tx");
     }
     assert_eq!(actor.queue.queued_len(), 3);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_gas_budget_prefers_fitting_cross_lane_tx_over_oversized_first_candidate() {
+    use iroha_config::parameters::actual::{
+        LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
+    };
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog};
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            ModelLaneConfig::default(),
+            ModelLaneConfig {
+                id: lane1.lane_id,
+                dataspace_id: lane1.dataspace_id,
+                alias: "lane-1".to_string(),
+                ..ModelLaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata::default(),
+        DataSpaceMetadata {
+            id: lane1.dataspace_id,
+            alias: "space-1".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+
+    let chain = ChainId::from("gas-fit-cross-lane");
+    let oversized_key = checked_keypair();
+    let (_, oversized_private_key) = oversized_key.clone().into_parts();
+    let oversized_authority = AccountId::new(oversized_key.public_key().clone());
+    let oversized_tx = TransactionBuilder::new(chain.clone(), oversized_authority.clone())
+        .with_instructions([
+            Log::new(Level::INFO, "oversized first lane tx a".to_string()),
+            Log::new(Level::INFO, "oversized first lane tx b".to_string()),
+        ])
+        .sign(&oversized_private_key);
+    let oversized_hash = oversized_tx.hash();
+
+    let fitting_key = checked_keypair();
+    let (_, fitting_private_key) = fitting_key.clone().into_parts();
+    let fitting_authority = AccountId::new(fitting_key.public_key().clone());
+    let fitting_tx = TransactionBuilder::new(chain, fitting_authority.clone())
+        .with_instructions([Log::new(Level::INFO, "fitting second lane tx".to_string())])
+        .sign(&fitting_private_key);
+    let fitting_hash = fitting_tx.hash();
+
+    let tx_gas_cost = |tx: &SignedTransaction| {
+        let instructions = match tx.instructions() {
+            Executable::Instructions(batch) => batch.iter().map(Clone::clone).collect::<Vec<_>>(),
+            Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
+                panic!("test transaction should be ISI-based")
+            }
+        };
+        crate::gas::meter_instructions(&instructions)
+    };
+    let fitting_gas = tx_gas_cost(&fitting_tx);
+    let oversized_gas = tx_gas_cost(&oversized_tx);
+    assert!(
+        oversized_gas > fitting_gas,
+        "two-log transaction should exceed one-log gas cost"
+    );
+    let gas_cap = NonZeroU64::new(fitting_gas).expect("fitting gas must be non-zero");
+
+    let routing_policy = LaneRoutingPolicy {
+        default_lane: lane0.lane_id,
+        default_dataspace: lane0.dataspace_id,
+        rules: vec![LaneRoutingRule {
+            lane: lane1.lane_id,
+            dataspace: Some(lane1.dataspace_id),
+            matcher: LaneRoutingMatcher {
+                account: Some(fitting_authority.to_string()),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog.clone();
+    nexus.dataspace_catalog = dataspace_catalog.clone();
+    nexus.routing_policy = routing_policy.clone();
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+
+    let queue_router = Arc::new(ConfigLaneRouter::new(
+        routing_policy,
+        dataspace_catalog,
+        lane_catalog,
+    ));
+    actor.queue = Arc::new(Queue::test_with_router_for_routes(
+        QueueConfig::default(),
+        &time_source,
+        queue_router,
+        &[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(1), DataSpaceId::new(1)),
+        ],
+    ));
+    for tx in [oversized_tx, fitting_tx] {
+        actor
+            .queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+                actor.state.view(),
+            )
+            .expect("push tx");
+    }
+
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        2,
+        Some(gas_cap),
+        None,
+        false,
+        &mut tx_guards,
+        2,
+        0,
+    );
+
+    assert_eq!(
+        tx_guards.len(),
+        1,
+        "one fitting transaction should fill the capped proposal slot"
+    );
+    assert_eq!(
+        tx_guards[0].as_accepted().hash(),
+        fitting_hash,
+        "scanner should choose the gas-fitting cross-lane transaction before oversized fallback"
+    );
+    assert_eq!(tx_guards[0].routing(), lane1);
+    assert_eq!(
+        deferred.len(),
+        1,
+        "oversized first-lane tx should be deferred"
+    );
+    assert_eq!(deferred[0].0.hash(), oversized_hash);
+
+    drop(tx_guards);
+    for (tx, routing_plan) in deferred {
+        actor
+            .queue
+            .push_requeued_with_routing_plan(tx, routing_plan, actor.state.as_ref())
+            .expect("requeue deferred oversized tx");
+    }
+    assert_eq!(actor.queue.queued_len(), 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_gas_budget_keeps_oversized_first_candidate_when_no_fit_exists() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let key_pair = checked_keypair();
+    let (_, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority)
+        .with_instructions([
+            Log::new(Level::INFO, "oversized fallback tx a".to_string()),
+            Log::new(Level::INFO, "oversized fallback tx b".to_string()),
+        ])
+        .sign(&private_key);
+    let tx_hash = tx.hash();
+    let instructions = match tx.instructions() {
+        Executable::Instructions(batch) => batch.iter().map(Clone::clone).collect::<Vec<_>>(),
+        Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
+            panic!("test transaction should be ISI-based")
+        }
+    };
+    assert!(
+        crate::gas::meter_instructions(&instructions) > 1,
+        "test transaction must exceed the tiny gas cap"
+    );
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push oversized tx");
+
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(5_usize),
+        5,
+        NonZeroU64::new(1),
+        None,
+        false,
+        &mut tx_guards,
+        2,
+        0,
+    );
+
+    assert!(
+        deferred.is_empty(),
+        "oversized fallback should not defer the only candidate"
+    );
+    assert_eq!(tx_guards.len(), 1);
+    assert_eq!(tx_guards[0].as_accepted().hash(), tx_hash);
+
+    drop(tx_guards);
 
     harness.shutdown.send();
 }

@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_pop_credentials_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 22dbc13f3322ef703f4d1c091a66b8206335411af2e06d8ff92c5d641b980ada
+source_hash: 3398edc13ea114f1c9182e02cd6b216367bb08ebdfd38d0593b6cf8207340ad3
 source_last_modified: "2026-06-25T17:19:30+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -180,3 +180,5 @@ python3 -m pytest -q scripts/tests/check_sorafs_pop_credentials_rollout_evidence
 
 Add dedicated service, CLI, and deployed verifier tests when the issuer,
 registry, juror client, and privacy-proof backend land.
+
+The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.

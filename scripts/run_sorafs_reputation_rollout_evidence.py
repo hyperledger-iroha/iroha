@@ -37,10 +37,24 @@ from sorafs_runner_preflight import (  # noqa: E402
     require_runner_passthrough_args,
     require_runner_positive_int,
     require_runner_url_args,
+    validate_runner_fixed_evidence_plan,
     validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
 )
+
+
+PLAN_SCHEMA = "sorafs.reputation.rollout_evidence_collection_plan.v1"
+PLAN_FIELDS = frozenset(
+    {
+        "schema",
+        "verifier_summary_schema",
+        "external_evidence",
+        "evidence_contract",
+        "steps",
+    }
+)
+EXTERNAL_EVIDENCE_FIELDS = frozenset({"metrics", "transport", "consumption"})
 
 
 @dataclass(frozen=True)
@@ -50,8 +64,6 @@ class CommandPlan:
     label: str
     artifact: Path | None
     command: list[str]
-
-
 
 
 def split_provider_proof_spec(spec: str) -> tuple[str, Path]:
@@ -229,22 +241,34 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     return plan
 
 
+def external_evidence(args: argparse.Namespace) -> dict[str, str]:
+    """Return reviewed external evidence paths rendered in dry-run plans."""
+
+    return {
+        "metrics": str(args.metrics_evidence),
+        "transport": str(args.transport_evidence),
+        "consumption": str(args.consumption_evidence),
+    }
+
+
+def evidence_contract() -> dict[str, dict[str, object]]:
+    """Return the checker-backed evidence contract rendered in dry-run plans."""
+
+    return {
+        kind: {
+            "schema": KIND_BY_NAME[kind].schema,
+            "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+        }
+        for kind in DEFAULT_REQUIRED_KINDS
+    }
+
+
 def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
     return {
-        "schema": "sorafs.reputation.rollout_evidence_collection_plan.v1",
+        "schema": PLAN_SCHEMA,
         "verifier_summary_schema": SUMMARY_SCHEMA,
-        "external_evidence": {
-            "metrics": str(args.metrics_evidence),
-            "transport": str(args.transport_evidence),
-            "consumption": str(args.consumption_evidence),
-        },
-        "evidence_contract": {
-            kind: {
-                "schema": KIND_BY_NAME[kind].schema,
-                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
-            }
-            for kind in DEFAULT_REQUIRED_KINDS
-        },
+        "external_evidence": external_evidence(args),
+        "evidence_contract": evidence_contract(),
         "steps": [
             {
                 "label": step.label,
@@ -254,6 +278,28 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
             for step in plan
         ],
     }
+
+
+def validate_plan_json(
+    rendered: object,
+    plan: Sequence[CommandPlan],
+    args: argparse.Namespace,
+) -> list[str]:
+    """Validate the reputation collection-plan envelope before use."""
+
+    return validate_runner_fixed_evidence_plan(
+        rendered,
+        plan,
+        diagnostic_prefix="reputation rollout runner plan",
+        plan_schema=PLAN_SCHEMA,
+        plan_fields=PLAN_FIELDS,
+        summary_schema=SUMMARY_SCHEMA,
+        external_evidence=external_evidence(args),
+        external_evidence_fields=EXTERNAL_EVIDENCE_FIELDS,
+        known_kinds=KIND_BY_NAME,
+        evidence_contract=evidence_contract(),
+        evidence_required_fields=EVIDENCE_REQUIRED_FIELDS,
+    )
 
 
 def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:
@@ -355,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
 
     plan = build_command_plan(args)
     rendered_plan = plan_json(plan, args)
-    plan_errors = validate_runner_plan_steps(rendered_plan, plan)
+    plan_errors = validate_plan_json(rendered_plan, plan, args)
     if plan_errors:
         emit_runner_error_lines(plan_errors)
         return 2

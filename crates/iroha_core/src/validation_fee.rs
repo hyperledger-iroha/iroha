@@ -545,6 +545,10 @@ fn enforce_policy(
         policy,
         &fee_asset_definition_id,
     )?;
+    let metadata_contains_validation_fee = has_validation_fee_metadata(tx.metadata());
+    if metadata_contains_validation_fee {
+        validate_policy_metadata(tx.metadata(), policy)?;
+    }
     let fee_coordinate = validation_fee_coordinate(tx.metadata())?;
     let mut requires_policy_metadata = false;
 
@@ -567,7 +571,7 @@ fn enforce_policy(
         )?;
     }
 
-    if requires_policy_metadata {
+    if requires_policy_metadata && !metadata_contains_validation_fee {
         validate_policy_metadata(tx.metadata(), policy)?;
     }
     Ok(())
@@ -852,6 +856,21 @@ fn validate_policy_metadata(
     }
 
     Ok(())
+}
+
+fn has_validation_fee_metadata(metadata: &Metadata) -> bool {
+    metadata
+        .get(VALIDATION_FEE_POLICY_VERSION_METADATA_KEY)
+        .is_some()
+        || metadata
+            .get(VALIDATION_FEE_POLICY_HASH_METADATA_KEY)
+            .is_some()
+        || metadata
+            .get(VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY)
+            .is_some()
+        || metadata
+            .get(VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY)
+            .is_some()
 }
 
 fn collect_asset_transfers(
@@ -1894,6 +1913,92 @@ mod tests {
             enforce_policy(&tx, &policy),
             Err(ValidationFeeAdmissionError::WrongPolicyHashMetadata { .. })
         ));
+    }
+
+    #[test]
+    fn zero_qualifying_transaction_rejects_mismatched_validation_fee_policy_metadata() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let non_fee_asset = asset_definition("xor");
+        let mut metadata = metadata_for(&policy);
+        let observed_hash_hex = hex::encode([9u8; 32]);
+        metadata.insert(
+            Name::from_str(VALIDATION_FEE_POLICY_HASH_METADATA_KEY).expect("metadata key"),
+            Json::new(observed_hash_hex.clone()),
+        );
+        let tx = tx(
+            1,
+            vec![transfer(
+                &user,
+                &non_fee_asset,
+                Numeric::new(1u64, 0),
+                &recipient,
+            )],
+            metadata,
+        );
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::WrongPolicyHashMetadata {
+                expected_hash_hex: hex::encode(policy.policy_hash().expect("policy hash")),
+                observed_hash_hex,
+            })
+        );
+    }
+
+    #[test]
+    fn zero_qualifying_transaction_with_fee_coordinate_requires_policy_metadata() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let non_fee_asset = asset_definition("xor");
+        let tx = tx(
+            1,
+            vec![transfer(
+                &user,
+                &non_fee_asset,
+                Numeric::new(1u64, 0),
+                &recipient,
+            )],
+            metadata_for_fee_instruction_coordinate(0),
+        );
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::MissingPolicyVersionMetadata)
+        );
+    }
+
+    #[test]
+    fn zero_qualifying_transaction_rejects_dangling_fee_entry_coordinate() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let non_fee_asset = asset_definition("xor");
+        let mut metadata = metadata_for(&policy);
+        metadata.insert(
+            Name::from_str(VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY).expect("metadata key"),
+            Json::new(0u64),
+        );
+        let tx = tx(
+            1,
+            vec![transfer(
+                &user,
+                &non_fee_asset,
+                Numeric::new(1u64, 0),
+                &recipient,
+            )],
+            metadata,
+        );
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::MalformedFeeInstructionMetadata)
+        );
     }
 
     #[test]

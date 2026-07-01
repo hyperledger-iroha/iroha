@@ -44,6 +44,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
+    validate_bound_evidence_digest_references,
     validate_bound_evidence_tuple_references,
     require_2xx_status,
     require_bool_true,
@@ -119,6 +120,7 @@ CYCLE_BOUND_KINDS = (
     "metrics_alerts",
     "governance_approval",
 )
+POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -220,6 +222,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "total_usd_micro",
         "reference_price_bound",
         "reference_decision_id_hex",
+        "policy_digest_hex",
         "line_item_root_hex",
         "statement_bundle_digest_hex",
         "reconciliation_digest_hex",
@@ -306,6 +309,7 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "decision_id_hex",
     "statement_count",
     "reference_decision_id_hex",
+    "policy_digest_hex",
     "statement_bundle_digest_hex",
     "reconciliation_digest_hex",
 )
@@ -317,6 +321,7 @@ BILLING_CYCLE_DETAIL_FIELDS: tuple[str, ...] = (
     "generated_at_unix",
     "statement_count",
     "reference_decision_id_hex",
+    "policy_digest_hex",
     "statement_bundle_digest_hex",
     "reconciliation_digest_hex",
 )
@@ -406,6 +411,7 @@ def validate_billing_cycle(
     require_positive_int(payload, "total_usd_micro", errors)
     require_bool_true(payload, "reference_price_bound", errors)
     require_hex(payload, "reference_decision_id_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
     require_hex(payload, "line_item_root_hex", HEX64_LEN, errors)
     require_hex(payload, "statement_bundle_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "reconciliation_digest_hex", HEX64_LEN, errors)
@@ -562,8 +568,10 @@ def build_summary(
     valid_billing_cycles: list[dict[str, Any]] = []
     valid_billing_cycle_artifacts: list[dict[str, Any]] = []
     valid_reference_decision_ids: set[str] = set()
+    valid_policy_digests: set[str] = set()
     valid_cycle_bindings: set[tuple[str, str]] = set()
     cycle_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -592,15 +600,20 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
-        if kind_name == "billing_cycle":
-            if evidence_artifact_is_valid(artifact):
-                valid_billing_cycle_artifacts.append(artifact)
-        elif kind_name == "reference_price" and evidence_artifact_is_valid(artifact):
+        artifact_valid = evidence_artifact_is_valid(artifact)
+        if kind_name == "billing_cycle" and artifact_valid:
+            valid_billing_cycle_artifacts.append(artifact)
+            policy_digest = evidence_artifact_fingerprint(artifact).get("policy_digest_hex")
+            if isinstance(policy_digest, str):
+                valid_policy_digests.add(policy_digest.lower())
+        if kind_name == "reference_price" and artifact_valid:
             decision_id = payload.get("decision_id_hex")
             if isinstance(decision_id, str):
                 valid_reference_decision_ids.add(decision_id.lower())
-        elif kind_name in CYCLE_BOUND_KINDS and evidence_artifact_is_valid(artifact):
+        if kind_name in CYCLE_BOUND_KINDS and artifact_valid:
             cycle_bound_artifacts.append((kind_name, artifact))
+        if kind_name in POLICY_BOUND_KINDS and artifact_valid:
+            policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
@@ -673,6 +686,23 @@ def build_summary(
         ),
     )
 
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("billing_cycle",) + POLICY_BOUND_KINDS,
+        bound_artifacts=policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must reference a valid "
+            "billing_cycle policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex requires a valid billing_cycle "
+            "policy_digest_hex"
+        ),
+    )
+
     required = build_required_evidence_summary(
         required_kinds,
         artifacts_by_kind,
@@ -696,6 +726,7 @@ def build_summary(
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_billing_cycles": valid_billing_cycles,
         "valid_reference_decision_ids": sorted(valid_reference_decision_ids),
+        "valid_policy_digests": sorted(valid_policy_digests),
         "valid_cycle_bindings": [
             {
                 "statement_bundle_digest_hex": statement_bundle,

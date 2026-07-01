@@ -469,6 +469,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "case_digest_hex",
         "roster_hash_hex",
         "tally_digest_hex",
+        "policy_digest_hex",
         "peer_count",
         "validator_count",
         "case_count",
@@ -535,6 +536,7 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "case_digest_hex",
     "roster_hash_hex",
     "tally_digest_hex",
+    "policy_digest_hex",
     "generated_at_unix",
     "peer_count",
     "validator_count",
@@ -887,6 +889,7 @@ def validate_e2e_panel(
     require_hex(payload, "case_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "roster_hash_hex", HEX64_LEN, errors)
     require_hex(payload, "tally_digest_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
     require_minimum_int(payload, "peer_count", options.min_peers, errors)
     require_minimum_int(payload, "validator_count", options.min_peers, errors)
     require_positive_int(payload, "case_count", errors)
@@ -997,6 +1000,8 @@ def build_summary(
     valid_tally_bindings: set[tuple[str, str, str]] = set()
     tally_candidate_artifacts: list[dict[str, Any]] = []
     tally_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_policy_digests: set[str] = set()
+    policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     e2e_candidate_artifacts: list[dict[str, Any]] = []
     deployment_context: dict[str, str] = {}
     files = discover_evidence_files(
@@ -1069,6 +1074,8 @@ def build_summary(
                 tally_bound_artifacts.append((kind_name, artifact))
             if kind_name == "e2e_panel":
                 e2e_candidate_artifacts.append(artifact)
+            elif kind_name == "governance_approval":
+                policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
@@ -1147,6 +1154,31 @@ def build_summary(
         ),
     )
 
+    for artifact in e2e_candidate_artifacts:
+        if evidence_artifact_is_valid(artifact):
+            policy_digest = evidence_artifact_fingerprint(artifact).get(
+                "policy_digest_hex"
+            )
+            if isinstance(policy_digest, str):
+                valid_policy_digests.add(policy_digest.lower())
+
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("e2e_panel", "governance_approval"),
+        bound_artifacts=policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must match a valid "
+            "e2e_panel policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex must match a valid "
+            "e2e_panel policy_digest_hex"
+        ),
+    )
+
     valid_e2e_runs = [
         {
             field: fingerprint[field]
@@ -1197,6 +1229,7 @@ def build_summary(
             }
             for case_digest, roster_hash, tally_digest in sorted(valid_tally_bindings)
         ],
+        "valid_policy_digests": sorted(valid_policy_digests),
         "valid_e2e_runs": valid_e2e_runs,
         "required": required,
         "errors": errors,

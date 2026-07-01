@@ -127,7 +127,11 @@ summary: Current SF-6 release automation and QA surfaces.
   envelope before writing the final production-readiness report, require
   aggregate status to match canonical aggregate diagnostics, require ready
   aggregate summaries to carry complete deployment context for a final
-  `prod`/`production` environment and only present, valid required rows,
+  `prod`/`production` environment and only present, valid required rows whose
+  deployment context matches the aggregate deployment block, require each
+  aggregate required row deployment_id must match aggregate deployment_id, and
+  require each aggregate required row environment must match aggregate
+  environment,
   validate final
   aggregate required rows for exact present and missing row output contracts,
   validate invalid aggregate required-row metadata before blocked rows are
@@ -138,19 +142,24 @@ summary: Current SF-6 release automation and QA surfaces.
   count every duplicate lane-summary input while keeping one duplicate row
   diagnostic per gate, pin aggregate blockers for unknown schemas and explicit
   unrequired summaries, avoid payload or secret-bearing
-  fields, reject unknown summary schemas discovered in summary directories, and
-  share the same reviewed `deployment_id` with no non-reviewed deployment
-  markers plus a final `prod`/`production` `environment`
+  fields, reject unknown summary schemas discovered in summary directories,
+  require an explicit final `--deployment-id`/`--environment` pair even for
+  direct checker invocations, and share the same reviewed `deployment_id` with
+  no non-reviewed or staging deployment markers plus a final
+  `prod`/`production` `environment`
   before emitting
   `sorafs.production_readiness.aggregate_gate.v1`. The companion
   `scripts/run_sorafs_production_readiness.py` accepts reviewed per-lane
   summary paths, requires exactly one summary input per required gate, requires
   an explicit canonical `--deployment-id`/`--environment` pair whose deployment
-  id passes the reviewed deployment-id policy and whose environment is `prod`
-  or `production`, supports `@ARGFILE`, rejects explicit summaries for lanes
+  id passes the reviewed deployment-id policy, carries no staging markers, and
+  whose environment is `prod` or `production`, advertises both flags as
+  required final deployment context in `--help`, supports `@ARGFILE`, rejects
+  explicit summaries for lanes
   outside a narrowed
   `--require-gate` selection, validates the schema-closed collection plan
-  envelope against the built command plan before dry-run output or execution,
+  envelope against the built command plan and independently rechecks final
+  production deployment context before dry-run output or execution,
   rejects non-object or non-strict-JSON collection-plan renderings before
   stdout or verifier launch,
   and emits that dry-run collection plan so release operators can inspect the

@@ -107,6 +107,7 @@ impl Default for MockToriiData {
                 sm_openssl_preview_enabled: false,
                 halo2: Halo2Status::default(),
             },
+            nexus: None,
             stack: Default::default(),
             sumeragi: None,
             governance,

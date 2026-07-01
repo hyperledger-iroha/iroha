@@ -82,6 +82,7 @@ def signed_manifest(*, private_key_absent: bool = True) -> dict:
             "private_key_absent": private_key_absent,
             "signature_algorithm": "ed25519",
             "manifest_digest_hex": DIGEST,
+            "policy_digest_hex": DIGEST,
             "public_key_fingerprint_hex": DIGEST,
             "raw_manifest_included": False,
         }
@@ -187,6 +188,9 @@ def test_complete_release_evidence_passes(tmp_path: Path) -> None:
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["schema"] == "sorafs.reference_sdk.release_evidence_gate.v1"
     assert payload["status"] == "ready"
+    assert payload["valid_release_manifest_digests"] == [DIGEST]
+    assert payload["valid_release_manifest_reference_digests"] == [DIGEST]
+    assert payload["valid_policy_digests"] == [DIGEST]
     assert payload["required"]["release_archive"]["valid"] is True
 
 
@@ -247,6 +251,24 @@ def test_signed_manifest_rejects_private_key_presence(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_signed_manifest_requires_policy_digest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = signed_manifest()
+    del payload["policy_digest_hex"]
+    write_json(tmp_path / "signed-manifest.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["valid_policy_digests"] == []
+    required = payload["required"]["signed_manifest"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+
+
 def test_stale_signed_manifest_does_not_anchor_release_bound_evidence(
     tmp_path: Path,
 ) -> None:
@@ -262,6 +284,7 @@ def test_stale_signed_manifest_does_not_anchor_release_bound_evidence(
     required = payload["required"]["release_archive"]
     artifact = required["artifacts"][0]
     assert payload["valid_release_manifest_digests"] == []
+    assert payload["valid_release_manifest_reference_digests"] == []
     assert required["valid"] is False
     assert artifact["valid"] is False
     assert artifact["errors"] == [
@@ -308,11 +331,33 @@ def test_release_archive_manifest_digest_must_match_signed_manifest(tmp_path: Pa
     payload = json.loads(summary.read_text(encoding="utf-8"))
     required = payload["required"]["release_archive"]
     artifact = required["artifacts"][0]
+    assert payload["valid_release_manifest_reference_digests"] == [DIGEST]
     assert required["valid"] is False
     assert artifact["valid"] is False
     assert artifact["errors"] == [
         "release_archive release_manifest_digest_hex must reference a valid "
         "signed_manifest manifest_digest_hex"
+    ]
+
+
+def test_governance_policy_digest_must_match_signed_manifest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = governance_approval()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert payload["valid_policy_digests"] == [DIGEST]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval policy_digest_hex must reference a valid "
+        "signed_manifest policy_digest_hex"
     ]
 
 

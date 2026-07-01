@@ -101,6 +101,7 @@ RELEASE_MANIFEST_BOUND_KINDS = (
     "ffi_header_contract",
     "governance_approval",
 )
+POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -189,6 +190,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "private_key_absent",
         "signature_algorithm",
         "manifest_digest_hex",
+        "policy_digest_hex",
         "public_key_fingerprint_hex",
         "raw_manifest_included",
     ),
@@ -264,6 +266,7 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_context_reviewed",
     "manifest_digest_hex",
     "release_manifest_digest_hex",
+    "policy_digest_hex",
 )
 
 
@@ -293,6 +296,7 @@ def validate_signed_manifest(payload: dict[str, Any], errors: list[str]) -> None
     require_bool_true(payload, "private_key_absent", errors)
     require_string(payload, "signature_algorithm", errors)
     require_hex(payload, "manifest_digest_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
     require_hex(payload, "public_key_fingerprint_hex", HEX64_LEN, errors)
     require_false(payload, "raw_manifest_included", errors)
 
@@ -422,7 +426,10 @@ def build_summary(
 
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
     valid_release_manifest_digests: set[str] = set()
+    valid_release_manifest_reference_digests: set[str] = set()
+    valid_policy_digests: set[str] = set()
     valid_release_manifest_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -457,8 +464,13 @@ def build_summary(
                 digest = fingerprint.get("manifest_digest_hex")
                 if isinstance(digest, str):
                     valid_release_manifest_digests.add(digest.lower())
+                policy_digest = fingerprint.get("policy_digest_hex")
+                if isinstance(policy_digest, str):
+                    valid_policy_digests.add(policy_digest.lower())
             elif kind_name in RELEASE_MANIFEST_BOUND_KINDS:
                 valid_release_manifest_bound_artifacts.append((kind_name, artifact))
+            if kind_name in POLICY_BOUND_KINDS:
+                valid_policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
@@ -478,6 +490,31 @@ def build_summary(
             "signed_manifest manifest_digest_hex"
         ),
     )
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("signed_manifest",),
+        bound_artifacts=valid_policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must reference a valid "
+            "signed_manifest policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex requires a valid "
+            "signed_manifest policy_digest_hex"
+        ),
+    )
+
+    for kind_name in RELEASE_MANIFEST_BOUND_KINDS:
+        for artifact in artifacts_by_kind.get(kind_name, []):
+            if not evidence_artifact_is_valid(artifact):
+                continue
+            fingerprint = evidence_artifact_fingerprint(artifact)
+            digest = fingerprint.get("release_manifest_digest_hex")
+            if isinstance(digest, str):
+                valid_release_manifest_reference_digests.add(digest.lower())
 
     required = build_required_evidence_summary(
         required_kinds,
@@ -501,6 +538,10 @@ def build_summary(
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_release_manifest_digests": sorted(valid_release_manifest_digests),
+        "valid_release_manifest_reference_digests": sorted(
+            valid_release_manifest_reference_digests
+        ),
+        "valid_policy_digests": sorted(valid_policy_digests),
         "required": required,
         "errors": errors,
     }

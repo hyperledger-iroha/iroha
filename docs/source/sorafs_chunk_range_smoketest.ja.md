@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_chunk_range_smoketest.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: aa4b01b4d7d5340555c8f27b3f733de4740328058177ef26c97afbc146b3c012
+source_hash: e2a92e903c7d9b56c424273cbd7a857b0bf19619ed3fb1264341dab9d0e7bd8d
 source_last_modified: "2025-11-04T12:07:36.779163+00:00"
 translation_last_reviewed: 2026-01-22
 ---

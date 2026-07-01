@@ -12545,6 +12545,50 @@ fn resolve_signed_query_routing_for_app(
     }
 }
 
+fn torii_lane_active_for_routing(
+    app: &AppState,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    lane_id: LaneId,
+) -> bool {
+    !nexus.enabled || app.state.is_lane_active_for_authority(lane_id)
+}
+
+fn torii_active_lane_ids_for_status(
+    app: &AppState,
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> Vec<u32> {
+    let mut lane_ids = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| torii_lane_active_for_routing(app, nexus, lane.id))
+        .map(|lane| lane.id.as_u32())
+        .collect::<Vec<_>>();
+    lane_ids.sort_unstable();
+    lane_ids.dedup();
+    lane_ids
+}
+
+fn torii_autoscale_capacity_lane_ids_for_status(
+    app: &AppState,
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> Vec<u32> {
+    if !nexus.enabled || !nexus.autoscale.enabled {
+        return Vec::new();
+    }
+    let mut lane_ids = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| lane.is_autoscale_managed_elastic())
+        .filter(|lane| torii_lane_active_for_routing(app, nexus, lane.id))
+        .map(|lane| lane.id.as_u32())
+        .collect::<Vec<_>>();
+    lane_ids.sort_unstable();
+    lane_ids.dedup();
+    lane_ids
+}
+
 fn resolve_torii_route_for_dataspace_id(
     app: &AppState,
     dataspace_id: iroha_data_model::nexus::DataSpaceId,
@@ -12555,7 +12599,9 @@ fn resolve_torii_route_for_dataspace_id(
         .lane_catalog
         .lanes()
         .iter()
-        .filter(|lane| lane.dataspace_id == dataspace_id)
+        .filter(|lane| {
+            lane.dataspace_id == dataspace_id && torii_lane_active_for_routing(app, nexus, lane.id)
+        })
         .map(|lane| lane.id)
         .min()
         .or_else(|| {
@@ -12565,7 +12611,9 @@ fn resolve_torii_route_for_dataspace_id(
                     .lanes()
                     .iter()
                     .find(|lane| {
-                        lane.id == LaneId::SINGLE && lane.dataspace_id == DataSpaceId::UNIVERSAL
+                        lane.id == LaneId::SINGLE
+                            && lane.dataspace_id == DataSpaceId::UNIVERSAL
+                            && torii_lane_active_for_routing(app, nexus, lane.id)
                     })
                     .map(|lane| lane.id)
             })?
@@ -13211,7 +13259,7 @@ fn validate_incoming_read_proxy_route(
 ) -> Result<RoutingDecision, Response> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
-    iroha_core::queue::resolve_routing_decision(
+    let resolved = iroha_core::queue::resolve_routing_decision(
         routing_decision,
         &nexus.lane_catalog,
         &nexus.dataspace_catalog,
@@ -13239,7 +13287,31 @@ fn validate_incoming_read_proxy_route(
             HeaderValue::from_static("stale_route"),
         );
         response
-    })
+    })?;
+    if !torii_lane_active_for_routing(app, nexus, resolved.lane_id) {
+        iroha_logger::warn!(
+            request_kind,
+            lane = routing_decision.lane_id.as_u32(),
+            dataspace = routing_decision.dataspace_id.as_u64(),
+            "Torii proxy read route is inactive at receiver authority height"
+        );
+        let mut response = torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            format!(
+                "proxied {request_kind} route lane {} dataspace {} is inactive at receiver authority height",
+                routing_decision.lane_id.as_u32(),
+                routing_decision.dataspace_id.as_u64()
+            ),
+        );
+        insert_routing_headers(&mut response, routing_decision, "proxy");
+        response.headers_mut().insert(
+            HeaderName::from_static("x-iroha-route-unavailable-reason"),
+            HeaderValue::from_static("stale_route"),
+        );
+        return Err(response);
+    }
+    Ok(resolved)
 }
 
 #[cfg(feature = "app_api")]
@@ -13259,6 +13331,17 @@ fn torii_route_for_lane_id(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )));
     };
+    if !torii_lane_active_for_routing(app, nexus, lane_id) {
+        return Err(Error::PushIntoQueue {
+            source: Box::new(queue::Error::UnresolvedRoute {
+                reason: format!(
+                    "lane {} is inactive at the current authority height",
+                    lane_id.as_u32()
+                ),
+            }),
+            backpressure: current_torii_backpressure(app),
+        });
+    }
 
     iroha_core::queue::resolve_routing_decision(
         RoutingDecision::new(lane_id, lane.dataspace_id),
@@ -13293,6 +13376,9 @@ fn torii_restricted_routes(app: &AppState) -> Vec<RoutingDecision> {
     let mut seen_dataspaces = BTreeSet::new();
     let mut routes = Vec::new();
     for lane in nexus.lane_catalog.lanes() {
+        if !torii_lane_active_for_routing(app, nexus, lane.id) {
+            continue;
+        }
         if lane.visibility != iroha_data_model::nexus::LaneVisibility::Restricted {
             continue;
         }
@@ -13425,7 +13511,9 @@ fn torii_public_dataspace_ids(app: &AppState) -> BTreeSet<DataSpaceId> {
     let mut dataspaces = BTreeSet::from([DataSpaceId::UNIVERSAL]);
 
     for lane in nexus.lane_catalog.lanes() {
-        if lane.visibility == iroha_data_model::nexus::LaneVisibility::Public {
+        if lane.visibility == iroha_data_model::nexus::LaneVisibility::Public
+            && torii_lane_active_for_routing(app, nexus, lane.id)
+        {
             dataspaces.insert(lane.dataspace_id);
         }
     }
@@ -13723,6 +13811,9 @@ fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
     let mut routes =
         BTreeMap::<iroha_data_model::nexus::DataSpaceId, iroha_data_model::nexus::LaneId>::new();
     for lane in nexus.lane_catalog.lanes() {
+        if !torii_lane_active_for_routing(app, nexus, lane.id) {
+            continue;
+        }
         routes
             .entry(lane.dataspace_id)
             .and_modify(|current| {
@@ -17083,6 +17174,127 @@ mod torii_routed_read_tests {
             .await
             .expect("response body should be readable");
         norito::decode_from_bytes(&body).expect("response body should decode as an error envelope")
+    }
+
+    pub(super) fn configure_corrupt_inactive_autoscale_range_route_for_test(
+        app: &mut SharedAppState,
+    ) -> (LaneId, DataSpaceId) {
+        let inactive_dataspace = DataSpaceId::new(1);
+        let inactive_lane = LaneId::new(1);
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: inactive_lane,
+                    dataspace_id: inactive_dataspace,
+                    alias: "manual-elastic-slot".to_owned(),
+                    visibility: iroha_data_model::nexus::LaneVisibility::Public,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("corrupt lane catalog");
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: inactive_dataspace,
+                alias: "inactive".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            dataspace_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+
+        let app_state = Arc::get_mut(app).expect("unique app state");
+        let state = Arc::get_mut(&mut app_state.state).expect("unique state");
+        {
+            let mut current = state.nexus.write();
+            *current = nexus;
+        }
+        (inactive_lane, inactive_dataspace)
+    }
+
+    #[test]
+    fn torii_route_resolution_rejects_inactive_autoscale_range_lane() {
+        let authority = routed_read_test_account(0x7c);
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let (inactive_lane, inactive_dataspace) =
+            configure_corrupt_inactive_autoscale_range_route_for_test(&mut app);
+
+        assert!(
+            !app.state.is_lane_active_for_authority(inactive_lane),
+            "fixture lane must be inactive for route authority"
+        );
+        let err = resolve_torii_route_for_dataspace_id(app.as_ref(), inactive_dataspace)
+            .expect_err("inactive autoscale-range lane must not resolve as a Torii route");
+        assert!(
+            matches!(
+                err,
+                queue::RoutingResolveError::NoLaneForDataspace { .. }
+                    | queue::RoutingResolveError::LaneDataspaceMismatch { .. }
+            ),
+            "inactive lane routing should fail closed, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn torii_explicit_lane_route_rejects_inactive_autoscale_range_lane() {
+        let authority = routed_read_test_account(0x7e);
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let (inactive_lane, _) =
+            configure_corrupt_inactive_autoscale_range_route_for_test(&mut app);
+
+        let err = torii_route_for_lane_id(app.as_ref(), inactive_lane)
+            .expect_err("explicit lane routing must not expose inactive autoscale-range lanes");
+        let Error::PushIntoQueue { source, .. } = err else {
+            panic!("inactive explicit lane routing should report route unavailability");
+        };
+        assert!(
+            matches!(
+                source.as_ref(),
+                queue::Error::UnresolvedRoute { reason }
+                    if reason.contains("inactive at the current authority height")
+            ),
+            "unexpected inactive lane route error: {source:?}"
+        );
+    }
+
+    #[test]
+    fn torii_fanout_route_discovery_excludes_inactive_autoscale_range_lane() {
+        let authority = routed_read_test_account(0x7d);
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let (inactive_lane, inactive_dataspace) =
+            configure_corrupt_inactive_autoscale_range_route_for_test(&mut app);
+
+        let routes = torii_all_dataspace_routes(app.as_ref());
+        assert!(
+            routes
+                .iter()
+                .all(|route| route.lane_id != inactive_lane
+                    && route.dataspace_id != inactive_dataspace),
+            "fanout route discovery must not expose inactive autoscale-range lanes: {routes:?}"
+        );
+        assert_eq!(
+            routes,
+            vec![RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]
+        );
+        let public_dataspaces = torii_public_dataspace_ids(app.as_ref());
+        assert!(
+            !public_dataspaces.contains(&inactive_dataspace),
+            "public visibility must not include dataspaces whose only public lane is inactive"
+        );
     }
 
     #[test]
@@ -24873,11 +25085,28 @@ async fn handler_soracloud_status(
     let high_load = backpressure.is_saturated() || queue_active >= high_load_threshold;
 
     let nexus = app.state.nexus_snapshot();
+    let configured_lane_count = u64::from(nexus.lane_catalog.lane_count().get());
+    let declared_lane_count = u64::try_from(nexus.lane_catalog.lanes().len()).unwrap_or(u64::MAX);
+    let active_lane_ids = torii_active_lane_ids_for_status(app.as_ref(), &nexus);
+    let active_lane_count = u64::try_from(active_lane_ids.len()).unwrap_or(u64::MAX);
+    let autoscale_capacity_lane_ids =
+        torii_autoscale_capacity_lane_ids_for_status(app.as_ref(), &nexus);
+    let autoscale_capacity_lane_count =
+        u64::try_from(autoscale_capacity_lane_ids.len()).unwrap_or(u64::MAX);
     let routing = json_object(vec![
         json_entry("nexus_enabled", nexus.enabled),
+        json_entry("configured_lane_count", configured_lane_count),
+        json_entry("lane_count", configured_lane_count),
+        json_entry("declared_lane_count", declared_lane_count),
+        json_entry("active_lane_count", active_lane_count),
+        json_entry("active_lane_ids", json_value(&active_lane_ids)),
         json_entry(
-            "lane_count",
-            u64::try_from(nexus.lane_catalog.lanes().len()).unwrap_or(u64::MAX),
+            "autoscale_capacity_lane_count",
+            autoscale_capacity_lane_count,
+        ),
+        json_entry(
+            "autoscale_capacity_lane_ids",
+            json_value(&autoscale_capacity_lane_ids),
         ),
         json_entry(
             "dataspace_count",
@@ -58588,6 +58817,140 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
+    async fn authoritative_lane_peers_ignore_future_created_autoscale_manifest_bindings() {
+        let local_keypair =
+            checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
+        let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x5e,
+            "derive authoritative-lane manifest validator fixture key",
+        );
+        let authoritative_peer_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x5f,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane manifest peer fixture key",
+        );
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let authoritative_validator =
+            AccountId::new(authoritative_validator_keypair.public_key().clone());
+        let authoritative_peer_id = PeerId::from(authoritative_peer_keypair.public_key().clone());
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::UNIVERSAL;
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            online_tx
+                .send(std::collections::HashSet::from([
+                    Peer::new(
+                        "127.0.0.1:10001".parse().expect("valid local address"),
+                        local_keypair.public_key().clone(),
+                    ),
+                    Peer::new(
+                        "127.0.0.1:10002"
+                            .parse()
+                            .expect("valid authoritative address"),
+                        authoritative_peer_keypair.public_key().clone(),
+                    ),
+                ]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+
+            let mut autoscale_lane = iroha_data_model::nexus::LaneConfig {
+                id: lane_id,
+                alias: format!("elastic-lane-{}", lane_id.as_u32()),
+                ..iroha_data_model::nexus::LaneConfig::default()
+            };
+            autoscale_lane.metadata.insert(
+                iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+                "true".to_owned(),
+            );
+            autoscale_lane.metadata.insert(
+                iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+                "7".to_owned(),
+            );
+            let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+                NonZeroU32::new(2).expect("non-zero lane count"),
+                vec![
+                    iroha_data_model::nexus::LaneConfig::default(),
+                    autoscale_lane,
+                ],
+            )
+            .expect("autoscale lane catalog");
+            let mut nexus = iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog,
+                ..iroha_config::parameters::actual::Nexus::default()
+            };
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("non-zero min lanes");
+            nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("non-zero max lanes");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            {
+                let mut current = state.nexus.write();
+                *current = nexus.clone();
+            }
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &authoritative_validator,
+                &authoritative_peer_keypair,
+                "authoritative",
+            );
+            {
+                let mut topology = state.commit_topology.block();
+                topology.clear();
+                topology.push(local_peer_id.clone());
+                topology.push(authoritative_peer_id.clone());
+                topology.commit();
+            }
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(
+                    lane_id,
+                    vec![(authoritative_validator, authoritative_peer_id.clone())],
+                )],
+            );
+            state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+                NonZeroU64::new(1).expect("non-zero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            ));
+        }
+
+        let route = RoutingDecision::new(lane_id, dataspace_id);
+        assert!(
+            super::authoritative_lane_peers(app.as_ref(), route)
+                .authoritative
+                .is_empty(),
+            "future-created autoscale manifest bindings must not bypass active-height authority"
+        );
+
+        app.state
+            .update_latest_block_header_cache_for_tests(BlockHeader::new(
+                NonZeroU64::new(7).expect("non-zero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            ));
+        assert_eq!(
+            super::authoritative_lane_peers(app.as_ref(), route).authoritative,
+            vec![authoritative_peer_id],
+            "manifest bindings should become authoritative at the autoscale creation height"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
     async fn manifest_backed_admin_managed_lane_ignores_local_commit_topology_filtering() {
         let local_validator_keypair = checked_torii_test_ed25519_keypair(
             0x5a,
@@ -58999,6 +59362,21 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
     #[tokio::test]
+    async fn incoming_read_proxy_rejects_inactive_autoscale_range_lane_hint() {
+        let mut app = mk_app_state_for_tests();
+        let (inactive_lane, inactive_dataspace) =
+            torii_routed_read_tests::configure_corrupt_inactive_autoscale_range_route_for_test(
+                &mut app,
+            );
+        let route = RoutingDecision::new(inactive_lane, inactive_dataspace);
+
+        let response = incoming_read_proxy_response_for_route(app, route).await;
+
+        assert_incoming_proxy_stale_route_rejection(&response, route);
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
     async fn incoming_verified_query_proxy_rejects_retired_lane_hint() {
         let app = mk_app_state_for_tests();
         let route = RoutingDecision::new(LaneId::new(43), DataSpaceId::UNIVERSAL);
@@ -59014,6 +59392,21 @@ pub(crate) mod tests_runtime_handlers {
         let mut app = mk_app_state_for_tests();
         configure_multiple_dataspace_routes_for_test(&mut app);
         let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
+
+        let response = incoming_verified_query_proxy_response_for_route(app, route).await;
+
+        assert_incoming_proxy_stale_route_rejection(&response, route);
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
+    async fn incoming_verified_query_proxy_rejects_inactive_autoscale_range_lane_hint() {
+        let mut app = mk_app_state_for_tests();
+        let (inactive_lane, inactive_dataspace) =
+            torii_routed_read_tests::configure_corrupt_inactive_autoscale_range_route_for_test(
+                &mut app,
+            );
+        let route = RoutingDecision::new(inactive_lane, inactive_dataspace);
 
         let response = incoming_verified_query_proxy_response_for_route(app, route).await;
 
@@ -61518,6 +61911,237 @@ pub(crate) mod tests_runtime_handlers {
                 .and_then(norito::json::Value::as_object)
                 .is_some(),
             "runtime_manager section should be present"
+        );
+    }
+
+    #[tokio::test]
+    async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() {
+        let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
+        let future_lane = LaneId::new(1);
+        let mut future_autoscale_lane = iroha_data_model::nexus::LaneConfig {
+            id: future_lane,
+            alias: "elastic-lane-1".to_owned(),
+            visibility: iroha_data_model::nexus::LaneVisibility::Public,
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        future_autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+            "true".to_owned(),
+        );
+        future_autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            "7".to_owned(),
+        );
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                future_autoscale_lane,
+            ],
+        )
+        .expect("future-created autoscale lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("nonzero max lanes");
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            {
+                let mut current = state.nexus.write();
+                *current = nexus;
+            }
+            state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            ));
+        }
+
+        let response = super::handler_soracloud_status(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("soracloud status should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode JSON response");
+        let routing = payload
+            .get("routing")
+            .and_then(norito::json::Value::as_object)
+            .expect("routing section");
+
+        assert_eq!(
+            routing
+                .get("configured_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            routing
+                .get("lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(2),
+            "legacy lane_count remains the configured lane count"
+        );
+        assert_eq!(
+            routing
+                .get("declared_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(2),
+            "declared lane count reports catalog metadata entries"
+        );
+        assert_eq!(
+            routing
+                .get("active_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1),
+            "future-created autoscale lanes must not count as active"
+        );
+        assert_eq!(
+            routing
+                .get("active_lane_ids")
+                .and_then(norito::json::Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(norito::json::Value::as_u64)
+                        .collect::<Vec<_>>()
+                }),
+            Some(vec![0])
+        );
+        assert_eq!(
+            routing
+                .get("autoscale_capacity_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(0),
+            "future-created autoscale lanes must not count as live capacity"
+        );
+        assert!(
+            routing
+                .get("autoscale_capacity_lane_ids")
+                .and_then(norito::json::Value::as_array)
+                .is_some_and(Vec::is_empty),
+            "future-created autoscale lanes must be absent from capacity ids"
+        );
+    }
+
+    #[tokio::test]
+    async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
+        let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(4).expect("nonzero lane namespace"),
+            vec![iroha_data_model::nexus::LaneConfig::default()],
+        )
+        .expect("sparse lane catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            {
+                let mut current = state.nexus.write();
+                *current = nexus;
+            }
+            state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            ));
+        }
+
+        let response = super::handler_soracloud_status(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("soracloud status should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode JSON response");
+        let routing = payload
+            .get("routing")
+            .and_then(norito::json::Value::as_object)
+            .expect("routing section");
+
+        assert_eq!(
+            routing
+                .get("configured_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(4),
+            "configured count must report the lane namespace size"
+        );
+        assert_eq!(
+            routing
+                .get("lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(4),
+            "legacy lane_count remains the configured namespace count"
+        );
+        assert_eq!(
+            routing
+                .get("declared_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1),
+            "declared count reports only catalog metadata entries"
+        );
+        assert_eq!(
+            routing
+                .get("active_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            routing
+                .get("active_lane_ids")
+                .and_then(norito::json::Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(norito::json::Value::as_u64)
+                        .collect::<Vec<_>>()
+                }),
+            Some(vec![0])
+        );
+        assert_eq!(
+            routing
+                .get("autoscale_capacity_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            routing
+                .get("autoscale_capacity_lane_ids")
+                .and_then(norito::json::Value::as_array)
+                .is_some_and(Vec::is_empty)
         );
     }
 

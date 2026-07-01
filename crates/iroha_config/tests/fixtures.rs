@@ -4242,7 +4242,7 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .and_then(|policy| policy.get("rules"))
         .and_then(TomlValue::as_array)
         .expect("nexus.routing_policy.rules should be configured");
-    assert!(
+    let has_is_instruction_route = |instruction: &str| {
         routing_rules.iter().any(|rule| {
             rule.get("lane").and_then(TomlValue::as_integer) == Some(3)
                 && rule.get("dataspace").and_then(TomlValue::as_str) == Some("is")
@@ -4251,10 +4251,22 @@ fn taira_config_enables_untrusted_cid_hosting() {
                     .and_then(TomlValue::as_table)
                     .and_then(|matcher| matcher.get("instruction"))
                     .and_then(TomlValue::as_str)
-                    == Some("smartcontract::deploy")
-        }),
-        "Taira profile should route contract deployments to the external `is` lane"
-    );
+                    == Some(instruction)
+        })
+    };
+    for instruction in [
+        "smartcontract::deploy",
+        "shield",
+        "zk::zk_transfer",
+        "unshield",
+        "register_asset_hidden_zk_pool",
+        "asset_hidden_zk_transfer",
+    ] {
+        assert!(
+            has_is_instruction_route(instruction),
+            "Taira profile should route {instruction} to the external `is` lane"
+        );
+    }
 
     let block = doc
         .get("sumeragi")
