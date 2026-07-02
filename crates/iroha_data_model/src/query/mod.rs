@@ -2802,21 +2802,36 @@ mod json_roundtrip_tests {
             0, 0, 0,
         ];
 
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
             .with_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
-        let mut json = SignedQueryJson::from(&signed);
-        let SignedQueryJson::Canonical(canonical) = &mut json;
-        let mut signature = canonical.signature.0.payload().to_vec();
-        signature[..SMALL_ORDER_R.len()].copy_from_slice(&SMALL_ORDER_R);
-        *canonical.signature.0 = Signature::from_bytes(&signature);
 
-        let err = match SignedQuery::try_from(json) {
-            Ok(_) => panic!("JSON signed query with malformed Ed25519 R must fail admission"),
-            Err(err) => err,
-        };
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut json = SignedQueryJson::from(&signed);
+            let SignedQueryJson::Canonical(canonical) = &mut json;
+            let mut signature = canonical.signature.0.payload().to_vec();
+            signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+            *canonical.signature.0 = Signature::from_bytes(&signature);
 
-        assert_eq!(err, "invalid SignedQuery signature material");
+            let err = match SignedQuery::try_from(json) {
+                Ok(_) => panic!("JSON signed query with malformed Ed25519 R must fail admission"),
+                Err(err) => err,
+            };
+
+            assert_eq!(
+                err, "invalid SignedQuery signature material",
+                "{label} signed query signature R was not rejected"
+            );
+        }
     }
 
     #[test]

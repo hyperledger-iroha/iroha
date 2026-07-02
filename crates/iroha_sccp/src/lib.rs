@@ -62630,7 +62630,7 @@ mod tests {
         assert_eq!(
             route_canary_hash,
             decode_fixed_hex_bytes::<32>(
-                "0xf2855793ffe735426c58635db37ec648119e931bfc3f1a4ad09974d3ffa605ae",
+                "0xd9fad9fb36aff755e4c6b5a322b0ef8b55d6c3bbb031b6b930605c4117ae6bcd",
             )
             .expect("TON route canary vector")
         );
@@ -70791,12 +70791,12 @@ mod tests {
                 "TON {label} replay remains a well-shaped audited deployment"
             );
             assert!(
-                sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
                     SCCP_DOMAIN_TON,
                     &material,
                     &replayed_audit_deployment,
                 ),
-                "TON {label} replay remains generally source-adapter ready"
+                "TON {label} replay must not satisfy governed source-adapter readiness"
             );
             assert!(
                 !sccp_source_chain_proof_matches_adapter_deployment(

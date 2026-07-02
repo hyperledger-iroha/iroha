@@ -33,11 +33,15 @@ ManifestKinds == {
   "spool_scan"
 }
 
+\* Manifest gate equality in Rust includes lane, epoch, sequence, and kind.
+\* Keep two missing-manifest identities so the model distinguishes an unchanged
+\* guard from a different exact guard with the same status label.
 ManifestReasons == {
-  "manifest_missing",
-  "manifest_hash_mismatch",
-  "manifest_read_failed",
-  "manifest_spool_scan"
+  "manifest_missing_a",
+  "manifest_missing_b",
+  "manifest_hash_mismatch_a",
+  "manifest_read_failed_a",
+  "manifest_spool_scan_a"
 }
 
 Reasons == {"none", "missing_local_data"} \cup ManifestReasons
@@ -62,9 +66,11 @@ ActualEvaluate(c) ==
     [] OTHER -> SpecEvaluate(c)
 
 SpecSatisfaction(previous, current) ==
-  IF previous = "missing_local_data" /\ current = "none"
-  THEN "missing_data_recovered"
-  ELSE "none"
+  CASE previous = "missing_local_data" /\ current # previous ->
+      "missing_data_recovered"
+    [] previous \in ManifestReasons /\ current # previous ->
+      "manifest_guard_recovered"
+    [] OTHER -> "none"
 
 ActualSatisfaction(previous, current) ==
   CASE Bug = "satisfaction_missing_to_none_ignored"
@@ -79,18 +85,25 @@ ActualSatisfaction(previous, current) ==
     [] Bug = "satisfaction_none_to_missing_recovers"
        /\ previous = "none"
        /\ current = "missing_local_data" -> "missing_data_recovered"
-    [] Bug = "satisfaction_missing_to_manifest_recovers"
+    [] Bug = "satisfaction_none_to_manifest_recovers"
+       /\ previous = "none"
+       /\ current \in ManifestReasons -> "manifest_guard_recovered"
+    [] Bug = "satisfaction_missing_to_manifest_ignored"
        /\ previous = "missing_local_data"
-       /\ current \in ManifestReasons -> "missing_data_recovered"
-    [] Bug = "satisfaction_manifest_to_none_recovers"
+       /\ current \in ManifestReasons -> "none"
+    [] Bug = "satisfaction_manifest_to_none_ignored"
        /\ previous \in ManifestReasons
-       /\ current = "none" -> "missing_data_recovered"
-    [] Bug = "satisfaction_manifest_to_manifest_recovers"
+       /\ current = "none" -> "none"
+    [] Bug = "satisfaction_manifest_to_different_ignored"
        /\ previous \in ManifestReasons
-       /\ current \in ManifestReasons -> "missing_data_recovered"
-    [] Bug = "satisfaction_manifest_to_missing_recovers"
+       /\ current \in ManifestReasons
+       /\ current # previous -> "none"
+    [] Bug = "satisfaction_manifest_to_missing_ignored"
        /\ previous \in ManifestReasons
-       /\ current = "missing_local_data" -> "missing_data_recovered"
+       /\ current = "missing_local_data" -> "none"
+    [] Bug = "satisfaction_manifest_identity_recovers"
+       /\ previous \in ManifestReasons
+       /\ current = previous -> "manifest_guard_recovered"
     [] OTHER -> SpecSatisfaction(previous, current)
 
 SpecManifestLabel(kind) ==
@@ -129,10 +142,12 @@ TypeInvariant ==
        "satisfaction_missing_to_missing_recovers",
        "satisfaction_none_to_none_recovers",
        "satisfaction_none_to_missing_recovers",
-       "satisfaction_missing_to_manifest_recovers",
-       "satisfaction_manifest_to_none_recovers",
-       "satisfaction_manifest_to_manifest_recovers",
-       "satisfaction_manifest_to_missing_recovers",
+       "satisfaction_none_to_manifest_recovers",
+       "satisfaction_missing_to_manifest_ignored",
+       "satisfaction_manifest_to_none_ignored",
+       "satisfaction_manifest_to_different_ignored",
+       "satisfaction_manifest_to_missing_ignored",
+       "satisfaction_manifest_identity_recovers",
        "manifest_missing_wrong_label",
        "manifest_hash_mismatch_wrong_label",
        "manifest_read_failed_wrong_label",
@@ -195,26 +210,36 @@ BugSatisfactionNoneToMissingRecovers ==
   ActualSatisfaction("none", "missing_local_data") =
     SpecSatisfaction("none", "missing_local_data")
 
-BugSatisfactionMissingToManifestRecovers ==
+BugSatisfactionNoneToManifestRecovers ==
+  \A reason \in ManifestReasons:
+    ActualSatisfaction("none", reason) =
+      SpecSatisfaction("none", reason)
+
+BugSatisfactionMissingToManifestIgnored ==
   \A reason \in ManifestReasons:
     ActualSatisfaction("missing_local_data", reason) =
       SpecSatisfaction("missing_local_data", reason)
 
-BugSatisfactionManifestToNoneRecovers ==
+BugSatisfactionManifestToNoneIgnored ==
   \A reason \in ManifestReasons:
     ActualSatisfaction(reason, "none") =
       SpecSatisfaction(reason, "none")
 
-BugSatisfactionManifestToManifestRecovers ==
+BugSatisfactionManifestToDifferentIgnored ==
   \A previous \in ManifestReasons:
-    \A current \in ManifestReasons:
+    \A current \in (ManifestReasons \ {previous}):
       ActualSatisfaction(previous, current) =
         SpecSatisfaction(previous, current)
 
-BugSatisfactionManifestToMissingRecovers ==
+BugSatisfactionManifestToMissingIgnored ==
   \A reason \in ManifestReasons:
     ActualSatisfaction(reason, "missing_local_data") =
       SpecSatisfaction(reason, "missing_local_data")
+
+BugSatisfactionManifestIdentityRecovers ==
+  \A reason \in ManifestReasons:
+    ActualSatisfaction(reason, reason) =
+      SpecSatisfaction(reason, reason)
 
 BugManifestMissingWrongLabel ==
   ActualManifestLabel("missing") = SpecManifestLabel("missing")

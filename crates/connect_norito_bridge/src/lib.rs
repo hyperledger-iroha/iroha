@@ -17,7 +17,7 @@ use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake3::hash as blake3_hash;
 use iroha_crypto::{
     Algorithm, EcdsaSecp256k1Sha256, Error as CryptoError, Hash, KeyGenOption, KeyPair, PrivateKey,
-    PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature, ed25519_parse_signature,
+    PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
     kex::KeyExchangeScheme,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
 };
@@ -3884,7 +3884,7 @@ fn parse_identifier_receipt_signature(value: Option<&JsonValue>) -> BridgeResult
         .and_then(JsonValue::as_str)
         .ok_or(BridgeError::IdentifierReceipt)?;
     let signature_bytes = decode_identifier_receipt_hex(signature_hex)?;
-    ed25519_parse_signature(&signature_bytes).map_err(|_| BridgeError::IdentifierReceipt)
+    Signature::try_from_bytes(&signature_bytes).map_err(|_| BridgeError::IdentifierReceipt)
 }
 
 fn parse_identifier_receipt_payload_value(
@@ -32646,9 +32646,13 @@ mod tests {
         }
     }
 
+    fn sample_identifier_receipt_attestation_signer() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x49; 32], Algorithm::Ed25519)
+            .expect("derive canonical identifier receipt attestation signer")
+    }
+
     fn sample_identifier_signature_hex(payload: &IdentifierResolutionReceiptPayload) -> String {
-        let signer = KeyPair::try_from_seed(vec![0x49; 32], Algorithm::Ed25519)
-            .expect("derive canonical identifier receipt attestation signer");
+        let signer = sample_identifier_receipt_attestation_signer();
         let signature = SignatureOf::try_new(signer.private_key(), payload)
             .expect("sign canonical identifier receipt fixture payload");
         hex::encode(signature.payload())
@@ -32850,6 +32854,33 @@ mod tests {
     }
 
     #[test]
+    fn parse_identifier_receipt_accepts_mldsa_signed_attestation() {
+        let payload = sample_identifier_receipt_payload();
+        let signer = KeyPair::try_from_seed(b"identifier-receipt-mldsa".to_vec(), Algorithm::MlDsa)
+            .expect("derive ML-DSA identifier receipt attestation signer");
+        let signature = SignatureOf::try_new(signer.private_key(), &payload)
+            .expect("sign ML-DSA identifier receipt fixture payload");
+        let signature_hex = hex::encode(signature.payload());
+        let receipt = parse_identifier_receipt_value(sample_identifier_receipt_json(
+            &payload,
+            json_object([
+                ("kind", JsonValue::from("signed")),
+                ("signature", JsonValue::from(signature_hex.clone())),
+            ]),
+        ))
+        .expect("parse ML-DSA signed structured torii receipt");
+
+        assert_eq!(receipt.payload, payload);
+        let RamLfeReceiptAttestation::Signed(signature) = &receipt.attestation else {
+            panic!("receipt attestation must be signed");
+        };
+        assert_eq!(hex::encode(signature.payload()), signature_hex);
+        receipt
+            .verify(signer.public_key())
+            .expect("ML-DSA identifier receipt signature should verify");
+    }
+
+    #[test]
     fn parse_identifier_receipt_rejects_all_zero_signed_attestation() {
         let payload = sample_identifier_receipt_payload();
         let mut value = sample_identifier_signed_receipt_json(&payload);
@@ -32861,8 +32892,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_identifier_receipt_rejects_malformed_ed25519_signed_attestation_r() {
+    fn parse_identifier_receipt_defers_malformed_ed25519_signed_attestation_r() {
         let payload = sample_identifier_receipt_payload();
+        let signer = sample_identifier_receipt_attestation_signer();
 
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
@@ -32878,11 +32910,14 @@ mod tests {
                 hex::encode(signature_bytes),
             );
 
-            let err = parse_identifier_receipt_value(value)
-                .expect_err("malformed Ed25519 identifier receipt signature R must reject");
+            let receipt = parse_identifier_receipt_value(value)
+                .expect("malformed Ed25519 identifier receipt signature R stays opaque");
+            let err = receipt
+                .verify(signer.public_key())
+                .expect_err("malformed Ed25519 identifier receipt signature R must not verify");
             assert!(
-                matches!(err, BridgeError::IdentifierReceipt),
-                "{label} signature R produced unexpected bridge error: {err:?}"
+                matches!(err, CryptoError::BadSignature),
+                "{label} signature R produced unexpected verification error: {err:?}"
             );
         }
     }
