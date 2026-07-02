@@ -15,6 +15,7 @@ class KagemushaRecursiveSpendProver private constructor() {
     companion object {
         const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 6
         const val RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 7
+        const val TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 15
         const val RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
             "kagemusha-recursive-aggregation-v1"
         const val RECURSIVE_COMPACT_CIRCUIT_ID_V1 =
@@ -69,6 +70,18 @@ class KagemushaRecursiveSpendProver private constructor() {
                 0xba.toByte(), 0xbc.toByte(), 0x77, 0x75,
             )
         private val nativeAvailable: Boolean = loadLibrary()
+        private val nativeTopUpAvailable: Boolean =
+            nativeAvailable &&
+                detectNativeAvailability(
+                    loadLibrary = {},
+                    nativeBridgeAbiVersionProbe = { nativeBridgeAbiVersion() },
+                    probeSymbol = {
+                        expectIllegalArgumentProbe {
+                            nativeTopUpSpend(MALFORMED_NATIVE_PROBE_ARCHIVE)
+                        }
+                    },
+                    requiredNativeBridgeAbiVersion = TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+                )
 
         private class LineageProvingKeyArchive(
             val version: Int,
@@ -89,6 +102,9 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         fun isNativeAvailable(): Boolean = nativeAvailable
+
+        @JvmStatic
+        fun isTopUpNativeAvailable(): Boolean = nativeTopUpAvailable
 
         @JvmStatic
         fun preferredMode(): Mode? =
@@ -682,6 +698,19 @@ class KagemushaRecursiveSpendProver private constructor() {
             initSpend(KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request))
 
         @JvmStatic
+        fun topUpSpend(requestArchive: ByteArray?): ByteArray =
+            call(
+                "top-up",
+                requestArchive,
+                ::nativeTopUpSpend,
+                bridgeAvailable = nativeTopUpAvailable,
+            )
+
+        @JvmStatic
+        fun topUpSpend(request: InitSpendRequest): ByteArray =
+            topUpSpend(KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request))
+
+        @JvmStatic
         fun appendSpend(requestArchive: ByteArray?): ByteArray =
             call("append", requestArchive, ::nativeAppendSpend)
 
@@ -772,17 +801,19 @@ class KagemushaRecursiveSpendProver private constructor() {
             label: String,
             requestArchive: ByteArray?,
             nativeCall: (ByteArray) -> ByteArray?,
+            bridgeAvailable: Boolean = nativeAvailable,
         ): ByteArray =
-            callArchive(label, "requestArchive", requestArchive, nativeCall)
+            callArchive(label, "requestArchive", requestArchive, nativeCall, bridgeAvailable)
 
         private fun callArchive(
             label: String,
             archiveName: String,
             archive: ByteArray?,
             nativeCall: (ByteArray) -> ByteArray?,
+            bridgeAvailable: Boolean = nativeAvailable,
         ): ByteArray {
             val ownedArchive = ownedNativeInput(archive, archiveName)
-            check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
+            check(bridgeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
             val output = nativeCall(ownedArchive)
             return requireRecursiveSpendOutput(output, label)
         }
@@ -937,6 +968,9 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         private external fun nativeAppendSpend(requestArchive: ByteArray): ByteArray?
+
+        @JvmStatic
+        private external fun nativeTopUpSpend(requestArchive: ByteArray): ByteArray?
 
         @JvmStatic
         private external fun nativeTransitionProfileInit(requestArchive: ByteArray): ByteArray?

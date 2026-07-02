@@ -10,6 +10,8 @@ import org.hyperledger.iroha.sdk.norito.SchemaHash
 object KagemushaWireNames {
     const val TRANSFER_INSTRUCTION: String = "iroha_data_model::isi::offline::KagemushaTransfer"
     const val REDEEM_RECURSIVE_INSTRUCTION: String = "iroha_data_model::isi::offline::RedeemKagemushaRecursive"
+    const val RECURSIVE_TOP_UP_REQUEST: String =
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1"
     const val RECURSIVE_REDEEM_REQUEST: String =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1"
 }
@@ -41,6 +43,14 @@ object KagemushaInstructionArchives {
     @JvmStatic
     fun recursiveRedeemInstructionBox(instructionArchive: ByteArray): InstructionBox =
         instructionBox(KagemushaInstructionType.REDEEM_RECURSIVE, instructionArchive)
+
+    @JvmStatic
+    fun topUpInstructionBox(instructionArchive: ByteArray): InstructionBox =
+        instructionBox(KagemushaInstructionType.TRANSFER, instructionArchive)
+
+    @JvmStatic
+    fun topUpInstructionBoxFromInitRequest(initRequestArchive: ByteArray): InstructionBox =
+        topUpInstructionBox(KagemushaRecursiveSpendProver.topUpSpend(initRequestArchive))
 
     @JvmStatic
     fun recursiveRedeemInstructionBoxFromRequest(redeemRequestArchive: ByteArray): InstructionBox =
@@ -85,6 +95,49 @@ object KagemushaInstructionArchives {
         nonce = nonce,
         metadata = metadata,
     )
+
+    @JvmStatic
+    fun topUpTransactionPayload(
+        instructionArchive: ByteArray,
+        chainId: String,
+        authority: String,
+        creationTimeMs: Long,
+        timeToLiveMs: Long? = null,
+        nonce: Int? = null,
+        metadata: Map<String, *> = emptyMap<String, Any>(),
+    ): TransactionPayload = transactionPayload(
+        instructionType = KagemushaInstructionType.TRANSFER,
+        instructionArchive = instructionArchive,
+        chainId = chainId,
+        authority = authority,
+        creationTimeMs = creationTimeMs,
+        timeToLiveMs = timeToLiveMs,
+        nonce = nonce,
+        metadata = metadata,
+    )
+
+    @JvmStatic
+    fun topUpTransactionPayloadFromInitRequest(
+        initRequestArchive: ByteArray,
+        chainId: String,
+        authority: String,
+        creationTimeMs: Long,
+        timeToLiveMs: Long? = null,
+        nonce: Int? = null,
+        metadata: Map<String, *> = emptyMap<String, Any>(),
+    ): TransactionPayload {
+        val exactChainId = requireNonBlankUnpadded(chainId, "chainId")
+        val exactAuthority = requireNonBlankUnpadded(authority, "authority")
+        return topUpTransactionPayload(
+            instructionArchive = KagemushaRecursiveSpendProver.topUpSpend(initRequestArchive),
+            chainId = exactChainId,
+            authority = exactAuthority,
+            creationTimeMs = creationTimeMs,
+            timeToLiveMs = timeToLiveMs,
+            nonce = nonce,
+            metadata = metadata,
+        )
+    }
 
     @JvmStatic
     fun recursiveRedeemTransactionPayloadFromRequest(

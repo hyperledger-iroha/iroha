@@ -269,7 +269,7 @@ class BearerOfflineWalletModelsTest {
         for (retiredKey in listOf("device_public_key", "app_attest_public_key_base64")) {
             val json = """
                 {
-                  "platform":"android-keymint",
+                  "platform":"android",
                   "attestation_key_id":"attest-key",
                   "device_id":"device-1",
                   "offline_public_key":"${base64(ByteArray(32) { 1 })}",
@@ -282,6 +282,12 @@ class BearerOfflineWalletModelsTest {
                 Json.decodeFromString<OfflineDeviceBinding>(json)
             }
             assertEquals("$retiredKey is retired; use assertion_public_key", error.message)
+        }
+        for (invalidPlatform in listOf("android-keymint", "ios-appattest", "ios-app-attest", "android-keymint ", "Android")) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                deviceBinding(platform = invalidPlatform)
+            }
+            assertEquals("platform must be a supported first-release value", error.message)
         }
     }
 
@@ -427,9 +433,9 @@ class BearerOfflineWalletModelsTest {
 
     @Test
     fun deviceProofRejectsNonCanonicalPlatformHashAndAssertion() {
-        assertEquals(OfflineNoteV2.ANDROID_KEYMINT_PLATFORM, deviceProof().platform)
+        assertEquals("android", deviceProof().platform)
 
-        for (invalidPlatform in listOf("android", "ios-app-attest", "android-keymint ")) {
+        for (invalidPlatform in listOf("android-keymint", "ios-appattest", "ios-app-attest", "android-keymint ", "Android")) {
             assertEquals(
                 "platform must be a supported first-release value",
                 assertFailsWith<IllegalArgumentException> {
@@ -464,7 +470,7 @@ class BearerOfflineWalletModelsTest {
 
         val json = """
             {
-              "platform":"android-keymint",
+              "platform":"android",
               "attestation_key_id":"attest-key",
               "challenge_hash_hex":"${"01".repeat(32)}",
               "assertion_base64":"_w=="
@@ -610,7 +616,7 @@ class BearerOfflineWalletModelsTest {
               "counterparty_offline_public_key":"${base64(ByteArray(32) { 2 })}",
               "amount":"1",
               "device_proof":{
-                "platform":"android-keymint",
+                "platform":"android",
                 "attestation_key_id":"attest-key",
                 "challenge_hash_hex":"${"03".repeat(32)}",
                 "assertion_base64":"${base64(ByteArray(8) { 7 })}"
@@ -1041,7 +1047,7 @@ class BearerOfflineWalletModelsTest {
         )
 
     private fun deviceProof(
-        platform: String = OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+        platform: String = "android",
         attestationKeyId: String = "attest-key",
         challengeHashHex: String = "01".repeat(32),
         assertionBase64: String = base64(ByteArray(8) { 7 }),
@@ -1055,9 +1061,9 @@ class BearerOfflineWalletModelsTest {
             counter = counter,
         )
 
-    private fun deviceBinding(): OfflineDeviceBinding =
+    private fun deviceBinding(platform: String = "android"): OfflineDeviceBinding =
         OfflineDeviceBinding(
-            platform = OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+            platform = platform,
             attestationKeyId = "attest-key",
             deviceId = "device-1",
             offlinePublicKey = base64(ByteArray(32) { 1 }),

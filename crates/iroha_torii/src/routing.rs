@@ -16562,6 +16562,36 @@ mod zk_roots_selector_tests {
     }
 
     #[test]
+    fn explicit_fee_metadata_inserts_deploy_sponsor_and_gas_limit() {
+        let mut metadata = Metadata::default();
+
+        apply_explicit_fee_metadata(
+            &mut metadata,
+            Some("xor#sora"),
+            Some("sponsor@sora"),
+            Some(10_000_000),
+        )
+        .expect("fee metadata should be valid");
+
+        let gas_asset_id = metadata
+            .get("gas_asset_id")
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+        let fee_sponsor = metadata
+            .get("fee_sponsor")
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+        let gas_limit = metadata
+            .get("gas_limit")
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<u64>().ok());
+
+        assert_eq!(gas_asset_id.as_deref(), Some("xor#sora"));
+        assert_eq!(fee_sponsor.as_deref(), Some("sponsor@sora"));
+        assert_eq!(gas_limit, Some(10_000_000));
+    }
+
+    #[test]
     fn multisig_propose_metadata_with_default_gas_asset_forwards_validation_fee_policy_metadata() {
         let (mut state, definition_id) = selector_state();
         let mut pipeline = state.pipeline_snapshot();
@@ -31360,6 +31390,15 @@ pub struct DeployContractDto {
     /// Optional transaction time-to-live in milliseconds; nodes still clamp to their configured maximum.
     #[norito(default)]
     pub transaction_ttl_ms: Option<u64>,
+    /// Optional gas asset identifier override.
+    #[norito(default)]
+    pub gas_asset_id: Option<String>,
+    /// Optional account that sponsors the deployment fee.
+    #[norito(default)]
+    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
+    /// Optional transaction gas limit for fee admission.
+    #[norito(default)]
+    pub gas_limit: Option<u64>,
     /// Optional governance manifest approvers, in addition to the transaction authority.
     #[norito(default)]
     pub gov_manifest_approvers: Vec<iroha_data_model::account::AccountId>,
@@ -31450,6 +31489,15 @@ pub struct DeployContractBundleDto {
     /// Optional transaction time-to-live in milliseconds applied to deploy and init transactions.
     #[norito(default)]
     pub transaction_ttl_ms: Option<u64>,
+    /// Optional gas asset identifier override applied to deploy transactions.
+    #[norito(default)]
+    pub gas_asset_id: Option<String>,
+    /// Optional account that sponsors deploy transaction fees.
+    #[norito(default)]
+    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
+    /// Optional transaction gas limit for deploy fee admission.
+    #[norito(default)]
+    pub gas_limit: Option<u64>,
     /// Optional governance manifest approvers, in addition to the transaction authority.
     #[norito(default)]
     pub gov_manifest_approvers: Vec<iroha_data_model::account::AccountId>,
@@ -32000,6 +32048,32 @@ fn metadata_with_default_gas_asset(state: &CoreState) -> Metadata {
 }
 
 #[cfg(feature = "app_api")]
+fn apply_explicit_fee_metadata(
+    metadata: &mut Metadata,
+    gas_asset_id: Option<&str>,
+    fee_sponsor: Option<&str>,
+    gas_limit: Option<u64>,
+) -> Result<()> {
+    if let Some(asset_id) = gas_asset_id {
+        let gas_asset_key =
+            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
+        metadata.insert(gas_asset_key, IrohaJson::new(asset_id.to_owned()));
+    }
+    if let Some(sponsor) = fee_sponsor {
+        let sponsor_key = Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`");
+        metadata.insert(sponsor_key, IrohaJson::new(sponsor.to_owned()));
+    }
+    if let Some(gas_limit) = gas_limit {
+        if gas_limit == 0 {
+            return Err(conversion_error("gas_limit must be positive".to_owned()));
+        }
+        let gas_limit_key = Name::from_str("gas_limit").expect("static metadata key `gas_limit`");
+        metadata.insert(gas_limit_key, IrohaJson::new(gas_limit));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
 fn insert_gov_manifest_approvers_metadata(
     metadata: &mut Metadata,
     approvers: &[iroha_data_model::account::AccountId],
@@ -32146,6 +32220,9 @@ fn contract_bundle_digest(req: &DeployContractBundleDto) -> Result<String> {
         "bundle_name": (req.bundle_name.clone()),
         "authority": (req.authority.clone()),
         "default_dataspace": (req.default_dataspace.clone()),
+        "gas_asset_id": (req.gas_asset_id.clone()),
+        "fee_sponsor": (req.fee_sponsor.clone()),
+        "gas_limit": (req.gas_limit),
         "contracts": (contracts),
         "init_calls": (init_calls),
         "assertions": (assertions),
@@ -34882,10 +34959,16 @@ async fn submit_contract_deploy_request(
         contract_alias,
         lease_expiry_ms,
         transaction_ttl_ms,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
         gov_manifest_approvers,
     } = req;
     let signer = KeyPair::from(private_key.0.clone());
     let prepared = prepare_contract_deployment(&code_b64, &signer)?;
+    let gas_asset_id =
+        normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
+    let fee_sponsor_literal = fee_sponsor.as_ref().map(ToString::to_string);
     let authority: dm::AccountId = authority.into();
     let (dataspace_alias, dataspace_id) =
         resolve_public_contract_deploy_alias(&state, &contract_alias)?;
@@ -34953,6 +35036,12 @@ async fn submit_contract_deploy_request(
         dm::Json::new(next_nonce),
     )));
     let mut metadata = metadata_with_default_gas_asset(&state);
+    apply_explicit_fee_metadata(
+        &mut metadata,
+        gas_asset_id.as_deref(),
+        fee_sponsor_literal.as_deref(),
+        gas_limit,
+    )?;
     insert_gov_manifest_approvers_metadata(&mut metadata, &gov_manifest_approvers);
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone());
     if let Some(transaction_ttl_ms) = transaction_ttl_ms {
@@ -35199,6 +35288,9 @@ async fn execute_contract_bundle_request(
                     contract_alias: contract.contract_alias.clone(),
                     lease_expiry_ms: contract.lease_expiry_ms,
                     transaction_ttl_ms: req.transaction_ttl_ms,
+                    gas_asset_id: req.gas_asset_id.clone(),
+                    fee_sponsor: req.fee_sponsor.clone(),
+                    gas_limit: req.gas_limit,
                     gov_manifest_approvers: req.gov_manifest_approvers.clone(),
                 },
                 Some(deploy_nonce),
@@ -35353,6 +35445,9 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
         contract_alias,
         lease_expiry_ms,
         transaction_ttl_ms,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
         gov_manifest_approvers,
     } = req;
     DeployContractBundleDto {
@@ -35361,6 +35456,9 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
         private_key,
         default_dataspace: None,
         transaction_ttl_ms,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
         gov_manifest_approvers,
         contracts: vec![DeployContractBundleContractDto {
             name: contract_alias.to_string(),
@@ -35644,6 +35742,9 @@ mod contract_bundle_tests {
             private_key,
             default_dataspace: None,
             transaction_ttl_ms: None,
+            gas_asset_id: None,
+            fee_sponsor: None,
+            gas_limit: None,
             gov_manifest_approvers: Vec::new(),
             contracts: vec![DeployContractBundleContractDto {
                 name: "demo.greeter".to_owned(),
@@ -38992,6 +39093,9 @@ mod deploy_tests {
             contract_alias: "fixture::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
             transaction_ttl_ms: None,
+            gas_asset_id: None,
+            fee_sponsor: None,
+            gas_limit: None,
             gov_manifest_approvers: Vec::new(),
         };
 

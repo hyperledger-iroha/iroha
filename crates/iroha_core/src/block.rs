@@ -13113,6 +13113,42 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn sccp_commitment_root_after_execution_omits_rejected_record_tx() {
+            let (account_id, keypair) = gen_account_in("sccp");
+            let state = sccp_state_with_account(&account_id);
+            let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 1);
+            let candidate_messages =
+                crate::bridge::collect_sccp_messages_from_accepted_transactions(
+                    &[accepted.clone()],
+                );
+            assert!(
+                crate::bridge::sccp_commitment_root_from_messages(&candidate_messages).is_some(),
+                "the pre-execution candidate includes the SCCP record"
+            );
+            let key = crate::bridge::sccp_outbound_message_key(&sccp_transfer_payload());
+            let leader = crate::block::checked_keypair();
+            let new_block = BlockBuilder::new(vec![accepted])
+                .chain(0, None)
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let mut state_block = state.block(new_block.header());
+            let signed_block: SignedBlock = new_block.into();
+
+            let root =
+                ValidBlock::sccp_commitment_root_after_execution(signed_block, &mut state_block)
+                    .expect("failed SCCP record should still derive a post-execution root");
+
+            assert_eq!(
+                root, None,
+                "rejected SCCP records must be omitted from the signed root"
+            );
+            assert!(
+                state_block.world.sccp_outbound_messages.get(&key).is_none(),
+                "rejected SCCP records must not persist outbound messages"
+            );
+        }
+
+        #[test]
         fn validate_and_record_transactions_rejects_sccp_root_after_duplicate_overlay_records() {
             let (account_id, keypair) = gen_account_in("sccp");
             let state = sccp_state_with_account(&account_id);

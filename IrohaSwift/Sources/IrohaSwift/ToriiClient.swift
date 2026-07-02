@@ -9383,7 +9383,11 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
-        try Self.rejectUnknownFields(in: decoder.container(keyedBy: ReadinessField.self))
+        do {
+            let container = try decoder.container(keyedBy: ReadinessField.self)
+            try Self.rejectRemovedAbi7Fields(in: container)
+            try Self.rejectUnknownFields(in: container)
+        }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let hasRecursiveCompactFamily = Self.containsAny(
             container,
@@ -9451,6 +9455,26 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
             )
         }
     }
+
+    private static func rejectRemovedAbi7Fields(
+        in container: KeyedDecodingContainer<ReadinessField>
+    ) throws {
+        for key in container.allKeys where removedAbi7Fields.contains(key.stringValue) {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) is not supported; use offline_kagemusha_recursive_compact_*"
+            )
+        }
+    }
+
+    private static let removedAbi7Fields: Set<String> = [
+        "offline_kagemusha_abi7",
+        "offline_kagemusha_abi7_mode",
+        "offline_kagemusha_abi7_bridge_abi_version",
+        "offline_kagemusha_abi7_circuit_id",
+        "offline_kagemusha_abi7_artifacts",
+    ]
 
     private static func decodeRecursiveCompactFamily(
         from container: KeyedDecodingContainer<CodingKeys>
