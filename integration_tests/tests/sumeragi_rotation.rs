@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eyre::{Result, WrapErr, eyre};
+use eyre::{Report, Result, WrapErr, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::{Level, consensus::Qc, isi::Log};
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
@@ -21,12 +21,38 @@ use tokio::{runtime::Runtime, time::sleep};
 
 const COMMIT_CERT_TIMEOUT: Duration = Duration::from_secs(120);
 const COMMIT_CERT_POLL: Duration = Duration::from_millis(200);
+const ROTATION_NETWORK_START_ATTEMPTS: usize = 3;
+const ROTATION_NETWORK_START_RETRY_DELAY: Duration = Duration::from_secs(1);
 
 fn start_network(
-    builder: NetworkBuilder,
+    build: impl Fn() -> NetworkBuilder,
     context: &'static str,
 ) -> eyre::Result<Option<(sandbox::SerializedNetwork, Runtime)>> {
-    sandbox::start_network_blocking_or_skip(builder, context)
+    for attempt in 1..=ROTATION_NETWORK_START_ATTEMPTS {
+        match sandbox::start_network_blocking_or_skip(build(), context) {
+            Ok(network) => return Ok(network),
+            Err(err)
+                if attempt < ROTATION_NETWORK_START_ATTEMPTS
+                    && is_retryable_rotation_startup_error(&err) =>
+            {
+                eprintln!(
+                    "warning: {context} network rebuild attempt {attempt}/{ROTATION_NETWORK_START_ATTEMPTS} failed after startup retries; retrying in {:?}: {err}",
+                    ROTATION_NETWORK_START_RETRY_DELAY
+                );
+                std::thread::sleep(ROTATION_NETWORK_START_RETRY_DELAY);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    unreachable!("rotation startup retry loop exits via return");
+}
+
+fn is_retryable_rotation_startup_error(err: &Report) -> bool {
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        text.contains("expected peers to start within timeout")
+            || text.contains("peer startup failed; startup snapshot:")
+    })
 }
 
 fn drive_network_to_total_height(
@@ -206,9 +232,8 @@ fn rotation_signer_indices_match_expected_set_a() -> Result<()> {
     init_instruction_registry();
 
     // Start a 5-peer validator network
-    let builder = NetworkBuilder::new().with_peers(5);
     let Some((network, rt)) = start_network(
-        builder,
+        || NetworkBuilder::new().with_peers(5),
         stringify!(rotation_signer_indices_match_expected_set_a),
     )?
     else {
@@ -256,11 +281,12 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
     init_instruction_registry();
 
     // Start a 7-peer validator network
-    let builder = NetworkBuilder::new()
-        .with_peers(7)
-        .with_sync_timeout(Duration::from_secs(300));
     let Some((network, rt)) = start_network(
-        builder,
+        || {
+            NetworkBuilder::new()
+                .with_peers(7)
+                .with_sync_timeout(Duration::from_secs(300))
+        },
         stringify!(rotation_signer_indices_match_expected_set_a_n7_multiple_heights),
     )?
     else {
@@ -314,9 +340,8 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
 fn canonical_certificate_identical_across_peers() -> Result<()> {
     init_instruction_registry();
 
-    let builder = NetworkBuilder::new().with_peers(4);
     let Some((network, rt)) = start_network(
-        builder,
+        || NetworkBuilder::new().with_peers(4),
         stringify!(canonical_certificate_identical_across_peers),
     )?
     else {
@@ -367,4 +392,17 @@ fn canonical_certificate_identical_across_peers() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[test]
+fn rotation_startup_retry_filter_matches_startup_failures_only() {
+    assert!(is_retryable_rotation_startup_error(&eyre!(
+        "peer startup failed; startup snapshot: peer#0 stopped"
+    )));
+    assert!(is_retryable_rotation_startup_error(&eyre!(
+        "expected peers to start within timeout"
+    )));
+    assert!(!is_retryable_rotation_startup_error(&eyre!(
+        "commit certificate signatures below quorum"
+    )));
 }

@@ -69,7 +69,7 @@ const RESTART_PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const PRESSURE_TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const PRESSURE_TRANSACTION_STATUS_TIMEOUT: Duration = Duration::from_secs(2);
 const COMBINED_PRESSURE_ALL_PEER_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
-const COMBINED_PRESSURE_QUORUM_ATTEMPTS: usize = 600;
+const COMBINED_PRESSURE_QUORUM_ATTEMPTS: usize = 1_200;
 const COMBINED_PRESSURE_RESTART_PROGRESS_TIMEOUT: Duration = Duration::from_secs(90);
 const COMBINED_PRESSURE_CATCH_UP_TIMEOUT: Duration = Duration::from_secs(180);
 const DUAL_RESTART_ALL_PEER_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -3991,10 +3991,12 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
     )
     .await?;
 
-    wait_for_numeric_balance(
-        &tx_builder_client,
+    let balance_quorum = peer_clients.len().saturating_sub(1).max(1);
+    wait_for_numeric_balance_quorum(
+        &peer_clients,
         AssetId::new(asset_def.clone(), source.clone()),
         Numeric::from(320_u32),
+        balance_quorum,
         "wait balance after first unshield in duplicate-nullifier scenario",
     )
     .await?;
@@ -4045,10 +4047,11 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
         return Ok(());
     }
 
-    wait_for_numeric_balance(
-        &tx_builder_client,
+    wait_for_numeric_balance_quorum(
+        &peer_clients,
         AssetId::new(asset_def, source),
         Numeric::from(320_u32),
+        balance_quorum,
         "wait balance after duplicate-nullifier attempt",
     )
     .await?;

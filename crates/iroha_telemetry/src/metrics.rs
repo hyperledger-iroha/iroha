@@ -18809,6 +18809,13 @@ mod test {
 
     use super::*;
 
+    fn assert_f64_eq(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < f64::EPSILON,
+            "expected {actual} to equal {expected}"
+        );
+    }
+
     #[test]
     fn metrics_lifecycle() {
         let metrics = Metrics::default();
@@ -19367,26 +19374,26 @@ mod test {
         let metrics = Metrics::default();
         metrics.record_sorafs_egress_reconciliation("provider-a", 1_000, Some(1_100), Some(900));
 
-        assert_eq!(
+        assert_f64_eq(
             metrics
                 .torii_sorafs_egress_bytes
                 .with_label_values(&["provider-a", "billing"])
                 .get(),
-            1_000.0
+            1_000.0,
         );
-        assert_eq!(
+        assert_f64_eq(
             metrics
                 .torii_sorafs_egress_bytes
                 .with_label_values(&["provider-a", "gateway"])
                 .get(),
-            1_100.0
+            1_100.0,
         );
-        assert_eq!(
+        assert_f64_eq(
             metrics
                 .torii_sorafs_egress_bytes
                 .with_label_values(&["provider-a", "orchestrator"])
                 .get(),
-            900.0
+            900.0,
         );
         assert!(
             (metrics
@@ -19406,12 +19413,12 @@ mod test {
                 .abs()
                 < f64::EPSILON
         );
-        assert_eq!(
+        assert_f64_eq(
             metrics
                 .torii_sorafs_egress_drift_ratio
                 .with_label_values(&["provider-a", "billing"])
                 .get(),
-            0.0
+            0.0,
         );
         let exported = metrics.try_to_string().expect("metrics should serialize");
         assert!(
@@ -19556,12 +19563,12 @@ mod test {
                 .get(),
             1
         );
-        assert_eq!(
+        assert_f64_eq(
             metrics
                 .sorafs_reputation_score
                 .with_label_values(&["provider-a"])
                 .get(),
-            1_200.0
+            1_200.0,
         );
         assert_eq!(
             metrics

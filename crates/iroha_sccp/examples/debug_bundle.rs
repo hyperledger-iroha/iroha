@@ -20,6 +20,7 @@ fn hex_encode(bytes: &[u8]) -> String {
     out
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() {
     let mut input = String::new();
     io::stdin()

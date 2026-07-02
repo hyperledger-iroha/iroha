@@ -470,8 +470,12 @@ fn poseidon_hash_columns_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u64>, G
         .collect())
 }
 
-// TODO: Re-enable the low-level fused kernels after Metal/CUDA parity is proven
-// against the scalar column batch plus Merkle-pair parent path.
+/// Dispatch the low-level fused leaf-plus-parent Poseidon kernel.
+///
+/// The production trace commitment path uses `trace::hash_columns_gpu_fused`,
+/// which composes the parity-proven column batch and Merkle-pair helpers.
+/// This lower-level hook remains available for backend parity tests and
+/// throughput experiments.
 #[allow(dead_code)]
 pub fn poseidon_hash_columns_fused(
     batch: &PoseidonColumnBatch,
@@ -488,8 +492,7 @@ pub fn poseidon_hash_columns_fused(
     }
 }
 
-// TODO: Keep this parked with `poseidon_hash_columns_fused` until CUDA fused
-// parent parity has hardware evidence.
+/// CUDA implementation for the low-level fused leaf-plus-parent Poseidon hook.
 #[allow(dead_code)]
 fn poseidon_hash_columns_fused_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u64>, GpuError> {
     if batch.is_empty() {

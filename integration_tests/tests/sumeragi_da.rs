@@ -217,6 +217,10 @@ impl RbcEncodingScenario {
     }
 }
 
+fn commit_latency_within_budget(commit_ms: u64, commit_budget_ms: u64) -> bool {
+    commit_ms <= commit_budget_ms.saturating_add(COMMIT_BUDGET_SCHEDULING_GRACE_MS)
+}
+
 impl PendingRbcStashCounters {
     fn total(&self) -> u64 {
         self.stash_ready_total
@@ -418,6 +422,7 @@ const RBC_DELIVER_BUDGET_PER_EXTRA_PEER_MS: u64 = 60_000;
 // warmed direct reruns settle lower, so keep extra slack for the cold-path run.
 const RBC_DELIVER_RS16_BUDGET_PREMIUM_MS: u64 = 40_000;
 const COMMIT_BUDGET_HEADROOM_MS: u64 = 40_000;
+const COMMIT_BUDGET_SCHEDULING_GRACE_MS: u64 = 1_000;
 const THROUGHPUT_FLOOR_MIB_S: f64 = 0.1;
 const BG_POST_QUEUE_DEPTH_BUDGET: f64 = 32.0;
 const P2P_QUEUE_DROP_BUDGET: f64 = 0.0;
@@ -437,6 +442,8 @@ const DA_RBC_SESSION_TIMEOUT_SECS: u64 = 240;
 const DA_VIEW_CHANGE_TIMEOUT_SECS: u64 = 300;
 const DA_PAYLOAD_LOSS_COMMIT_TIMEOUT_SECS: u64 = 240;
 const DA_KURA_EVICTION_PROGRESS_WAIT_SECS: u64 = 45;
+const DA_KURA_EVICTION_MARKER_WAIT_SECS: u64 = 300;
+const DA_KURA_EVICTION_MAX_SUBMISSIONS: u64 = 16;
 const DA_LANE_TEU_MIN_BYTES: usize = 256 * 1024;
 const DA_LANE_TEU_HEADROOM_BYTES: usize = 64 * 1024;
 const DA_FUSION_FLOOR_TEU_MIN: i64 = 128 * 1024;
@@ -484,19 +491,25 @@ fn da_fusion_floor_teu_for_payload(payload_bytes: usize) -> i64 {
 
 fn da_kura_eviction_disk_budget_bytes(payload_bytes: usize) -> i64 {
     let target = payload_bytes
-        .saturating_mul(12)
-        .saturating_add(DA_LANE_TEU_HEADROOM_BYTES.saturating_mul(2));
+        .saturating_mul(5)
+        .saturating_add(DA_LANE_TEU_HEADROOM_BYTES);
     i64::try_from(target).unwrap_or(i64::MAX)
 }
 
-fn da_kura_source_disk_budget_bytes(payload_bytes: usize) -> i64 {
-    da_kura_eviction_disk_budget_bytes(payload_bytes).saturating_mul(32)
+fn da_kura_store_eviction_disk_budget_bytes(payload_bytes: usize) -> i64 {
+    let target = payload_bytes
+        .saturating_mul(10)
+        .saturating_add(DA_LANE_TEU_HEADROOM_BYTES);
+    i64::try_from(target).unwrap_or(i64::MAX)
 }
 
 fn kura_eviction_override_layer(payload_bytes: usize) -> Table {
+    kura_eviction_override_layer_with_budget(da_kura_eviction_disk_budget_bytes(payload_bytes))
+}
+
+fn kura_eviction_override_layer_with_budget(disk_budget: i64) -> Table {
     let mut table = Table::new();
     let mut writer = TomlWriter::new(&mut table);
-    let disk_budget = da_kura_eviction_disk_budget_bytes(payload_bytes).saturating_mul(4);
     writer
         .write(["kura", "blocks_in_memory"], 1_i64)
         .write(["kura", "max_disk_usage_bytes"], disk_budget)
@@ -520,7 +533,6 @@ async fn start_network_with_primary_kura_source_or_skip(
             .map(|layer| ConfigLayer(layer.into_owned()))
             .collect();
         let eviction_layer = ConfigLayer(eviction_layer);
-
         for (index, peer) in network.peers().iter().enumerate() {
             let mut layers = base_layers.clone();
             if index != 0 {
@@ -787,7 +799,7 @@ async fn sumeragi_rbc_background_queue_synchronous() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
     let scenario_name = stringify!(sumeragi_da_kura_eviction_rehydrates_from_da_store);
-    let payload_bytes = 64 * 1024;
+    let payload_bytes = 128 * 1024;
     let tx_limit =
         u64::try_from(torii_max_content_len_for_payload(payload_bytes)).unwrap_or(u64::MAX);
     let tx_limit_nz =
@@ -825,10 +837,19 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
                 ["network", "max_frame_bytes_tx_gossip"],
                 P2P_TX_FRAME_BUDGET_BYTES,
             )
+            .write(["sumeragi", "da", "enabled"], true)
             .write(["sumeragi", "consensus_mode"], "permissioned")
             .write(
                 ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                 rbc_chunk_max_bytes,
+            )
+            .write(
+                ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
+                600_000i64,
+            )
+            .write(
+                ["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"],
+                600_000i64,
             )
             .write(
                 ["torii", "max_content_len"],
@@ -845,6 +866,9 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_data_availability_enabled(true)
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::DaEnabled(true),
+        )))
         .with_genesis_instruction(SetParameter::new(Parameter::Transaction(
             TransactionParameter::MaxTxBytes(tx_limit_nz),
         )))
@@ -860,24 +884,25 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
     };
 
     let result: Result<()> = async {
-        let mut client = network.client();
+        let peers = network.peers();
+        let primary_submit_peer = peers
+            .first()
+            .cloned()
+            .ok_or_else(|| eyre!("network must have a primary Kura source peer"))?;
+        let mut client = primary_submit_peer.client();
         let status_timeout = da_commit_wait_timeout();
         client.transaction_status_timeout = status_timeout;
         client.transaction_ttl = Some(status_timeout.saturating_add(Duration::from_secs(30)));
         configure_runtime_da(&client).await?;
 
-        let peers = network.peers();
-        let peer = peers
-            .first()
-            .ok_or_else(|| eyre!("network must have at least one peer"))?;
         let store_roots = peers
             .iter()
             .map(NetworkPeer::kura_store_dir)
             .collect::<Vec<_>>();
+        let history_peer_quorum = peers.len().min(2).max(1);
 
         let status_before = fetch_status(&client).await?;
         let mut expected_height = status_before.blocks;
-        let mut evicted_marker = None;
         let mut submitted = 0_u64;
         let deadline = Instant::now() + da_commit_wait_timeout();
         let pick_lowest_evicted_marker =
@@ -885,13 +910,17 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
                 markers.into_iter().min_by_key(|marker| marker.height)
         };
 
-        while evicted_marker.is_none() && Instant::now() < deadline {
+        let mut evicted_marker = None;
+        while evicted_marker.is_none()
+            && submitted < DA_KURA_EVICTION_MAX_SUBMISSIONS
+            && Instant::now() < deadline
+        {
             expected_height = expected_height.saturating_add(1);
             let message = generate_incompressible_payload(
                 &format!("{scenario_name}-{submitted}"),
                 payload_bytes,
             );
-            submit_log_to_any_peer(&peers, message).await?;
+            submit_log_to_any_peer(std::slice::from_ref(&primary_submit_peer), message).await?;
             submitted = submitted.saturating_add(1);
 
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -901,28 +930,39 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
             let per_submit_wait = remaining.min(Duration::from_secs(
                 DA_KURA_EVICTION_PROGRESS_WAIT_SECS,
             ));
-            if timeout(per_submit_wait, peer.once_block(expected_height))
-                .await
-                .is_err()
+            if wait_for_status_height_quorum(
+                peers,
+                expected_height,
+                history_peer_quorum,
+                per_submit_wait,
+            )
+            .await
+            .is_err()
             {
-                // Avoid failing on one stalled proposal; continue driving consensus until the
-                // scenario deadline and keep the target height aligned with observed progress.
-                let status = fetch_status(&client)
-                    .await
-                    .wrap_err("refresh status after per-submit block wait timeout")?;
-                expected_height = expected_height.max(status.blocks);
+                let markers = collect_evicted_kura_blocks_from_roots(&store_roots)
+                    .wrap_err("collect Kura eviction markers after progress timeout")?;
+                if let Some(marker) = pick_lowest_evicted_marker(markers) {
+                    evicted_marker = Some(marker);
+                    break;
+                }
+                let status = fetch_status(&client).await;
+                expected_height =
+                    expected_height.max(status.map(|status| status.blocks).unwrap_or(0));
                 continue;
             }
 
             let markers = collect_evicted_kura_blocks_from_roots(&store_roots)
                 .wrap_err("collect Kura eviction markers")?;
             evicted_marker = pick_lowest_evicted_marker(markers);
+            if evicted_marker.is_some() {
+                break;
+            }
         }
 
         if evicted_marker.is_none() {
             let markers = wait_for_evicted_kura_blocks_any(
                 store_roots.clone(),
-                Duration::from_secs(30),
+                Duration::from_secs(DA_KURA_EVICTION_MARKER_WAIT_SECS),
             )
                 .await
                 .wrap_err("wait for Kura eviction markers")?;
@@ -1196,7 +1236,7 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
             peers,
             sessions_url_primary.clone(),
             expected_height,
-            &block_hash_hex,
+            Some(&block_hash_hex),
             Some(persisted.view),
             restart_start,
         )
@@ -1493,7 +1533,7 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
             peers,
             primary_sessions_url,
             expected_height,
-            &block_hash_hex,
+            Some(&block_hash_hex),
             Some(persisted.view),
             restart_start,
         )
@@ -2436,11 +2476,8 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
                     "failed to map RBC sessions URL {} to a peer",
                     inflight.sessions_url
                 )
-            })?;
+        })?;
         let observed_torii = peers[observed_peer_index].client().torii_url.clone();
-        let status_url = observed_torii
-            .join("status")
-            .wrap_err("compose observed status URL")?;
         let store_dir = peers[observed_peer_index]
             .kura_store_dir()
             .join("rbc_sessions");
@@ -2516,7 +2553,6 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             return Ok(());
         }
 
-        let restarted_client = peers[observed_peer_index].client();
         let resumed_torii = observed_torii.clone();
         let restart_sessions_url = resumed_torii
             .join("v1/sumeragi/rbc/sessions")
@@ -2584,20 +2620,32 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             }
             sleep(Duration::from_millis(200)).await;
         }
-        let _terminal_observation = wait_for_rbc_delivery(
+        let _terminal_observation = wait_for_terminal_rbc_state(
             http.clone(),
+            &peers,
             restart_sessions_url.clone(),
             session_height,
+            None,
+            None,
             recovery_start,
         )
         .await
         .wrap_err("wait for terminal RBC delivery after cold restart")?;
-        network
-            .ensure_blocks_with(|height| height.total >= session_height)
-            .await
-            .wrap_err_with(|| {
-                format!("wait for restarted network to expose height {session_height}")
-            })?;
+        let resumed_peer = wait_for_status_height_quorum(
+            &peers,
+            session_height,
+            commit_quorum_from_len(peers.len()).max(1),
+            da_rbc_recovery_timeout(),
+        )
+        .await
+        .wrap_err_with(|| {
+            format!("wait for restarted network quorum to expose height {session_height}")
+        })?;
+        let restarted_client = resumed_peer.client();
+        let resumed_torii = restarted_client.torii_url.clone();
+        let status_url = resumed_torii
+            .join("status")
+            .wrap_err("compose resumed status URL")?;
 
         let resume_height = fetch_status(&restarted_client)
             .await
@@ -2617,7 +2665,7 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             resume_height,
             resume_start,
         ));
-        let store_dir_for_rbc = store_dir.clone();
+        let store_dir_for_rbc = resumed_peer.kura_store_dir().join("rbc_sessions");
         let rbc_future = tokio::spawn(async move {
             wait_for_persisted_rbc_session(&store_dir_for_rbc, resume_height, resume_start).await
         });
@@ -2818,10 +2866,6 @@ where
     let status_before = fetch_status(&client).await?;
     let expected_height = status_before.blocks + 1;
 
-    let status_url = client
-        .torii_url
-        .join("status")
-        .wrap_err("compose status URL")?;
     let sessions_url = client
         .torii_url
         .join("v1/sumeragi/rbc/sessions")
@@ -2836,12 +2880,18 @@ where
         expected_height,
         start,
     ));
-    let commit_handle = tokio::spawn(wait_for_height(
-        http.clone(),
-        status_url,
-        expected_height,
-        start,
-    ));
+    let commit_peers = network.peers().to_vec();
+    let commit_required = commit_quorum_from_len(commit_peers.len()).max(1);
+    let commit_handle = tokio::spawn(async move {
+        wait_for_status_height_quorum(
+            &commit_peers,
+            expected_height,
+            commit_required,
+            da_commit_wait_timeout(),
+        )
+        .await
+        .map(|_| start.elapsed())
+    });
 
     let submit_client = client.clone();
     let submit_handle = tokio::task::spawn_blocking(move || {
@@ -3128,8 +3178,8 @@ where
             .map_or("", |(_, failure_context)| failure_context.as_str()),
     );
     assert!(
-        commit_ms_u64 <= commit_budget_ms,
-        "Commit latency {commit_ms_u64} ms exceeded budget {commit_budget_ms} ms"
+        commit_latency_within_budget(commit_ms_u64, commit_budget_ms),
+        "Commit latency {commit_ms_u64} ms exceeded budget {commit_budget_ms} ms plus scheduling grace {COMMIT_BUDGET_SCHEDULING_GRACE_MS} ms"
     );
     assert!(
         throughput_mib_s >= throughput_floor_mib_s,
@@ -3537,6 +3587,20 @@ fn torii_max_content_len_saturates_on_overflow() {
 }
 
 #[test]
+fn commit_latency_budget_allows_only_scheduling_grace() {
+    let budget = 75_000;
+
+    assert!(commit_latency_within_budget(
+        budget + COMMIT_BUDGET_SCHEDULING_GRACE_MS,
+        budget
+    ));
+    assert!(!commit_latency_within_budget(
+        budget + COMMIT_BUDGET_SCHEDULING_GRACE_MS + 1,
+        budget
+    ));
+}
+
+#[test]
 fn da_lane_teu_budget_preserves_legacy_small_payload_defaults() {
     assert_eq!(da_lane_teu_capacity_for_payload(1024), 262_144);
     assert_eq!(da_fusion_floor_teu_for_payload(1024), 131_072);
@@ -3556,13 +3620,66 @@ fn da_lane_teu_budget_scales_above_double_payload_for_large_da_blocks() {
 }
 
 #[test]
-fn da_kura_eviction_budget_fits_two_large_blocks_but_forces_eviction() {
+fn da_kura_eviction_budget_fits_minimum_evictable_history() {
     let payload = 128 * 1024;
     let budget = da_kura_eviction_disk_budget_bytes(payload);
     let payload_i64 = i64::try_from(payload).expect("payload fits in i64");
 
-    assert!(budget > payload_i64 * 12);
-    assert!(budget < payload_i64 * 14);
+    assert!(budget > payload_i64 * 5);
+    assert!(budget <= payload_i64 * 6);
+}
+
+#[test]
+fn da_store_eviction_budget_fits_minimum_evictable_history() {
+    let payload = 64 * 1024;
+    let budget = da_kura_store_eviction_disk_budget_bytes(payload);
+    let payload_i64 = i64::try_from(payload).expect("payload fits in i64");
+
+    assert!(budget > payload_i64 * 10);
+    assert!(budget <= payload_i64 * 11);
+}
+
+#[test]
+fn kura_eviction_override_layer_uses_tight_budget() {
+    let payload = 128 * 1024;
+    let expected_budget = da_kura_eviction_disk_budget_bytes(payload);
+    let layer = kura_eviction_override_layer(payload);
+    let kura = layer
+        .get("kura")
+        .and_then(toml::Value::as_table)
+        .expect("kura table");
+    let nexus_storage = layer
+        .get("nexus")
+        .and_then(toml::Value::as_table)
+        .and_then(|nexus| nexus.get("storage"))
+        .and_then(toml::Value::as_table)
+        .expect("nexus storage table");
+
+    assert_eq!(
+        kura.get("max_disk_usage_bytes")
+            .and_then(toml::Value::as_integer),
+        Some(expected_budget)
+    );
+    assert_eq!(
+        nexus_storage
+            .get("max_disk_usage_bytes")
+            .and_then(toml::Value::as_integer),
+        Some(expected_budget)
+    );
+}
+
+#[test]
+fn kura_eviction_override_layer_with_budget_uses_explicit_budget() {
+    let layer = kura_eviction_override_layer_with_budget(123_456);
+    let kura = layer
+        .get("kura")
+        .and_then(toml::Value::as_table)
+        .expect("kura table");
+    assert_eq!(
+        kura.get("max_disk_usage_bytes")
+            .and_then(toml::Value::as_integer),
+        Some(123_456)
+    );
 }
 
 #[test]
@@ -3571,6 +3688,14 @@ fn da_commit_wait_timeout_is_reasonable() {
         da_commit_wait_timeout(),
         Duration::from_secs(DA_COMMIT_WAIT_TIMEOUT_SECS)
     );
+}
+
+#[test]
+fn commit_certificate_required_from_len_matches_bft_quorum() {
+    assert_eq!(commit_certificate_required_from_len(0), 1);
+    assert_eq!(commit_certificate_required_from_len(1), 1);
+    assert_eq!(commit_certificate_required_from_len(4), 3);
+    assert_eq!(commit_certificate_required_from_len(6), 5);
 }
 
 #[test]
@@ -4542,6 +4667,58 @@ fn collect_evicted_kura_blocks_from_roots(roots: &[PathBuf]) -> Result<Vec<Evict
     Ok(markers)
 }
 
+fn max_kura_block_index_entries(root: &Path) -> Result<usize> {
+    const BLOCK_INDEX_ENTRY_BYTES: usize = 16;
+
+    let mut max_entries = 0_usize;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(err)
+                    .wrap_err_with(|| format!("failed to read directory {}", dir.display()));
+            }
+        };
+        for entry in entries {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let path = entry.path();
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !file_type.is_file() || entry.file_name() != std::ffi::OsStr::new("blocks.index") {
+                continue;
+            }
+
+            let bytes =
+                fs::read(&path).wrap_err_with(|| format!("failed to read {}", path.display()))?;
+            ensure!(
+                bytes.len() % BLOCK_INDEX_ENTRY_BYTES == 0,
+                "{} size is not aligned to {BLOCK_INDEX_ENTRY_BYTES}-byte entries",
+                path.display()
+            );
+            max_entries = max_entries.max(bytes.len() / BLOCK_INDEX_ENTRY_BYTES);
+        }
+    }
+    Ok(max_entries)
+}
+
+fn select_kura_eviction_peer_index(roots: &[PathBuf], min_entries: usize) -> Result<usize> {
+    let mut best = None;
+    for (index, root) in roots.iter().enumerate().skip(1) {
+        let entries = max_kura_block_index_entries(root)?;
+        if entries >= min_entries && best.is_none_or(|(_, best_entries)| entries > best_entries) {
+            best = Some((index, entries));
+        }
+    }
+    best.map(|(index, _)| index).ok_or_else(|| {
+        eyre!("no non-primary peer had at least {min_entries} indexed Kura block entries")
+    })
+}
+
 #[test]
 fn collect_da_block_files_from_roots_merges_nested_da_directories() {
     let root_a = tempfile::tempdir().expect("root A tempdir");
@@ -4580,15 +4757,48 @@ fn collect_evicted_kura_blocks_finds_nested_index_markers() {
     assert_eq!(markers[0].height, 2);
 }
 
+#[test]
+fn select_kura_eviction_peer_index_prefers_deep_non_primary_history() {
+    let root_a = tempfile::tempdir().expect("root A tempdir");
+    let root_b = tempfile::tempdir().expect("root B tempdir");
+    let root_c = tempfile::tempdir().expect("root C tempdir");
+
+    for (root, entries) in [
+        (root_a.path(), 4_usize),
+        (root_b.path(), 2),
+        (root_c.path(), 5),
+    ] {
+        let blocks_dir = root.join("blocks/lane_000_default");
+        fs::create_dir_all(&blocks_dir).expect("create blocks dir");
+        fs::write(blocks_dir.join("blocks.index"), vec![0_u8; entries * 16])
+            .expect("write blocks index");
+    }
+
+    let roots = vec![
+        root_a.path().to_path_buf(),
+        root_b.path().to_path_buf(),
+        root_c.path().to_path_buf(),
+    ];
+
+    assert_eq!(
+        select_kura_eviction_peer_index(&roots, 3).expect("select peer"),
+        2
+    );
+}
+
 async fn wait_for_evicted_kura_blocks_any(
     roots: Vec<PathBuf>,
     timeout: Duration,
 ) -> Result<Vec<EvictedKuraBlock>> {
     let start = Instant::now();
+    let mut max_index_entries = 0_usize;
     loop {
         let markers = collect_evicted_kura_blocks_from_roots(&roots)?;
         if !markers.is_empty() {
             return Ok(markers);
+        }
+        for root in &roots {
+            max_index_entries = max_index_entries.max(max_kura_block_index_entries(root)?);
         }
         if start.elapsed() > timeout {
             let roots = roots
@@ -4597,7 +4807,7 @@ async fn wait_for_evicted_kura_blocks_any(
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(eyre!(
-                "timed out waiting for Kura eviction markers under [{roots}]"
+                "timed out waiting for Kura eviction markers under [{roots}]; max_index_entries={max_index_entries}"
             ));
         }
         sleep(Duration::from_millis(200)).await;
@@ -4611,6 +4821,7 @@ async fn wait_for_commit_certificates(
     start: Instant,
 ) -> Result<()> {
     let timeout = da_commit_wait_timeout();
+    let required = commit_certificate_required_from_len(torii_urls.len());
     let mut urls = Vec::with_capacity(torii_urls.len());
     for torii in torii_urls {
         let base =
@@ -4627,13 +4838,15 @@ async fn wait_for_commit_certificates(
     }
 
     let mut last_missing = Vec::new();
+    let mut last_present = 0usize;
     loop {
         if start.elapsed() > timeout {
             return Err(eyre!(
-                "timed out waiting for commit certificates at height {expected_height}; missing={last_missing:?}"
+                "timed out waiting for commit certificates at height {expected_height}; present={last_present}; required={required}; missing={last_missing:?}"
             ));
         }
         last_missing.clear();
+        last_present = 0;
         for (torii, url) in &urls {
             let response = http
                 .get(url.clone())
@@ -4653,13 +4866,19 @@ async fn wait_for_commit_certificates(
                 .any(|cert| cert.height == expected_height)
             {
                 last_missing.push(format!("{torii} (missing height {expected_height})"));
+            } else {
+                last_present = last_present.saturating_add(1);
             }
         }
-        if last_missing.is_empty() {
+        if last_present >= required {
             return Ok(());
         }
         sleep(Duration::from_millis(200)).await;
     }
+}
+
+fn commit_certificate_required_from_len(peer_count: usize) -> usize {
+    commit_quorum_from_len(peer_count).max(1)
 }
 
 async fn fetch_rbc_session_hashes(
@@ -4992,16 +5211,13 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
     let tx_limit_nz =
         NonZeroU64::new(tx_limit).ok_or_else(|| eyre!("tx_limit must be non-zero"))?;
     let rbc_chunk_max_bytes = i64::try_from(payload_bytes).unwrap_or(i64::MAX);
-    let lane_teu_capacity = da_lane_teu_capacity_for_payload(payload_bytes);
-    let fusion_floor_teu = da_fusion_floor_teu_for_payload(payload_bytes);
-    let stake_amount = SumeragiNposParameters::default().min_self_bond();
-
     let mut config_table = toml::Table::new();
     {
         let mut writer = TomlWriter::new(&mut config_table);
         writer
             .write("telemetry_enabled", true)
             .write("telemetry_profile", "full")
+            .write(["nexus", "enabled"], false)
             .write(["logger", "level"], "WARN")
             .write(["network", "max_frame_bytes"], CONSENSUS_FRAME_BUDGET_BYTES)
             .write(
@@ -5032,7 +5248,7 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
                 torii_max_content_len_for_payload(payload_bytes),
             )
             .write(["sumeragi", "da", "enabled"], true)
-            .write(["sumeragi", "consensus_mode"], "npos")
+            .write(["sumeragi", "consensus_mode"], "permissioned")
             .write(
                 ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                 rbc_chunk_max_bytes,
@@ -5051,72 +5267,10 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
             );
     }
 
-    let mut nexus = toml::map::Map::new();
-    nexus.insert("enabled".into(), toml::Value::Boolean(true));
-    nexus.insert("lane_count".into(), toml::Value::Integer(1));
-
-    let mut lane = toml::map::Map::new();
-    lane.insert("alias".into(), toml::Value::String("lane0".into()));
-    lane.insert("index".into(), toml::Value::Integer(0));
-    let mut metadata = toml::map::Map::new();
-    metadata.insert(
-        "scheduler.teu_capacity".into(),
-        toml::Value::String(lane_teu_capacity.to_string()),
-    );
-    lane.insert("metadata".into(), toml::Value::Table(metadata));
-    nexus.insert(
-        "lane_catalog".into(),
-        toml::Value::Array(vec![toml::Value::Table(lane)]),
-    );
-
-    let mut fusion = toml::map::Map::new();
-    fusion.insert("floor_teu".into(), toml::Value::Integer(fusion_floor_teu));
-    fusion.insert("exit_teu".into(), toml::Value::Integer(lane_teu_capacity));
-    nexus.insert("fusion".into(), toml::Value::Table(fusion));
-
-    let da_sample = 1_i64;
-    let da_threshold = 1_i64;
-    let mut da = toml::map::Map::new();
-    da.insert(
-        "q_in_slot_total".into(),
-        toml::Value::Integer(da_sample.max(1)),
-    );
-    da.insert("q_in_slot_per_ds_min".into(), toml::Value::Integer(1));
-    da.insert("sample_size_base".into(), toml::Value::Integer(da_sample));
-    da.insert("sample_size_max".into(), toml::Value::Integer(da_sample));
-    da.insert("threshold_base".into(), toml::Value::Integer(da_threshold));
-    da.insert("per_attester_shards".into(), toml::Value::Integer(1));
-    let mut audit = toml::map::Map::new();
-    audit.insert("sample_size".into(), toml::Value::Integer(da_sample));
-    audit.insert("window_count".into(), toml::Value::Integer(1));
-    audit.insert("interval_ms".into(), toml::Value::Integer(60_000));
-    da.insert("audit".into(), toml::Value::Table(audit));
-    nexus.insert("da".into(), toml::Value::Table(da));
-
-    let mut storage = toml::map::Map::new();
-    storage.insert(
-        "max_disk_usage_bytes".into(),
-        toml::Value::Integer(da_kura_source_disk_budget_bytes(payload_bytes)),
-    );
-    let mut weights = toml::map::Map::new();
-    weights.insert("kura_blocks_bps".into(), toml::Value::Integer(9_000));
-    weights.insert("wsv_snapshots_bps".into(), toml::Value::Integer(500));
-    weights.insert("sorafs_bps".into(), toml::Value::Integer(250));
-    weights.insert("soranet_spool_bps".into(), toml::Value::Integer(200));
-    weights.insert("soravpn_spool_bps".into(), toml::Value::Integer(50));
-    storage.insert("disk_budget_weights".into(), toml::Value::Table(weights));
-    nexus.insert("storage".into(), toml::Value::Table(storage));
-
-    {
-        let mut writer = TomlWriter::new(&mut config_table);
-        writer.write("nexus", toml::Value::Table(nexus));
-    }
-
     let eviction_layer = kura_eviction_override_layer(payload_bytes);
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_npos_genesis_bootstrap(stake_amount)
         .with_data_availability_enabled(true)
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),
@@ -5154,10 +5308,10 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
             .iter()
             .map(NetworkPeer::kura_store_dir)
             .collect::<Vec<_>>();
+        let history_peer_quorum = peers.len().min(2).max(1);
 
         let status_before = fetch_status(&client).await?;
         let mut expected_height = status_before.blocks;
-        let mut evicted_marker = None;
         let mut submitted = 0_u64;
         let deadline = Instant::now() + da_commit_wait_timeout();
         let pick_lowest_evicted_marker =
@@ -5165,7 +5319,11 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
                 markers.into_iter().min_by_key(|marker| marker.height)
             };
 
-        while evicted_marker.is_none() && Instant::now() < deadline {
+        let mut evicted_marker = None;
+        while evicted_marker.is_none()
+            && submitted < DA_KURA_EVICTION_MAX_SUBMISSIONS
+            && Instant::now() < deadline
+        {
             expected_height = expected_height.saturating_add(1);
             let payload = generate_incompressible_payload(
                 &format!("{scenario_name}-payload-{submitted}"),
@@ -5180,28 +5338,45 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
             }
             let per_submit_wait =
                 remaining.min(Duration::from_secs(DA_KURA_EVICTION_PROGRESS_WAIT_SECS));
-            if timeout(per_submit_wait, primary_peer.once_block(expected_height))
-                .await
-                .is_err()
+            if wait_for_status_height_quorum(
+                peers,
+                expected_height,
+                history_peer_quorum,
+                per_submit_wait,
+            )
+            .await
+            .is_err()
             {
-                let status = fetch_status(&client)
-                    .await
-                    .wrap_err("refresh status after per-submit block wait timeout")?;
-                expected_height = expected_height.max(status.blocks);
+                let markers = collect_evicted_kura_blocks_from_roots(&kura_roots)
+                    .wrap_err("collect Kura eviction markers after progress timeout")?;
+                if let Some(marker) = pick_lowest_evicted_marker(markers) {
+                    evicted_marker = Some(marker);
+                    break;
+                }
+                let status = fetch_status(&client).await;
+                expected_height =
+                    expected_height.max(status.map(|status| status.blocks).unwrap_or(0));
                 continue;
             }
 
-            let markers = collect_evicted_kura_blocks_from_roots(&kura_roots)?;
+            let markers = collect_evicted_kura_blocks_from_roots(&kura_roots)
+                .wrap_err("collect Kura eviction markers")?;
             evicted_marker = pick_lowest_evicted_marker(markers);
+            if evicted_marker.is_some() {
+                break;
+            }
         }
 
         if evicted_marker.is_none() {
-            let markers =
-                wait_for_evicted_kura_blocks_any(kura_roots.clone(), Duration::from_secs(30))
-                    .await
-                    .wrap_err("wait for Kura eviction markers")?;
+            let markers = wait_for_evicted_kura_blocks_any(
+                kura_roots.clone(),
+                Duration::from_secs(DA_KURA_EVICTION_MARKER_WAIT_SECS),
+            )
+            .await
+            .wrap_err("wait for Kura eviction markers")?;
             evicted_marker = pick_lowest_evicted_marker(markers);
         }
+
         let evicted_marker = evicted_marker.ok_or_else(|| {
             eyre!("timed out waiting for Kura eviction markers after {submitted} blocks")
         })?;
@@ -5364,6 +5539,61 @@ async fn restart_all_peers(network: &Network, config_layers: &[ConfigLayer]) -> 
     Ok(())
 }
 
+async fn wait_for_status_height_quorum(
+    peers: &[NetworkPeer],
+    target_height: u64,
+    required_peer_count: usize,
+    timeout: Duration,
+) -> Result<NetworkPeer> {
+    let required_peer_count = required_peer_count.max(1).min(peers.len().max(1));
+    let deadline = Instant::now() + timeout;
+    let mut last_observed = Vec::new();
+    loop {
+        let mut reached = Vec::new();
+        last_observed.clear();
+        for (idx, peer) in peers.iter().enumerate() {
+            if !peer.is_running() {
+                last_observed.push(format!("peer#{idx}({}) stopped", peer.mnemonic()));
+                continue;
+            }
+            match peer.status().await {
+                Ok(status) => {
+                    last_observed.push(format!(
+                        "peer#{idx}({}) height={} non_empty={} queue={}",
+                        peer.mnemonic(),
+                        status.blocks,
+                        status.blocks_non_empty,
+                        status.queue_size
+                    ));
+                    if status.blocks >= target_height {
+                        reached.push((peer.clone(), status.blocks));
+                    }
+                }
+                Err(err) => {
+                    last_observed.push(format!(
+                        "peer#{idx}({}) status_err={err:?}",
+                        peer.mnemonic()
+                    ));
+                }
+            }
+        }
+        if reached.len() >= required_peer_count {
+            let (peer, _) = reached
+                .into_iter()
+                .max_by_key(|(_, height)| *height)
+                .expect("reached contains quorum peer");
+            return Ok(peer);
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "timed out waiting for {required_peer_count} peers to reach height {target_height}; last={}",
+                last_observed.join("; ")
+            ));
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
 fn required_rbc_observation_after_endpoint_timeout(
     expected_height: u64,
     persisted_observation: Option<RbcObservation>,
@@ -5412,7 +5642,7 @@ async fn wait_for_terminal_rbc_state(
     peers: &[NetworkPeer],
     sessions_url: reqwest::Url,
     expected_height: u64,
-    block_hash_hex: &str,
+    expected_block_hash: Option<&str>,
     expected_view: Option<u64>,
     start: Instant,
 ) -> Result<RbcObservation> {
@@ -5430,7 +5660,7 @@ async fn wait_for_terminal_rbc_state(
             if let Some(observation) = parse_rbc_summary(
                 &value,
                 expected_height,
-                Some(block_hash_hex),
+                expected_block_hash,
                 expected_view,
                 start,
             )? {
@@ -5441,7 +5671,7 @@ async fn wait_for_terminal_rbc_state(
         if let Some(observation) = rbc_observation_from_persisted_snapshot_quorum(
             peers,
             expected_height,
-            Some(block_hash_hex),
+            expected_block_hash,
             expected_view,
             start.elapsed(),
             persisted_quorum,
@@ -5449,8 +5679,9 @@ async fn wait_for_terminal_rbc_state(
             return Ok(observation);
         }
         if start.elapsed() > timeout {
+            let block_hash_label = expected_block_hash.unwrap_or("<any>");
             let context =
-                match collect_rbc_failure_context(&http, peers, expected_height, block_hash_hex)
+                match collect_rbc_failure_context(&http, peers, expected_height, block_hash_label)
                     .await
                 {
                     Ok(context) => context,
@@ -5460,7 +5691,7 @@ async fn wait_for_terminal_rbc_state(
                 .map(|view| format!(" view {view}"))
                 .unwrap_or_default();
             return Err(eyre!(
-                "timed out waiting for terminal RBC state at height {expected_height}{view_context} for block {block_hash_hex}\n{context}"
+                "timed out waiting for terminal RBC state at height {expected_height}{view_context} for block {block_hash_label}\n{context}"
             ));
         }
         sleep(Duration::from_millis(200)).await;

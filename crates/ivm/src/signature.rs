@@ -275,18 +275,16 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
     }
 
     #[cfg(feature = "cuda")]
-    if let Some((sigs, pks, hrams, map)) = cuda_inputs {
-        if !sigs.is_empty() {
-            if let Some(out) = crate::cuda::ed25519_verify_batch_cuda(&sigs, &pks, &hrams) {
-                if out.len() == map.len() {
-                    let mut results = vec![false; items.len()];
-                    for (idx, ok) in map.into_iter().zip(out.into_iter()) {
-                        results[idx] = ok;
-                    }
-                    return results;
-                }
-            }
+    if let Some((sigs, pks, hrams, map)) = cuda_inputs
+        && !sigs.is_empty()
+        && let Some(out) = crate::cuda::ed25519_verify_batch_cuda(&sigs, &pks, &hrams)
+        && out.len() == map.len()
+    {
+        let mut results = vec![false; items.len()];
+        for (idx, ok) in map.into_iter().zip(out.into_iter()) {
+            results[idx] = ok;
         }
+        return results;
     }
 
     let mut results = Vec::with_capacity(items.len());
@@ -297,15 +295,15 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
         };
 
         #[cfg(feature = "cuda")]
-        if maybe_cuda {
-            if let Some(res) = crate::cuda::ed25519_verify_cuda(
+        if maybe_cuda
+            && let Some(res) = crate::cuda::ed25519_verify_cuda(
                 items[idx].message,
                 &items[idx].signature,
                 &items[idx].public_key,
-            ) {
-                results.push(res);
-                continue;
-            }
+            )
+        {
+            results.push(res);
+            continue;
         }
 
         results.push(pk.verify_strict(items[idx].message, &sig).is_ok());

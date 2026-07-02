@@ -405,7 +405,7 @@ mod imp {
                     let d_lo = cuda_buffer_from_slice(&lo_pad)?;
 
                     let threads: u32 = 256;
-                    let blocks: u32 = ((pow2 as u32) + threads - 1) / threads;
+                    let blocks: u32 = (pow2 as u32).div_ceil(threads);
 
                     let mut k = 2usize;
                     while k <= pow2 {
@@ -432,10 +432,8 @@ mod imp {
                     d_hi.copy_to(&mut hi_out).ok()?;
                     d_lo.copy_to(&mut lo_out).ok()?;
 
-                    for idx in 0..len {
-                        hi[idx] = hi_out[idx];
-                        lo[idx] = lo_out[idx];
-                    }
+                    hi[..len].copy_from_slice(&hi_out[..len]);
+                    lo[..len].copy_from_slice(&lo_out[..len]);
                     Some(())
                 })
             })?
@@ -515,9 +513,7 @@ mod imp {
                         ));
                         return None;
                     }
-                    if wait_for_cuda_stream(stream, kernel_name).is_none() {
-                        return None;
-                    }
+                    wait_for_cuda_stream(stream, kernel_name)?;
                     if d_out.copy_to(out_words).is_err() {
                         record_cuda_disable(format!("{kernel_name} copy failed"));
                         return None;
@@ -635,7 +631,7 @@ mod imp {
         while current_count > 1 {
             let next_count = current_count.div_ceil(2);
             let threads: u32 = 256;
-            let grid: u32 = ((next_count + threads - 1) / threads).max(1);
+            let grid: u32 = next_count.div_ceil(threads).max(1);
             let (input, output) = if current_is_initial {
                 (initial_digests, &scratch)
             } else {
@@ -997,8 +993,8 @@ mod imp {
             trace_cuda_selftest("keccak");
             // keccak_f1600 parity on a simple patterned state
             let mut k_scalar = [0u64; 25];
-            for i in 0..25 {
-                k_scalar[i] = (i as u64) * 0x0101_0101_0101_0101u64;
+            for (idx, slot) in k_scalar.iter_mut().enumerate() {
+                *slot = (idx as u64) * 0x0101_0101_0101_0101u64;
             }
             let mut k_cuda = k_scalar;
             crate::sha3::keccak_f1600_impl(&mut k_scalar);
@@ -1280,7 +1276,7 @@ mod imp {
                     let d_b = cuda_buffer_from_slice(b)?;
                     let d_out = device_buffer_uninitialized::<f32>(len)?;
                     unsafe {
-                        launch!(function<<<(len as u32 + 255) / 256, 256, 0, stream>>>(
+                        launch!(function<<<(len as u32).div_ceil(256), 256, 0, stream>>>(
                             d_a.as_device_ptr(),
                             d_b.as_device_ptr(),
                             d_out.as_device_ptr(),
@@ -1313,7 +1309,7 @@ mod imp {
                     let d_b = cuda_buffer_from_slice(b)?;
                     let d_out = device_buffer_uninitialized::<u32>(len)?;
                     unsafe {
-                        launch!(function<<<(len as u32 + 255) / 256, 256, 0, stream>>> (
+                        launch!(function<<<(len as u32).div_ceil(256), 256, 0, stream>>> (
                             d_a.as_device_ptr(),
                             d_b.as_device_ptr(),
                             d_out.as_device_ptr(),
@@ -1346,7 +1342,7 @@ mod imp {
                     let d_b = cuda_buffer_from_slice(b)?;
                     let d_out = device_buffer_uninitialized::<u64>(len)?;
                     unsafe {
-                        launch!(function<<<(len as u32 + 255) / 256, 256, 0, stream>>> (
+                        launch!(function<<<(len as u32).div_ceil(256), 256, 0, stream>>> (
                             d_a.as_device_ptr(),
                             d_b.as_device_ptr(),
                             d_out.as_device_ptr(),
@@ -1364,10 +1360,7 @@ mod imp {
     }
 
     fn vadd64_cuda_selftest() -> bool {
-        let a = [
-            (0x0000_0000u64 << 32) | 0xffff_ffff,
-            (0x8000_0000u64 << 32) | 0x0000_0001,
-        ];
+        let a = [0xffff_ffff, (0x8000_0000u64 << 32) | 0x0000_0001];
         let b = [
             (0x0000_0001u64 << 32) | 0x0000_0001,
             (0x7fff_ffffu64 << 32) | 0xffff_ffff,
@@ -1466,7 +1459,7 @@ mod imp {
                         let d_rk = cuda_buffer_from_slice(&rk)?;
                         let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                         let threads: u32 = 256;
-                        let grid: u32 = ((count + threads - 1) / threads).max(1);
+                        let grid: u32 = count.div_ceil(threads).max(1);
                         unsafe {
                             launch!(function<<<grid, threads, 0, stream>>>(
                                 d_states.as_device_ptr(),
@@ -1697,7 +1690,7 @@ mod imp {
                     let d_blocks = cuda_buffer_from_slice(&flat)?;
                     let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                     let threads: u32 = 256;
-                    let grid: u32 = ((count + threads - 1) / threads).max(1);
+                    let grid: u32 = count.div_ceil(threads).max(1);
                     unsafe {
                         launch!(function<<<grid, threads, 0, stream>>>(
                             d_blocks.as_device_ptr(),
@@ -1791,10 +1784,7 @@ mod imp {
             .flatten()
         });
 
-        match result {
-            Some(root) if root == expected => true,
-            _ => false,
-        }
+        matches!(result, Some(root) if root == expected)
     }
 
     /// Compute SHA-256 digests for many 64-byte blocks in parallel on the GPU.
@@ -1821,7 +1811,7 @@ mod imp {
                     let d_blocks = cuda_buffer_from_slice(&flat)?;
                     let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                     let threads: u32 = 256;
-                    let grid: u32 = ((count + threads - 1) / threads).max(1);
+                    let grid: u32 = count.div_ceil(threads).max(1);
                     unsafe {
                         launch!(function<<<grid, threads, 0, stream>>>(
                             d_blocks.as_device_ptr(),
@@ -1875,7 +1865,7 @@ mod imp {
                     let d_blocks = cuda_buffer_from_slice(&flat_blocks)?;
                     let d_digests = device_buffer_uninitialized::<u8>(count * 32)?;
                     let threads: u32 = 256;
-                    let grid: u32 = (((count as u32) + threads - 1) / threads).max(1);
+                    let grid: u32 = (count as u32).div_ceil(threads).max(1);
                     unsafe {
                         launch!(leaves_function<<<grid, threads, 0, stream>>>(
                             d_blocks.as_device_ptr(),
@@ -1923,6 +1913,7 @@ mod imp {
         Poseidon6,
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn launch_poseidon_kernel(
         kernel: PoseidonKernel,
         state_words: &mut [u64],
@@ -1973,7 +1964,7 @@ mod imp {
                         cuda_buffer_from_slice_async(mds_flat, stream, "poseidon mds upload")?;
                     let _ = mds_key;
                     let threads: u32 = 32;
-                    let blocks = ((batch_len + threads - 1) / threads).max(1);
+                    let blocks = batch_len.div_ceil(threads).max(1);
                     let grid = blocks.max(1);
                     trace_cuda_selftest("poseidon launch");
                     unsafe {
@@ -2045,9 +2036,7 @@ mod imp {
         if inputs.len() > u32::MAX as usize {
             return None;
         }
-        if inputs.len().checked_mul(POSEIDON2_STATE_WORDS).is_none() {
-            return None;
-        }
+        inputs.len().checked_mul(POSEIDON2_STATE_WORDS)?;
         let rc = crate::poseidon::poseidon2_round_constants_words();
         let mds = crate::poseidon::poseidon2_mds_words();
         debug_assert_eq!(
@@ -2112,9 +2101,7 @@ mod imp {
         if inputs.len() > u32::MAX as usize {
             return None;
         }
-        if inputs.len().checked_mul(POSEIDON6_STATE_WORDS).is_none() {
-            return None;
-        }
+        inputs.len().checked_mul(POSEIDON6_STATE_WORDS)?;
         let rc = crate::poseidon::poseidon6_round_constants_words();
         let mds = crate::poseidon::poseidon6_mds_words();
         debug_assert_eq!(
@@ -2302,7 +2289,7 @@ mod imp {
                     let d_rk = cuda_buffer_from_slice(&rk)?;
                     let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                     let threads: u32 = 256;
-                    let grid: u32 = ((count + threads - 1) / threads).max(1);
+                    let grid: u32 = count.div_ceil(threads).max(1);
                     unsafe {
                         launch!(function<<<grid, threads, 0, stream>>>(
                             d_states.as_device_ptr(),
@@ -2355,7 +2342,7 @@ mod imp {
                     let d_rk = cuda_buffer_from_slice(&rk)?;
                     let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                     let threads: u32 = 256;
-                    let grid: u32 = ((count + threads - 1) / threads).max(1);
+                    let grid: u32 = count.div_ceil(threads).max(1);
                     unsafe {
                         launch!(function<<<grid, threads, 0, stream>>>(
                             d_states.as_device_ptr(),
@@ -2421,7 +2408,7 @@ mod imp {
                     let d_rks = cuda_buffer_from_slice(&flat_rks)?;
                     let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                     let threads: u32 = 256;
-                    let grid: u32 = ((count + threads - 1) / threads).max(1);
+                    let grid: u32 = count.div_ceil(threads).max(1);
                     unsafe {
                         launch!(function<<<grid, threads, 0, stream>>>(
                             d_states.as_device_ptr(),
@@ -2488,7 +2475,7 @@ mod imp {
                     let d_rks = cuda_buffer_from_slice(&flat_rks)?;
                     let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                     let threads: u32 = 256;
-                    let grid: u32 = ((count + threads - 1) / threads).max(1);
+                    let grid: u32 = count.div_ceil(threads).max(1);
                     unsafe {
                         launch!(function<<<grid, threads, 0, stream>>>(
                             d_states.as_device_ptr(),
@@ -2671,7 +2658,7 @@ mod imp {
                     let d_hram = cuda_buffer_from_slice(&flat_hrams)?;
                     let d_out = device_buffer_uninitialized::<u8>(count)?;
                     let threads: u32 = 128;
-                    let blocks: u32 = ((count as u32) + threads - 1) / threads;
+                    let blocks: u32 = (count as u32).div_ceil(threads);
                     unsafe {
                         launch!(function<<<blocks.max(1), threads, 0, stream>>>(
                             d_sig.as_device_ptr(),
@@ -3445,7 +3432,7 @@ mod imp {
                     round_keys
                         .iter()
                         .copied()
-                        .fold(state, |block, rk| crate::aes::aesenc_impl(block, rk))
+                        .fold(state, crate::aes::aesenc_impl)
                 })
                 .collect();
             let expected_dec: Vec<[u8; 16]> = states
@@ -3455,7 +3442,7 @@ mod imp {
                     round_keys
                         .iter()
                         .copied()
-                        .fold(state, |block, rk| crate::aes::aesdec_impl(block, rk))
+                        .fold(state, crate::aes::aesdec_impl)
                 })
                 .collect();
 
@@ -3504,32 +3491,32 @@ mod imp {
                 return;
             }
 
-            let add_lhs = vec![
+            let add_lhs = [
                 crate::bn254_vec::FieldElem::from_u64(0x1234_5678_9abc_def0),
                 crate::bn254_vec::FieldElem::from_u64(0x2222_3333_4444_5555),
                 crate::bn254_vec::FieldElem::from_u64(0x0fff_eeee_dddd_cccc),
             ];
-            let add_rhs = vec![
+            let add_rhs = [
                 crate::bn254_vec::FieldElem::from_u64(0x0fed_cba9_8765_4321),
                 crate::bn254_vec::FieldElem::from_u64(0x0101_0101_0101_0101),
                 crate::bn254_vec::FieldElem::from_u64(0x1111_0000_ffff_eeee),
             ];
-            let sub_lhs = vec![
+            let sub_lhs = [
                 crate::bn254_vec::FieldElem::from_u64(0x0fff_ffff_ffff_fffb),
                 crate::bn254_vec::FieldElem::from_u64(0x9999_8888_7777_6666),
                 crate::bn254_vec::FieldElem::from_u64(0x1212_1212_1212_1212),
             ];
-            let sub_rhs = vec![
+            let sub_rhs = [
                 crate::bn254_vec::FieldElem::from_u64(0x0000_0000_0000_0011),
                 crate::bn254_vec::FieldElem::from_u64(0x1111_2222_3333_4444),
                 crate::bn254_vec::FieldElem::from_u64(0x0101_0101_0101_0101),
             ];
-            let mul_lhs = vec![
+            let mul_lhs = [
                 crate::bn254_vec::FieldElem::from_u64(0x0102_0304_0506_0708),
                 crate::bn254_vec::FieldElem::from_u64(0x1112_1314_1516_1718),
                 crate::bn254_vec::FieldElem::from_u64(0x2122_2324_2526_2728),
             ];
-            let mul_rhs = vec![
+            let mul_rhs = [
                 crate::bn254_vec::FieldElem::from_u64(0x1112_1314_1516_1718),
                 crate::bn254_vec::FieldElem::from_u64(0x0102_0304_0506_0708),
                 crate::bn254_vec::FieldElem::from_u64(0x3334_3536_3738_393a),

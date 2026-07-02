@@ -6,9 +6,16 @@ fn code32(word: u32) -> Vec<u8> {
 
 #[test]
 fn global_capacity_eviction_and_runtime_resize() {
-    // Initialize a small global cache
-    ivm_cache::init_global_with_capacity(2);
-    // Reset counters by reading them (monotonic; we only assert deltas >= baseline)
+    // Install a small global cache even when earlier grouped tests have already
+    // initialized it, then restore the previous runtime limits on exit.
+    let previous = ivm_cache::cache_limits();
+    let _guard = ivm_cache::CacheLimitsGuard::new(ivm_cache::CacheLimits {
+        capacity: 2,
+        max_bytes: previous.max_bytes,
+        max_decoded_ops: previous.max_decoded_ops,
+    });
+    // Snapshot counters after the resize; they are monotonic, so this test only
+    // asserts deltas from the local baseline.
     let (_h0, _m0, _e0) = ivm_cache::global_counters();
 
     // Three distinct short streams

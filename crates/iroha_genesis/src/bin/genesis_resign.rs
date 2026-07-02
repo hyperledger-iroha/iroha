@@ -176,13 +176,15 @@ fn resign_block(
     zk_policy_hash: Option<[u8; 32]>,
 ) -> Result<SignedBlock> {
     let transactions = block.external_transactions().cloned().collect::<Vec<_>>();
-    let confidential_features =
-        zk_policy_hash.map_or(block.header().confidential_features, |hash| {
+    let confidential_features = zk_policy_hash.map_or_else(
+        || block.header().confidential_features,
+        |hash| {
             Some(confidential_features_with_policy_hash(
                 block.header().confidential_features,
                 hash,
             ))
-        });
+        },
+    );
     SignedBlock::try_genesis_with_da_proof_policies(
         transactions,
         key_pair.private_key(),

@@ -1973,24 +1973,23 @@ impl IVM {
                     }
                 };
                 #[cfg(feature = "cuda")]
-                if self.use_cuda {
-                    if let Some(res) =
-                        crate::cuda::ed25519_verify_cuda(&msg, &sig_bytes_arr, &pk_bytes)
-                    {
-                        let value = if res { 1 } else { 0 };
-                        if result_reg == 0 {
-                            self.registers.force_set(0, value);
-                            if self.zk_mode {
-                                self.registers.force_set_tag(0, false);
-                            }
-                        } else {
-                            self.registers.set(result_reg as usize, value);
-                            if self.zk_mode {
-                                self.registers.set_tag(result_reg as usize, false);
-                            }
+                if self.use_cuda
+                    && let Some(res) =
+                        crate::cuda::ed25519_verify_cuda(msg, &sig_bytes_arr, &pk_bytes)
+                {
+                    let value = if res { 1 } else { 0 };
+                    if result_reg == 0 {
+                        self.registers.force_set(0, value);
+                        if self.zk_mode {
+                            self.registers.force_set_tag(0, false);
                         }
-                        return Ok(());
+                    } else {
+                        self.registers.set(result_reg as usize, value);
+                        if self.zk_mode {
+                            self.registers.set_tag(result_reg as usize, false);
+                        }
                     }
+                    return Ok(());
                 }
                 let pk = match VerifyingKey::from_bytes(&pk_bytes) {
                     Ok(k) => k,
