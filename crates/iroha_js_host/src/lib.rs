@@ -2868,7 +2868,7 @@ fn kagemusha_pallas_open_envelopes_from_record_bundle(
 /// Native ABI level required by the recursive Kagemusha spend helpers.
 #[napi(js_name = "connectNoritoBridgeAbiVersion")]
 pub fn connect_norito_bridge_abi_version() -> u32 {
-    8
+    15
 }
 
 /// Build metadata-bound Pallas open envelopes for a Kagemusha verified record bundle.
@@ -3194,6 +3194,47 @@ pub fn kagemusha_recursive_spend_init(request_archive: Uint8Array) -> napi::Resu
     encode_kagemusha_recursive_archive(
         &bundle,
         "failed to encode Kagemusha recursive spend init bundle",
+    )
+}
+
+/// Build the online-to-offline top-up Kagemusha transfer instruction from an init request archive.
+#[napi(js_name = "kagemushaRecursiveSpendTopUp")]
+pub fn kagemusha_recursive_spend_topup(request_archive: Uint8Array) -> napi::Result<Buffer> {
+    use iroha_core::zk::{
+        kagemusha_verified_folded_public_inputs_from_record_bundle,
+        kagemusha_verified_folded_public_inputs_from_record_bundle_at_height,
+    };
+
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 =
+        decode_kagemusha_recursive_archive(&request_archive, "Kagemusha recursive spend top-up")?;
+    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)?;
+    request
+        .validate_public_binding()
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
+    let _public_inputs = match request.block_height {
+        Some(block_height) => kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(
+            &request.record_bundle,
+            block_height,
+        ),
+        None => kagemusha_verified_folded_public_inputs_from_record_bundle(&request.record_bundle),
+    }
+    .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
+    let step = request.record_bundle.bundle.steps.first().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "Kagemusha recursive spend top-up init request has no fold steps",
+        )
+    })?;
+    let instruction = iroha_data_model::isi::offline::KagemushaTransfer::new(
+        request.record_bundle.bundle.asset.clone(),
+        step.input_nullifiers.clone(),
+        step.output_commitments.clone(),
+        step.attachment.clone(),
+        Some(step.root_before),
+    );
+    encode_kagemusha_recursive_archive(
+        &instruction,
+        "failed to encode Kagemusha recursive spend top-up instruction",
     )
 }
 
@@ -19013,8 +19054,8 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_bridge_abi_version_is_additive_eight() {
-        assert_eq!(connect_norito_bridge_abi_version(), 8);
+    fn kagemusha_recursive_spend_bridge_abi_version_is_additive_fifteen() {
+        assert_eq!(connect_norito_bridge_abi_version(), 15);
     }
 
     fn empty_kagemusha_record_bundle_archive_for_js_host() -> Vec<u8> {

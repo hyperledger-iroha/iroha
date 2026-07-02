@@ -6221,25 +6221,28 @@ configs as Apalache.
 - `da::evaluate(...)` is fail-open when DA is disabled, reports missing local
   data only when DA is enabled and local validation data is absent, and does
   not synthesize manifest guards,
-- `da::gate_satisfaction(...)` reports `MissingDataRecovered` only for the
-  exact `MissingLocalData -> None` transition,
+- `da::gate_satisfaction(...)` reports `MissingDataRecovered` whenever an
+  exact `MissingLocalData` gate changes, reports `ManifestGuardRecovered`
+  whenever an exact manifest guard changes, and suppresses satisfaction for
+  unchanged or newly introduced gates,
 - manifest guard kind labels remain stable for telemetry/status snapshots.
 `DaGateHelperCorrectnessEnvelope` composes the type invariant with evaluation,
 satisfaction-transition, and manifest-label exactness.
-Its TLC cross-check independently exhausts the same eighteen expected-failure
+Its TLC cross-check independently exhausts the same twenty expected-failure
 configs as Apalache.
 
 `SumeragiDaGateStatusGate.tla` captures data-availability gate status
 accounting:
 - missing-local-data and manifest-guard transitions increment only their own
   counters and update the latest reason snapshot,
-- clearing `MissingLocalData` records `MissingDataRecovered`, while manifest
-  clears and `None -> None` transitions do not synthesize satisfaction,
+- clearing or replacing `MissingLocalData` records `MissingDataRecovered`,
+  clearing or replacing an exact manifest guard records `ManifestGuardRecovered`,
+  and `None -> None` plus newly introduced gates do not synthesize satisfaction,
 - `da_gate_missing_local_data_total()` and `snapshot().da_gate` project the
   same counters, latest reason, and last-satisfied status as the recorder,
 - the test reset helper clears counters, latest reason, and last-satisfied
   status.
-Its TLC cross-check independently exhausts the same twenty-five
+Its TLC cross-check independently exhausts the same thirty-two
 expected-failure configs as Apalache.
 
 `SumeragiManifestGuardGate.tla` captures DA manifest enforcement helpers:
@@ -15948,7 +15951,7 @@ surfaces it abstracts:
 | Model concept | Implementation surface |
 | --- | --- |
 | evaluation cases | `da::evaluate(...)` returns `None` when DA is disabled, returns `Some(MissingLocalData)` only for DA-enabled missing local validation data, and returns `None` for DA-enabled available data. |
-| satisfaction cases | `da::gate_satisfaction(...)` returns `Some(MissingDataRecovered)` only when the previous reason was `MissingLocalData` and the current reason is `None`; all other previous/current reason pairs return `None`. |
+| satisfaction cases | `da::gate_satisfaction(...)` returns `Some(MissingDataRecovered)` when the exact previous `MissingLocalData` gate changes, returns `Some(ManifestGuardRecovered)` when the exact previous manifest guard changes, and returns `None` for unchanged gates or newly introduced gates. |
 | manifest labels | `ManifestGateKind::as_str()` returns the stable `manifest_missing`, `manifest_hash_mismatch`, `manifest_read_failed`, and `manifest_spool_scan` labels consumed by status and telemetry snapshots. |
 
 The manifest guard model is intentionally finite. These are the implementation
@@ -28914,10 +28917,12 @@ bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-missing-to-non
 bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-missing-to-missing-recovers
 bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-none-to-none-recovers
 bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-none-to-missing-recovers
-bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-missing-to-manifest-recovers
-bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-manifest-to-none-recovers
-bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-manifest-to-manifest-recovers
-bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-manifest-to-missing-recovers
+bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-none-to-manifest-recovers
+bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-missing-to-manifest-ignored
+bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-manifest-to-none-ignored
+bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-manifest-to-different-ignored
+bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-manifest-to-missing-ignored
+bash scripts/formal/sumeragi_apalache.sh da-gate-bug-satisfaction-manifest-identity-recovers
 bash scripts/formal/sumeragi_apalache.sh da-gate-bug-manifest-missing-wrong-label
 bash scripts/formal/sumeragi_apalache.sh da-gate-bug-manifest-hash-mismatch-wrong-label
 bash scripts/formal/sumeragi_apalache.sh da-gate-bug-manifest-read-failed-wrong-label
@@ -28934,7 +28939,8 @@ bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-manifest-spool-scan-
 bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-current-none-keeps-reason
 bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-missing-recovery-not-satisfied
 bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-missing-recovery-clears-counter
-bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-manifest-clear-sets-satisfied
+bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-manifest-clear-not-satisfied
+bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-manifest-clear-sets-missing-satisfied
 bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-none-to-none-sets-satisfied
 bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-repeated-missing-overwrites-count
 bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-repeated-manifest-overwrites-count
@@ -28947,6 +28953,12 @@ bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-getter-missing-local
 bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-top-level-snapshot-drops-da-gate
 bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-reset-after-records-keeps-counters
 bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-reset-after-records-keeps-status
+bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-missing-to-manifest-not-satisfied
+bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-missing-to-manifest-sets-manifest-satisfied
+bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-manifest-to-missing-not-satisfied
+bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-manifest-to-different-not-satisfied
+bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-manifest-identity-sets-satisfied
+bash scripts/formal/sumeragi_apalache.sh da-gate-status-bug-none-to-manifest-sets-satisfied
 bash scripts/formal/sumeragi_apalache.sh manifest-guard-bug-enforce-missing-allows
 bash scripts/formal/sumeragi_apalache.sh manifest-guard-bug-enforce-hash-mismatch-allows
 bash scripts/formal/sumeragi_apalache.sh manifest-guard-bug-enforce-read-error-allows

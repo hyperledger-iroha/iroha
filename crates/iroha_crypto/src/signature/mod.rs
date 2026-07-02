@@ -754,6 +754,16 @@ mod tests {
         Signature::try_new(key_pair.private_key(), message).expect("sign checked signature fixture")
     }
 
+    const ED25519_SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const ED25519_NONCANONICAL_R: [u8; 32] = [
+        0x1a, 0xd5, 0x25, 0x8f, 0x60, 0x2d, 0x56, 0xc9, 0xb2, 0xa7, 0x25, 0x95, 0x60, 0xc7, 0x2c,
+        0x69, 0x5c, 0xdc, 0xd6, 0xfd, 0x31, 0xe2, 0xa4, 0xc0, 0xfe, 0x53, 0x6e, 0xcd, 0xd3, 0x36,
+        0x69, 0x92,
+    ];
+
     #[test]
     #[cfg(feature = "rand")]
     fn create_signature_ed25519() {
@@ -908,6 +918,64 @@ mod tests {
             .expect_err("all-zero signature payload must fail closed");
 
         assert!(matches!(err, Error::BadSignature));
+    }
+
+    #[test]
+    fn signature_verify_rejects_malformed_ed25519_r_before_backend() {
+        let key_pair = KeyPair::try_from_seed(vec![0x46; 32], Algorithm::Ed25519)
+            .expect("seeded Ed25519 keypair");
+        let message = b"iroha:generic-signature-ed25519-r-admission";
+        let valid_signature = checked_signature(&key_pair, message);
+        valid_signature
+            .verify(key_pair.public_key(), message)
+            .expect("valid signature verifies before mutation");
+
+        for (label, replacement_r) in [
+            ("small-order", ED25519_SMALL_ORDER_R),
+            ("noncanonical", ED25519_NONCANONICAL_R),
+        ] {
+            let mut payload = valid_signature.payload().to_vec();
+            payload[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let signature = Signature::from_bytes(&payload);
+
+            let err = signature
+                .verify(key_pair.public_key(), message)
+                .expect_err("malformed Ed25519 R must fail through generic verification");
+
+            assert!(
+                matches!(err, Error::BadSignature),
+                "{label} R produced unexpected error: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn signature_of_verify_rejects_malformed_ed25519_r_before_backend() {
+        let key_pair = KeyPair::try_from_seed(vec![0x47; 32], Algorithm::Ed25519)
+            .expect("seeded Ed25519 typed keypair");
+        let valid_signature =
+            SignatureOf::<()>::try_new(key_pair.private_key(), &()).expect("typed signature");
+        valid_signature
+            .verify(key_pair.public_key(), &())
+            .expect("valid typed signature verifies before mutation");
+
+        for (label, replacement_r) in [
+            ("small-order", ED25519_SMALL_ORDER_R),
+            ("noncanonical", ED25519_NONCANONICAL_R),
+        ] {
+            let mut payload = valid_signature.payload().to_vec();
+            payload[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let signature = SignatureOf::<()>::from_signature(Signature::from_bytes(&payload));
+
+            let err = signature
+                .verify(key_pair.public_key(), &())
+                .expect_err("malformed Ed25519 R must fail through typed verification");
+
+            assert!(
+                matches!(err, Error::BadSignature),
+                "{label} R produced unexpected typed error: {err:?}"
+            );
+        }
     }
 
     #[test]

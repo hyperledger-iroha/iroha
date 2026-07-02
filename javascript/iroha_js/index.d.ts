@@ -15367,6 +15367,38 @@ export type KagemushaRecursiveRedeemTransactionInput =
   KagemushaRecursiveRedeemTransactionBaseInput &
     KagemushaRecursiveRedeemArchiveInput;
 
+export interface KagemushaRecursiveTopUpTransactionBaseInput {
+  chainId: string;
+  authority: string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+  privateKeyAlgorithm?: string | null;
+}
+
+export type KagemushaRecursiveTopUpArchiveInput =
+  | {
+      initRequestArchive: BinaryLike;
+      init_request_archive?: never;
+      requestArchive?: never;
+    }
+  | {
+      initRequestArchive?: never;
+      init_request_archive: BinaryLike;
+      requestArchive?: never;
+    }
+  | {
+      initRequestArchive?: never;
+      init_request_archive?: never;
+      requestArchive: BinaryLike;
+    };
+
+export type KagemushaRecursiveTopUpTransactionInput =
+  KagemushaRecursiveTopUpTransactionBaseInput &
+    KagemushaRecursiveTopUpArchiveInput;
+
 export interface IvmProvedTransactionAssemblyInput {
   chainId: string;
   authority: string;
@@ -19765,6 +19797,7 @@ export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: "recursive_compa
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 7;
+export const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 15;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: "kagemusha-recursive-compact-v1";
 export const KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT: "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch";
 export const KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT: "recursive compact Kagemusha multi-hop payment-token proving requires the append verifier batch";
@@ -19781,6 +19814,7 @@ export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: 838860
 export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: 128;
 export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: 67108864;
 export const KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN: "iroha:kagemusha:v1:recursive-spend-accumulator";
+export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile-digest";
 export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";
@@ -19919,6 +19953,7 @@ export function requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppe
   previousHopCount: number,
 ): boolean;
 export function isKagemushaRecursiveSpendNativeAvailable(): boolean;
+export function isKagemushaRecursiveSpendTopUpNativeAvailable(): boolean;
 export function isKagemushaCompactPaymentTokenNativeAvailable(): boolean;
 export function isKagemushaRecursiveAggregationProofBundleNativeAvailable(): boolean;
 export function isKagemushaPallasOpenEnvelopeBuilderNativeAvailable(): boolean;
@@ -20113,6 +20148,9 @@ export function decodeKagemushaRecursiveSpendBundle(
 export function kagemushaRecursiveSpendInitTyped(
   request: KagemushaRecursiveSpendInitRequestInput,
 ): Buffer;
+export function kagemushaRecursiveSpendTopUpTyped(
+  request: KagemushaRecursiveSpendInitRequestInput,
+): Buffer;
 export function kagemushaRecursiveSpendAppendTyped(
   request: KagemushaRecursiveSpendAppendRequestInput,
 ): Buffer;
@@ -20123,6 +20161,9 @@ export function kagemushaRecursiveSpendRedeemTyped(
   request: KagemushaRecursiveSpendRedeemRequestInput,
 ): Buffer;
 export function kagemushaRecursiveSpendInit(requestArchive: BinaryLike): Buffer;
+export function kagemushaRecursiveSpendTopUp(
+  requestArchive: BinaryLike,
+): Buffer;
 export function kagemushaRecursiveSpendAppend(
   requestArchive: BinaryLike,
 ): Buffer;
@@ -20613,6 +20654,10 @@ export function buildKagemushaInstructionArchiveInstruction(
 
 export function buildKagemushaInstructionTransaction(
   input: KagemushaInstructionTransactionInput,
+): SignedTransactionResult;
+
+export function buildKagemushaRecursiveTopUpTransaction(
+  input: KagemushaRecursiveTopUpTransactionInput,
 ): SignedTransactionResult;
 
 export function buildKagemushaRecursiveRedeemTransaction(

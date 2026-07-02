@@ -14,6 +14,7 @@ public final class KagemushaRecursiveSpendProver {
   public static final int RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7;
   public static final int RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION =
       RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION;
+  public static final int TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 15;
   public static final String RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
       "kagemusha-recursive-aggregation-v1";
   public static final String RECURSIVE_COMPACT_CIRCUIT_ID_V1 =
@@ -72,6 +73,7 @@ public final class KagemushaRecursiveSpendProver {
         (byte) 0xBA, (byte) 0xBC, 0x77, 0x75
       };
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
+  private static final boolean TOP_UP_NATIVE_AVAILABLE = loadTopUpBridge();
 
   public enum Mode {
     RECURSIVE_COMPACT_V1("recursive_compact_v1"),
@@ -92,6 +94,10 @@ public final class KagemushaRecursiveSpendProver {
 
   public static boolean isNativeAvailable() {
     return NATIVE_AVAILABLE;
+  }
+
+  public static boolean isTopUpNativeAvailable() {
+    return TOP_UP_NATIVE_AVAILABLE;
   }
 
   public static Mode preferredMode() {
@@ -650,6 +656,19 @@ public final class KagemushaRecursiveSpendProver {
     return initSpend(KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request));
   }
 
+  public static byte[] topUpSpend(final byte[] requestArchive) {
+    return call(
+        "top-up",
+        requestArchive,
+        KagemushaRecursiveSpendProver::nativeTopUpSpend,
+        TOP_UP_NATIVE_AVAILABLE);
+  }
+
+  public static byte[] topUpSpend(
+      final KagemushaRecursiveSpendRequestCodecs.InitSpendRequest request) {
+    return topUpSpend(KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request));
+  }
+
   public static byte[] appendSpend(final byte[] requestArchive) {
     return call("append", requestArchive, KagemushaRecursiveSpendProver::nativeAppendSpend);
   }
@@ -738,13 +757,30 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   private static byte[] call(final String label, final byte[] requestArchive, final NativeCall call) {
-    return callArchive(label, "requestArchive", requestArchive, call);
+    return call(label, requestArchive, call, NATIVE_AVAILABLE);
+  }
+
+  private static byte[] call(
+      final String label,
+      final byte[] requestArchive,
+      final NativeCall call,
+      final boolean bridgeAvailable) {
+    return callArchive(label, "requestArchive", requestArchive, call, bridgeAvailable);
   }
 
   private static byte[] callArchive(
       final String label, final String archiveName, final byte[] archive, final NativeCall call) {
+    return callArchive(label, archiveName, archive, call, NATIVE_AVAILABLE);
+  }
+
+  private static byte[] callArchive(
+      final String label,
+      final String archiveName,
+      final byte[] archive,
+      final NativeCall call,
+      final boolean bridgeAvailable) {
     final byte[] ownedArchive = ownedNativeInput(archive, archiveName);
-    requireNative();
+    requireNative(bridgeAvailable);
     final byte[] output = call.run(ownedArchive);
     return requireRecursiveSpendOutput(output, label);
   }
@@ -821,7 +857,11 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   private static void requireNative() {
-    if (!NATIVE_AVAILABLE) {
+    requireNative(NATIVE_AVAILABLE);
+  }
+
+  private static void requireNative(final boolean bridgeAvailable) {
+    if (!bridgeAvailable) {
       throw new IllegalStateException(LIBRARY_NAME + " is not available in this runtime");
     }
   }
@@ -831,6 +871,15 @@ public final class KagemushaRecursiveSpendProver {
         () -> System.loadLibrary(LIBRARY_NAME),
         KagemushaRecursiveSpendProver::nativeBridgeAbiVersion,
         KagemushaRecursiveSpendProver::probeRequiredNativeSymbols);
+  }
+
+  private static boolean loadTopUpBridge() {
+    return NATIVE_AVAILABLE
+        && detectNativeAvailability(
+            () -> {},
+            KagemushaRecursiveSpendProver::nativeBridgeAbiVersion,
+            KagemushaRecursiveSpendProver::probeTopUpNativeSymbol,
+            TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
   }
 
   private static boolean probeRequiredNativeSymbols() {
@@ -853,6 +902,11 @@ public final class KagemushaRecursiveSpendProver {
     available &=
         expectIllegalArgumentProbe(() -> nativeBuildPreviousProofOpenEnvelopesArchive(probe));
     return available;
+  }
+
+  private static boolean probeTopUpNativeSymbol() {
+    return expectIllegalArgumentProbe(
+        () -> nativeTopUpSpend(MALFORMED_NATIVE_PROBE_ARCHIVE));
   }
 
   static boolean expectIllegalArgumentProbe(final NativeProbe probe) {
@@ -934,6 +988,8 @@ public final class KagemushaRecursiveSpendProver {
   private static native int nativeBridgeAbiVersion();
 
   private static native byte[] nativeInitSpend(byte[] requestArchive);
+
+  private static native byte[] nativeTopUpSpend(byte[] requestArchive);
 
   private static native byte[] nativeAppendSpend(byte[] requestArchive);
 

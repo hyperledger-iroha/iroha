@@ -152,6 +152,17 @@ public sealed class TransactionBuilder
         return AddInstruction(TransactionInstruction.KagemushaInstructionArchive(instructionType, instructionArchive));
     }
 
+    public TransactionBuilder KagemushaRecursiveTopUp(
+        KagemushaRecursiveSpendTopUpInstructionArchive instructionArchive)
+    {
+        return AddInstruction(TransactionInstruction.KagemushaRecursiveTopUp(instructionArchive));
+    }
+
+    public TransactionBuilder KagemushaRecursiveTopUp(ReadOnlySpan<byte> initRequestArchive)
+    {
+        return KagemushaRecursiveTopUp(KagemushaRecursiveSpendNative.TopUp(initRequestArchive));
+    }
+
     public TransactionBuilder KagemushaRecursiveRedeem(
         KagemushaRecursiveSpendRedeemInstructionArchive instructionArchive)
     {

@@ -1556,11 +1556,18 @@ mod tests {
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
+    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
 
-    fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+    fn signature_with_malformed_ed25519_r(
+        signature: &Signature,
+        replacement_r: &[u8; 32],
+    ) -> Signature {
         let mut payload = signature.payload().to_vec();
-        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
-            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&payload)
     }
 
@@ -1875,13 +1882,19 @@ mod tests {
             .verify()
             .expect("checked usage voucher signature must verify");
 
-        voucher.signature = signature_with_malformed_ed25519_r(&voucher.signature);
-        assert_eq!(
-            voucher
-                .verify()
-                .expect_err("malformed voucher signature R must fail admission"),
-            iroha_crypto::Error::BadSignature
-        );
+        let valid_signature = voucher.signature.clone();
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            voucher.signature =
+                signature_with_malformed_ed25519_r(&valid_signature, &replacement_r);
+            assert_eq!(
+                voucher.verify().unwrap_err(),
+                iroha_crypto::Error::BadSignature,
+                "{label} voucher signature R must fail admission"
+            );
+        }
     }
 
     #[test]

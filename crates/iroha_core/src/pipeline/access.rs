@@ -712,18 +712,14 @@ fn derive_record_bridge_receipt_access(
 fn derive_sccp_outbound_message_access(
     record: &iroha_data_model::isi::bridge::RecordSccpMessage,
 ) -> AccessSet {
-    let Some(payload) = crate::bridge::decode_recorded_sccp_payload_bytes(&record.payload_bytes)
+    let Ok(validated) =
+        crate::bridge::validate_recorded_sccp_message_payload_bytes(&record.payload_bytes)
     else {
         return AccessSet::global();
     };
-    if iroha_sccp::sccp_message_source_domain(&payload) != iroha_sccp::SCCP_DOMAIN_SORA {
-        return AccessSet::global();
-    }
     let mut set = AccessSet::new();
     set.add_read(NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned());
-    set.add_write(key_sccp_outbound_message(
-        &crate::bridge::sccp_outbound_message_key(&payload),
-    ));
+    set.add_write(key_sccp_outbound_message(&validated.key));
     set
 }
 
@@ -2505,35 +2501,29 @@ mod tests {
     }
 
     #[test]
-    fn record_sccp_message_access_serializes_binary_and_hex_aliases() {
+    fn record_sccp_message_access_serializes_canonical_payload_only() {
         let payload =
             sccp_transfer_payload(3, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
         let canonical_payload = iroha_sccp::canonical_sccp_payload_bytes(&payload);
         let binary = InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
             canonical_payload.clone(),
         ));
-        let hex_alias =
-            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
-                format!("0x{}", hex::encode(&canonical_payload)).into_bytes(),
-            ));
         let expected =
             key_sccp_outbound_message(&crate::bridge::sccp_outbound_message_key(&payload));
 
-        for instruction in [&binary, &hex_alias] {
-            let mut visited_triggers = BTreeSet::new();
-            let set = derive_from_instruction(
-                instruction,
-                None::<&crate::state::StateView<'_>>,
-                &mut visited_triggers,
-                0,
-                0,
-            );
-            assert_eq!(
-                set.read_keys,
-                BTreeSet::from([NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned()])
-            );
-            assert_eq!(set.write_keys, BTreeSet::from([expected.clone()]));
-        }
+        let mut visited_triggers = BTreeSet::new();
+        let set = derive_from_instruction(
+            &binary,
+            None::<&crate::state::StateView<'_>>,
+            &mut visited_triggers,
+            0,
+            0,
+        );
+        assert_eq!(
+            set.read_keys,
+            BTreeSet::from([NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned()])
+        );
+        assert_eq!(set.write_keys, BTreeSet::from([expected]));
     }
 
     #[test]
@@ -2547,8 +2537,18 @@ mod tests {
         let inbound = InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
             iroha_sccp::canonical_sccp_payload_bytes(&inbound_payload),
         ));
+        let hex_alias_payload =
+            sccp_transfer_payload(4, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
+        let hex_alias =
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                format!(
+                    "0x{}",
+                    hex::encode(iroha_sccp::canonical_sccp_payload_bytes(&hex_alias_payload))
+                )
+                .into_bytes(),
+            ));
 
-        for instruction in [&invalid, &inbound] {
+        for instruction in [&invalid, &inbound, &hex_alias] {
             let mut visited_triggers = BTreeSet::new();
             let set = derive_from_instruction(
                 instruction,

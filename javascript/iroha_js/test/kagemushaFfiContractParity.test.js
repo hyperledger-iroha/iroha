@@ -17,6 +17,7 @@ const REQUIRED_C_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
   "connect_norito_kagemusha_recursive_spend_verify",
   "connect_norito_kagemusha_recursive_spend_redeem",
+  "connect_norito_kagemusha_recursive_spend_topup",
   "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle",
 ]);
 
@@ -38,6 +39,7 @@ const REQUIRED_JS_NATIVE_METHODS = Object.freeze([
   "kagemushaRecursiveSpendLineageWitnessAppendResult",
   "kagemushaRecursiveSpendVerify",
   "kagemushaRecursiveSpendRedeem",
+  "kagemushaRecursiveSpendTopUp",
 ]);
 
 const REQUIRED_RECURSIVE_COMPACT_JS_METHODS = Object.freeze([
@@ -67,6 +69,7 @@ const REQUIRED_PYTHON_NATIVE_METHODS = Object.freeze([
   "kagemusha_recursive_spend_lineage_witness_append_result",
   "kagemusha_recursive_spend_verify",
   "kagemusha_recursive_spend_redeem",
+  "kagemusha_recursive_spend_topup",
 ]);
 
 const REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS = Object.freeze([
@@ -594,6 +597,7 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "lineageWitnessAppendResult",
       "verifySpend",
       "redeemSpend",
+      "topUpSpend",
     ],
     "Swift public prover",
   );
@@ -610,8 +614,10 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "lineageWitnessAppendResult",
       "verifySpend",
       "redeemSpend",
+      "topUpSpend",
       "nativeTransitionProfileInit",
       "nativeTransitionProfileAppend",
+      "nativeTopUpSpend",
     ],
     "Android Java SDK",
   );
@@ -627,8 +633,10 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "lineageWitnessAppendResult",
       "verifySpend",
       "redeemSpend",
+      "topUpSpend",
       "nativeTransitionProfileInit",
       "nativeTransitionProfileAppend",
+      "nativeTopUpSpend",
       "nativeBuildPallasOpenEnvelopesArchive",
       "nativeBuildPreviousProofOpenEnvelopesArchive",
     ],
@@ -646,6 +654,7 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "LineageWitnessAppendResult",
       "Verify",
       "Redeem",
+      "TopUp",
       "ProveVerifiedCompactPaymentTokenWithRecords",
       "BuildPallasOpenEnvelopesArchive",
       "BuildPreviousProofOpenEnvelopesArchive",
@@ -654,6 +663,7 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "NativeTransitionProfileInit",
       "NativeTransitionProfileAppend",
       "NativeLineageAppendBoundary",
+      "NativeTopUp",
       "NativeCompactPaymentToken",
       "NativeBuildPallasOpenEnvelopesArchive",
       "NativeBuildPreviousProofOpenEnvelopesArchive",
@@ -678,6 +688,7 @@ test("Kagemusha Kotlin recursive spend JNI declarations stay static", () => {
     "nativeLineageWitnessAppendResult",
     "nativeVerifySpend",
     "nativeRedeemSpend",
+    "nativeTopUpSpend",
     "nativeBuildPallasOpenEnvelopesArchive",
     "nativeBuildPreviousProofOpenEnvelopesArchive",
   ];
@@ -1960,6 +1971,7 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
         "buildKagemushaInstructionArchiveInstruction",
         "buildKagemushaInstructionTransaction",
         "buildKagemushaRecursiveRedeemTransaction",
+        "buildKagemushaRecursiveTopUpTransaction",
         "KagemushaInstructionArchive",
         "KagemushaTransfer",
         "RedeemKagemushaRecursive",
@@ -1974,6 +1986,8 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "must not contain surrounding whitespace",
       "kagemushaRecursiveSpendRedeem",
       "kagemushaRecursiveRedeem.redeemRequestArchive",
+      "kagemushaRecursiveSpendTopUp",
+      "kagemushaRecursiveTopUp.initRequestArchive",
       "Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength))",
       "Buffer.from(new Uint8Array(value))",
     ],
@@ -1983,6 +1997,11 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       transactionSource,
       /buildKagemushaRecursiveRedeemTransaction[\s\S]*?kagemushaRecursiveSpendRedeem[\s\S]*?buildKagemushaInstructionTransaction/u,
       `${relative} must derive the redeem instruction before signing`,
+    );
+    assert.match(
+      transactionSource,
+      /buildKagemushaRecursiveTopUpTransaction[\s\S]*?kagemushaRecursiveSpendTopUp[\s\S]*?buildKagemushaInstructionTransaction/u,
+      `${relative} must derive the top-up transfer instruction before signing`,
     );
   }
   for (const relative of [
@@ -1995,6 +2014,7 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
         "buildKagemushaInstructionArchiveInstruction",
         "buildKagemushaInstructionTransaction",
         "buildKagemushaRecursiveRedeemTransaction",
+        "buildKagemushaRecursiveTopUpTransaction",
       ],
       `${relative} Kagemusha instruction transaction exports`,
     );
@@ -2010,9 +2030,15 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "KagemushaRecursiveRedeemTransactionBaseInput",
       "KagemushaRecursiveRedeemArchiveInput",
       "KagemushaRecursiveRedeemTransactionInput",
+      "KagemushaRecursiveTopUpTransactionBaseInput",
+      "KagemushaRecursiveTopUpArchiveInput",
+      "KagemushaRecursiveTopUpTransactionInput",
       "buildKagemushaInstructionArchiveInstruction",
       "buildKagemushaInstructionTransaction",
       "buildKagemushaRecursiveRedeemTransaction",
+      "buildKagemushaRecursiveTopUpTransaction",
+      "initRequestArchive: BinaryLike;",
+      "init_request_archive: BinaryLike;",
       "redeemRequestArchive: BinaryLike;",
       "redeem_request_archive: BinaryLike;",
       "requestArchive: BinaryLike;",
@@ -2049,6 +2075,7 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "valid KagemushaTransfer Norito archive",
       "bytesBase64 must be canonical standard base64",
       "buildKagemushaInstructionTransaction wraps one archive instruction",
+      "buildKagemushaRecursiveTopUpTransaction derives transfer instruction before signing",
       "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
       "transaction builders reject padded authority and asset definition IDs before native dispatch",
       "authority must not contain surrounding whitespace",
@@ -2058,6 +2085,8 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "privateKaigiFeeSpend\\.verifyingKey\\.id\\.backend must not contain surrounding whitespace",
       "privateKaigiFeeSpend\\.verifyingKey\\.record\\.circuit_id must not contain surrounding whitespace",
       "instruction_type: \"KagemushaTransfer\"",
+      "kagemushaRecursiveTopUp\\.initRequestArchive must be a Buffer or ArrayBuffer view",
+      "top-up native rejected",
       "redeemRequestArchive must be a Buffer or ArrayBuffer view",
       "redeem native rejected",
       "buildKagemusha transaction helpers copy mutable buffers before native calls",
