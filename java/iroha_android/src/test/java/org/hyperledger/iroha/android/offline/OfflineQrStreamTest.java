@@ -116,6 +116,13 @@ public final class OfflineQrStreamTest {
       paddedSuffixThrew = true;
     }
     assertTrue(paddedSuffixThrew, "whitespace-wrapped QR payload should be rejected");
+    boolean noncanonicalBase64Threw = false;
+    try {
+      OfflineQrStream.TextCodec.decode("iroha:qr:AB==", OfflineQrStream.FrameEncoding.BASE64);
+    } catch (IllegalArgumentException error) {
+      noncanonicalBase64Threw = true;
+    }
+    assertTrue(noncanonicalBase64Threw, "noncanonical QR base64 payload should be rejected");
     boolean threw = false;
     try {
       OfflineQrStream.TextCodec.decode(retiredPrefix, OfflineQrStream.FrameEncoding.BASE64);

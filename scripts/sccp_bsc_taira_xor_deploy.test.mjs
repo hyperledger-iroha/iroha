@@ -58,6 +58,7 @@ import {
   isCanonicalBscProductionArtifactPath,
   isSmokeFixtureGroth16VerifierMaterial,
   normalizeBscRpcUrl,
+  normalizeTairaToriiUrl,
   parseBoolean,
   parseJsonWithoutDuplicateKeys,
   normalizeVerifierMaterial,
@@ -4661,17 +4662,141 @@ test("BSC RPC endpoint normalization is fail-closed", () => {
     "https://data-seed-prebsc-1-s1.bnbchain.org:8545",
   );
   assert.equal(
-    normalizeBscRpcUrl("http://localhost:8545", { allowLocal: true }),
-    "http://localhost:8545",
+    normalizeBscRpcUrl("https://data-seed-prebsc-1-s1.bnbchain.org:8545/provider/"),
+    "https://data-seed-prebsc-1-s1.bnbchain.org:8545/provider",
   );
-  for (const endpoint of [
-    "http://example.com",
-    "https://user:pass@example.com",
-    "https://example.com?token=secret",
-    "https://example.com/#fragment",
-    "not a url",
+  assert.equal(
+    normalizeBscRpcUrl("http://127.0.0.2:8545", { allowLocal: true }),
+    "http://127.0.0.2:8545",
+  );
+  for (const [endpoint, expected] of [
+    ["http://example.com", /HTTPS unless loopback HTTP/u],
+    ["https://user:pass@example.com", /credentials, params, query strings, or fragments/u],
+    ["https://example.com/root;param", /credentials, params, query strings, or fragments/u],
+    ["https://example.com?token=secret", /credentials, params, query strings, or fragments/u],
+    ["https://example.com/#fragment", /credentials, params, query strings, or fragments/u],
+    ["https://localhost", /public DNS/u],
+    ["https://127.0.0.1", /public DNS/u],
+    ["https://10.0.0.7", /public DNS/u],
+    ["https://[::1]", /public DNS/u],
+    ["https://bsc", /public DNS/u],
+    ["https://bsc.local", /public DNS/u],
+    ["https://bad_host.bnbchain.org", /public DNS/u],
+    [" https://data-seed-prebsc-1-s1.bnbchain.org:8545", /exact http\(s\) URL/u],
+    ["https://data-seed-prebsc-1-s1.bnbchain.org:8545\nsecret", /exact http\(s\) URL/u],
+    ["not a url", /valid HTTP\(S\) URL/u],
   ]) {
-    assert.throws(() => normalizeBscRpcUrl(endpoint), /BSC RPC URL/u);
+    assert.throws(() => normalizeBscRpcUrl(endpoint), expected);
+  }
+});
+
+test("BSC TAIRA Torii URL normalization rejects hidden request state", () => {
+  assert.equal(normalizeTairaToriiUrl("https://taira.sora.org/"), "https://taira.sora.org");
+  assert.equal(
+    normalizeTairaToriiUrl("http://localhost:8080"),
+    "http://localhost:8080",
+  );
+  for (const [toriiUrl, expected] of [
+    ["http://taira.sora.org", /HTTPS unless it is loopback HTTP/u],
+    ["https://user:pass@taira.sora.org", /credentials, params, query strings, or fragments/u],
+    ["https://taira.sora.org/root;param", /credentials, params, query strings, or fragments/u],
+    ["https://taira.sora.org?token=secret", /credentials, params, query strings, or fragments/u],
+    ["https://taira.sora.org/#fragment", /credentials, params, query strings, or fragments/u],
+    ["https://localhost", /public DNS/u],
+    ["https://127.0.0.1", /public DNS/u],
+    ["https://10.0.0.7", /public DNS/u],
+    ["https://[::1]", /public DNS/u],
+    ["https://taira", /public DNS/u],
+    ["https://taira.local", /public DNS/u],
+    ["https://bad_host.sora.org", /public DNS/u],
+    [" https://taira.sora.org", /exact http\(s\) URL/u],
+    ["https://taira.sora.org\nsecret", /exact http\(s\) URL/u],
+    ["not a url", /valid HTTP\(S\) URL/u],
+  ]) {
+    assert.throws(() => normalizeTairaToriiUrl(toriiUrl), expected);
+  }
+});
+
+test("BSC browser prover module URLs must use public HTTPS hosts", () => {
+  for (const [moduleUrl, expected] of [
+    [
+      "https://user:pass@provers.sora.org/bsc-destination.js",
+      /credentials, params, query strings, or fragments/u,
+    ],
+    [
+      "https://provers.sora.org/bsc-destination.js;param",
+      /credentials, params, query strings, or fragments/u,
+    ],
+    [
+      "https://provers.sora.org/bsc-destination.js?token=secret",
+      /credentials, params, query strings, or fragments/u,
+    ],
+    [
+      "https://provers.sora.org/bsc-destination.js#fragment",
+      /credentials, params, query strings, or fragments/u,
+    ],
+    ["https://localhost/bsc-destination.js", /public DNS/u],
+    ["https://127.0.0.1/bsc-destination.js", /public DNS/u],
+    ["https://10.0.0.7/bsc-destination.js", /public DNS/u],
+    ["https://provers/bsc-destination.js", /public DNS/u],
+    ["https://provers.local/bsc-destination.js", /public DNS/u],
+    ["https://bad_host.sora.org/bsc-destination.js", /public DNS/u],
+    [" https://provers.sora.org/bsc-destination.js", /non-empty canonical string/u],
+  ]) {
+    assert.throws(
+      () =>
+        buildUpsertSccpRouteManifestInstruction(
+          productionReadyRouteManifest({
+            destinationBrowserProver: {
+              ...browserProverRef("destination"),
+              moduleUrl,
+            },
+          }),
+        ),
+      expected,
+    );
+  }
+});
+
+test("BSC browser prover module URLs reject traversal and root-relative paths", () => {
+  for (const [moduleUrl, expected] of [
+    ["../bsc-destination.js", /must not traverse parent directories/u],
+    ["./../bsc-destination.js", /must not traverse parent directories/u],
+    ["/bsc-destination.js", /package-relative/u],
+    ["//provers.sora.org/bsc-destination.js", /package-relative/u],
+    ["./bsc-destination.js?token=secret", /package-relative/u],
+    [".//bsc-destination.js", /package-relative/u],
+    [".\\bsc-destination.js", /package-relative/u],
+    ["./bsc-destination%2ejs", /package-relative/u],
+  ]) {
+    assert.throws(
+      () =>
+        buildUpsertSccpRouteManifestInstruction(
+          productionReadyRouteManifest({
+            destinationBrowserProver: {
+              ...browserProverRef("destination"),
+              moduleUrl,
+            },
+          }),
+        ),
+      expected,
+    );
+  }
+
+  for (const moduleUrl of [
+    "./bsc-destination.js",
+    "@sora/sccp-bsc-destination-prover/bsc-destination.js",
+  ]) {
+    assert.doesNotThrow(() =>
+      buildUpsertSccpRouteManifestInstruction(
+        productionReadyRouteManifest({
+          destinationBrowserProver: {
+            ...browserProverRef("destination"),
+            moduleUrl,
+          },
+        }),
+      ),
+    );
   }
 });
 
@@ -10805,7 +10930,7 @@ test("BSC deploy command rejects missing signer and unsafe local RPC before netw
           "--rpc-url",
           "http://127.0.0.1:8545",
         ]),
-      /HTTPS unless localhost is allowed/u,
+      /HTTPS unless loopback HTTP is allowed/u,
     );
   } finally {
     if (previous === undefined) {

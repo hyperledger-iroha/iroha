@@ -812,7 +812,8 @@ async fn proof_handler(
     }
     let payload = hex::decode(&request.payload_hex).map_err(|_| StatusCode::BAD_REQUEST)?;
     let sig_bytes = hex::decode(&request.signature_hex).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let candidate = Signature::try_from_bytes(&sig_bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let candidate =
+        iroha_crypto::ed25519_parse_signature(&sig_bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
     candidate
         .verify(&signature.public_key, &payload)
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
@@ -888,6 +889,67 @@ mod tests {
 
         let err = check_thresholds(&thresholds_path, &report).expect_err("should fail");
         assert!(err.to_string().contains("exceeded bound"));
+    }
+
+    #[test]
+    fn proof_handler_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let key_pair = KeyPair::try_from_seed(vec![0x5B; 32], Algorithm::Ed25519)
+            .expect("derive I3 proof handler fixture keypair");
+        let payload = b"i3 proof handler signature admission";
+        let signature = Signature::try_new(key_pair.private_key(), payload)
+            .expect("checked I3 proof handler fixture signature");
+        let proof_signature = ProofSignature {
+            public_key: key_pair.public_key().clone(),
+            signature: signature.clone(),
+            message: payload.to_vec(),
+        };
+        let valid_request = ProofRequest {
+            signature_hex: hex::encode(signature.payload()),
+            payload_hex: hex::encode(payload),
+            version: "v1".to_owned(),
+        };
+        let runtime = Runtime::new().expect("tokio runtime");
+        runtime
+            .block_on(proof_handler(
+                proof_signature.clone(),
+                json::to_vec(&valid_request)
+                    .expect("encode valid proof request")
+                    .into(),
+            ))
+            .expect("valid proof request succeeds");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = signature.payload().to_vec();
+            malformed[..32].copy_from_slice(&replacement_r);
+            let request = ProofRequest {
+                signature_hex: hex::encode(malformed),
+                payload_hex: hex::encode(payload),
+                version: "v1".to_owned(),
+            };
+            let status = match runtime.block_on(proof_handler(
+                proof_signature.clone(),
+                json::to_vec(&request)
+                    .expect("encode malformed proof request")
+                    .into(),
+            )) {
+                Ok(_) => panic!("{label} Ed25519 R unexpectedly verified"),
+                Err(status) => status,
+            };
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{label} R status");
+        }
     }
 
     #[test]

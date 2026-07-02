@@ -639,6 +639,7 @@ TRX_GUID_METADATA_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
 TRX_ZERO_GUID_METADATA = "00000000-0000-0000-0000-000000000000"
+TRX_ATTRIBUTE_PERCENT_DECODE_MAX_ROUNDS = 8
 SENSITIVE_TRX_ATTRIBUTE_VALUE_MARKERS = (
     "secret-token",
     "private key",
@@ -724,12 +725,14 @@ def is_vstest_element(element, name):
 def iter_percent_decoded_trx_attribute_values(value):
     values_to_check = [value]
     decoded_value = value
-    for _round in range(3):
+    for _round in range(TRX_ATTRIBUTE_PERCENT_DECODE_MAX_ROUNDS):
         next_decoded_value = urllib.parse.unquote(decoded_value)
         if next_decoded_value == decoded_value:
-            break
+            return values_to_check
         values_to_check.append(next_decoded_value)
         decoded_value = next_decoded_value
+    if urllib.parse.unquote(decoded_value) != decoded_value:
+        fail("requires TRX XML metadata to avoid deeply nested percent encoding")
     return values_to_check
 
 

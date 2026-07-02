@@ -101,7 +101,15 @@ public final class OfflineQrStream {
       } else {
         payload = value;
       }
-      return java.util.Base64.getDecoder().decode(payload);
+      return decodeExactBase64(payload);
+    }
+
+    private static byte[] decodeExactBase64(final String value) {
+      final byte[] decoded = java.util.Base64.getDecoder().decode(value);
+      if (!java.util.Base64.getEncoder().encodeToString(decoded).equals(value)) {
+        throw new IllegalArgumentException("QR text payload must be canonical base64");
+      }
+      return decoded;
     }
   }
 

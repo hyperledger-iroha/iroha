@@ -37,6 +37,17 @@ use crate::{
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
 
+fn verify_typed_signature_for_signer<T: Encode>(
+    signature: &SignatureOf<T>,
+    signer: &PublicKey,
+    payload: &T,
+) -> Result<(), iroha_crypto::Error> {
+    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    }
+    signature.verify(signer, payload)
+}
+
 #[model]
 mod model {
     use iroha_primitives::const_vec::ConstVec;
@@ -755,9 +766,10 @@ impl SignedTransaction {
     pub fn verify_signature(&self) -> Result<(), TransactionSignatureError> {
         let TransactionSignature(signature) = &self.signature;
         match self.payload.authority.controller() {
-            AccountController::Single(signatory) => signature
-                .verify(signatory, &self.payload)
-                .map_err(|err| TransactionSignatureError::CryptoError(err.to_string())),
+            AccountController::Single(signatory) => {
+                verify_typed_signature_for_signer(signature, signatory, &self.payload)
+                    .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))
+            }
             AccountController::Multisig(policy) => self.verify_multisig_signatures(policy),
         }
     }
@@ -848,10 +860,10 @@ impl SignedSealedTransactionCommitment {
     #[inline]
     pub fn verify_signature(&self) -> Result<(), TransactionSignatureError> {
         match self.payload.authority.controller() {
-            AccountController::Single(signatory) => self
-                .signature
-                .verify(signatory, &self.payload)
-                .map_err(|err| TransactionSignatureError::CryptoError(err.to_string())),
+            AccountController::Single(signatory) => {
+                verify_typed_signature_for_signer(&self.signature, signatory, &self.payload)
+                    .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))
+            }
             AccountController::Multisig(_) => {
                 Err(TransactionSignatureError::UnsupportedMultisigAuthority)
             }
@@ -957,9 +969,7 @@ impl SignedTransaction {
             if !seen.insert(entry.signer.clone()) {
                 continue;
             }
-            entry
-                .signature
-                .verify(&entry.signer, &self.payload)
+            verify_typed_signature_for_signer(&entry.signature, &entry.signer, &self.payload)
                 .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))?;
             collected = collected.saturating_add(u32::from(*weight));
         }
@@ -1545,6 +1555,18 @@ mod tests {
         })
     }
 
+    const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    fn signature_of_with_malformed_ed25519_r<T>(signature: &SignatureOf<T>) -> SignatureOf<T> {
+        let mut payload = signature.payload().to_vec();
+        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
+            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        SignatureOf::from_signature(iroha_crypto::Signature::from_bytes(&payload))
+    }
+
     #[test]
     fn with_instructions_accepts_instruction_box() {
         let chain: ChainId = "test-chain".parse().unwrap();
@@ -1792,6 +1814,23 @@ mod tests {
             .expect_err("invalid transaction signature must fail verification");
 
         assert!(matches!(err, TransactionSignatureError::CryptoError(_)));
+    }
+
+    #[test]
+    fn signed_transaction_rejects_malformed_ed25519_signature_r() {
+        let mut invalid_tx = sample_signed_transaction();
+        invalid_tx.signature = TransactionSignature(signature_of_with_malformed_ed25519_r(
+            &invalid_tx.signature.0,
+        ));
+
+        let err = invalid_tx
+            .verify_signature()
+            .expect_err("malformed Ed25519 transaction signature R must fail admission");
+
+        assert_eq!(
+            err,
+            TransactionSignatureError::CryptoError("Signature verification failed".to_owned())
+        );
     }
 
     #[test]

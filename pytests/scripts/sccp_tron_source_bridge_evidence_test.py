@@ -155,6 +155,15 @@ def sample_full_toml_args():
     )
 
 
+def active_template_hash(module, lane, field):
+    for template_lane, template_field, template_hash in (
+        module.sccp_active_source_template_component_hashes()
+    ):
+        if template_lane == lane and template_field == field:
+            return template_hash
+    raise AssertionError(f"missing active {lane} template hash for {field}")
+
+
 def add_route_canary_transaction_metadata(args):
     args.route_canary_transaction_id = bytes.fromhex(TRON_ROUTE_CANARY_TRANSACTION_ID)
     args.route_canary_transaction_owner_address = bytes.fromhex(
@@ -1747,6 +1756,37 @@ def test_direct_record_hashes_reject_cross_role_template_source_component_hashes
         else:
             raise AssertionError(
                 f"TRON record hash accepted cross-role template hash for {field}"
+            )
+
+
+def test_direct_record_hashes_reject_foreign_active_lane_template_source_component_hashes():
+    module = load_evidence_module()
+    config_hash = bytes.fromhex(TRON_SOURCE_CONFIG_VECTOR)
+    template_hash = active_template_hash(
+        module,
+        "Solana",
+        "consensus_verifier_hash",
+    )
+
+    for record_hash, field in (
+        (module.tron_source_verifier_material_record_hash, "source_trust_anchor_hash"),
+        (
+            module.tron_source_adapter_engine_deployment_record_hash,
+            "source_bridge_emitter_code_hash",
+        ),
+    ):
+        args = sample_full_toml_args()
+        setattr(args, field, template_hash)
+        label = field.replace("_", " ")
+
+        try:
+            record_hash(args, config_hash)
+        except ValueError as exc:
+            assert f"live {label}" in str(exc)
+            assert "template-derived Solana consensus verifier hash" in str(exc)
+        else:
+            raise AssertionError(
+                f"TRON record hash accepted foreign template hash for {field}"
             )
 
 

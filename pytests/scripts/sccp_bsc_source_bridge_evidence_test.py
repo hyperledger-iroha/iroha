@@ -80,6 +80,15 @@ def bsc_args(module, *, bsc_network="mainnet"):
     )
 
 
+def active_template_hash(module, lane, field):
+    for template_lane, template_field, template_hash in (
+        module.sccp_active_source_template_component_hashes()
+    ):
+        if template_lane == lane and template_field == field:
+            return template_hash
+    raise AssertionError(f"missing active {lane} template hash for {field}")
+
+
 def test_bsc_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
@@ -1076,6 +1085,69 @@ def test_bsc_direct_record_hashes_reject_cross_role_template_component_hashes():
             else:
                 raise AssertionError(
                     f"BSC {bsc_network} record hash accepted cross-role template hash for {field}"
+                )
+
+
+def test_bsc_direct_record_hashes_reject_other_supported_profile_template_component_hashes():
+    module = load_evidence_module()
+
+    for bsc_network, template_network in (("mainnet", "testnet"), ("testnet", "mainnet")):
+        template_hash = module._template_component_hashes(template_network)[
+            "consensus_verifier_hash"
+        ]
+        for record_hash, field in (
+            (module.bsc_source_verifier_material_record_hash, "source_trust_anchor_hash"),
+            (
+                module.bsc_source_adapter_engine_deployment_record_hash,
+                "source_bridge_emitter_code_hash",
+            ),
+        ):
+            args = bsc_args(module, bsc_network=bsc_network)
+            setattr(args, field, template_hash)
+            label = field.replace("_", " ")
+
+            try:
+                record_hash(args)
+            except ValueError as exc:
+                assert f"live {label}" in str(exc)
+                assert (
+                    f"template-derived {template_network} consensus verifier hash"
+                    in str(exc)
+                )
+            else:
+                raise AssertionError(
+                    f"BSC {bsc_network} record hash accepted {template_network} template hash for {field}"
+                )
+
+
+def test_bsc_direct_record_hashes_reject_foreign_active_lane_template_component_hashes():
+    module = load_evidence_module()
+    template_hash = active_template_hash(
+        module,
+        "Solana",
+        "consensus_verifier_hash",
+    )
+
+    for bsc_network in ("mainnet", "testnet"):
+        for record_hash, field in (
+            (module.bsc_source_verifier_material_record_hash, "source_trust_anchor_hash"),
+            (
+                module.bsc_source_adapter_engine_deployment_record_hash,
+                "source_bridge_emitter_code_hash",
+            ),
+        ):
+            args = bsc_args(module, bsc_network=bsc_network)
+            setattr(args, field, template_hash)
+            label = field.replace("_", " ")
+
+            try:
+                record_hash(args)
+            except ValueError as exc:
+                assert f"live {label}" in str(exc)
+                assert "template-derived Solana consensus verifier hash" in str(exc)
+            else:
+                raise AssertionError(
+                    f"BSC {bsc_network} record hash accepted foreign template hash for {field}"
                 )
 
 

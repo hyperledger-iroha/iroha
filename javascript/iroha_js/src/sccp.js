@@ -44167,10 +44167,11 @@ const normalizeBridgeProofSubmitPayloadBase = (input, context) => {
     "signature_b64",
   );
   if (signatureB64 !== SCCP_OPTIONAL_FIELD_MISSING) {
-    payload.signature_b64 = normalizeNonEmptyString(
+    base64ToBytesStrict(
       signatureB64,
       `${context}.signatureB64`,
     );
+    payload.signature_b64 = signatureB64;
   }
   const creationTimeMs = optionalField(
     "creationTimeMs",

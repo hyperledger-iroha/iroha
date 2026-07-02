@@ -4,6 +4,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import java.math.BigInteger
 import java.security.GeneralSecurityException
 import java.security.KeyStore
 import javax.crypto.Cipher
@@ -207,15 +208,19 @@ class AndroidOfflineNoteSecureStore @JvmOverloads constructor(
         fun decode(payload: ByteArray): OfflineNoteWalletNote {
             val obj = requireObject(JsonParser.parse(String(payload, Charsets.UTF_8)), "wallet note")
             require(asLong(obj["version"], "version") == 1L) { "unsupported Offline Note wallet note version" }
+            val amount = asString(obj["amount"], "amount")
+            require(amount == OfflineNote.canonicalAmountString(amount)) {
+                "amount must be canonical"
+            }
             return OfflineNoteWalletNote(
                 chainId = asString(obj["chain_id"], "chain_id"),
                 accountId = asString(obj["account_id"], "account_id"),
                 assetId = asString(obj["asset_id"], "asset_id"),
-                amount = asString(obj["amount"], "amount"),
+                amount = amount,
                 keyCertificate = OfflineNote.decodeCertificate(
                     b64decode(asString(obj["key_certificate_norito_base64"], "key_certificate_norito_base64"))
                 ),
-                noteCommitment = hexBytes(asString(obj["note_commitment_hex"], "note_commitment_hex")),
+                noteCommitment = hexBytes32(asString(obj["note_commitment_hex"], "note_commitment_hex")),
                 noteSecret = b64decode(asString(obj["note_secret_base64"], "note_secret_base64")),
                 origin = decodeOrigin(requireObject(obj["origin"], "origin")),
                 bearerAuditTrail = decodeAuditTrail(obj["bearer_audit_trail_norito_base64"]),
@@ -262,7 +267,7 @@ class AndroidOfflineNoteSecureStore @JvmOverloads constructor(
                 )
                 "p2p_output" -> OfflineNote.CommitmentOrigin.P2pOutput(
                     paymentRequestId = asString(obj["payment_request_id"], "payment_request_id"),
-                    outputIndex = asLong(obj["output_index"], "output_index").toInt(),
+                    outputIndex = asInt(obj["output_index"], "output_index"),
                 )
                 else -> throw IllegalArgumentException("unsupported Offline Note origin kind")
             }
@@ -312,10 +317,22 @@ private fun asString(value: Any?, field: String): String {
 }
 
 private fun asLong(value: Any?, field: String): Long = when (value) {
-    is Number -> value.toLong()
-    is String -> value.toLong()
+    is BigInteger -> try {
+        value.longValueExact()
+    } catch (e: ArithmeticException) {
+        throw IllegalArgumentException("$field must fit in signed 64-bit range", e)
+    }
+    is Byte, is Short, is Int, is Long -> (value as Number).toLong()
+    is Float, is Double -> throw IllegalArgumentException("$field must be an integer")
     else -> throw IllegalArgumentException("$field must be an integer")
 }
+
+private fun asInt(value: Any?, field: String): Int =
+    try {
+        java.lang.Math.toIntExact(asLong(value, field))
+    } catch (e: ArithmeticException) {
+        throw IllegalArgumentException("$field must fit in signed 32-bit range", e)
+    }
 
 private fun b64(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.NO_WRAP)
 
@@ -331,15 +348,20 @@ private fun hexLower(bytes: ByteArray): String {
     return out.toString()
 }
 
-private fun hexBytes(value: String): ByteArray {
-    val normalized = value.removePrefix("0x").removePrefix("0X").lowercase()
-    require(normalized.length % 2 == 0) { "hex string must have an even length" }
-    val out = ByteArray(normalized.length / 2)
+private fun hexBytes32(value: String): ByteArray {
+    require(value.length == 64) { "note_commitment_hex must be 32-byte lowercase hex" }
+    val out = ByteArray(32)
     for (index in out.indices) {
-        val hi = Character.digit(normalized[index * 2], 16)
-        val lo = Character.digit(normalized[index * 2 + 1], 16)
-        require(hi >= 0 && lo >= 0) { "hex string must contain only hex digits" }
+        val hi = lowercaseHexDigit(value[index * 2])
+        val lo = lowercaseHexDigit(value[index * 2 + 1])
         out[index] = ((hi shl 4) or lo).toByte()
     }
     return out
 }
+
+private fun lowercaseHexDigit(value: Char): Int =
+    when (value) {
+        in '0'..'9' -> value - '0'
+        in 'a'..'f' -> value - 'a' + 10
+        else -> throw IllegalArgumentException("note_commitment_hex must be 32-byte lowercase hex")
+    }

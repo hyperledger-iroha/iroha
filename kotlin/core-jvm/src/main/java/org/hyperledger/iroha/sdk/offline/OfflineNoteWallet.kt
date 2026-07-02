@@ -2182,7 +2182,11 @@ private fun strictBase64UrlDecode(value: String, field: String): ByteArray {
         "$field must be unpadded base64url"
     }
     require(value.all(::isBase64UrlCharacter)) { "$field must be unpadded base64url" }
-    return Base64.getUrlDecoder().decode(value)
+    val decoded = Base64.getUrlDecoder().decode(value)
+    require(Base64.getUrlEncoder().withoutPadding().encodeToString(decoded) == value) {
+        "$field must be canonical unpadded base64url"
+    }
+    return decoded
 }
 
 private fun isBase64UrlCharacter(value: Char): Boolean =

@@ -763,7 +763,7 @@ public enum OfflineQrStreamTextCodec {
     public static func decode(_ value: String, encoding: OfflineQrStreamFrameEncoding) throws -> Data {
         switch encoding {
         case .binary:
-            guard let decoded = Data(base64Encoded: value) else {
+            guard let decoded = decodeExactBase64(value) else {
                 throw OfflineQrStreamError.invalidEnvelope("frame text is not base64")
             }
             return decoded
@@ -771,11 +771,19 @@ public enum OfflineQrStreamTextCodec {
             guard let stripped = value.stripPrefix(base64Prefix) else {
                 throw OfflineQrStreamError.invalidEnvelope("qr text prefix missing")
             }
-            guard let decoded = Data(base64Encoded: stripped) else {
+            guard let decoded = decodeExactBase64(stripped) else {
                 throw OfflineQrStreamError.invalidEnvelope("frame text is not base64")
             }
             return decoded
         }
+    }
+
+    private static func decodeExactBase64(_ value: String) -> Data? {
+        guard let decoded = Data(base64Encoded: value),
+              decoded.base64EncodedString() == value else {
+            return nil
+        }
+        return decoded
     }
 }
 

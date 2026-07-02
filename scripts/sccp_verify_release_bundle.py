@@ -764,6 +764,9 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "requires every present `UnitTestResult` `isExecuted` flag to be `true`",
     "Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`",
     "truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence",
+    "TRX XML metadata percent decoding is bounded and fail-closed",
+    "sensitive metadata hidden behind nested percent encoding",
+    "values still percent-decodable after eight rounds remain forged evidence",
     "Canonical `.NET` SCCP marker lines must use a single literal space after the colon",
     "VSTest summary label/value and number/unit separators must be present",
     "padding must use ordinary spaces only",
@@ -2578,6 +2581,13 @@ ETHEREUM_RECEIPT_RPC_DUPLICATE_JSON_MARKERS = (
             "JSON-RPC {method} request failed",
             "JSON-RPC {method} returned invalid JSON",
             "JSON-RPC {method} returned error response",
+            "import ipaddress",
+            "import urllib.parse",
+            "def _normalize_evm_rpc_url(",
+            "def _evm_rpc_host_is_loopback(",
+            "def _evm_rpc_host_is_non_public_dns(",
+            "--rpc-url must use HTTPS unless it is loopback HTTP",
+            "--rpc-url HTTPS host must use public DNS",
             "object_pairs_hook=_json_object_without_duplicate_keys",
         ),
     ),
@@ -2588,6 +2598,9 @@ ETHEREUM_RECEIPT_RPC_DUPLICATE_JSON_MARKERS = (
             "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys",
             "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields",
             "test_receipt_json_rpc_redacts_invalid_json_parser_details",
+            "test_receipt_json_rpc_url_rejects_hidden_request_state",
+            "malformed receipt RPC URL reached the opener",
+            "https://bad_host.rpc.example",
             "test_receipt_json_rpc_redacts_transport_and_error_response_details",
             "secret-token invalid EVM receipt JSON-RPC payload",
             "secret-token",
@@ -3910,10 +3923,47 @@ ETHEREUM_SOURCE_BRIDGE_CONFIG_MARKERS = (
 )
 SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
     (
+        "scripts/sccp_source_template_hashes.py",
+        (
+            "SCCP_ACTIVE_SOURCE_TEMPLATE_FIELDS_BY_LANE",
+            "SCCP_ACTIVE_SOURCE_TEMPLATE_COMPONENT_HASHES",
+            '"ETH"',
+            '"BSC"',
+            '"Solana"',
+            '"TON"',
+            '"TRON"',
+            "def sccp_active_source_template_component_hash_errors(",
+            "hash must be non-zero bytes32",
+            "hash duplicates",
+            "fields must match active launch template order",
+            "def _validate_sccp_active_source_template_component_hashes(",
+            "_validate_sccp_active_source_template_component_hashes()",
+            "def sccp_source_template_hash_match(",
+            "def sccp_source_template_hash_human_label(",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_source_template_hashes_test.py",
+        (
+            "test_active_source_template_denylist_is_canonical_and_unique",
+            "test_active_source_template_denylist_validator_rejects_bad_entries",
+            "test_source_template_hash_match_labels_local_and_foreign_templates",
+            "test_active_source_template_denylist_matches_evidence_script_templates",
+            "entry 1 hash duplicates ETH.source_trust_anchor_hash",
+            "lane TRON fields must match active launch template order",
+            "active_lane_hashes(helper, \"ETH\")",
+            "active_lane_hashes(helper, \"BSC\")",
+            "active_lane_hashes(helper, \"Solana\")",
+            "active_lane_hashes(helper, \"TON\")",
+            "active_lane_hashes(helper, \"TRON\")",
+        ),
+    ),
+    (
         "scripts/sccp_eth_source_bridge_evidence.py",
         (
             "ETH_TEMPLATE_COMPONENTS = {",
             "def _evm_family_template_component_hash(",
+            "sccp_source_template_hash_match(",
             "template-derived {label} is not deployable",
         ),
     ),
@@ -3921,6 +3971,7 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
         (
             "test_eth_direct_record_hashes_reject_template_component_hashes",
+            "test_eth_direct_record_hashes_reject_foreign_active_lane_template_component_hashes",
             "test_eth_source_evidence_rejects_template_component_hashes",
             "ETH material hash accepted template",
             "ETH deployment hash accepted template",
@@ -3932,6 +3983,7 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         (
             "BSC_TEMPLATE_COMPONENTS = {",
             "def bsc_template_components(",
+            "sccp_source_template_hash_match(",
             "template-derived {label} is not deployable",
         ),
     ),
@@ -3939,6 +3991,8 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
         (
             "test_bsc_direct_record_hashes_reject_template_component_hashes",
+            "test_bsc_direct_record_hashes_reject_foreign_active_lane_template_component_hashes",
+            "test_bsc_direct_record_hashes_reject_other_supported_profile_template_component_hashes",
             "test_bsc_source_evidence_rejects_template_component_hashes",
             "BSC {bsc_network} material hash accepted template",
             "BSC {bsc_network} deployment hash accepted template",
@@ -3950,6 +4004,7 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         (
             "def solana_template_component_hash(",
             "def _reject_template_hashes(",
+            "sccp_source_template_hash_match(",
             "must be deployed evidence, not the Solana template hash",
             "built-in template material",
         ),
@@ -3958,8 +4013,10 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         "pytests/scripts/sccp_solana_source_state_evidence_test.py",
         (
             "test_direct_record_hashes_reject_template_component_hashes",
+            "test_direct_record_hashes_reject_foreign_active_lane_template_component_hashes",
             "test_solana_template_component_hashes_are_rejected",
             "test_solana_cli_rejects_full_light_client_audit_hash_reusing_template_material",
+            "test_solana_cli_rejects_full_light_client_audit_hash_reusing_foreign_template_material",
             "Solana material hash accepted template",
             "Solana deployment hash accepted template",
             "Solana template {field} was accepted",
@@ -3971,6 +4028,7 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         (
             "TON_TEMPLATE_COMPONENTS = {",
             "def _ton_template_component_hash(",
+            "sccp_source_template_hash_match(",
             "template-derived {label} is not deployable",
             "built-in template material",
         ),
@@ -3979,8 +4037,10 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         "pytests/scripts/sccp_ton_source_state_evidence_test.py",
         (
             "test_ton_direct_record_hashes_reject_template_component_hashes",
+            "test_ton_direct_record_hashes_reject_foreign_active_lane_template_component_hashes",
             "test_ton_source_evidence_rejects_template_component_hashes",
             "test_ton_cli_rejects_full_light_client_audit_hash_reusing_template_material",
+            "test_ton_cli_rejects_full_light_client_audit_hash_reusing_foreign_template_material",
             "TON material hash accepted template",
             "TON deployment hash accepted template",
             "template TON {label} was accepted",
@@ -3992,6 +4052,7 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         (
             "TRON_TEMPLATE_COMPONENTS = {",
             "def _tron_template_component_hash(",
+            "sccp_source_template_hash_match(",
             "template-derived {label} is not deployable",
         ),
     ),
@@ -4000,6 +4061,7 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         (
             "test_toml_rendering_rejects_template_source_component_hashes",
             "test_direct_record_hashes_reject_template_source_component_hashes",
+            "test_direct_record_hashes_reject_foreign_active_lane_template_source_component_hashes",
             "direct material hash accepted template",
             "direct deployment hash accepted template",
             "template-derived TRON {label} was accepted",
@@ -4014,14 +4076,16 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             'if profile.chain == "sol":',
             'if profile.chain == "ton":',
             'if profile.chain == "tron":',
+            "def _active_source_material_template_hash_values(",
+            "def _source_material_template_hash_values(",
             "def _reject_source_material_template_hashes(",
-            "for field, template_hash in template_hashes.items():",
+            "template_hash_values = _source_material_template_hash_values(profile)",
             "f\"{field} must be deployed evidence, not built-in template material\"",
             "def _reject_source_adapter_deployment_template_hashes(",
             "f\"{field} must be deployed source-adapter evidence, \"",
             "for field in (\"adapter_verifier_vk_hash\", \"deployment_receipt_hash\"):",
             "def _reject_source_adapter_audit_template_hashes(",
-            "if any(raw == template_hash for template_hash in template_hashes.values()):",
+            "if raw in template_hashes:",
             "def _source_material_template_hash_values_or_errors(",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "template material validation failed",
@@ -4058,6 +4122,10 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         (
             "test_all_lanes_evidence_rejects_source_material_template_hashes_for_all_lanes",
             "test_all_lanes_evidence_rejects_source_adapter_deployment_template_hashes_for_all_lanes",
+            "test_all_lanes_evidence_rejects_foreign_active_lane_source_material_template_hashes",
+            "test_all_lanes_evidence_rejects_foreign_active_lane_source_adapter_template_hashes",
+            "test_all_lanes_evidence_rejects_source_adapter_audit_hash_foreign_template_replays",
+            "test_route_allowlist_hash_rejects_foreign_active_template_source_record_inputs",
             "test_all_lanes_evidence_rejects_source_adapter_deployment_control_hash_template_replays",
             "test_all_lanes_evidence_rejects_source_adapter_audit_hash_template_replays",
             "test_all_lanes_evidence_rejects_route_canary_transcript_hash_template_replays",
@@ -4072,7 +4140,9 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "test_all_lanes_cli_rejects_source_gate_requirement_failure_without_leaking",
             "test_all_lanes_release_checklist_rejects_destination_and_route_template_replays",
             "module.argparse.ArgumentTypeError",
+            "test_all_lanes_cli_rejects_copied_ready_source_record_foreign_template_replay",
             "test_all_lanes_cli_rejects_active_copied_source_record_template_replay_when_lane_not_ready",
+            "test_all_lanes_cli_rejects_active_copied_source_gate_foreign_template_replay",
             "test_all_lanes_cli_rejects_active_copied_source_gate_template_replay_when_required_false",
             "test_all_lanes_cli_rejects_active_copied_source_gate_template_replay_when_required_malformed",
             "test_all_lanes_cli_rejects_active_copied_source_gate_template_replay_when_ready_malformed",
@@ -4114,7 +4184,7 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "source adapter gate hash-key validation failed",
             "def _source_adapter_gate_template_hash_errors(",
             "def _source_adapter_gate_template_audit_errors(",
-            "all_lanes._source_material_template_hashes(profile).values()",
+            "all_lanes._source_material_template_hash_values(profile)",
             "for audit_field in audit_fields:",
             "if bytes.fromhex(audit_hash[2:]) in template_hashes:",
             "source_adapter_gate emit_audit_key_shape_errors must be a boolean",
@@ -4185,6 +4255,7 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         (
             "test_release_bundle_rejects_public_source_adapter_gate_template_audit_replays",
             "test_release_bundle_rejects_public_source_adapter_gate_template_hash_replays",
+            "test_release_bundle_template_helpers_reject_foreign_active_lane_templates",
             "test_release_bundle_source_gate_helper_control_flags_reject_non_booleans",
             "non-boolean source-gate audit-key shape control was accepted",
             "non-boolean cryptographic-evidence source-gate control was accepted",
@@ -4446,6 +4517,11 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TON accountStates account address must be a canonical raw address",
             "TON verifier account code_boc is invalid",
             "TON live code BoC base64 metadata is invalid",
+            "import ipaddress",
+            "def _api_host_is_loopback(",
+            "def _api_host_is_non_public_dns(",
+            "--api-url must use HTTPS unless it is loopback HTTP",
+            "--api-url HTTPS host must use public DNS",
             "def _exact_live_string(",
             "label=\"verifier_contract_address\"",
             "label=\"account_state_hash\"",
@@ -4535,6 +4611,10 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
         "pytests/scripts/sccp_ton_live_evidence_test.py",
         (
             "def test_live_ton_account_states_redacts_transport_and_error_response_details",
+            "def test_live_ton_api_url_rejects_hidden_request_state",
+            "http://toncenter.example",
+            "https://toncenter.local",
+            "exact http(s) URL",
             "def test_live_ton_account_states_redacts_invalid_json_parser_details",
             "def test_live_ton_evidence_redacts_account_address_parser_failures",
             "def test_live_ton_evidence_redacts_code_boc_parser_failures",
@@ -4901,6 +4981,10 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "EVM-family source material constructors must reject all-zero role hashes",
             "EVM-family source material constructors must reject reused role hashes",
             "source_verifier_material_production_gate_rejects_builtin_placeholder_role_replay",
+            "source_verifier_material_rejects_cross_lane_profile_template_hash_replay",
+            "full_light_client_audit_descriptors_reject_cross_lane_template_hash_replay",
+            "BSC also has a material-only envelope profile, but this fixture is",
+            "BSC governed deployment material is config-bound even though the",
             "BSC deployed source material must include governed source bridge config binding",
             "BSC deployed source material must bind the source bridge network id",
             "BSC deployed source material must bind the source bridge owner",
@@ -4916,10 +5000,17 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "bound TRON transaction-source helpers must reject source bridge contract/owner address reuse",
             "domain {source_domain} must classify built-in placeholder replay for {label}",
             "domain {source_domain} must reject built-in placeholder replay for {label}",
+            "domain {source_domain} must classify foreign domain {template_domain} template {label} replay",
+            "domain {source_domain} must reject foreign domain {template_domain} template {label} replay",
+            "fn sccp_hash_reuses_any_profile_template_component(",
+            "fn sccp_source_verifier_hashes_reuse_any_profile_template_components(",
+            "sccp_source_verifier_hashes_reuse_any_profile_template_components(audit_hashes)",
             "Solana source material constructors must reject all-zero role hashes",
             "Solana full-light-client audit hashes must be pairwise role-separated",
+            "Solana audited deployment builder must reject foreign domain {template_domain} template consensus hash replay",
             "TON source material constructors must reject all-zero role hashes",
             "TON full-light-client audit hashes must be pairwise role-separated",
+            "TON audited deployment builder must reject foreign domain {template_domain} template consensus hash replay",
             "TRON source material constructors must reject all-zero role hashes",
             "TRON source material constructors must reject reused role hashes",
             "source_state_proof_preflight_requires_canonical_present_capsules",
@@ -5372,6 +5463,13 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "JSON-RPC {method} request failed",
             "JSON-RPC {method} returned invalid JSON",
             "JSON-RPC {method} returned error response",
+            "import ipaddress",
+            "import urllib.parse",
+            "def _normalize_evm_rpc_url(",
+            "def _evm_rpc_host_is_loopback(",
+            "def _evm_rpc_host_is_non_public_dns(",
+            "--rpc-url must use HTTPS unless it is loopback HTTP",
+            "--rpc-url HTTPS host must use public DNS",
             "EVM source bridge runtime bytecode metadata is invalid",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "    except (\n        argparse.ArgumentTypeError,\n        AttributeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
@@ -5416,6 +5514,8 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "https://rpc.example.invalid/secret-token-provider",
             "SCCP EVM source live evidence collection failed",
             "test_evm_source_json_rpc_redacts_invalid_json_parser_details",
+            "test_evm_source_json_rpc_url_rejects_hidden_request_state",
+            "malformed EVM source RPC URL reached the opener",
             "test_evm_source_json_rpc_redacts_transport_and_error_response_details",
             "secret-token-evm-source-error",
             "secret-token {target_method} parser detail",
@@ -5547,6 +5647,13 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "JSON-RPC {method} request failed",
             "JSON-RPC {method} returned invalid JSON",
             "JSON-RPC {method} returned error response",
+            "import ipaddress",
+            "import urllib.parse",
+            "def _normalize_evm_rpc_url(",
+            "def _evm_rpc_host_is_loopback(",
+            "def _evm_rpc_host_is_non_public_dns(",
+            "--rpc-url must use HTTPS unless it is loopback HTTP",
+            "--rpc-url HTTPS host must use public DNS",
             "EVM bridge runtime bytecode metadata is invalid",
             "EVM verifier runtime bytecode metadata is invalid",
             "def _validate_copied_route_summary_metadata(",
@@ -5603,6 +5710,8 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "usedMessageProofs(bytes32) is false",
             "test_evm_json_rpc_redacts_transport_and_error_response_details",
             "test_evm_json_rpc_redacts_invalid_json_parser_details",
+            "test_evm_json_rpc_url_rejects_hidden_request_state",
+            "malformed EVM RPC URL reached the opener",
             "secret-token-evm-error",
             "secret-token invalid EVM JSON-RPC payload",
             "module.argparse.ArgumentTypeError",
@@ -6034,6 +6143,10 @@ ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
             "deployment-aware production verification must reject proofs that do not bind deployment evidence",
             "deployment matching must reject material-only proofs without deployment evidence",
             "deployment matching must reject proof evidence spliced after OpenVerify binding",
+            "fn bsc_mainnet_source_sdk_facade_requires_deployment_bound_source_adapter",
+            "sccp_bsc_source_verifier_material_with_hashes_emitter_and_config_v1(",
+            "source_bridge_network_id: sccp_bsc_testnet_network_id_word_v1(),",
+            "source_bridge_owner_address: [0x68; 20],",
             "BSC facade must reject replayed deployment receipts",
             "ETH facade must reject replayed deployment receipts",
         ),
@@ -6618,7 +6731,9 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             "def test_retired_network_patterns_catch_adversarial_examples",
             "def test_retired_network_patterns_catch_separator_obfuscation_examples",
             "def test_retired_network_patterns_catch_html_entity_obfuscation_examples",
+            "def test_retired_network_patterns_catch_deep_html_entity_obfuscation_examples",
             "def test_retired_network_patterns_catch_url_percent_obfuscation_examples",
+            "def test_retired_network_patterns_catch_deep_url_percent_obfuscation_examples",
             "def test_retired_network_patterns_catch_unicode_confusable_obfuscation_examples",
             "def test_retired_network_patterns_catch_unicode_normalization_obfuscation_examples",
             "def test_retired_network_surface_scan_covers_expected_files",
@@ -6645,13 +6760,17 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             "def _retired_word(",
             "def _decoded_note_pattern(",
             "def _decode_retired_network_surface_text",
+            "def deep_html_entity_text(",
+            "def deep_url_percent_text(",
             "def _normalize_retired_network_confusables",
             "def _strip_retired_network_ignored_unicode",
             "def _normalize_retired_network_surface_text",
             "def _decoded_retired_network_surface_violations",
             "html_unescape",
-            "for _html_pass in range(3)",
+            "url_quote",
             "url_unquote",
+            "for _decode_pass in range(max(1, len(text)))",
+            "next_decoded = url_unquote(html_unescape(decoded))",
             "import unicodedata",
             'unicodedata.normalize("NFKC", text)',
             'unicodedata.normalize("NFD", compatibility_normalized)',
@@ -6673,6 +6792,8 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             '("Sub", "&amp;#115;", "trate", "/", "Pol", "&amp;#107;", "adot")',
             '("Sub", "%73", "trate", "%2f", "Pol", "%6b", "adot")',
             '("Sub", "%2573", "trate", "%252f", "Pol", "%256b", "adot")',
+            'deep_html_entity_text("&#115;")',
+            'deep_url_percent_text(',
             '("sp", "&amp;#95;", _RUNTIME)',
             '("sp", "%5f", _RUNTIME)',
             '(_RUNTIME, "::", _SC, "::", _ALE)',
@@ -6780,6 +6901,14 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "rawValue === null && allowNull",
             "function normalizeCanonicalHex32(value, label = \"value\")",
             "function normalizeCanonicalEvmAddress(value, label = \"address\")",
+            'import { isIP } from "node:net";',
+            "function normalizeUrlHostname(hostname)",
+            "function isLoopbackEndpointHost(hostname)",
+            "function isNonPublicEndpointDnsHost(hostname)",
+            "function normalizeEndpointText(value, defaultValue, label)",
+            "export function normalizeTairaToriiUrl(",
+            "--torii-url must use HTTPS unless it is loopback HTTP.",
+            "--torii-url HTTPS host must use public DNS.",
             "[\"moduleHash\", \"module_hash\", \"moduleSha256\", \"module_sha256\", \"sha256\"]",
             "\"boundRouteHash\"",
             "\"destinationBindingHash\"",
@@ -6797,6 +6926,14 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "async function submitSignedTransactionRawToTairaPipeline(",
             "error?.name === \"ToriiHttpError\"",
             "HTTP ${error.status} while submitting raw signed transaction",
+            "export function normalizeBscRpcUrl(",
+            "BSC RPC URL must use HTTPS unless loopback HTTP is allowed.",
+            "BSC RPC URL must not contain credentials, params, query strings, or fragments.",
+            "BSC RPC URL HTTPS host must use public DNS.",
+            "HTTPS URLs must use public DNS.",
+            "must not contain credentials, params, query strings, or fragments.",
+            "must not traverse parent directories.",
+            "must be package-relative, HTTPS, or loopback HTTP without query strings or fragments.",
             "function productionHandoffPlaceholderReason(",
             "contains production handoff placeholder material at",
             "function bscDeploymentEvidenceHashSnapshot(routeEvidence)",
@@ -6855,6 +6992,17 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "sentinel:bsc-route-config-base-input",
             "BSC route-config command rejects offline full TOML evidence output collisions before writing artifacts",
             "BSC canonical production output guard rejects diagnostic or draft material",
+            "BSC RPC endpoint normalization is fail-closed",
+            "BSC TAIRA Torii URL normalization rejects hidden request state",
+            "BSC browser prover module URLs must use public HTTPS hosts",
+            "BSC browser prover module URLs reject traversal and root-relative paths",
+            "https://bad_host.bnbchain.org",
+            "https://bad_host.sora.org",
+            "https://provers.sora.org/bsc-destination.js;param",
+            "../bsc-destination.js",
+            "./bsc-destination.js",
+            "@sora/sccp-bsc-destination-prover/bsc-destination.js",
+            "./bsc-destination%2ejs",
             "const malformedBooleanOptionValues = Object.freeze([",
             "const EVM_EMPTY_CODE_HASH =",
             "codeHashes: {",
@@ -7004,11 +7152,27 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
     (
         "crates/iroha_config/src/parameters/user.rs",
         (
+            "fn is_public_dns_domain(",
+            "fn is_package_relative_module_url(",
+            "module_url HTTPS host must use public DNS",
+            "module_url must not contain params",
             "pub deployment_evidence_sha256: Option<String>",
             "SCCP BSC route manifest production_ready requires deployment_evidence_sha256",
             "deployment_evidence_sha256 must be non-zero",
+            "bsc_browser_prover_rejects_root_and_hidden_local_module_urls",
+            "bsc_browser_prover_rejects_non_public_https_module_urls",
+            "bsc_browser_prover_rejects_url_params",
+            "bsc_browser_prover_accepts_package_relative_module_url",
             "production_ready_bsc_route_requires_deployment_evidence_hash",
             "bsc_route_rejects_zero_deployment_evidence_hash",
+        ),
+    ),
+    (
+        "crates/iroha_core/tests/sccp_route_manifest_isi.rs",
+        (
+            "root-relative browser prover URLs must be rejected",
+            "non-public HTTPS browser prover URLs must be rejected",
+            "module_url HTTPS host must use public DNS",
         ),
     ),
     (
@@ -7262,6 +7426,8 @@ TON_ROUTE_MANIFEST_CLI_MARKERS = (
             'throw new Error("Unexpected positional argument.");',
             "function normalizeCliPathOption(value, label, fallback)",
             "must be a non-empty path.",
+            "const tairaContractPath = normalizeCliPathOption(",
+            'const offlineFullTomlEvidencePath = options["offline-full-toml-sha256"]',
             "const COMMAND_OPTION_ALLOWLISTS = Object.freeze({",
             "function assertKnownCommand(command)",
             'throw new Error("Unknown command.");',
@@ -7277,6 +7443,14 @@ TON_ROUTE_MANIFEST_CLI_MARKERS = (
             "`${outputLabel} must not be the same path as ${inputLabel}.`",
             'assertDistinctResolvedPaths(outPath, "--out", [',
             'assertDistinctResolvedPaths(outPath, "--out", [[manifestPath, "--manifest"]]);',
+            "function isLoopbackHost(hostname)",
+            "function isNonPublicDnsHost(hostname)",
+            "HTTPS URLs must use a public DNS host.",
+            "must not traverse parent directories.",
+            'value.startsWith("/")',
+            'segment === "" || (segment === "." && index !== 0)',
+            "manifest.explorer_url = normalizeRequiredPublicExplorerUrl(",
+            "TON route manifest explorer_host must match explorer_url host.",
             'const submit = optionEnabled(options, "submit", false);',
             "const SUBMIT_ONLY_OPTIONS = Object.freeze([",
             "function assertSubmitOnlyOptionsAbsentWhenNotSubmitting(options)",
@@ -7286,15 +7460,28 @@ TON_ROUTE_MANIFEST_CLI_MARKERS = (
             "function normalizePrivateKeyEnvName(",
             "/^[A-Z_][A-Z0-9_]{0,127}$/u",
             "--private-key-env must be an uppercase environment variable name",
+            "function normalizeTairaBurnRecordVkName(value, label =",
+            "normalized.trim() !== normalized",
+            "must be 1-128 verifier-key identifier characters",
             "function normalizeAuthority(value)",
             "--authority must be a canonical I105 account id.",
             "function normalizeToriiUrl(value)",
             "--torii-url must use HTTPS unless it is loopback HTTP.",
             "--torii-url must not include credentials, query, or fragment.",
+            "--torii-url HTTPS host must use public DNS.",
+            "function normalizeOptionalPublicExplorerUrl(value, label)",
+            "function normalizeRequiredPublicExplorerUrl(value, label)",
+            'import { isIP } from "node:net";',
+            "must be a public HTTPS URL.",
+            "must use a public DNS host.",
+            '!unbracketedHostname.includes(".")',
+            "isIP(unbracketedHostname) !== 0",
+            "must not include credentials, query, or fragment.",
             "const privateKeyHex = process.env[privateKeyEnv];",
             "const { buildUpsertSccpRouteManifestTransaction } = await import(",
             "function normalizePositiveDecimalString(value, label, fallback = null)",
             'typeof candidate !== "string"',
+            "candidate.trim() !== candidate",
             "TON finalize message value in nanoTON",
         ),
     ),
@@ -7308,6 +7495,24 @@ TON_ROUTE_MANIFEST_CLI_MARKERS = (
             "TON publish-route-manifest rejects missing option values before manifest read",
             "/Option requires a value/u",
             "TON route manifest rejects empty output paths before writing",
+            "TON route manifest rejects malformed input paths before reading",
+            "/--taira-contract must be a non-empty path/u",
+            "TON route manifest rejects malformed TAIRA burn-record VK names",
+            "/--vk-name must be 1-128 verifier-key identifier characters/u",
+            "TON route manifest rejects unsafe public explorer URLs before writing",
+            "secret-token-ton-explorer-url",
+            "/--post-deploy-route-canary-explorer-url must be a public HTTPS URL/u",
+            "/--post-deploy-source-event-explorer-url must use a public DNS host/u",
+            "/--post-deploy-route-canary-explorer-url must use a public DNS host/u",
+            "TON route manifest rejects non-public HTTPS browser module URLs",
+            "/destination_browser_prover\\.module_url HTTPS URLs must use a public DNS host/u",
+            "/source_browser_prover\\.module_url HTTPS URLs must use a public DNS host/u",
+            "TON route manifest rejects traversal and root-relative browser module URLs",
+            "../ton-destination.js",
+            "/ton-destination.js",
+            ".//ton-destination.js",
+            "./ton-destination.js",
+            "@sora/sccp-ton-destination-prover/ton-destination.js",
             "TON publish-route-manifest rejects empty path options before manifest read",
             "/--manifest must be a non-empty path/u",
             "TON route manifest redacts unexpected positional arguments",
@@ -7326,6 +7531,10 @@ TON_ROUTE_MANIFEST_CLI_MARKERS = (
             "TON publish-route-manifest rejects output path collisions with manifest",
             "/--out must not be the same path as --deployment-evidence/u",
             "/--out must not be the same path as --manifest/u",
+            "TON publish-route-manifest rejects unsafe top-level explorer metadata",
+            "/TON route manifest explorer_url must use a public DNS host/u",
+            "/TON route manifest explorer_host must match explorer_url host/u",
+            "/TON route manifest TAIRA burn-record VK name must be 1-128 verifier-key identifier characters/u",
             "malformedBooleanOptionValues",
             "TON publish-route-manifest rejects malformed submit booleans before writing",
             "TON publish-route-manifest rejects malformed wait booleans before writing",
@@ -7344,6 +7553,9 @@ TON_ROUTE_MANIFEST_CLI_MARKERS = (
             "secret-token-ton-torii-url",
             "/--torii-url must use HTTPS unless it is loopback HTTP/u",
             "/--torii-url must not include credentials, query, or fragment/u",
+            "https://bad_host.sora.org",
+            "/--torii-url HTTPS host must use public DNS/u",
+            "http://127.0.0.1:8080",
             "TON publish-route-manifest rejects unsafe authorities before secret lookup",
             "route-manifest-manager@taira",
             "secret-token-ton-authority",
@@ -7352,7 +7564,9 @@ TON_ROUTE_MANIFEST_CLI_MARKERS = (
             "SCCP_TON_TEST_MISSING_PRIVATE_KEY",
             "/--chain-id must be 809574f5-fee7-5e69-bfcf-52451e42d50f for TAIRA/u",
             "/--commit-timeout-ms must be a positive integer/u",
-            "TON publish-route-manifest rejects numeric nanoTON manifest scalars",
+            "TON route manifest rejects malformed finalize message values",
+            "TON publish-route-manifest rejects malformed nanoTON manifest scalars",
+            "/--ton-finalize-message-value-nano must be a positive integer decimal string/u",
             "/Option must be specified at most once/u",
             "DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO",
         ),
@@ -7386,6 +7600,7 @@ TRON_RUNTIME_ROUTE_MANIFEST_MARKERS = (
         (
             "fn validate_tron_production_metadata(",
             "fn validate_post_deploy_evidence(",
+            "fn validate_post_deploy_blocker_lists(",
             "fn expected_tron_destination_binding_key(",
             "Self::normalize_tron_base58_address(",
             "map(SccpRouteManifest::parse)",
@@ -7397,9 +7612,22 @@ TRON_RUNTIME_ROUTE_MANIFEST_MARKERS = (
             "fn production_ready_tron_route_requires_post_deploy_full_toml_ready()",
             "fn production_ready_tron_route_requires_offline_full_toml_hash()",
             "fn tron_route_rejects_malformed_post_deploy_hashes()",
+            "fn production_ready_tron_route_rejects_post_deploy_blocker_lists()",
+            "fn tron_route_rejects_malformed_post_deploy_blocker_entries()",
             "SCCP TRON route manifest production_ready requires route_id =",
             "SCCP TRON route manifest production_ready requires network_id_hex =",
             "SCCP TRON route manifest production_ready requires taira_burn_record_vk_backend =",
+            "source_event_transaction_production_blockers",
+            "post_deploy_production_blockers",
+        ),
+    ),
+    (
+        "crates/iroha_config/tests/sccp_route_manifest_aliases.rs",
+        (
+            "fn route_manifest_toml_rejects_scalar_post_deploy_blocker_container()",
+            "fn route_manifest_toml_rejects_non_string_post_deploy_blocker_entry()",
+            "post_deploy_production_blockers = \"operator hold\"",
+            "full_toml_production_blockers = [123]",
         ),
     ),
     (
@@ -7669,10 +7897,13 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "must not contain duplicate integers",
             "contains {field_kind} field name with sensitive name",
             "def _source_adapter_gate_hash_role_fields(",
+            "def _all_lanes_route_canary_source_gate_hash_role_fields(",
             "source_adapter_gate.audit_hashes",
             "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id",
+            "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.call_data_sha256",
             "def _all_lanes_unknown_key_errors(",
             "def _all_lanes_missing_key_errors(",
+            "def _exact_object_key_errors(",
             "def _all_lanes_not_ready_nested_schema_errors(",
             "_all_lanes_not_ready_nested_schema_errors(",
             "def _matching_nonzero_fixed_hex_field_errors(",
@@ -7718,6 +7949,7 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "must be true or false",
             "def _all_lanes_nested_field_sets(",
             "def _all_lanes_route_canary_fields(",
+            "def _all_lanes_route_canary_transcript_hash_fields(",
             "def _unknown_public_field_error(",
             "contains unknown field name with sensitive name",
             "def _nonzero_bytes32_field_errors(",
@@ -7743,8 +7975,10 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "blockers must be empty",
             "when gate is required",
             "def _source_adapter_gate_hash_role_fields(",
+            "def _all_lanes_route_canary_source_gate_hash_role_fields(",
             "source_adapter_gate.audit_hashes",
             "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id",
+            "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.call_data_sha256",
             "def _route_canary_common_semantic_errors(",
             "def _route_canary_common_present_semantic_errors(",
             "def _route_canary_required_truth_present_semantic_errors(",
@@ -7883,6 +8117,11 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def test_release_bundle_rejects_not_ready_public_route_canary_common_semantic_drift_before_render",
             "def test_release_bundle_verifier_rejects_cross_lane_route_canary_evidence_replay",
             "def test_release_bundle_verifier_rejects_cross_lane_route_canary_transcript_replay",
+            "def test_release_bundle_all_lanes_route_canary_transcript_fields_follow_template_tuple",
+            "def test_release_bundle_all_lanes_source_gate_route_canary_roles_use_hash_fields_only",
+            "def test_release_bundle_all_lanes_route_canary_rejects_source_gate_hash_matrix",
+            "def test_release_bundle_all_lanes_route_canary_sweeps_upstream_hash_replay",
+            '"call_data_sha256" in canary_hash_fields',
             "route_canary.message_id from readiness report embedded evidence lane domain 1",
             "supported_launch_domains must not contain duplicate integers",
             "unsupported_launch_domains must not contain duplicate integers",
@@ -7926,6 +8165,7 @@ ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS = (
             "def _decoded_public_blocker_text_issue(",
             "def _decoded_public_nested_value_issue(",
             "def _canonical_public_blocker_key(",
+            "return _decoded_public_blocker_text(value).casefold()",
             "def _blocker_text_issue(",
             "def _blocker_mentions(",
             "token in blocker_key",
@@ -7936,7 +8176,7 @@ ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS = (
             "normalized_value = _decoded_sensitive_public_marker_text(value)",
             "if not text.isascii():",
             "if _decoded_public_blocker_text_issue(text) is not None:",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "decoded_issue = _decoded_public_nested_value_issue(value)",
             "contains control character",
             "contains non-ASCII character",
@@ -8076,6 +8316,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "PUBLIC_LANE_SOLANA_ROUTE_CANARY_FIELDS = ",
             "PUBLIC_LANE_TON_ROUTE_CANARY_FIELDS = ",
             "PUBLIC_LANE_ROUTE_CANARY_FIELDS_BY_DOMAIN = {",
+            "def _public_lane_route_canary_source_gate_hash_role_fields(",
             "PUBLIC_DOMAIN_LISTS = {",
             "must be the production remote domains",
             "must be the supported launch remote domains",
@@ -8216,8 +8457,11 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "def _check_route_canary_evidence(",
             "route canary evidence hash must be live evidence, ",
             "route canary evidence is not bound",
+            "PUBLIC_LANE_ROUTE_CANARY_FIELDS_BY_DOMAIN.get(",
+            "route_canary.{field}",
             "source_adapter_gate hash role",
             "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id",
+            "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.call_data_sha256",
             'label=f"{lane_label}: source adapter gate hash role"',
             "def _unexpected_audit_hash_field_detail(",
             "source adapter gate hash must match audit_hashes.",
@@ -8295,6 +8539,8 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "lane_blockers.encoded_route_allowlist",
             "lane_blockers.decoded_sensitive",
             "lane_blockers.encoded_duplicate",
+            "def test_all_lanes_public_blocker_keys_casefold_decoded_text",
+            "route canary strasse",
             "def test_all_lanes_release_checklist_does_not_mask_unbound_route_canary",
             "route canary pending operator certification",
             "def test_all_lanes_release_checklist_redacts_root_blockers",
@@ -8394,6 +8640,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "def test_all_lanes_cli_rejects_copied_ready_lane_hash_shape_drift",
             "def test_all_lanes_evidence_rejects_bare_fixed_hex_aliases",
             "def test_all_lanes_cli_rejects_copied_route_canary_template_replay",
+            "def test_all_lanes_route_canary_template_hash_fields_match_verifier",
             "def test_all_lanes_cli_rejects_copied_route_canary_transcript_template_replay",
             "def test_all_lanes_cli_rejects_active_copied_source_record_template_replay_when_lane_not_ready",
             "def test_all_lanes_cli_rejects_active_copied_source_gate_template_replay_when_required_false",
@@ -8589,6 +8836,9 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "route|operator-audit-field",
             "secret-token-replayed-audit-field",
             "def test_all_lanes_release_checklist_rejects_source_gate_hash_role_replay",
+            "release checklist source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id",
+            "release checklist source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.call_data_sha256",
+            "release checklist source_adapter_gate hash role ignores route_canary.log_index scalar",
             "def test_all_lanes_release_checklist_rejects_evm_source_gate_policy_downgrade",
             "def test_all_lanes_release_checklist_rejects_malformed_source_gate_blockers",
             "def test_all_lanes_summary_rejects_malformed_source_gate_blockers",
@@ -9014,11 +9264,12 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "blockers[{blocker_index}] contains {issue}",
             "def _public_blocker_list_duplicate_error(",
             "def _public_blocker_text_issue(",
+            "return _decoded_public_blocker_text(value).casefold()",
             "def _active_launch_blocker_mentions(",
             "token in blocker_key",
             "def _active_launch_scoped_blocker(",
             "prefix_unscoped",
-            "blocker_key.startswith(prefix.lower())",
+            "blocker_key.startswith(prefix.casefold())",
             "def _active_launch_blockers(",
             "SCCP evidence blocker must be a non-empty canonical string",
             "SCCP evidence blocker contains {issue}",
@@ -9132,11 +9383,12 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "release_checklist contains unknown field name with non-ASCII character",
             "id contains sensitive name",
             "def _public_blocker_text_issue(",
+            "return _decoded_public_blocker_text(value).casefold()",
             "def _active_launch_blocker_mentions(",
             "token in blocker_key",
             "def _active_launch_scoped_blocker(",
             "prefix_unscoped",
-            "blocker_key.startswith(prefix.lower())",
+            "blocker_key.startswith(prefix.casefold())",
             "def _active_launch_blockers(",
             "SCCP evidence blocker must be a non-empty canonical string",
             "SCCP evidence blocker contains {issue}",
@@ -9402,6 +9654,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active launch lane blockers must not contain duplicate strings",
             "def test_release_readiness_report_decodes_active_launch_blocker_domain_prefixes",
             "domain%202%20(bsc): route canary encoded other evidence hold",
+            "def test_release_readiness_public_blocker_keys_casefold_decoded_text",
+            "route canary strasse",
         ),
     ),
     (
@@ -9531,6 +9785,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active launch lane blockers must not contain duplicate strings",
             "def test_release_bundle_verifier_decodes_active_launch_blocker_domain_prefixes",
             "Domain%202%20(BSC): route canary encoded other lane hold",
+            "def test_release_bundle_verifier_public_blocker_keys_casefold_decoded_text",
+            "route canary strasse",
             "def test_release_bundle_verifier_rejects_release_checklist_field_type_drift",
             "def test_release_bundle_verifier_rejects_release_checklist_malformed_unknown_fields",
             "def test_release_bundle_verifier_rejects_release_checklist_malformed_item_ids",
@@ -9816,6 +10072,12 @@ TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS = (
             'if (options[key] === "false") return false;',
             "throw new Error(`--${key} must be true or false`);",
             'const broadcast = optionEnabled(options, "broadcast", false);',
+            'import { isIP } from "node:net";',
+            "function isNonPublicTronEndpointDnsHost(hostname)",
+            "function normalizeTronEndpoint(endpoint = DEFAULT_TRON_ENDPOINT)",
+            "TRON endpoint must be an exact HTTPS URL",
+            "TRON endpoint must not include params, query strings, or fragments",
+            "TRON endpoint HTTPS host must use public DNS",
             "deployCommand,",
         ),
     ),
@@ -9835,6 +10097,12 @@ TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS = (
             "/--production-ready must be true or false/u",
             "/--live-readback-checked must be true or false/u",
             "/--allow-unready must be true or false/u",
+            "TRON endpoint normalization rejects unsafe deployment gateway overrides",
+            "https://bad_host.trongrid.io",
+            "https://8.8.8.8",
+            "/exact HTTPS URL/",
+            "/params, query strings, or fragments/",
+            "/public DNS/",
             "assert.equal(await readFile(out, \"utf8\"), sentinel)",
             '"check-account"',
             '"require-secret"',
@@ -12213,6 +12481,9 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "SENSITIVE_TRX_ATTRIBUTE_VALUE_MARKERS",
             "urllib.parse.unquote",
             "iter_percent_decoded_trx_attribute_values",
+            "TRX_ATTRIBUTE_PERCENT_DECODE_MAX_ROUNDS = 8",
+            "for _round in range(TRX_ATTRIBUTE_PERCENT_DECODE_MAX_ROUNDS)",
+            "requires TRX XML metadata to avoid deeply nested percent encoding",
             "TRX_DURATION_METADATA_RE",
             "TRX_TIMESTAMP_METADATA_RE",
             "TRX_GUID_METADATA_RE",
@@ -12467,6 +12738,8 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "unexpected-trusted-attribute",
             "schema-known-sensitive-attribute",
             "schema-known-percent-sensitive-attribute",
+            "schema-known-deep-percent-sensitive-attribute",
+            "schema-known-excessive-percent-encoding",
             "schema-known-percent-control-attribute",
             "schema-known-percent-nonascii-attribute",
             "schema-known-freeform-duration-attribute",
@@ -13987,6 +14260,8 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "def _public_source_inventory_gate_error(",
             "def _source_inventory_required_public_gates(",
             "def _public_source_inventory_errors(",
+            "def _public_mapping_string_keys(",
+            "def _public_mapping_get_string_key(",
             "readiness report source_inventory contains unknown gate",
             "readiness report source_inventory missing required gate",
             "USER_PROVER_SUBMISSION_SURFACE_PUBLIC_FIELDS = frozenset",
@@ -14046,6 +14321,8 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "READINESS_REPORT_ROOT_FIELDS",
             "SOURCE_INVENTORY_FIELDS",
             "def _safe_public_key_sort_key(",
+            "def _public_mapping_string_keys(",
+            "def _public_mapping_get_string_key(",
             "key=_safe_public_key_sort_key",
             "def _release_report_preflight_errors(",
             "production_ready must be true or false",
@@ -14092,6 +14369,10 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_guards_release_public_json_root_schema_inventory",
             "test_release_bundle_verifier_rejects_missing_release_public_json_root_schema_inventory_gate",
             "class HostilePublicKey",
+            "class HashCollisionPublicKey",
+            "HashCollisionPublicKey(\"phase_evidence_source_gate\")",
+            "HashCollisionPublicKey(\"validation_status\")",
+            "HashCollisionPublicKey(\"domain\")",
             "test_release_bundle_preflight_rejects_truthy_production_ready",
             "test_release_bundle_preflight_rejects_malformed_blocker_containers",
             "test_release_bundle_preflight_rejects_malformed_ready_report",
@@ -14170,6 +14451,9 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "secret-token-readiness-json-parent-link",
             "test_release_readiness_public_payload_redacts_hostile_mapping_keys",
             "class HostilePublicKey",
+            "class HashCollisionPublicKey",
+            "HashCollisionPublicKey(\"phase_evidence_source_gate\")",
+            "HashCollisionPublicKey(\"validation_status\")",
             "def test_release_readiness_report_cli_rejects_unknown_report_fields_without_leaking",
             "def test_release_readiness_report_cli_rejects_malformed_allowed_report_roots_without_leaking",
             "readiness report inputs must be a list of canonical strings",
@@ -14387,6 +14671,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "source_adapter_gate_audit_hashes must be an object",
             "source_adapter_gate hash role",
             "public source_adapter_gate audit hashes must not reuse route_canary_message_id",
+            "for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS",
             "def _cryptographic_evidence_route_canary_hash_role_errors(",
             "route_canary hash role",
             "def _cryptographic_evidence_lane_binding_errors(",
@@ -14483,6 +14768,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "def _public_cryptographic_source_adapter_gate_hash_role_errors(",
             "source_adapter_gate hash role",
             "public source_adapter_gate audit hashes must not reuse route_canary_message_id",
+            "for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS",
             "def _public_cryptographic_route_canary_hash_role_errors(",
             "route_canary hash role",
         ),
@@ -14549,6 +14835,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "def _cryptographic_evidence_source_adapter_gate_hash_role_errors(",
             "source_adapter_gate hash role",
             "public source_adapter_gate audit hashes must not reuse route_canary_message_id",
+            "for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS",
             "def _cryptographic_evidence_route_canary_hash_role_errors(",
             "route_canary hash role",
             "source_adapter_gate_required must be false for this domain",
@@ -14607,6 +14894,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_rejects_oversized_copied_tron_crypto_evidence_before_render",
             "test_release_bundle_rejects_copied_crypto_source_adapter_gate_drift_before_render",
             "test_release_bundle_rejects_copied_crypto_source_adapter_gate_hash_role_replay",
+            "bundle crypto source-gate transcript replay rejects route_canary_call_data_sha256",
             "test_release_bundle_source_gate_audit_key_failures_are_bounded",
             "secret-token-source-gate-audit-keys",
             "test_release_bundle_source_gate_hash_key_failures_are_bounded",
@@ -14616,6 +14904,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_render",
             "test_release_bundle_verifier_rejects_unbound_crypto_evidence",
             "test_release_bundle_verifier_rejects_false_crypto_evidence_bound_with_canary_hash",
+            "bundle crypto route-canary transcript replay rejects route_canary_call_data_sha256",
             "test_release_bundle_verifier_rejects_crypto_evidence_hash_drift",
             "test_release_bundle_verifier_expected_crypto_evidence_preserves_malformed_values",
             "test_release_bundle_verifier_rejects_crypto_evidence_zero_hashes",
@@ -14626,6 +14915,9 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_verifier_crypto_evm_live_tag_flag_rejects_non_booleans",
             "non-boolean public crypto EVM live-tag enforcement flag was accepted",
             "test_release_bundle_verifier_rejects_crypto_source_gate_hash_role_replay",
+            "test_release_bundle_verifier_rejects_crypto_source_gate_transcript_replay",
+            "strict verifier crypto source-gate transcript replay rejects route_canary_call_data_sha256",
+            "strict verifier crypto route-canary transcript replay rejects route_canary_call_data_sha256",
             "test_release_bundle_bsc_source_gate_policy_matches_verifier_before_render",
             "test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift",
             "test_release_bundle_verifier_rejects_crypto_evidence_malformed_source_adapter_gate_audit_keys",
@@ -14722,6 +15014,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "for exception_type in (RuntimeError, report.argparse.ArgumentTypeError):",
             "public crypto route-canary template replays cover every launch domain",
             "public crypto route-canary transcript template replays cover every launch domain",
+            "public crypto route-canary transcript replay rejects route_canary_call_data_sha256",
             "test_release_readiness_report_cli_rejects_crypto_source_adapter_gate_template_replay_without_leaking",
             "test_release_readiness_report_public_crypto_rejects_source_gate_template_replays_when_required_false_or_malformed",
             "public crypto source-gate template replays cover every launch domain",
@@ -14732,6 +15025,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "public crypto route-canary scalar null policy covers every non-message-proof launch domain",
             "public crypto source-gate source-role replay covers every launch domain",
             "public crypto source-gate transcript replay covers every launch domain",
+            "public crypto source-gate transcript replay rejects route_canary_call_data_sha256",
             "readiness report cryptographic_evidence missing required domain: ",
             'assert active_row["source_adapter_gate_audit_hashes"] == ["not", "an", "object"]',
         ),
@@ -15383,6 +15677,7 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "def _decoded_sensitive_public_marker_text(",
             "def _decoded_public_blocker_text_issue(",
             "def _canonical_public_blocker_key(",
+            "return _decoded_public_blocker_text(value).casefold()",
             "def _public_blocker_text_blocker(",
             "def _public_blocker_list_field_errors(",
             "public blocker list allow_empty must be a boolean",
@@ -15422,6 +15717,7 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "def _decoded_sensitive_public_marker_text(",
             "def _decoded_public_blocker_text_issue(",
             "def _canonical_public_blocker_key(",
+            "return _decoded_public_blocker_text(value).casefold()",
             "def _public_blocker_text_issue(",
             "decoded_issue = _decoded_public_blocker_text_issue(item)",
             "normalized_item = _decoded_sensitive_public_marker_text(item)",
@@ -15464,6 +15760,8 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "safe copied passed source blocker",
             "def test_release_readiness_public_blocker_helpers_reject_decoded_unsafe_text",
             "def test_release_readiness_public_sensitive_markers_reject_encoded_confusables",
+            "def test_release_readiness_public_blocker_keys_casefold_decoded_text",
+            "api key strasse",
             "s%D0%B5cret-token",
             "safe%0Apublic-blocker",
             "safe%E2%80%AEpublic-blocker",
@@ -15486,6 +15784,7 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "def _decoded_sensitive_public_marker_text(",
             "def _decoded_public_blocker_text_issue(",
             "def _canonical_public_blocker_key(",
+            "return _decoded_public_blocker_text(value).casefold()",
             "def _public_blocker_text_error(",
             "decoded_issue = _decoded_public_blocker_text_issue(blocker)",
             "normalized_blocker = _decoded_sensitive_public_marker_text(blocker)",
@@ -15504,6 +15803,7 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "production corridor is not ready",
             "require_phase_evidence must be true or false",
             "does not require hashed phase evidence",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "blockers must be empty when production_ready is true",
         ),
     ),
@@ -15545,6 +15845,8 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "operator|public-blocker",
             "operator public blоcker",
             "def test_release_bundle_public_blocker_helpers_reject_decoded_unsafe_text",
+            "def test_release_bundle_public_blocker_keys_casefold_decoded_text",
+            "api key strasse",
             "def test_release_bundle_public_sensitive_markers_reject_encoded_confusables",
             "s%D0%B5cret-token",
             "secret%20key",
@@ -15687,7 +15989,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "TRON route canary verifier address metadata is invalid",
             "def _cli_error_detail(",
             "if not text.isascii():",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             (
                 "except (\n"
                 "        argparse.ArgumentTypeError,\n"
@@ -15710,6 +16012,13 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "JSON-RPC {method} failed with HTTP {exc.code}",
             "JSON-RPC {method} request failed",
             "JSON-RPC {method} returned error response",
+            "import ipaddress",
+            "import urllib.parse",
+            "def _normalize_solana_rpc_url(",
+            "def _rpc_host_is_loopback(",
+            "def _rpc_host_is_non_public_dns(",
+            "--rpc-url must use HTTPS unless it is loopback HTTP",
+            "--rpc-url HTTPS host must use public DNS",
             'raise RuntimeError(f"{label} account data is invalid base64") from None',
             'raise ValueError(f"{label} must be base64") from None',
             "def _parse_solana_program_id(",
@@ -15730,7 +16039,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP Solana live evidence collection failed",
@@ -15744,6 +16053,11 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "TON live verifier address metadata is invalid",
             "TON live account address metadata is invalid",
             "TON live last_transaction_lt metadata is invalid",
+            "import ipaddress",
+            "def _api_host_is_loopback(",
+            "def _api_host_is_non_public_dns(",
+            "--api-url must use HTTPS unless it is loopback HTTP",
+            "--api-url HTTPS host must use public DNS",
             "def _reject_runtime_file_symlink_path(",
             "def _read_runtime_text_file(",
             "if not path.is_file():\n        raise ValueError(error_message) from None",
@@ -15766,7 +16080,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP TON live evidence collection failed",
@@ -15822,6 +16136,13 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "TRON API {endpoint} returned duplicate JSON keys",
             "TRON API {endpoint} returned invalid JSON",
             "TRON API {endpoint} returned error response",
+            "import ipaddress",
+            "import urllib.parse",
+            "def _normalize_tron_node_url(",
+            "def _tron_node_host_is_loopback(",
+            "def _tron_node_host_is_non_public_dns(",
+            "--tron-node-url must use HTTPS unless it is loopback HTTP",
+            "--tron-node-url HTTPS host must use public DNS",
             "witness schedule payload is invalid",
             'f"witness schedule transition {index} message is invalid"',
             'f"witness schedule transition {index} seal is invalid"',
@@ -15832,7 +16153,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP TRON live evidence collection failed",
@@ -15852,7 +16173,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP Ethereum source bridge evidence rendering failed",
@@ -15873,7 +16194,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP BSC source bridge evidence rendering failed",
@@ -15901,7 +16222,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP EVM destination evidence rendering failed",
@@ -15929,11 +16250,18 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "JSON-RPC {method} request failed",
             "JSON-RPC {method} returned invalid JSON",
             "JSON-RPC {method} returned error response",
+            "import ipaddress",
+            "import urllib.parse",
+            "def _normalize_evm_rpc_url(",
+            "def _evm_rpc_host_is_loopback(",
+            "def _evm_rpc_host_is_non_public_dns(",
+            "--rpc-url must use HTTPS unless it is loopback HTTP",
+            "--rpc-url HTTPS host must use public DNS",
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "SCCP EVM receipt proof evidence collection failed",
         ),
     ),
@@ -15962,11 +16290,18 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "    except (\n        argparse.ArgumentTypeError,\n        AttributeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "JSON-RPC {method} returned duplicate JSON keys",
             "JSON-RPC {method} returned invalid JSON",
+            "import ipaddress",
+            "import urllib.parse",
+            "def _normalize_evm_rpc_url(",
+            "def _evm_rpc_host_is_loopback(",
+            "def _evm_rpc_host_is_non_public_dns(",
+            "--rpc-url must use HTTPS unless it is loopback HTTP",
+            "--rpc-url HTTPS host must use public DNS",
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP EVM source live evidence collection failed",
@@ -15989,11 +16324,18 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "label=\"route canary evidence hash\"",
             "JSON-RPC {method} returned duplicate JSON keys",
             "JSON-RPC {method} returned invalid JSON",
+            "import ipaddress",
+            "import urllib.parse",
+            "def _normalize_evm_rpc_url(",
+            "def _evm_rpc_host_is_loopback(",
+            "def _evm_rpc_host_is_non_public_dns(",
+            "--rpc-url must use HTTPS unless it is loopback HTTP",
+            "--rpc-url HTTPS host must use public DNS",
             "def _cli_error_detail(",
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP EVM live evidence collection failed",
@@ -16019,7 +16361,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP Solana destination evidence rendering failed",
@@ -16035,7 +16377,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP Solana source-state evidence rendering failed",
@@ -16060,7 +16402,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP TON destination evidence rendering failed",
@@ -16076,7 +16418,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP TON source-state evidence rendering failed",
@@ -16096,7 +16438,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if not text.isascii():",
             "def _decoded_cli_error_text_issue(",
             "if _decoded_cli_error_text_issue(text):",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "if isinstance(exc, (OSError, SystemExit)):",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP TRON source bridge evidence rendering failed",
@@ -16110,7 +16452,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "type(exc.code) is int",
             "if not text.isascii():",
             "if _decoded_public_blocker_text_issue(markdown_scan_text) is not None:",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP release bundle generation failed",
             "def _public_scalar_string_error(",
@@ -16157,7 +16499,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if isinstance(exc, SystemExit):",
             "if not text.isascii():",
             "if _decoded_public_blocker_text_issue(markdown_scan_text) is not None:",
-            "normalized_text = _decoded_public_blocker_text(text).lower()",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "SENSITIVE_PUBLIC_FIELD_NAME_MARKERS = (",
             "passphrase",
             "session",
@@ -16362,6 +16704,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_lane_cli_error_detail_redacts_decoded_sensitive_messages",
             "def test_lane_cli_error_detail_redacts_decoded_unsafe_messages",
             "def test_lane_cli_error_detail_treats_system_exit_as_opaque",
+            "def test_lane_cli_error_detail_normalizes_decoded_text_with_casefold",
+            "normalized_text = _decoded_public_blocker_text(text).casefold()",
+            "normalized_text = _decoded_public_blocker_text(text).lower()",
             "safe helper SystemExit detail",
             "def test_lane_cli_error_detail_preserves_safe_runtime_error_messages",
         ),
@@ -16370,6 +16715,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_solana_live_evidence_test.py",
         (
             "def test_solana_json_rpc_redacts_transport_and_error_response_details",
+            "def test_solana_json_rpc_url_rejects_hidden_request_state",
+            "malformed Solana RPC URL reached the opener",
+            "https://bad_host.solana.example.invalid",
             "def test_solana_json_rpc_redacts_invalid_json_parser_details",
             "def test_live_solana_evidence_redacts_imported_parser_failures",
             "def test_live_solana_evidence_rejects_non_string_imported_metadata_without_stringifying",
@@ -16419,6 +16767,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_ton_live_evidence_test.py",
         (
             "def test_live_ton_evidence_redacts_imported_parser_failures",
+            "def test_live_ton_api_url_rejects_hidden_request_state",
+            "http://toncenter.example",
+            "https://toncenter.local",
+            "exact http(s) URL",
             "def test_live_ton_account_states_redacts_invalid_json_parser_details",
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
             "def test_live_ton_evidence_redacts_code_boc_parser_failures",
@@ -16485,6 +16837,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "source-event calldata rendered in full TOML mode",
             "def test_tron_api_http_error_detail_is_bounded",
             "def test_tron_api_rejects_duplicate_json_keys",
+            "def test_tron_node_url_rejects_hidden_request_state",
+            "malformed TRON node URL reached the opener",
+            "https://bad_host.tron.example",
             "def test_tron_api_redacts_transport_and_error_response_details",
             "for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):",
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
@@ -16670,6 +17025,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "JSON-RPC eth_chainId returned duplicate JSON keys",
             "JSON-RPC eth_getTransactionReceipt returned duplicate JSON keys",
             "def test_receipt_json_rpc_redacts_invalid_json_parser_details",
+            "def test_receipt_json_rpc_url_rejects_hidden_request_state",
+            "malformed receipt RPC URL reached the opener",
             "secret-token invalid EVM receipt JSON-RPC payload",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
@@ -16688,6 +17045,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "source bridge address metadata is invalid",
             "bridge address metadata is invalid",
             "test_evm_source_json_rpc_redacts_invalid_json_parser_details",
+            "test_evm_source_json_rpc_url_rejects_hidden_request_state",
+            "malformed EVM source RPC URL reached the opener",
             "test_evm_source_live_redacts_receipt_field_parser_exception_causes",
             "test_evm_source_live_redacts_receipt_readback_parser_exception_causes",
             "test_evm_source_live_redacts_receipt_block_hash_metadata_reparse_failures",
@@ -16730,6 +17089,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "JSON-RPC eth_chainId returned duplicate JSON keys",
             "bridge address metadata is invalid",
             "test_evm_json_rpc_redacts_invalid_json_parser_details",
+            "test_evm_json_rpc_url_rejects_hidden_request_state",
+            "malformed EVM RPC URL reached the opener",
             "def test_evm_live_hex_parsers_redact_typeerror_parser_causes",
             "def test_evm_live_hex_nonzero_controls_reject_non_booleans",
             "malformed EVM live exact-hex nonzero control accepted",
@@ -18547,7 +18908,7 @@ def _source_adapter_gate_template_hashes(domain: Any) -> tuple[bytes, ...]:
     profile = all_lanes.LANE_PROFILES.get(domain)
     if profile is None:
         return ()
-    return tuple(all_lanes._source_material_template_hashes(profile).values())
+    return all_lanes._source_material_template_hash_values(profile)
 
 
 def _source_adapter_gate_template_hashes_or_errors(
@@ -19642,6 +20003,46 @@ ALL_LANES_ROUTE_CANARY_KEYS_BY_DOMAIN = {
     SCCP_DOMAIN_TON: ALL_LANES_TON_ROUTE_CANARY_KEYS,
     SCCP_DOMAIN_TRON: ALL_LANES_TRON_ROUTE_CANARY_KEYS,
 }
+
+
+def _all_lanes_route_canary_transcript_hash_fields(domain: Any) -> tuple[str, ...]:
+    """Return ordered route-canary transcript hash roles for a lane domain."""
+
+    route_canary_fields = ALL_LANES_ROUTE_CANARY_KEYS_BY_DOMAIN.get(
+        domain,
+        ALL_LANES_ROUTE_CANARY_COMMON_KEYS,
+    )
+    fields = [
+        field
+        for field in ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
+        if field in route_canary_fields and field != "evidence_hash"
+    ]
+    if domain == SCCP_DOMAIN_TRON:
+        for preferred in reversed(("transaction_id", "message_id")):
+            if preferred in fields:
+                fields.remove(preferred)
+                fields.insert(0, preferred)
+    if "evidence_hash" in route_canary_fields:
+        fields.append("evidence_hash")
+    return tuple(fields)
+
+
+def _all_lanes_route_canary_source_gate_hash_role_fields(
+    domain: Any,
+) -> tuple[str, ...]:
+    """Return route-canary hash roles reserved from source-gate audit hashes."""
+
+    route_canary_fields = ALL_LANES_ROUTE_CANARY_KEYS_BY_DOMAIN.get(
+        domain,
+        ALL_LANES_ROUTE_CANARY_COMMON_KEYS,
+    )
+    return tuple(
+        field
+        for field in ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
+        if field in route_canary_fields and field != "evidence_hash"
+    )
+
+
 ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN = {
     SCCP_DOMAIN_ETH: "evm_message_proof_accepted_transaction",
     SCCP_DOMAIN_BSC: "evm_message_proof_accepted_transaction",
@@ -24131,10 +24532,12 @@ def _expected_cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str,
 
 def _active_launch_lane(evidence: dict[str, Any]) -> dict[str, Any] | None:
     for lane in evidence.get("lanes", []):
+        if not isinstance(lane, dict):
+            continue
+        lane_domain = _public_mapping_get_string_key(lane, "domain")
         if (
-            isinstance(lane, dict)
-            and type(lane.get("domain")) is int
-            and lane.get("domain") == ACTIVE_LAUNCH_DOMAIN
+            type(lane_domain) is int
+            and lane_domain == ACTIVE_LAUNCH_DOMAIN
         ):
             return lane
     return None
@@ -24197,7 +24600,7 @@ PUBLIC_SENSITIVE_MARKER_CONFUSABLES = str.maketrans(
 def _decoded_sensitive_public_marker_text(value: str) -> str:
     return _decoded_public_blocker_text(value).translate(
         PUBLIC_SENSITIVE_MARKER_CONFUSABLES
-    ).lower()
+    ).casefold()
 
 
 def _decoded_public_blocker_text_issue(value: str) -> str | None:
@@ -24212,7 +24615,7 @@ def _decoded_public_blocker_text_issue(value: str) -> str | None:
 
 
 def _canonical_public_blocker_key(value: str) -> str:
-    return _decoded_public_blocker_text(value).lower()
+    return _decoded_public_blocker_text(value).casefold()
 
 
 def _active_launch_blocker_mentions(blocker: str, tokens: tuple[str, ...]) -> bool:
@@ -24275,7 +24678,7 @@ def _active_launch_scoped_blocker(
     prefix_unscoped: bool,
 ) -> str | None:
     blocker_key = _canonical_public_blocker_key(blocker)
-    if blocker_key.startswith(prefix.lower()):
+    if blocker_key.startswith(prefix.casefold()):
         return blocker
     if blocker_key.startswith("domain "):
         return None
@@ -25993,6 +26396,27 @@ def _safe_public_key_sort_key(value: object) -> tuple[int, str]:
     if isinstance(value, str):
         return (0, value)
     return (1, type(value).__name__)
+
+
+def _public_mapping_string_keys(payload: dict[Any, Any]) -> set[str]:
+    """Return copied public mapping keys that are exactly strings."""
+
+    return {key for key in payload if isinstance(key, str)}
+
+
+def _public_mapping_has_string_key(payload: dict[Any, Any], field: str) -> bool:
+    return field in _public_mapping_string_keys(payload)
+
+
+def _public_mapping_get_string_key(
+    payload: dict[Any, Any],
+    field: str,
+    default: Any = None,
+) -> Any:
+    for key, value in payload.items():
+        if isinstance(key, str) and key == field:
+            return value
+    return default
 
 
 SENSITIVE_PUBLIC_FIELD_NAME_MARKERS = (
@@ -29266,6 +29690,7 @@ def _render_readiness_markdown(
             "- Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping; normalization is only used to classify malformed summary-shaped lines.",
             "- TRX `UnitTestResult` outcome values must be present and literal `Passed`; missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence.",
             "- Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`; truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence.",
+            "- TRX XML metadata percent decoding is bounded and fail-closed: sensitive metadata hidden behind nested percent encoding and values still percent-decodable after eight rounds remain forged evidence.",
             "- Direct `.NET` TRX XML section children must stay canonical: `Results` contains only direct `UnitTestResult` rows whose rows are leaf elements, `TestDefinitions` contains only direct `UnitTest` definitions, each `UnitTest` contains only direct leaf `Execution` and `TestMethod` children, and extra or nested XML children remain forged evidence.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
             f"- {SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE}",
@@ -29280,10 +29705,10 @@ def _render_readiness_markdown(
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
             "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
-            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, raw publish HTTP-error preservation, browser-prover sidecar/reference duplicate-or-malformed-alias rejection, accessor-backed scalar alias suppression, handoff-placeholder, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, raw publish HTTP-error preservation, public-DNS BSC RPC, Torii, CLI/runtime traversal-safe browser-module URL rejection, browser-prover sidecar/reference duplicate-or-malformed-alias rejection, accessor-backed scalar alias suppression, handoff-placeholder, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, duplicate-alias, accessor-backed alias suppression, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
-            "- SCCP TON route-manifest CLI source inventory must pin redacted duplicate-option rejection, explicit option-value requirements, valued-help rejection, non-empty path preflight, unknown-command and unknown-option rejection, redacted unexpected positional arguments, exact publish booleans, submit-only option rejection, gas metadata preflight before manifest reads, canonical I105 authorities, submit metadata preflight before private-key lookup, bounded private-key env names, HTTPS-or-loopback Torii URLs, output path collision rejection, and string-only nanoTON manifest ingestion before governed TAIRA TON XOR route-manifest artifacts can satisfy production readiness.",
-            "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
+            "- SCCP TON route-manifest CLI source inventory must pin redacted duplicate-option rejection, explicit option-value requirements, valued-help rejection, exact burn-record VK names, non-empty input/output path preflight, unknown-command and unknown-option rejection, redacted unexpected positional arguments, exact publish booleans, submit-only option rejection, gas metadata preflight before manifest reads, canonical I105 authorities, submit metadata preflight before private-key lookup, bounded private-key env names, public-DNS HTTPS-or-loopback Torii URLs, top-level and post-deploy public DNS explorer plus traversal-safe browser-module URL validation, output path collision rejection, and exact string-only nanoTON decimal manifest ingestion before governed TAIRA TON XOR route-manifest artifacts can satisfy production readiness.",
+            "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, post-deploy anchor rejection, and malformed/non-empty post-deploy blocker-list rejection before runtime config evidence can satisfy production readiness.",
             "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
             "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, non-string section-key, not-ready nested schema, hash/flag-coherence, and route-canary proof-context/hash-role/common/truth-semantic blockers before all-lanes evidence can satisfy production readiness.",
             "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
@@ -29306,7 +29731,7 @@ def _render_readiness_markdown(
             "- SCCP Ethereum source-event context source inventory must pin receipt-proof evidence guards that bind source-event logs to receipt transaction hash, block hash, and block number before source-event evidence is accepted.",
             "- SCCP Ethereum source-event evidence-mode source inventory must pin receipt-proof evidence guards that require source-bridge validation or an explicit receipt-only mode before receipt proof summaries can be emitted.",
             "- SCCP Ethereum source-event zero-digest source inventory must pin receipt-proof evidence guards that reject all-zero source-event digests before source-event evidence can be accepted.",
-            "- SCCP Ethereum receipt RPC duplicate-JSON source inventory must pin evidence-script guards that reject duplicate JSON-RPC result or receipt keys and redact receipt RPC transport/error details before receipt proof evidence can be parsed.",
+            "- SCCP Ethereum receipt RPC duplicate-JSON source inventory must pin evidence-script guards that reject duplicate JSON-RPC result or receipt keys, reject unsafe receipt RPC URLs, and redact receipt RPC transport/error details before receipt proof evidence can be parsed.",
             "- SCCP Ethereum block receipt transaction-hash source inventory must pin evidence and SDK guards that reject duplicate transaction hashes in block receipt lists before receipt trie proofs can be built.",
             "- SCCP Ethereum JavaScript receipt-admission source inventory must pin source/dist guards for matching block receipts, beacon finality, typed-receipt rejection, and immutable prover-callback evidence before browser local proving can run.",
             "- SCCP Ethereum SDK receipt-metadata source inventory must pin public SDK guards for block-receipt metadata binding and typed-receipt rejection before receipt proof builders can run.",
@@ -29317,15 +29742,15 @@ def _render_readiness_markdown(
             "- SCCP Ethereum sync-committee roster source inventory must pin exact 512-authority mainnet rosters, unit validator weights, 342-participant quorum fixtures, and 81,925-byte next-sync-committee payload vectors across public SDKs before local finality evidence can be accepted.",
             "- SCCP Ethereum source-bridge config source inventory must pin bridge-address/network/code-hash config hashing, source-bridge network-id/code-hash role-reuse rejection, and negative config-drift tests.",
             "- SCCP Ethereum EVM source-adapter deployment source inventory must pin the active deployment gate, source-bridge network/config binding, ETH/BSC deployment helper coverage, and negative drift tests.",
-            "- SCCP source-material template rejection source inventory must pin ETH, BSC, Solana, TON, and TRON evidence-script guards, aggregate all-lanes copied-evidence guards, strict release-bundle public JSON guards, and negative tests that reject built-in template verifier hashes before source material can satisfy production readiness.",
-            "- SCCP source-material role validation source inventory must pin ETH, BSC, Solana, TON, and TRON zero-hash, role-reuse, canonical adapter-verifier, full-light-client audit role-separation, descriptor control-field drift, TRON source-call contract/owner role-separation guards, C#/.NET ETH/BSC source-material vectors, and redacted all-lanes-TOML/source validator/source-record/source-gate/TON-live-accountStates/address/code-BoC/TON-destination-code-BoC/TRON-live-API/metadata/full-TOML/TRON-witness-JSON blockers before source material can satisfy production readiness.",
+            "- SCCP source-material template rejection source inventory must pin the shared active-template denylist, ETH, BSC, Solana, TON, and TRON evidence-script guards, Solana/TON audit-hash guards, aggregate all-lanes direct and copied-evidence guards, strict release-bundle public JSON guards, and negative tests that reject built-in same-lane and foreign-lane template verifier hashes before source material can satisfy production readiness.",
+            "- SCCP source-material role validation source inventory must pin ETH, BSC, Solana, TON, and TRON zero-hash, role-reuse, canonical adapter-verifier, full-light-client audit role-separation, descriptor control-field drift, TRON source-call contract/owner role-separation guards, C#/.NET ETH/BSC source-material vectors, and redacted all-lanes-TOML/source validator/source-record/source-gate/EVM-live-RPC-url/Solana-live-RPC-url/TON-live-API-url/accountStates/address/code-BoC/TON-destination-code-BoC/TRON-live-node-url/API/metadata/full-TOML/TRON-witness-JSON blockers before source material can satisfy production readiness.",
             "- SCCP EVM contract smoke Ethereum mainnet network-id source inventory must pin ETH chain-id vectors, BSC rejection vectors, and accepted-event network-id assertions.",
             "- SCCP EVM contract smoke production-surface source inventory must pin verifier-code/key, destination-binding, domain-overflow, proof-shape, cross-deployment, and replay rejection smoke coverage.",
             "- SCCP Ethereum core range/finality binding source inventory must pin finality-height range binding in Core and negative outer-range replay tests.",
             "- SCCP Ethereum core message replay source inventory must pin durable pinned-record replay protection and negative replay/history tests.",
             "- SCCP Ethereum Torii pinned message proof source inventory must pin pinned message-proof extraction and negative unpinned-record serving tests.",
-            "- Ethereum mainnet live EVM source production source inventory must pin canonical live source RPC chain ids, ETH/BSC source-live lane coverage, finalized block tags, deployment receipt binding, redacted JSON-RPC diagnostics, route canary calldata, and proof tuple drift tests.",
-            "- Ethereum mainnet live EVM destination production source inventory must pin canonical live destination RPC chain ids, ETH/BSC destination-live lane coverage, finalized block tags, runtime bytecode hashes, redacted runtime bytecode parser diagnostics, and destination production TOML evidence before production readiness can pass.",
+            "- Ethereum mainnet live EVM source production source inventory must pin canonical live source RPC chain ids, ETH/BSC source-live lane coverage, public-DNS RPC URL admission, finalized block tags, deployment receipt binding, redacted JSON-RPC diagnostics, route canary calldata, and proof tuple drift tests.",
+            "- Ethereum mainnet live EVM destination production source inventory must pin canonical live destination RPC chain ids, ETH/BSC destination-live lane coverage, public-DNS RPC URL admission, finalized block tags, runtime bytecode hashes, redacted runtime bytecode parser diagnostics, and destination production TOML evidence before production readiness can pass.",
             "- SCCP Ethereum route-canary finalized receipt-block source inventory must pin finalized receipt-block binding, TOML evidence fields, all-lanes comments, runtime hashing, and negative drift tests.",
             "- SCCP Ethereum EVM block-tag metadata source inventory must pin finalized source/destination block-tag evidence and negative drift tests.",
             "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, canonical native EVM prover SDK-id rejection, padded-SDK adversarial tests, BSC proof-artifact remote-prover marker rejection, adversarial manifest coverage, and redacted native payload artifact-path diagnostics.",
@@ -29343,7 +29768,7 @@ def _render_readiness_markdown(
             "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
             "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
             "- SCCP unready transparent-proof source inventory must pin the diagnostic `allow_unready` toggle as config-owned, reject case-variant, split-token, and source-escaped environment override names on config-owned paths, and reject production-ready BSC/TRON route configs that force the unready toggle back on.",
-            "- SCCP TRON deploy operator boolean source inventory must pin malformed operator-boolean rejection before TRON deploy helper evidence can satisfy production readiness.",
+            "- SCCP TRON deploy operator boolean source inventory must pin malformed operator-boolean and public-DNS endpoint rejection before TRON deploy helper evidence can satisfy production readiness.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
     )
@@ -31553,21 +31978,12 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
         ),
         ("destination_binding_hash", row.get("destination_binding_hash")),
         ("route_allowlist_hash", row.get("route_allowlist_hash")),
-        ("route_canary_evidence_hash", row.get("route_canary_evidence_hash")),
         # Source-inventory marker: public source_adapter_gate audit hashes must not reuse route_canary_message_id
-        ("route_canary_transaction_hash", row.get("route_canary_transaction_hash")),
-        (
-            "route_canary_receipt_block_hash",
-            row.get("route_canary_receipt_block_hash"),
-        ),
-        (
-            "route_canary_block_receipts_root",
-            row.get("route_canary_block_receipts_root"),
-        ),
-        ("route_canary_message_id", row.get("route_canary_message_id")),
-        ("route_canary_transaction_id", row.get("route_canary_transaction_id")),
-        ("route_canary_signature_sha256", row.get("route_canary_signature_sha256")),
     ]
+    role_fields.extend(
+        (field, row.get(field))
+        for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
+    )
     role_fields.extend(
         (f"source_adapter_gate_audit_hashes.{field}", value)
         for field, value in sorted(
@@ -31593,23 +32009,9 @@ def _cryptographic_evidence_route_canary_hash_role_errors(
 
     return _distinct_nonzero_hex_field_errors(
         "readiness report cryptographic evidence row route_canary hash role",
-        (
-            (
-                "route_canary_transaction_hash",
-                row.get("route_canary_transaction_hash"),
-            ),
-            (
-                "route_canary_receipt_block_hash",
-                row.get("route_canary_receipt_block_hash"),
-            ),
-            (
-                "route_canary_block_receipts_root",
-                row.get("route_canary_block_receipts_root"),
-            ),
-            ("route_canary_message_id", row.get("route_canary_message_id")),
-            ("route_canary_transaction_id", row.get("route_canary_transaction_id")),
-            ("route_canary_signature_sha256", row.get("route_canary_signature_sha256")),
-            ("route_canary_evidence_hash", row.get("route_canary_evidence_hash")),
+        tuple(
+            (field, row.get(field))
+            for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
         ),
         byte_length=32,
     )
@@ -32896,9 +33298,9 @@ def _public_blocker_list_field_errors(
     if type(allow_empty) is not bool:
         raise ValueError("public blocker list allow_empty must be a boolean")
 
-    if field not in payload:
+    if not _public_mapping_has_string_key(payload, field):
         return []
-    value = payload.get(field)
+    value = _public_mapping_get_string_key(payload, field)
     if not isinstance(value, list):
         return [
             f"{label} {field} must be a list of non-empty strings "
@@ -33455,7 +33857,11 @@ def _source_inventory_schema_errors(source_inventory: Any) -> list[str]:
         return [f"{label} is not an object"]
     unknown_gate_errors: list[str] = []
     for gate in sorted(
-        set(source_inventory) - SOURCE_INVENTORY_REQUIRED_GATES,
+        (
+            gate
+            for gate in source_inventory
+            if not isinstance(gate, str) or gate not in SOURCE_INVENTORY_REQUIRED_GATES
+        ),
         key=_safe_public_key_sort_key,
     ):
         gate_key_blocker = _source_inventory_gate_key_blocker(gate)
@@ -33466,20 +33872,29 @@ def _source_inventory_schema_errors(source_inventory: Any) -> list[str]:
     errors.extend(
         _number_repeated_source_inventory_unknown_gate_errors(unknown_gate_errors)
     )
-    for gate in sorted(SOURCE_INVENTORY_REQUIRED_GATES - set(source_inventory)):
+    present_source_inventory_gates = {
+        gate
+        for gate in source_inventory
+        if isinstance(gate, str) and gate in SOURCE_INVENTORY_REQUIRED_GATES
+    }
+    for gate in sorted(SOURCE_INVENTORY_REQUIRED_GATES - present_source_inventory_gates):
         errors.append(f"{label} missing required gate: {gate}")
     for gate, status in sorted(
         source_inventory.items(),
         key=lambda item: _safe_public_key_sort_key(item[0]),
     ):
-        if gate not in SOURCE_INVENTORY_REQUIRED_GATES:
+        if not isinstance(gate, str) or gate not in SOURCE_INVENTORY_REQUIRED_GATES:
             continue
         gate_label = f"{label}.{gate}"
         if not isinstance(status, dict):
             errors.append(f"{gate_label} must be an object")
             continue
         for key in sorted(
-            set(status) - SOURCE_INVENTORY_KEYS,
+            (
+                key
+                for key in status
+                if not isinstance(key, str) or key not in SOURCE_INVENTORY_KEYS
+            ),
             key=_safe_public_key_sort_key,
         ):
             errors.append(
@@ -33489,9 +33904,13 @@ def _source_inventory_schema_errors(source_inventory: Any) -> list[str]:
                     "unknown",
                 )
             )
-        for key in sorted(SOURCE_INVENTORY_KEYS - set(status)):
+        present_status_keys = _public_mapping_string_keys(status)
+        for key in sorted(SOURCE_INVENTORY_KEYS - present_status_keys):
             errors.append(f"{gate_label} missing field: {key}")
-        validation_status = status.get("validation_status")
+        validation_status = _public_mapping_get_string_key(
+            status,
+            "validation_status",
+        )
         if validation_status not in {"passed", "blocked"}:
             errors.append(f"{gate_label} validation_status must be passed or blocked")
         elif validation_status != "passed":
@@ -33504,7 +33923,7 @@ def _source_inventory_schema_errors(source_inventory: Any) -> list[str]:
                 allow_empty=True,
             )
         )
-        blockers = status.get("validation_blockers")
+        blockers = _public_mapping_get_string_key(status, "validation_blockers")
         if isinstance(blockers, list) and blockers:
             errors.append(f"{gate_label} validation_blockers must be empty")
     return errors
@@ -33517,13 +33936,17 @@ def _exact_object_key_errors(
 ) -> list[str]:
     errors: list[str] = []
     for key in sorted(
-        set(payload) - allowed_keys,
+        (
+            key
+            for key in payload
+            if not isinstance(key, str) or key not in allowed_keys
+        ),
         key=_safe_public_key_sort_key,
     ):
         errors.append(
             _native_evm_prover_field_name_blocker(label, key, "unknown")
         )
-    for key in sorted(allowed_keys - set(payload)):
+    for key in sorted(allowed_keys - _public_mapping_string_keys(payload)):
         errors.append(f"{label} missing field: {key}")
     return errors
 
@@ -33789,18 +34212,10 @@ def _source_adapter_gate_coherence_errors(
                     )
                 )
                 # Source-inventory marker: source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id
-                for field in sorted(
-                    ALL_LANES_ROUTE_CANARY_KEYS_BY_DOMAIN.get(
-                        domain,
-                        ALL_LANES_ROUTE_CANARY_COMMON_KEYS,
-                    )
+                # Source-inventory marker: source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.call_data_sha256
+                for field in _all_lanes_route_canary_source_gate_hash_role_fields(
+                    domain
                 ):
-                    if field in {
-                        "destination_binding_hash",
-                        "evidence_hash",
-                        "route_allowlist_hash",
-                    }:
-                        continue
                     role_fields.append(
                         (f"route_canary.{field}", route_canary.get(field))
                     )
@@ -34238,7 +34653,7 @@ def _destination_binding_recompute_errors(
 
 
 def _all_lanes_lane_label(label: str, index: int, lane: dict[str, Any]) -> str:
-    domain = lane.get("domain")
+    domain = _public_mapping_get_string_key(lane, "domain")
     if type(domain) is int:
         return f"{label} lane domain {domain}"
     return f"{label} lane {index}"
@@ -34452,18 +34867,8 @@ def _all_lanes_route_canary_schema_errors(
                     type_label="bytes32",
                 )
             )
-        evm_transcript_hash_fields = (
-            "transaction_hash",
-            "receipt_block_hash",
-            "block_receipts_root",
-            "call_data_sha256",
-            "message_id",
-            "payload_hash",
-            "statement_hash",
-            "commitment_root",
-            "finality_height",
-            "finality_block_hash",
-            "evidence_hash",
+        evm_transcript_hash_fields = _all_lanes_route_canary_transcript_hash_fields(
+            domain
         )
         errors.extend(
             _distinct_nonzero_hex_field_errors(
@@ -34583,17 +34988,8 @@ def _all_lanes_route_canary_schema_errors(
                 f"{label} signature_recovered_address must match "
                 "transaction_owner_address"
             )
-        tron_transcript_hash_fields = (
-            "transaction_id",
-            "message_id",
-            "call_data_sha256",
-            "payload_hash",
-            "statement_hash",
-            "commitment_root",
-            "finality_height",
-            "finality_block_hash",
-            "signature_sha256",
-            "evidence_hash",
+        tron_transcript_hash_fields = _all_lanes_route_canary_transcript_hash_fields(
+            domain
         )
         errors.extend(
             _distinct_nonzero_hex_field_errors(
@@ -34775,27 +35171,21 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             errors.append(f"{label} lane {index} is not an object")
             continue
         lane_label = _all_lanes_lane_label(label, index, lane)
-        for key in sorted(
-            set(lane) - ALL_LANES_LANE_KEYS,
-            key=_safe_public_key_sort_key,
-        ):
-            errors.append(
-                _native_evm_prover_field_name_blocker(
-                    lane_label,
-                    key,
-                    "unknown",
-                )
-            )
-        for key in sorted(ALL_LANES_LANE_KEYS - set(lane)):
-            errors.append(f"{lane_label} missing field: {key}")
-        if "domain" in lane and type(lane.get("domain")) is not int:
+        lane_has = lambda field: _public_mapping_has_string_key(lane, field)
+        lane_get = lambda field, default=None: _public_mapping_get_string_key(
+            lane,
+            field,
+            default,
+        )
+        errors.extend(_exact_object_key_errors(lane_label, lane, ALL_LANES_LANE_KEYS))
+        if lane_has("domain") and type(lane_get("domain")) is not int:
             errors.append(f"{lane_label} domain must be an integer")
-        raw_domain = lane.get("domain")
+        raw_domain = lane_get("domain")
         domain = raw_domain if type(raw_domain) is int else None
         expected_chain = _expected_chain_label(domain) if domain is not None else None
         if domain is not None and expected_chain is None:
             errors.append(f"{lane_label} domain must be a production remote domain")
-        if "chain" in lane:
+        if lane_has("chain"):
             errors.extend(
                 _non_empty_string_field_errors(
                     lane_label,
@@ -34806,7 +35196,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
         if (
             expected_chain is not None
             and _public_scalar_string_error(
-                lane.get("chain"),
+                lane_get("chain"),
                 lane_label,
                 "chain",
                 allow_empty=False,
@@ -34814,7 +35204,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             is None
             and not _chain_matches_domain(
                 domain,
-                lane.get("chain"),
+                lane_get("chain"),
             )
         ):
             errors.append(f"{lane_label} chain must be {expected_chain}")
@@ -34830,7 +35220,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             "destination_binding",
             "route_allowlist",
         ):
-            if field in lane and not isinstance(lane.get(field), dict):
+            if lane_has(field) and not isinstance(lane_get(field), dict):
                 errors.append(f"{lane_label} {field} is not an object")
         errors.extend(
             _public_blocker_list_field_errors(
@@ -34840,10 +35230,10 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 allow_empty=True,
             )
         )
-        blockers = lane.get("blockers")
+        blockers = lane_get("blockers")
         if domain == ACTIVE_LAUNCH_DOMAIN and isinstance(blockers, list) and blockers:
             errors.append(f"{lane_label} blockers must be empty")
-        records = lane.get("records")
+        records = lane_get("records")
         if isinstance(records, dict):
             records_label = f"{lane_label} records"
             errors.extend(
@@ -34854,17 +35244,21 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 )
             )
             for field in ALL_LANES_RECORD_KEYS:
-                if field in records:
-                    if domain == ACTIVE_LAUNCH_DOMAIN or lane.get("production_ready") is True:
+                if _public_mapping_has_string_key(records, field):
+                    if (
+                        domain == ACTIVE_LAUNCH_DOMAIN
+                        or lane_get("production_ready") is True
+                    ):
                         errors.extend(_true_field_errors(records_label, records, field))
                     else:
                         errors.extend(_boolean_field_errors(records_label, records, field))
         records_complete = isinstance(records, dict) and all(
-            records.get(field) is True for field in ALL_LANES_RECORD_KEYS
+            _public_mapping_get_string_key(records, field) is True
+            for field in ALL_LANES_RECORD_KEYS
         )
         if (
             domain != ACTIVE_LAUNCH_DOMAIN
-            and lane.get("production_ready") is False
+            and lane_get("production_ready") is False
         ):
             errors.extend(
                 _all_lanes_not_ready_nested_schema_errors(
@@ -34881,7 +35275,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 )
             )
             continue
-        source_hashes = lane.get("source_record_hashes")
+        source_hashes = lane_get("source_record_hashes")
         if isinstance(source_hashes, dict):
             source_hashes_label = f"{lane_label} source_record_hashes"
             errors.extend(
@@ -34908,7 +35302,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                     source_hashes,
                 )
             )
-        source_gate = lane.get("source_adapter_gate")
+        source_gate = lane_get("source_adapter_gate")
         if isinstance(source_gate, dict):
             source_gate_label = f"{lane_label} source_adapter_gate"
             errors.extend(
@@ -35363,17 +35757,22 @@ def _all_lanes_summary_schema_errors(
             allow_empty=True,
         )
     )
-    blockers = summary.get("blockers")
+    summary_get = lambda field, default=None: _public_mapping_get_string_key(
+        summary,
+        field,
+        default,
+    )
+    blockers = summary_get("blockers")
     if isinstance(blockers, list):
         launch_blockers = _active_launch_blockers(summary)
         if launch_blockers:
             errors.append(f"{label} active {ACTIVE_LAUNCH_DISPLAY} launch blockers must be empty")
-    errors.extend(_all_lanes_lane_schema_errors(label, summary.get("lanes")))
-    errors.extend(_all_lanes_route_canary_cross_lane_errors(label, summary.get("lanes")))
-    required_domains = summary.get("required_domains")
-    supported_launch_domains = summary.get("supported_launch_domains")
-    unsupported_launch_domains = summary.get("unsupported_launch_domains")
-    lanes = summary.get("lanes")
+    errors.extend(_all_lanes_lane_schema_errors(label, summary_get("lanes")))
+    errors.extend(_all_lanes_route_canary_cross_lane_errors(label, summary_get("lanes")))
+    required_domains = summary_get("required_domains")
+    supported_launch_domains = summary_get("supported_launch_domains")
+    unsupported_launch_domains = summary_get("unsupported_launch_domains")
+    lanes = summary_get("lanes")
     if (
         isinstance(required_domains, list)
         and all(type(domain) is int for domain in required_domains)
@@ -35383,11 +35782,15 @@ def _all_lanes_summary_schema_errors(
         and all(type(domain) is int for domain in unsupported_launch_domains)
         and isinstance(lanes, list)
         and all(
-            isinstance(lane, dict) and type(lane.get("domain")) is int
+            isinstance(lane, dict)
+            and type(_public_mapping_get_string_key(lane, "domain")) is int
             for lane in lanes
         )
     ):
-        lane_domains = [lane["domain"] for lane in lanes]
+        lane_domains = [
+            _public_mapping_get_string_key(lane, "domain")
+            for lane in lanes
+        ]
         if len(set(required_domains)) != len(required_domains):
             errors.append(f"{label} required_domains contains duplicate domains")
         if len(set(lane_domains)) != len(lane_domains):

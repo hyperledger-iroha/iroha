@@ -27360,6 +27360,13 @@ mod tests {
         };
         let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
         let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
+        let validator_keypair = KeyPair::try_from_seed(vec![0x40; 32], Algorithm::Ed25519)
+            .expect("derive client SCCP transparent-proof validator fixture key");
+        let validator_set = vec![PeerId::from(validator_keypair.public_key().clone())];
+        let validator_set_hash = HashOf::<Vec<PeerId>>::new(&validator_set);
+        let mut validator_set_hash_bytes = [0u8; 32];
+        validator_set_hash_bytes.copy_from_slice(validator_set_hash.as_ref().as_ref());
+        let validator_public_keys = vec![validator_keypair.public_key().to_string()];
         let finality_proof = NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
@@ -27380,8 +27387,9 @@ mod tests {
                 chain_order_hash: [0u8; 32],
                 rechain_seq: 0,
                 highest_qc: None,
+                validator_set_hash: validator_set_hash_bytes,
                 validator_set_hash_version: 1,
-                validator_public_keys: vec!["validator-1".to_owned()],
+                validator_public_keys,
                 validator_set_pops: vec![vec![0xAA]],
                 signers_bitmap: vec![0x01],
                 bls_aggregate_signature: vec![0xBB],

@@ -2,6 +2,7 @@
 
 use std::{
     collections::BTreeSet,
+    fmt,
     num::NonZeroUsize,
     sync::{Arc, Mutex, OnceLock},
 };
@@ -16,6 +17,7 @@ use iroha_data_model::{
     },
     consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1},
     isi::InstructionBox,
+    name::Name,
     peer::PeerId,
     transaction::{Executable, TransactionEntrypoint},
 };
@@ -203,10 +205,16 @@ pub(crate) fn sccp_outbound_message_key(payload: &SccpPayloadV1) -> SccpOutbound
     }
 }
 
-fn decode_recorded_sccp_message(instruction: &InstructionBox) -> Option<SccpPayloadV1> {
-    let record = instruction
+fn recorded_sccp_message_instruction(
+    instruction: &InstructionBox,
+) -> Option<&iroha_data_model::isi::bridge::RecordSccpMessage> {
+    instruction
         .as_any()
-        .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()?;
+        .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
+}
+
+fn decode_recorded_sccp_message(instruction: &InstructionBox) -> Option<SccpPayloadV1> {
+    let record = recorded_sccp_message_instruction(instruction)?;
     decode_recorded_sccp_payload_bytes(&record.payload_bytes)
 }
 
@@ -236,6 +244,274 @@ fn entrypoint_has_successful_or_pending_result(
         .is_some_and(|result| result.as_ref().is_ok())
 }
 
+/// Invalid route binding for a SORA-origin outbound SCCP payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SccpOutboundRouteValidationError {
+    /// Route id is not encoded as SCCP `text_utf8`.
+    NonTextRouteId,
+    /// Asset id is not encoded as SCCP `text_utf8`.
+    NonTextAssetId,
+    /// Route id bytes are not valid UTF-8.
+    InvalidRouteIdUtf8,
+    /// Asset id bytes are not valid UTF-8.
+    InvalidAssetIdUtf8,
+    /// Text asset id has no route-local asset key.
+    EmptyAssetKey,
+    /// Text asset id route-local key is not an Iroha `Name`.
+    InvalidAssetKey,
+    /// Text asset id contains `#` without a scope suffix.
+    EmptyAssetScope,
+    /// Text asset id contains more than one `#` scope separator.
+    AmbiguousAssetScope,
+    /// Destination domain does not have a canonical route slug.
+    UnknownDestinationDomain(u32),
+    /// Asset home domain is neither SORA nor the destination domain.
+    InvalidAssetHomeDomain {
+        /// Asset home domain in the payload.
+        asset_home_domain: u32,
+        /// Destination domain in the payload.
+        dest_domain: u32,
+    },
+    /// Route id does not match the asset and domain binding.
+    RouteIdMismatch {
+        /// Actual route id from the payload.
+        actual: String,
+        /// Expected deterministic route id for the payload binding.
+        expected: String,
+    },
+}
+
+impl SccpOutboundRouteValidationError {
+    pub(crate) fn reason(&self) -> &'static str {
+        match self {
+            Self::NonTextRouteId => "RecordSccpMessage payload route_id is not text_utf8",
+            Self::NonTextAssetId => "RecordSccpMessage payload asset_id is not text_utf8",
+            Self::InvalidRouteIdUtf8 => "RecordSccpMessage payload route_id is invalid UTF-8",
+            Self::InvalidAssetIdUtf8 => "RecordSccpMessage payload asset_id is invalid UTF-8",
+            Self::EmptyAssetKey => "RecordSccpMessage payload asset key is empty",
+            Self::InvalidAssetKey => "RecordSccpMessage payload asset key is not a valid Name",
+            Self::EmptyAssetScope => "RecordSccpMessage payload asset scope is empty",
+            Self::AmbiguousAssetScope => {
+                "RecordSccpMessage payload asset_id has multiple scope separators"
+            }
+            Self::UnknownDestinationDomain(_) => {
+                "RecordSccpMessage payload destination domain has no route slug"
+            }
+            Self::InvalidAssetHomeDomain { .. } => {
+                "RecordSccpMessage payload asset home domain is not bound to SORA or destination"
+            }
+            Self::RouteIdMismatch { .. } => {
+                "RecordSccpMessage payload route_id does not match asset/domain binding"
+            }
+        }
+    }
+}
+
+impl fmt::Display for SccpOutboundRouteValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonTextRouteId => write!(f, "route_id must use text_utf8 codec"),
+            Self::NonTextAssetId => write!(f, "asset_id must use text_utf8 codec"),
+            Self::InvalidRouteIdUtf8 => write!(f, "route_id must be valid UTF-8"),
+            Self::InvalidAssetIdUtf8 => write!(f, "asset_id must be valid UTF-8"),
+            Self::EmptyAssetKey => write!(f, "asset key must not be empty"),
+            Self::InvalidAssetKey => write!(f, "asset key must be a valid Iroha Name"),
+            Self::EmptyAssetScope => write!(f, "asset scope must not be empty after `#`"),
+            Self::AmbiguousAssetScope => {
+                write!(f, "asset_id must contain at most one `#` scope separator")
+            }
+            Self::UnknownDestinationDomain(domain) => {
+                write!(f, "destination domain {domain} has no route slug")
+            }
+            Self::InvalidAssetHomeDomain {
+                asset_home_domain,
+                dest_domain,
+            } => write!(
+                f,
+                "asset home domain {asset_home_domain} must be SORA or the destination domain {dest_domain}"
+            ),
+            Self::RouteIdMismatch { actual, expected } => write!(
+                f,
+                "route_id `{actual}` does not match asset/domain binding `{expected}`"
+            ),
+        }
+    }
+}
+
+fn sccp_domain_route_slug(domain: u32) -> Option<&'static str> {
+    match domain {
+        iroha_sccp::SCCP_DOMAIN_SORA => Some("sora"),
+        iroha_sccp::SCCP_DOMAIN_ETH => Some("eth"),
+        iroha_sccp::SCCP_DOMAIN_BSC => Some("bsc"),
+        iroha_sccp::SCCP_DOMAIN_SOL => Some("sol"),
+        iroha_sccp::SCCP_DOMAIN_TON => Some("ton"),
+        iroha_sccp::SCCP_DOMAIN_TRON => Some("tron"),
+        _ => None,
+    }
+}
+
+fn sccp_text_route_field<'a>(
+    codec: u8,
+    bytes: &'a [u8],
+    non_text: SccpOutboundRouteValidationError,
+    invalid_utf8: SccpOutboundRouteValidationError,
+) -> Result<&'a str, SccpOutboundRouteValidationError> {
+    if codec != iroha_sccp::SCCP_CODEC_TEXT_UTF8 {
+        return Err(non_text);
+    }
+    core::str::from_utf8(bytes).map_err(|_| invalid_utf8)
+}
+
+fn sccp_route_asset_key(asset_id: &str) -> Result<&str, SccpOutboundRouteValidationError> {
+    let mut parts = asset_id.split('#');
+    let asset_key = parts.next().unwrap_or_default();
+    if asset_key.is_empty() {
+        return Err(SccpOutboundRouteValidationError::EmptyAssetKey);
+    }
+    if asset_key.parse::<Name>().is_err() {
+        return Err(SccpOutboundRouteValidationError::InvalidAssetKey);
+    }
+    if let Some(scope) = parts.next() {
+        if scope.is_empty() {
+            return Err(SccpOutboundRouteValidationError::EmptyAssetScope);
+        }
+        if parts.next().is_some() {
+            return Err(SccpOutboundRouteValidationError::AmbiguousAssetScope);
+        }
+    }
+    Ok(asset_key)
+}
+
+fn is_known_taira_xor_outbound_route_fields(
+    route_id: &str,
+    asset_id: &str,
+    target_domain: u32,
+    asset_home_domain: Option<u32>,
+) -> bool {
+    let asset_home_is_sora = match asset_home_domain {
+        Some(domain) => domain == iroha_sccp::SCCP_DOMAIN_SORA,
+        None => true,
+    };
+    asset_home_is_sora
+        && asset_id == iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1
+        && matches!(
+            (route_id, target_domain),
+            (
+                iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+                iroha_sccp::SCCP_DOMAIN_TRON
+            ) | (
+                iroha_sccp::SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+                iroha_sccp::SCCP_DOMAIN_BSC
+            ) | ("taira_ton_xor", iroha_sccp::SCCP_DOMAIN_TON)
+        )
+}
+
+fn expected_sora_home_outbound_route_id(
+    target_domain: u32,
+    asset_key: &str,
+) -> Result<String, SccpOutboundRouteValidationError> {
+    let target_slug = sccp_domain_route_slug(target_domain).ok_or(
+        SccpOutboundRouteValidationError::UnknownDestinationDomain(target_domain),
+    )?;
+    Ok(format!("nexus:{target_slug}:{asset_key}"))
+}
+
+fn validate_sora_outbound_transfer_route(
+    transfer: &iroha_sccp::TransferPayloadV1,
+) -> Result<(), SccpOutboundRouteValidationError> {
+    let route_id = sccp_text_route_field(
+        transfer.route_id_codec,
+        transfer.route_id.as_slice(),
+        SccpOutboundRouteValidationError::NonTextRouteId,
+        SccpOutboundRouteValidationError::InvalidRouteIdUtf8,
+    )?;
+    let asset_id = sccp_text_route_field(
+        transfer.asset_id_codec,
+        transfer.asset_id.as_slice(),
+        SccpOutboundRouteValidationError::NonTextAssetId,
+        SccpOutboundRouteValidationError::InvalidAssetIdUtf8,
+    )?;
+    if is_known_taira_xor_outbound_route_fields(
+        route_id,
+        asset_id,
+        transfer.dest_domain,
+        Some(transfer.asset_home_domain),
+    ) {
+        return Ok(());
+    }
+
+    let asset_key = sccp_route_asset_key(asset_id)?;
+    let dest_slug = sccp_domain_route_slug(transfer.dest_domain).ok_or(
+        SccpOutboundRouteValidationError::UnknownDestinationDomain(transfer.dest_domain),
+    )?;
+    let expected_route_id = if transfer.asset_home_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+        expected_sora_home_outbound_route_id(transfer.dest_domain, asset_key)?
+    } else if transfer.asset_home_domain == transfer.dest_domain {
+        format!("{dest_slug}:sora:{asset_key}")
+    } else {
+        return Err(SccpOutboundRouteValidationError::InvalidAssetHomeDomain {
+            asset_home_domain: transfer.asset_home_domain,
+            dest_domain: transfer.dest_domain,
+        });
+    };
+    if route_id != expected_route_id {
+        return Err(SccpOutboundRouteValidationError::RouteIdMismatch {
+            actual: route_id.to_owned(),
+            expected: expected_route_id,
+        });
+    }
+    Ok(())
+}
+
+fn validate_sora_outbound_route_activation(
+    activation: &iroha_sccp::RouteActivatePayloadV1,
+) -> Result<(), SccpOutboundRouteValidationError> {
+    let route_id = sccp_text_route_field(
+        activation.route_id_codec,
+        activation.route_id.as_slice(),
+        SccpOutboundRouteValidationError::NonTextRouteId,
+        SccpOutboundRouteValidationError::InvalidRouteIdUtf8,
+    )?;
+    let asset_id = sccp_text_route_field(
+        activation.asset_id_codec,
+        activation.asset_id.as_slice(),
+        SccpOutboundRouteValidationError::NonTextAssetId,
+        SccpOutboundRouteValidationError::InvalidAssetIdUtf8,
+    )?;
+    if is_known_taira_xor_outbound_route_fields(route_id, asset_id, activation.target_domain, None)
+    {
+        return Ok(());
+    }
+
+    let asset_key = sccp_route_asset_key(asset_id)?;
+    let expected_route_id =
+        expected_sora_home_outbound_route_id(activation.target_domain, asset_key)?;
+    if route_id != expected_route_id {
+        return Err(SccpOutboundRouteValidationError::RouteIdMismatch {
+            actual: route_id.to_owned(),
+            expected: expected_route_id,
+        });
+    }
+    Ok(())
+}
+
+/// Validate deterministic route binding for SORA-origin outbound SCCP records.
+pub(crate) fn validate_sora_outbound_sccp_payload_route(
+    payload: &SccpPayloadV1,
+) -> Result<(), SccpOutboundRouteValidationError> {
+    match payload {
+        SccpPayloadV1::RouteActivate(activation) => {
+            validate_sora_outbound_route_activation(activation)?
+        }
+        SccpPayloadV1::Transfer(transfer) => validate_sora_outbound_transfer_route(transfer)?,
+        SccpPayloadV1::AssetRegister(_)
+        | SccpPayloadV1::TokenAdd(_)
+        | SccpPayloadV1::TokenPause(_)
+        | SccpPayloadV1::TokenResume(_) => {}
+    }
+    Ok(())
+}
+
 fn collect_sccp_messages_from_executable<F>(
     tx_index: usize,
     executable: &Executable,
@@ -251,6 +527,9 @@ fn collect_sccp_messages_from_executable<F>(
             return;
         };
         if iroha_sccp::sccp_message_source_domain(&payload) != iroha_sccp::SCCP_DOMAIN_SORA {
+            return;
+        }
+        if validate_sora_outbound_sccp_payload_route(&payload).is_err() {
             return;
         }
         let key = sccp_outbound_message_key(&payload);
@@ -340,8 +619,30 @@ where
     messages
 }
 
-/// Extract all SCCP message records from the external transactions in a signed block.
-pub fn collect_sccp_messages_from_signed_block(block: &SignedBlock) -> Vec<RecordedSccpMessage> {
+/// Extract SCCP message records from one accepted signed entrypoint without deduplicating them.
+pub(crate) fn collect_sccp_messages_from_accepted_transaction(
+    tx_index: usize,
+    transaction: &AcceptedTransaction<'_>,
+) -> Vec<RecordedSccpMessage> {
+    let mut messages = Vec::new();
+    let mut seen = BTreeSet::new();
+    if let Some(signed) = signed_transaction_from_sccp_entrypoint(transaction.entrypoint()) {
+        collect_sccp_messages_from_executable(
+            tx_index,
+            signed.instructions(),
+            &mut seen,
+            &|_| false,
+            false,
+            &mut messages,
+        );
+    }
+    messages
+}
+
+fn collect_sccp_messages_from_signed_block_with_deduplication(
+    block: &SignedBlock,
+    deduplicate: bool,
+) -> Vec<RecordedSccpMessage> {
     let mut messages = Vec::new();
     let mut seen = BTreeSet::new();
     for (entrypoint_index, entrypoint) in block.external_entrypoints_cloned().enumerate() {
@@ -360,11 +661,265 @@ pub fn collect_sccp_messages_from_signed_block(block: &SignedBlock) -> Vec<Recor
             transaction.instructions(),
             &mut seen,
             &|_| false,
-            false,
+            deduplicate,
             &mut messages,
         );
     }
     messages
+}
+
+/// Malformed committed SCCP record instruction found in a successful or pending entrypoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SccpRecordInstructionValidationError {
+    /// `RecordSccpMessage` appeared outside a verified `IvmProved` overlay.
+    UnsupportedExecutable {
+        /// External entrypoint index in the block payload.
+        tx_index: usize,
+        /// Instruction index inside the executable instruction list.
+        instruction_index: usize,
+    },
+    /// `RecordSccpMessage` payload bytes could not be decoded as a valid SCCP payload.
+    InvalidPayload {
+        /// External entrypoint index in the block payload.
+        tx_index: usize,
+        /// Instruction index inside the IVM overlay.
+        instruction_index: usize,
+    },
+    /// `RecordSccpMessage` payload decoded, but its source domain is not SORA.
+    NonSoraSource {
+        /// External entrypoint index in the block payload.
+        tx_index: usize,
+        /// Instruction index inside the IVM overlay.
+        instruction_index: usize,
+        /// Source domain encoded in the SCCP payload.
+        source_domain: u32,
+    },
+    /// `RecordSccpMessage` payload decoded, but outbound route binding is invalid.
+    RouteBinding {
+        /// External entrypoint index in the block payload.
+        tx_index: usize,
+        /// Instruction index inside the IVM overlay.
+        instruction_index: usize,
+        /// Route-binding validation error.
+        error: SccpOutboundRouteValidationError,
+    },
+}
+
+impl SccpRecordInstructionValidationError {
+    pub(crate) fn tx_index(&self) -> usize {
+        match self {
+            Self::UnsupportedExecutable { tx_index, .. }
+            | Self::InvalidPayload { tx_index, .. }
+            | Self::NonSoraSource { tx_index, .. }
+            | Self::RouteBinding { tx_index, .. } => *tx_index,
+        }
+    }
+
+    pub(crate) fn instruction_index(&self) -> usize {
+        match self {
+            Self::UnsupportedExecutable {
+                instruction_index, ..
+            }
+            | Self::InvalidPayload {
+                instruction_index, ..
+            }
+            | Self::NonSoraSource {
+                instruction_index, ..
+            }
+            | Self::RouteBinding {
+                instruction_index, ..
+            } => *instruction_index,
+        }
+    }
+
+    pub(crate) fn reason(&self) -> &'static str {
+        match self {
+            Self::UnsupportedExecutable { .. } => {
+                "RecordSccpMessage requires a verified IvmProved overlay"
+            }
+            Self::InvalidPayload { .. } => "RecordSccpMessage payload is invalid",
+            Self::NonSoraSource { .. } => "RecordSccpMessage payload source domain is not SORA",
+            Self::RouteBinding { error, .. } => error.reason(),
+        }
+    }
+}
+
+fn invalid_sccp_record_instruction_in_executable(
+    tx_index: usize,
+    executable: &Executable,
+) -> Option<SccpRecordInstructionValidationError> {
+    match executable {
+        Executable::Instructions(instructions) => {
+            instructions
+                .iter()
+                .enumerate()
+                .find_map(|(instruction_index, instruction)| {
+                    recorded_sccp_message_instruction(instruction).map(|_| {
+                        SccpRecordInstructionValidationError::UnsupportedExecutable {
+                            tx_index,
+                            instruction_index,
+                        }
+                    })
+                })
+        }
+        Executable::IvmProved(proved) => {
+            proved
+                .overlay
+                .iter()
+                .enumerate()
+                .find_map(|(instruction_index, instruction)| {
+                    let record = recorded_sccp_message_instruction(instruction)?;
+                    let Some(payload) = decode_recorded_sccp_payload_bytes(&record.payload_bytes)
+                    else {
+                        return Some(SccpRecordInstructionValidationError::InvalidPayload {
+                            tx_index,
+                            instruction_index,
+                        });
+                    };
+                    let source_domain = iroha_sccp::sccp_message_source_domain(&payload);
+                    if source_domain != iroha_sccp::SCCP_DOMAIN_SORA {
+                        return Some(SccpRecordInstructionValidationError::NonSoraSource {
+                            tx_index,
+                            instruction_index,
+                            source_domain,
+                        });
+                    }
+                    validate_sora_outbound_sccp_payload_route(&payload)
+                        .err()
+                        .map(|error| SccpRecordInstructionValidationError::RouteBinding {
+                            tx_index,
+                            instruction_index,
+                            error,
+                        })
+                })
+        }
+        Executable::ContractCall(_) | Executable::Ivm(_) => None,
+    }
+}
+
+fn invalid_sccp_record_instruction_in_signed_block(
+    block: &SignedBlock,
+) -> Option<SccpRecordInstructionValidationError> {
+    for (entrypoint_index, entrypoint) in block.external_entrypoints_cloned().enumerate() {
+        let transaction = match entrypoint {
+            TransactionEntrypoint::External(transaction) => transaction,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
+            TransactionEntrypoint::SealedCommitment(_)
+            | TransactionEntrypoint::PrivateKaigi(_)
+            | TransactionEntrypoint::Time(_) => continue,
+        };
+        if !entrypoint_has_successful_or_pending_result(block, entrypoint_index) {
+            continue;
+        }
+        if let Some(error) = invalid_sccp_record_instruction_in_executable(
+            entrypoint_index,
+            transaction.instructions(),
+        ) {
+            return Some(error);
+        }
+    }
+    None
+}
+
+/// Extract all non-replayed SCCP message records from the external transactions in a signed block.
+pub fn collect_sccp_messages_from_signed_block(block: &SignedBlock) -> Vec<RecordedSccpMessage> {
+    collect_sccp_messages_from_signed_block_with_deduplication(block, true)
+}
+
+/// Return the first duplicate successful SCCP outbound key in a signed block, if any.
+pub(crate) fn duplicate_sccp_outbound_message_key_in_signed_block(
+    block: &SignedBlock,
+) -> Option<SccpOutboundMessageKey> {
+    let mut seen = BTreeSet::new();
+    for message in collect_sccp_messages_from_signed_block_with_deduplication(block, false) {
+        let key = sccp_outbound_message_key(&message.payload);
+        if !seen.insert(key) {
+            return Some(key);
+        }
+    }
+    None
+}
+
+/// Validation error for committed SCCP records reconstructed from a signed block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SccpCommittedBlockValidationError {
+    /// The block advertises an SCCP root but has no committed transaction results.
+    MissingTransactionResults {
+        /// Root advertised in the block header.
+        actual: [u8; 32],
+    },
+    /// The block has fewer committed transaction results than external entrypoints.
+    TransactionResultCountMismatch {
+        /// Number of external entrypoints in the block payload.
+        external_entrypoints: usize,
+        /// Number of committed transaction results attached to the block.
+        results: usize,
+    },
+    /// A successful or pending entrypoint contains a malformed SCCP record instruction.
+    InvalidRecordInstruction(SccpRecordInstructionValidationError),
+    /// The block contains more than one successful outbound message with the same replay key.
+    DuplicateOutboundMessage(SccpOutboundMessageKey),
+    /// The block header commitment root does not match reconstructed SCCP records.
+    CommitmentRootMismatch {
+        /// Root recomputed from committed SCCP message records.
+        expected: Option<[u8; 32]>,
+        /// Root advertised in the block header.
+        actual: Option<[u8; 32]>,
+    },
+}
+
+fn sccp_transaction_result_count_mismatch(block: &SignedBlock) -> Option<(usize, usize)> {
+    if !block.has_results() {
+        return None;
+    }
+    let external_entrypoints = block.external_entrypoint_count();
+    let results = block.results().len();
+    (results < external_entrypoints).then_some((external_entrypoints, results))
+}
+
+/// Validate committed SCCP records against the signed block header.
+///
+/// This check is intentionally fail-closed for duplicate successful outbound
+/// keys before comparing roots, so a malformed block cannot be accepted by
+/// signing a root over a deduplicated message list.
+pub(crate) fn validate_sccp_commitment_root_for_signed_block(
+    block: &SignedBlock,
+) -> Result<(), SccpCommittedBlockValidationError> {
+    if let Some(actual) = block.header().sccp_commitment_root()
+        && !block.has_results()
+    {
+        return Err(SccpCommittedBlockValidationError::MissingTransactionResults { actual });
+    }
+
+    if let Some((external_entrypoints, results)) = sccp_transaction_result_count_mismatch(block) {
+        return Err(
+            SccpCommittedBlockValidationError::TransactionResultCountMismatch {
+                external_entrypoints,
+                results,
+            },
+        );
+    }
+
+    if let Some(error) = invalid_sccp_record_instruction_in_signed_block(block) {
+        return Err(SccpCommittedBlockValidationError::InvalidRecordInstruction(
+            error,
+        ));
+    }
+
+    if let Some(key) = duplicate_sccp_outbound_message_key_in_signed_block(block) {
+        return Err(SccpCommittedBlockValidationError::DuplicateOutboundMessage(
+            key,
+        ));
+    }
+
+    let messages = collect_sccp_messages_from_signed_block(block);
+    let expected = sccp_commitment_root_from_messages(&messages);
+    let actual = block.header().sccp_commitment_root();
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(SccpCommittedBlockValidationError::CommitmentRootMismatch { expected, actual })
+    }
 }
 
 /// Compute the SCCP commitment Merkle root for a set of recorded messages.
@@ -993,6 +1548,51 @@ fn sccp_qc_projection_matches_local(
         && qc.bls_aggregate_signature == trusted_qc.aggregate.bls_aggregate_signature
 }
 
+fn validate_local_sccp_records_against_commitment_root(
+    local_block: &SignedBlock,
+    commitment_root: [u8; 32],
+) -> Result<(), String> {
+    if !local_block.has_results() {
+        return Err(
+            "SCCP finality proof local block is missing committed transaction results".to_owned(),
+        );
+    }
+    if let Some((external_entrypoints, results)) =
+        sccp_transaction_result_count_mismatch(local_block)
+    {
+        return Err(format!(
+            "SCCP finality proof local block result count mismatch: external_entrypoints={external_entrypoints} results={results}"
+        ));
+    }
+
+    if let Some(error) = invalid_sccp_record_instruction_in_signed_block(local_block) {
+        return Err(format!(
+            "SCCP finality proof local block contains invalid outbound SCCP record: tx_index={} instruction_index={} reason={}",
+            error.tx_index(),
+            error.instruction_index(),
+            error.reason()
+        ));
+    }
+
+    if let Some(key) = duplicate_sccp_outbound_message_key_in_signed_block(local_block) {
+        return Err(format!(
+            "SCCP finality proof local block contains duplicate outbound message source_domain={} target_domain={} message_id={}",
+            key.source_domain,
+            key.target_domain,
+            hex::encode(key.message_id)
+        ));
+    }
+
+    let messages = collect_sccp_messages_from_signed_block(local_block);
+    if sccp_commitment_root_from_messages(&messages) != Some(commitment_root) {
+        return Err(
+            "SCCP finality proof commitment root does not match local SCCP records".to_owned(),
+        );
+    }
+
+    Ok(())
+}
+
 /// Verify an SCCP finality proof against local committed blocks and trusted commit-roster data.
 ///
 /// This intentionally rejects proofs when the local node cannot load the committed block or
@@ -1051,12 +1651,10 @@ pub fn verify_sccp_finality_proof_against_local_state(
         );
     }
 
-    let messages = collect_sccp_messages_from_signed_block(local_block.as_ref());
-    if sccp_commitment_root_from_messages(&messages) != Some(finality.commitment_root) {
-        return Err(
-            "SCCP finality proof commitment root does not match local SCCP records".to_owned(),
-        );
-    }
+    validate_local_sccp_records_against_commitment_root(
+        local_block.as_ref(),
+        finality.commitment_root,
+    )?;
 
     let trusted_qc = state
         .sccp_commit_qc_for_block(finality.height, local_hash)
@@ -1201,6 +1799,38 @@ mod tests {
             sender: b"sora:bridge".to_vec(),
             recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
             recipient: recipient.to_vec(),
+            route_id_codec: 1,
+            route_id: b"nexus:eth:xor".to_vec(),
+        })
+    }
+
+    fn sample_route_activate_payload(nonce: u64, route_id: &[u8]) -> SccpPayloadV1 {
+        SccpPayloadV1::RouteActivate(iroha_sccp::RouteActivatePayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: route_id.to_vec(),
+        })
+    }
+
+    fn non_sora_source_transfer_payload(nonce: u64) -> SccpPayloadV1 {
+        SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            nonce,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: 1,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            sender: b"0x0000000000000000000000000000000000000555".to_vec(),
+            recipient_codec: 1,
+            recipient: b"sora:recipient".to_vec(),
             route_id_codec: 1,
             route_id: b"nexus:eth:xor".to_vec(),
         })
@@ -2009,6 +2639,62 @@ mod tests {
     }
 
     #[test]
+    fn collect_sccp_messages_from_accepted_transactions_skips_unbound_outbound_route() {
+        let mut payload =
+            sample_transfer_payload(12, b"0x0000000000000000000000000000000000000227");
+        let SccpPayloadV1::Transfer(transfer) = &mut payload else {
+            unreachable!("sample payload is a transfer");
+        };
+        transfer.route_id = b"nexus:bsc:xor".to_vec();
+        let accepted = accepted_transaction_with_sccp_payload(
+            iroha_sccp::canonical_sccp_payload_bytes(&payload),
+        );
+
+        let messages = collect_sccp_messages_from_accepted_transactions(&[accepted]);
+
+        assert!(
+            messages.is_empty(),
+            "proposal SCCP roots must not include records that execution will reject"
+        );
+    }
+
+    #[test]
+    fn collect_sccp_messages_from_accepted_transactions_skips_unbound_route_activation() {
+        let payload = sample_route_activate_payload(21, b"nexus:bsc:xor");
+        let accepted = accepted_transaction_with_sccp_payload(
+            iroha_sccp::canonical_sccp_payload_bytes(&payload),
+        );
+
+        let messages = collect_sccp_messages_from_accepted_transactions(&[accepted]);
+
+        assert!(
+            messages.is_empty(),
+            "proposal SCCP roots must not include route activations that execution will reject"
+        );
+    }
+
+    #[test]
+    fn collect_sccp_messages_from_accepted_transactions_skips_malformed_outbound_asset_scope() {
+        let mut payload =
+            sample_transfer_payload(23, b"0x0000000000000000000000000000000000000229");
+        let SccpPayloadV1::Transfer(transfer) = &mut payload else {
+            unreachable!("sample payload is a transfer");
+        };
+        transfer.asset_id = b"xor#".to_vec();
+        transfer.route_id = b"nexus:eth:xor".to_vec();
+        let accepted = accepted_transaction_with_sccp_payload(
+            iroha_sccp::canonical_sccp_payload_bytes(&payload),
+        );
+
+        let messages = collect_sccp_messages_from_accepted_transactions(&[accepted]);
+
+        assert!(
+            messages.is_empty(),
+            "proposal SCCP roots must not include asset-id aliases with empty scopes"
+        );
+    }
+
+    #[test]
     fn collect_sccp_messages_from_accepted_transactions_deduplicates_same_overlay_key() {
         let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
             8,
@@ -2052,7 +2738,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_sccp_messages_from_block_preserves_successful_duplicate_outbound_keys() {
+    fn collect_sccp_messages_from_block_deduplicates_successful_duplicate_outbound_keys() {
         let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
             10,
             b"0x0000000000000000000000000000000000000443",
@@ -2071,14 +2757,394 @@ mod tests {
 
         let messages = collect_sccp_messages_from_signed_block(&block);
 
-        assert_eq!(messages.len(), 2);
+        assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].tx_index, 0);
-        assert_eq!(messages[1].tx_index, 1);
         assert_eq!(
             messages[0].payload,
             iroha_sccp::decode_canonical_sccp_payload_bytes(&payload).expect("payload decodes")
         );
-        assert_eq!(messages[1].payload, messages[0].payload);
+        let expected_commitment =
+            iroha_sccp::hub_commitment_from_sccp_payload(&messages[0].payload);
+        assert_eq!(
+            sccp_commitment_root_from_messages(&messages),
+            iroha_sccp::commitment_merkle_root(&[expected_commitment])
+        );
+    }
+
+    #[test]
+    fn collect_sccp_messages_from_block_deduplicates_binary_and_hex_duplicate_outbound_keys() {
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            11,
+            b"0x0000000000000000000000000000000000000445",
+        ));
+        let encoded_payload = format!("0x{}", hex::encode(&payload)).into_bytes();
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                encoded_payload,
+            )),
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload.clone(),
+            )),
+        ]));
+        let block = signed_block_with_transactions(vec![tx], 9);
+
+        let messages = collect_sccp_messages_from_signed_block(&block);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].tx_index, 0);
+        assert_eq!(messages[0].instruction_index, 0);
+        assert_eq!(
+            messages[0].payload,
+            iroha_sccp::decode_canonical_sccp_payload_bytes(&payload).expect("payload decodes")
+        );
+    }
+
+    #[test]
+    fn local_sccp_finality_records_reject_duplicate_successful_outbound_keys() {
+        let payload = sample_transfer_payload(12, b"0x0000000000000000000000000000000000000446");
+        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+        let first_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload_bytes.clone(),
+            )),
+        ]));
+        let second_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload_bytes,
+            )),
+        ]));
+        let block = signed_block_with_transactions(vec![first_tx, second_tx], 9);
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        let deduped_root =
+            sccp_commitment_root_from_messages(&messages).expect("deduped commitment root");
+
+        let err = validate_local_sccp_records_against_commitment_root(&block, deduped_root)
+            .expect_err("duplicate successful SCCP records must reject before root acceptance");
+
+        assert!(err.contains("duplicate outbound message"));
+        assert!(err.contains(&hex::encode(sccp_outbound_message_key(&payload).message_id)));
+    }
+
+    #[test]
+    fn local_sccp_finality_records_reject_binary_and_hex_duplicate_outbound_keys() {
+        let payload = sample_transfer_payload(13, b"0x0000000000000000000000000000000000000447");
+        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+        let encoded_payload = format!("0x{}", hex::encode(&payload_bytes)).into_bytes();
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                encoded_payload,
+            )),
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload_bytes,
+            )),
+        ]));
+        let block = signed_block_with_transactions(vec![tx], 9);
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        let deduped_root =
+            sccp_commitment_root_from_messages(&messages).expect("deduped commitment root");
+
+        let err = validate_local_sccp_records_against_commitment_root(&block, deduped_root)
+            .expect_err("SCCP finality local record validation must reject encoded replay aliases");
+
+        assert!(err.contains("duplicate outbound message"));
+        assert!(err.contains(&hex::encode(sccp_outbound_message_key(&payload).message_id)));
+    }
+
+    #[test]
+    fn validate_sccp_commitment_root_for_signed_block_rejects_resultless_sccp_root() {
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            14,
+            b"0x0000000000000000000000000000000000000448",
+        ));
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload,
+            )),
+        ]));
+        let mut block = signed_block_without_results(vec![tx], 9);
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        let root = sccp_commitment_root_from_messages(&messages).expect("pre-execution SCCP root");
+        block.set_sccp_commitment_root(Some(root));
+
+        let err = validate_sccp_commitment_root_for_signed_block(&block)
+            .expect_err("committed SCCP root validation must require committed results");
+
+        assert_eq!(
+            err,
+            SccpCommittedBlockValidationError::MissingTransactionResults { actual: root }
+        );
+    }
+
+    #[test]
+    fn validate_sccp_commitment_root_for_signed_block_rejects_short_result_vector() {
+        let plain_tx = signed_transaction_with_executable(Executable::Instructions(
+            Vec::<InstructionBox>::new().into(),
+        ));
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            16,
+            b"0x0000000000000000000000000000000000000450",
+        ));
+        let sccp_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload,
+            )),
+        ]));
+        let mut block = signed_block_with_transactions(vec![plain_tx.clone()], 9);
+        block.set_external_entrypoints(vec![
+            TransactionEntrypoint::External(plain_tx),
+            TransactionEntrypoint::External(sccp_tx),
+        ]);
+
+        let err = validate_sccp_commitment_root_for_signed_block(&block).expect_err(
+            "committed SCCP validation must reject external entrypoints without committed results",
+        );
+
+        assert_eq!(
+            err,
+            SccpCommittedBlockValidationError::TransactionResultCountMismatch {
+                external_entrypoints: 2,
+                results: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn validate_sccp_commitment_root_for_signed_block_rejects_invalid_record_payload() {
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                b"not a canonical SCCP payload".to_vec(),
+            )),
+        ]));
+        let block = signed_block_with_transactions(vec![tx], 9);
+
+        let err = validate_sccp_commitment_root_for_signed_block(&block)
+            .expect_err("successful invalid SCCP record payload must reject");
+
+        assert_eq!(
+            err,
+            SccpCommittedBlockValidationError::InvalidRecordInstruction(
+                SccpRecordInstructionValidationError::InvalidPayload {
+                    tx_index: 0,
+                    instruction_index: 0,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn validate_sccp_commitment_root_for_signed_block_rejects_non_sora_record_payload() {
+        let payload =
+            iroha_sccp::canonical_sccp_payload_bytes(&non_sora_source_transfer_payload(18));
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload,
+            )),
+        ]));
+        let block = signed_block_with_transactions(vec![tx], 9);
+
+        let err = validate_sccp_commitment_root_for_signed_block(&block)
+            .expect_err("successful non-SORA SCCP record payload must reject");
+
+        assert_eq!(
+            err,
+            SccpCommittedBlockValidationError::InvalidRecordInstruction(
+                SccpRecordInstructionValidationError::NonSoraSource {
+                    tx_index: 0,
+                    instruction_index: 0,
+                    source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn validate_sccp_commitment_root_for_signed_block_rejects_unbound_outbound_route() {
+        let mut payload =
+            sample_transfer_payload(17, b"0x0000000000000000000000000000000000000451");
+        let SccpPayloadV1::Transfer(transfer) = &mut payload else {
+            unreachable!("sample payload is a transfer");
+        };
+        transfer.route_id = b"nexus:bsc:xor".to_vec();
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload,
+            )),
+        ]));
+        let block = signed_block_with_transactions(vec![tx], 9);
+
+        let err = validate_sccp_commitment_root_for_signed_block(&block)
+            .expect_err("successful invalid outbound SCCP route must reject");
+
+        assert_eq!(
+            err,
+            SccpCommittedBlockValidationError::InvalidRecordInstruction(
+                SccpRecordInstructionValidationError::RouteBinding {
+                    tx_index: 0,
+                    instruction_index: 0,
+                    error: SccpOutboundRouteValidationError::RouteIdMismatch {
+                        actual: "nexus:bsc:xor".to_owned(),
+                        expected: "nexus:eth:xor".to_owned(),
+                    },
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn validate_sccp_commitment_root_for_signed_block_rejects_unbound_route_activation() {
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_route_activate_payload(
+            22,
+            b"nexus:bsc:xor",
+        ));
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload,
+            )),
+        ]));
+        let block = signed_block_with_transactions(vec![tx], 9);
+
+        let err = validate_sccp_commitment_root_for_signed_block(&block)
+            .expect_err("successful invalid outbound SCCP route activation must reject");
+
+        assert_eq!(
+            err,
+            SccpCommittedBlockValidationError::InvalidRecordInstruction(
+                SccpRecordInstructionValidationError::RouteBinding {
+                    tx_index: 0,
+                    instruction_index: 0,
+                    error: SccpOutboundRouteValidationError::RouteIdMismatch {
+                        actual: "nexus:bsc:xor".to_owned(),
+                        expected: "nexus:eth:xor".to_owned(),
+                    },
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn validate_sccp_commitment_root_for_signed_block_rejects_ambiguous_asset_scope() {
+        let mut payload = sample_route_activate_payload(24, b"nexus:eth:xor");
+        let SccpPayloadV1::RouteActivate(activation) = &mut payload else {
+            unreachable!("sample payload is a route activation");
+        };
+        activation.asset_id = b"xor#universal#shadow".to_vec();
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload,
+            )),
+        ]));
+        let block = signed_block_with_transactions(vec![tx], 9);
+
+        let err = validate_sccp_commitment_root_for_signed_block(&block)
+            .expect_err("successful ambiguous outbound SCCP asset scope must reject");
+
+        assert_eq!(
+            err,
+            SccpCommittedBlockValidationError::InvalidRecordInstruction(
+                SccpRecordInstructionValidationError::RouteBinding {
+                    tx_index: 0,
+                    instruction_index: 0,
+                    error: SccpOutboundRouteValidationError::AmbiguousAssetScope,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn validate_sccp_commitment_root_for_signed_block_rejects_direct_record_instruction() {
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            19,
+            b"0x0000000000000000000000000000000000000452",
+        ));
+        let tx = signed_transaction_with_executable(Executable::Instructions(
+            vec![InstructionBox::from(
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(payload),
+            )]
+            .into(),
+        ));
+        let block = signed_block_with_transactions(vec![tx], 9);
+
+        let err = validate_sccp_commitment_root_for_signed_block(&block)
+            .expect_err("successful direct SCCP record instruction must reject");
+
+        assert_eq!(
+            err,
+            SccpCommittedBlockValidationError::InvalidRecordInstruction(
+                SccpRecordInstructionValidationError::UnsupportedExecutable {
+                    tx_index: 0,
+                    instruction_index: 0,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn local_sccp_finality_records_reject_invalid_record_payload() {
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                b"not a canonical SCCP payload".to_vec(),
+            )),
+        ]));
+        let block = signed_block_with_transactions(vec![tx], 9);
+
+        let err = validate_local_sccp_records_against_commitment_root(&block, [0xAA; 32])
+            .expect_err("local SCCP finality validation must reject invalid record payloads");
+
+        assert!(err.contains("invalid outbound SCCP record"));
+        assert!(err.contains("tx_index=0"));
+        assert!(err.contains("instruction_index=0"));
+        assert!(err.contains("payload is invalid"));
+    }
+
+    #[test]
+    fn local_sccp_finality_records_reject_short_result_vector() {
+        let plain_tx = signed_transaction_with_executable(Executable::Instructions(
+            Vec::<InstructionBox>::new().into(),
+        ));
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            17,
+            b"0x0000000000000000000000000000000000000451",
+        ));
+        let sccp_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload,
+            )),
+        ]));
+        let mut block = signed_block_with_transactions(vec![plain_tx.clone()], 9);
+        block.set_external_entrypoints(vec![
+            TransactionEntrypoint::External(plain_tx),
+            TransactionEntrypoint::External(sccp_tx),
+        ]);
+
+        let err = validate_local_sccp_records_against_commitment_root(&block, [0xAA; 32])
+            .expect_err("local SCCP finality validation must reject short result vectors");
+
+        assert!(err.contains("result count mismatch"));
+        assert!(err.contains("external_entrypoints=2"));
+        assert!(err.contains("results=1"));
+    }
+
+    #[test]
+    fn local_sccp_finality_records_reject_resultless_matching_root() {
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            15,
+            b"0x0000000000000000000000000000000000000449",
+        ));
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload,
+            )),
+        ]));
+        let block = signed_block_without_results(vec![tx], 9);
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        let root = sccp_commitment_root_from_messages(&messages).expect("pre-execution SCCP root");
+
+        let err = validate_local_sccp_records_against_commitment_root(&block, root)
+            .expect_err("local SCCP finality validation must require committed results");
+
+        assert!(err.contains("missing committed transaction results"));
     }
 
     #[test]

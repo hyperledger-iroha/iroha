@@ -19,10 +19,24 @@ from __future__ import annotations
 
 import argparse
 from html import unescape as html_unescape
+from pathlib import Path
 from urllib.parse import unquote
 import hashlib
 import json
+import sys
 from typing import Iterable
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = REPO_ROOT / "scripts"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from sccp_source_template_hashes import (  # noqa: E402
+    sccp_active_source_template_component_hashes,
+    sccp_source_template_hash_human_label,
+    sccp_source_template_hash_match,
+)
 
 
 SCCP_DOMAIN_SORA = 0
@@ -679,12 +693,21 @@ def _require_light_client_evidence_role_separation(
                     "Solana full-light-client verifier hashes must not reuse "
                     f"existing source-adapter material: {field} matches {role_field}"
                 )
-        for template_field, template_hash in _template_component_hashes().items():
-            if value == template_hash:
-                raise SystemExit(
-                    "Solana full-light-client verifier hashes must not reuse "
-                    f"built-in template material: {field} matches {template_field}"
-                )
+        match = sccp_source_template_hash_match(
+            value,
+            local_template_hashes=_template_component_hashes(),
+        )
+        if match is not None:
+            lane, template_field = match
+            template_label = (
+                template_field
+                if lane is None
+                else sccp_source_template_hash_human_label(match)
+            )
+            raise SystemExit(
+                "Solana full-light-client verifier hashes must not reuse "
+                f"built-in template material: {field} matches {template_label}"
+            )
 
 
 def _template_hash_fields() -> tuple[tuple[str, str, str], ...]:
@@ -721,12 +744,20 @@ def _reject_template_hashes(args: argparse.Namespace) -> None:
         supplied_hash = getattr(args, field, None)
         if supplied_hash is None:
             continue
-        for template_field, template_hash in template_hashes.items():
-            if supplied_hash == template_hash:
-                raise SystemExit(
-                    f"{field} must be deployed evidence, not the Solana "
-                    f"{template_field} template hash"
-                )
+        match = sccp_source_template_hash_match(
+            supplied_hash,
+            local_template_hashes=template_hashes,
+        )
+        if match is not None:
+            lane, template_field = match
+            if lane is None:
+                template_label = f"Solana {template_field}"
+            else:
+                template_label = sccp_source_template_hash_human_label(match)
+            raise SystemExit(
+                f"{field} must be deployed evidence, not the "
+                f"{template_label} template hash"
+            )
 
 
 def _require_canonical_adapter_verifier_vk_hash(args: argparse.Namespace) -> None:
@@ -1184,7 +1215,7 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
         return fallback
     if _decoded_cli_error_text_issue(text):
         return fallback
-    normalized_text = _decoded_public_blocker_text(text).lower()
+    normalized_text = _decoded_public_blocker_text(text).casefold()
     if any(marker in normalized_text for marker in SENSITIVE_CLI_ERROR_MARKERS):
         return fallback
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):

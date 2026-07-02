@@ -19296,10 +19296,11 @@ def _normalize_bridge_proof_submit_payload_base(
         "signature_b64",
     )
     if signature_b64 is not _MISSING:
-        payload["signature_b64"] = _normalize_non_empty_string(
+        _decode_base64_strict(
             signature_b64,
             f"{context}.signatureB64",
         )
+        payload["signature_b64"] = signature_b64
     creation_time_ms = _mapping_optional_value_without_aliases(
         value,
         f"{context}.creationTimeMs",

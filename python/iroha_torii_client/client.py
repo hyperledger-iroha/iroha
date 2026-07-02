@@ -4521,7 +4521,7 @@ class ToriiClient:
                 signature_b64,
                 "bridge proof submit.signature_b64",
             )
-            payload["signature_b64"] = self._normalize_required_base64_payload(
+            payload["signature_b64"] = self._normalize_required_exact_base64_payload(
                 signature_b64,
                 "bridge proof submit.signature_b64",
             )
@@ -4619,7 +4619,7 @@ class ToriiClient:
                 signature_b64,
                 "bridge message submit.signature_b64",
             )
-            payload["signature_b64"] = self._normalize_required_base64_payload(
+            payload["signature_b64"] = self._normalize_required_exact_base64_payload(
                 signature_b64,
                 "bridge message submit.signature_b64",
             )
@@ -6150,7 +6150,7 @@ class ToriiClient:
                 expected_length=64,
             )
         if signature_b64 is not None:
-            request_payload["signature_b64"] = self._normalize_required_base64_payload(
+            request_payload["signature_b64"] = self._normalize_required_exact_base64_payload(
                 signature_b64,
                 "propose_multisig.signature_b64",
             )
@@ -8039,6 +8039,21 @@ class ToriiClient:
             raise RuntimeError(f"{context} must be a valid base64 payload") from exc
         if not decoded:
             raise RuntimeError(f"{context} must not decode to empty bytes")
+        return literal
+
+    @staticmethod
+    def _normalize_required_exact_base64_payload(value: Any, context: str) -> str:
+        literal = _require_exact_non_empty_string(value, context)
+        if any(char.isspace() for char in literal):
+            raise ValueError(f"{context} must be exact standard-base64")
+        try:
+            decoded = base64.b64decode(literal, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise RuntimeError(f"{context} must be a valid base64 payload") from exc
+        if not decoded:
+            raise RuntimeError(f"{context} must not decode to empty bytes")
+        if base64.b64encode(decoded).decode("ascii") != literal:
+            raise ValueError(f"{context} must be exact standard-base64")
         return literal
 
     @staticmethod

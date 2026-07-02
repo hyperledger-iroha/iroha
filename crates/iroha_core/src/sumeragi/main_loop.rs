@@ -3737,6 +3737,8 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         | BlockValidationError::EmptyBlock
         | BlockValidationError::DuplicateTransactions
         | BlockValidationError::SccpCommitmentRootMismatch { .. }
+        | BlockValidationError::SccpTransactionResultCountMismatch { .. }
+        | BlockValidationError::SccpInvalidOutboundRecord { .. }
         | BlockValidationError::SccpDuplicateOutboundMessage { .. }
         | BlockValidationError::ExecutionContextInvalid(_)
         | BlockValidationError::CommittedFragmentCountMismatch { .. }
@@ -3771,6 +3773,33 @@ fn vnext_validation_reject_reason_label(reason_label: &str) -> &'static str {
         "validation_roots_missing" => VALIDATION_REASON_EXECUTION,
         "pending_block_invalid" => VALIDATION_REASON_STATELESS,
         _ => VALIDATION_REASON_STATELESS,
+    }
+}
+
+#[cfg(test)]
+mod validation_reject_reason_tests {
+    use super::*;
+
+    #[test]
+    fn sccp_transaction_result_count_mismatch_is_execution_reject_reason() {
+        let reason = validation_reject_reason_label(
+            &BlockValidationError::SccpTransactionResultCountMismatch {
+                external_entrypoints: 2,
+                results: 1,
+            },
+        );
+        assert_eq!(reason, VALIDATION_REASON_EXECUTION);
+    }
+
+    #[test]
+    fn sccp_invalid_outbound_record_is_execution_reject_reason() {
+        let reason =
+            validation_reject_reason_label(&BlockValidationError::SccpInvalidOutboundRecord {
+                tx_index: 0,
+                instruction_index: 0,
+                reason: "invalid SCCP record fixture",
+            });
+        assert_eq!(reason, VALIDATION_REASON_EXECUTION);
     }
 }
 

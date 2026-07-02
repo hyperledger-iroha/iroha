@@ -2337,6 +2337,22 @@ pub enum BlockValidationError {
         /// Root advertised in the block header.
         actual: Option<[u8; 32]>,
     },
+    /// SCCP committed block has fewer transaction results than external entrypoints. External entrypoints: {external_entrypoints}, results: {results}
+    SccpTransactionResultCountMismatch {
+        /// Number of external entrypoints in the block payload.
+        external_entrypoints: usize,
+        /// Number of committed transaction results attached to the block.
+        results: usize,
+    },
+    /// SCCP committed block contains an invalid successful outbound record instruction. Entrypoint index: {tx_index}, instruction index: {instruction_index}, reason: {reason}
+    SccpInvalidOutboundRecord {
+        /// External entrypoint index in the block payload.
+        tx_index: usize,
+        /// Instruction index inside the executable.
+        instruction_index: usize,
+        /// Human-readable validation reason.
+        reason: &'static str,
+    },
     /// SCCP committed block contains duplicate successful outbound message. Source domain: {source_domain}, target domain: {target_domain}, message id: {message_id:?}
     SccpDuplicateOutboundMessage {
         /// SCCP source domain encoded in the duplicate payload.
@@ -2832,6 +2848,12 @@ mod chained {
         #[must_use]
         pub fn creation_time(&self) -> Duration {
             self.0.header.creation_time()
+        }
+
+        /// Header that would be signed if the builder were signed in its current state.
+        #[must_use]
+        pub(crate) fn header(&self) -> BlockHeader {
+            self.0.header
         }
 
         /// Attach a DA commitment bundle and update the header hash accordingly.
@@ -5391,25 +5413,41 @@ pub(crate) mod valid {
         }
 
         fn validate_sccp_commitment_root(block: &SignedBlock) -> Result<(), BlockValidationError> {
-            let messages = crate::bridge::collect_sccp_messages_from_signed_block(block);
-            let mut seen = std::collections::BTreeSet::new();
-            for message in &messages {
-                let key = crate::bridge::sccp_outbound_message_key(&message.payload);
-                if !seen.insert(key) {
-                    return Err(BlockValidationError::SccpDuplicateOutboundMessage {
+            crate::bridge::validate_sccp_commitment_root_for_signed_block(block).map_err(|error| {
+                match error {
+                    crate::bridge::SccpCommittedBlockValidationError::MissingTransactionResults {
+                        actual,
+                    } => BlockValidationError::SccpCommitmentRootMismatch {
+                        expected: None,
+                        actual: Some(actual),
+                    },
+                    crate::bridge::SccpCommittedBlockValidationError::TransactionResultCountMismatch {
+                        external_entrypoints,
+                        results,
+                    } => BlockValidationError::SccpTransactionResultCountMismatch {
+                        external_entrypoints,
+                        results,
+                    },
+                    crate::bridge::SccpCommittedBlockValidationError::InvalidRecordInstruction(
+                        error,
+                    ) => BlockValidationError::SccpInvalidOutboundRecord {
+                        tx_index: error.tx_index(),
+                        instruction_index: error.instruction_index(),
+                        reason: error.reason(),
+                    },
+                    crate::bridge::SccpCommittedBlockValidationError::DuplicateOutboundMessage(
+                        key,
+                    ) => BlockValidationError::SccpDuplicateOutboundMessage {
                         source_domain: key.source_domain,
                         target_domain: key.target_domain,
                         message_id: key.message_id,
-                    });
+                    },
+                    crate::bridge::SccpCommittedBlockValidationError::CommitmentRootMismatch {
+                        expected,
+                        actual,
+                    } => BlockValidationError::SccpCommitmentRootMismatch { expected, actual },
                 }
-            }
-            let expected = crate::bridge::sccp_commitment_root_from_messages(&messages);
-            let actual = block.header().sccp_commitment_root();
-            if actual == expected {
-                Ok(())
-            } else {
-                Err(BlockValidationError::SccpCommitmentRootMismatch { expected, actual })
-            }
+            })
         }
 
         #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -12587,6 +12625,14 @@ pub(crate) mod valid {
             })
             .take(record_count)
             .collect::<Vec<_>>();
+            sccp_accepted_transaction_with_overlay(account_id, keypair, overlay)
+        }
+
+        fn sccp_accepted_transaction_with_overlay(
+            account_id: AccountId,
+            keypair: &KeyPair,
+            overlay: Vec<InstructionBox>,
+        ) -> AcceptedTransaction<'static> {
             let mut bytecode = ivm::ProgramMetadata {
                 version_major: 1,
                 version_minor: 0,
@@ -12645,10 +12691,14 @@ pub(crate) mod valid {
 
         #[test]
         fn sccp_commitment_root_validation_accepts_matching_root() {
-            let probe = signed_sccp_block(None);
-            let messages = crate::bridge::collect_sccp_messages_from_signed_block(&probe);
+            let mut block = signed_sccp_block(None);
+            set_single_sccp_transaction_result(
+                &mut block,
+                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
+            );
+            let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
             let root = crate::bridge::sccp_commitment_root_from_messages(&messages);
-            let block = signed_sccp_block(root);
+            block.set_sccp_commitment_root(root);
 
             ValidBlock::validate_sccp_commitment_root(&block)
                 .expect("matching SCCP commitment root should validate");
@@ -12656,7 +12706,11 @@ pub(crate) mod valid {
 
         #[test]
         fn sccp_commitment_root_validation_rejects_wrong_root() {
-            let block = signed_sccp_block(Some([0xAA; 32]));
+            let mut block = signed_sccp_block(Some([0xAA; 32]));
+            set_single_sccp_transaction_result(
+                &mut block,
+                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
+            );
 
             let err = ValidBlock::validate_sccp_commitment_root(&block)
                 .expect_err("wrong SCCP commitment root should reject");
@@ -12670,14 +12724,109 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn sccp_commitment_root_validation_rejects_root_without_messages() {
+        fn sccp_commitment_root_validation_rejects_resultless_root() {
+            let block = signed_sccp_block(Some([0xAA; 32]));
+
+            let err = ValidBlock::validate_sccp_commitment_root(&block)
+                .expect_err("SCCP commitment root without committed results should reject");
+            assert!(matches!(
+                err,
+                BlockValidationError::SccpCommitmentRootMismatch {
+                    expected: None,
+                    actual: Some(_),
+                }
+            ));
+        }
+
+        #[test]
+        fn sccp_commitment_root_validation_rejects_short_result_vector() {
+            let (plain_account, plain_keypair) = gen_account_in("sccp");
+            let plain_tx = TransactionBuilder::new(sccp_chain_id(), plain_account)
+                .sign(plain_keypair.private_key());
+            let plain_hash = plain_tx.hash_as_entrypoint();
+            let sccp_entrypoint = sccp_accepted_transaction().entrypoint().clone();
+            let accepted_plain = AcceptedTransaction::new_unchecked(Cow::Owned(plain_tx.clone()));
             let leader = crate::block::checked_keypair();
-            let block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+            let mut block: SignedBlock = BlockBuilder::new(vec![accepted_plain])
                 .chain(0, None)
-                .with_sccp_commitment_root(Some([0xBB; 32]))
                 .sign(leader.private_key())
                 .unpack(|_| {})
                 .into();
+            block
+                .set_transaction_results(
+                    Vec::new(),
+                    &[plain_hash],
+                    vec![Ok(
+                        iroha_data_model::transaction::DataTriggerSequence::default(),
+                    )],
+                )
+                .expect("single plain transaction result should attach");
+            block.set_external_entrypoints(vec![
+                iroha_data_model::transaction::TransactionEntrypoint::External(plain_tx),
+                sccp_entrypoint,
+            ]);
+
+            let err = ValidBlock::validate_sccp_commitment_root(&block).expect_err(
+                "SCCP validation must reject external SCCP entrypoints without committed results",
+            );
+            assert!(matches!(
+                err,
+                BlockValidationError::SccpTransactionResultCountMismatch {
+                    external_entrypoints: 2,
+                    results: 1,
+                }
+            ));
+        }
+
+        #[test]
+        fn sccp_commitment_root_validation_rejects_invalid_successful_record_payload() {
+            let (account_id, keypair) = gen_account_in("sccp");
+            let accepted = sccp_accepted_transaction_with_overlay(
+                account_id,
+                &keypair,
+                vec![InstructionBox::from(
+                    iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                        b"not a canonical SCCP payload".to_vec(),
+                    ),
+                )],
+            );
+            let leader = crate::block::checked_keypair();
+            let mut block: SignedBlock = BlockBuilder::new(vec![accepted])
+                .chain(0, None)
+                .sign(leader.private_key())
+                .unpack(|_| {})
+                .into();
+            set_single_sccp_transaction_result(
+                &mut block,
+                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
+            );
+
+            let err = ValidBlock::validate_sccp_commitment_root(&block).expect_err(
+                "successful invalid SCCP record payload must not be hidden by an empty root",
+            );
+            assert!(matches!(
+                err,
+                BlockValidationError::SccpInvalidOutboundRecord {
+                    tx_index: 0,
+                    instruction_index: 0,
+                    reason
+                } if reason.contains("payload is invalid")
+            ));
+        }
+
+        #[test]
+        fn sccp_commitment_root_validation_rejects_root_without_messages() {
+            let leader = crate::block::checked_keypair();
+            let mut block: SignedBlock =
+                BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+                    .chain(0, None)
+                    .with_sccp_commitment_root(Some([0xBB; 32]))
+                    .sign(leader.private_key())
+                    .unpack(|_| {})
+                    .into();
+            block
+                .set_transaction_results(Vec::new(), &[], Vec::new())
+                .expect("empty block result fixture should be valid");
 
             let err = ValidBlock::validate_sccp_commitment_root(&block)
                 .expect_err("root without SCCP messages should reject");
@@ -12820,21 +12969,13 @@ pub(crate) mod valid {
             let (account_id, keypair) = gen_account_in("sccp");
             let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 2);
             let leader = crate::block::checked_keypair();
-            let probe_block: SignedBlock = BlockBuilder::new(vec![accepted.clone()])
-                .chain(0, None)
-                .sign(leader.private_key())
-                .unpack(|_| {})
-                .into();
-            let duplicate_messages =
-                crate::bridge::collect_sccp_messages_from_signed_block(&probe_block);
-            assert_eq!(
-                duplicate_messages.len(),
-                2,
-                "signed-block SCCP collection preserves duplicate successful records"
-            );
-            let duplicate_inclusive_root =
-                crate::bridge::sccp_commitment_root_from_messages(&duplicate_messages)
-                    .expect("duplicate-inclusive candidate root");
+            let duplicate_commitment =
+                iroha_sccp::hub_commitment_from_sccp_payload(&sccp_transfer_payload());
+            let duplicate_inclusive_root = iroha_sccp::commitment_merkle_root(&[
+                duplicate_commitment.clone(),
+                duplicate_commitment,
+            ])
+            .expect("duplicate-inclusive candidate root");
             let mut block: SignedBlock = BlockBuilder::new(vec![accepted])
                 .chain(0, None)
                 .with_sccp_commitment_root(Some(duplicate_inclusive_root))
@@ -20389,6 +20530,12 @@ mod event {
             BlockValidationError::EmptyBlock => Reason::EmptyBlock,
             BlockValidationError::DuplicateTransactions => Reason::TransactionValidationFailed,
             BlockValidationError::SccpCommitmentRootMismatch { .. } => {
+                Reason::SccpCommitmentRootMismatch
+            }
+            BlockValidationError::SccpTransactionResultCountMismatch { .. } => {
+                Reason::SccpCommitmentRootMismatch
+            }
+            BlockValidationError::SccpInvalidOutboundRecord { .. } => {
                 Reason::SccpCommitmentRootMismatch
             }
             BlockValidationError::SccpDuplicateOutboundMessage { .. } => {

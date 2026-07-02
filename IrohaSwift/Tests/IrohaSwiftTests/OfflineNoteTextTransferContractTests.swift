@@ -99,6 +99,16 @@ final class OfflineNoteTextTransferContractTests: XCTestCase {
         }
     }
 
+    func testBase64URLDecodeRejectsNonCanonicalPadBits() {
+        XCTAssertEqual(OfflineNoteTextTransferContract.base64URLDecodedData("AA"), Data([0x00]))
+        XCTAssertEqual(OfflineNoteTextTransferContract.base64URLDecodedData("AQ"), Data([0x01]))
+        XCTAssertEqual(OfflineNoteTextTransferContract.base64URLDecodedData("YQ"), Data([0x61]))
+
+        for value in ["AB", "Af", "YR"] {
+            XCTAssertNil(OfflineNoteTextTransferContract.base64URLDecodedData(value), value)
+        }
+    }
+
     func testDeviceToDevicePayloadBudgetMatchesNfcApduBudget() throws {
         XCTAssertEqual(
             OfflineNoteTextTransferContract.maxDeviceToDevicePayloadBytes,

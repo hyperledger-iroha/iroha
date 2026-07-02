@@ -428,7 +428,7 @@ mod tests {
     fn browser_prover_ref(seed: u8) -> SccpRouteBrowserProverManifestRef {
         let hex = |byte| format!("0x{}", hex::encode([byte; 32]));
         SccpRouteBrowserProverManifestRef {
-            module_url: "/sccp-bsc/taira-bsc-xor-prover.js".to_owned(),
+            module_url: "@sora/sccp-bsc-prover/taira-bsc-xor-prover.js".to_owned(),
             module_specifier: Some("@sora/sccp-bsc-prover".to_owned()),
             module_hash: hex(seed),
             manifest_hash: hex(seed.saturating_add(1)),

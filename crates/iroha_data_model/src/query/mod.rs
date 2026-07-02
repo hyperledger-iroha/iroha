@@ -58,6 +58,19 @@ use crate::{
     trigger::{Trigger, TriggerId},
 };
 
+fn verify_query_signature_for_signer(
+    signature: &SignatureOf<QueryRequestWithAuthority>,
+    signer: &PublicKey,
+    payload: &QueryRequestWithAuthority,
+    material_error: &'static str,
+    verify_error: &'static str,
+) -> Result<(), &'static str> {
+    if matches!(signer.try_algorithm(), Ok(iroha_crypto::Algorithm::Ed25519)) {
+        iroha_crypto::ed25519_parse_signature(signature.payload()).map_err(|_| material_error)?;
+    }
+    signature.verify(signer, payload).map_err(|_| verify_error)
+}
+
 impl iroha_version::Version for SignedQuery {
     fn version(&self) -> u8 {
         1
@@ -401,27 +414,23 @@ pub mod json_wrappers {
         fn try_from(v: SignedQueryJson) -> Result<Self, Self::Error> {
             match v {
                 SignedQueryJson::Canonical(v1) => {
-                    // Validate signature against the reconstructed payload
-                    let request_for_verify = query_request_from_json(v1.payload.request.clone())?;
-                    let QuerySignature(sig) = &v1.signature;
-                    sig.verify(
-                        v1.payload.authority.signatory(),
-                        &QueryRequestWithAuthority {
-                            authority: v1.payload.authority.clone(),
-                            request: request_for_verify,
-                        },
-                    )
-                    .map_err(|_| "invalid SignedQuery signature")?;
-
                     let request = query_request_from_json(v1.payload.request)?;
+                    let payload = QueryRequestWithAuthority {
+                        authority: v1.payload.authority,
+                        request,
+                    };
+                    let QuerySignature(sig) = &v1.signature;
+                    verify_query_signature_for_signer(
+                        sig,
+                        payload.authority.signatory(),
+                        &payload,
+                        "invalid SignedQuery signature material",
+                        "invalid SignedQuery signature",
+                    )?;
 
-                    // Build canonical SignedQuery
                     Ok(SignedQuery {
                         signature: v1.signature,
-                        payload: QueryRequestWithAuthority {
-                            authority: v1.payload.authority,
-                            request,
-                        },
+                        payload,
                     })
                 }
             }
@@ -2402,9 +2411,13 @@ mod candidate {
     impl SignedQueryCandidate {
         fn validate(self) -> Result<SignedQuery, &'static str> {
             let QuerySignature(signature) = &self.signature;
-            signature
-                .verify(self.payload.authority.signatory(), &self.payload)
-                .map_err(|_| "Query request signature is not valid")?;
+            verify_query_signature_for_signer(
+                signature,
+                self.payload.authority.signatory(),
+                &self.payload,
+                "Query request signature material is not valid",
+                "Query request signature is not valid",
+            )?;
 
             Ok(SignedQuery {
                 payload: self.payload,
@@ -2558,6 +2571,43 @@ mod candidate {
                 .err()
                 .expect("expected signature validation to fail");
             assert_eq!(err, "Query request signature is not valid");
+        }
+
+        #[test]
+        fn malformed_ed25519_signature_r_rejected_before_verify() {
+            const SMALL_ORDER_R: [u8; 32] = [
+                1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0,
+            ];
+            const NONCANONICAL_R: [u8; 32] = [
+                0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0x7f,
+            ];
+
+            for (label, replacement_r) in [
+                ("small-order", SMALL_ORDER_R),
+                ("noncanonical", NONCANONICAL_R),
+            ] {
+                let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
+                    FindExecutorDataModel,
+                ))
+                .with_authority(ALICE_ID.clone())
+                .sign(&ALICE_KEYPAIR);
+                let mut candidate = SignedQueryCandidate {
+                    signature: signed_query.signature,
+                    payload: signed_query.payload,
+                };
+                let mut sig_bytes = candidate.signature.0.payload().to_vec();
+                sig_bytes[..replacement_r.len()].copy_from_slice(&replacement_r);
+                *candidate.signature.0 = iroha_crypto::Signature::from_bytes(&sig_bytes);
+
+                let err = candidate
+                    .validate()
+                    .err()
+                    .unwrap_or_else(|| panic!("{label} Ed25519 signature R must be rejected"));
+                assert_eq!(err, "Query request signature material is not valid");
+            }
         }
 
         #[test]
@@ -2743,6 +2793,30 @@ mod json_roundtrip_tests {
             !message.contains("panic during decode"),
             "invalid signatures should not surface as decode panics: {message}"
         );
+    }
+
+    #[test]
+    fn signed_query_json_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+        let mut json = SignedQueryJson::from(&signed);
+        let SignedQueryJson::Canonical(canonical) = &mut json;
+        let mut signature = canonical.signature.0.payload().to_vec();
+        signature[..SMALL_ORDER_R.len()].copy_from_slice(&SMALL_ORDER_R);
+        *canonical.signature.0 = Signature::from_bytes(&signature);
+
+        let err = match SignedQuery::try_from(json) {
+            Ok(_) => panic!("JSON signed query with malformed Ed25519 R must fail admission"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err, "invalid SignedQuery signature material");
     }
 
     #[test]

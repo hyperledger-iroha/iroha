@@ -10153,6 +10153,19 @@ fileprivate enum ToriiRequestValidation {
         }
         return trimmed
     }
+
+    static func normalizedExactBase64(_ value: String, field: String) throws -> String {
+        guard !value.isEmpty, value == value.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            throw ToriiClientError.invalidPayload("\(field) must be exact standard-base64.")
+        }
+        guard let data = Data(base64Encoded: value), !data.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(field) must be valid base64.")
+        }
+        guard data.base64EncodedString() == value else {
+            throw ToriiClientError.invalidPayload("\(field) must be exact standard-base64.")
+        }
+        return value
+    }
 }
 
 public enum ToriiVerifyingKeyEvent: Sendable {
@@ -10985,7 +10998,7 @@ public struct ToriiContractCallRequest: Encodable, Sendable {
             field: "public_key_hex"
         )
         let normalizedSignatureB64 = try signatureB64.map {
-            try ToriiRequestValidation.normalizedBase64($0, field: "signature_b64")
+            try ToriiRequestValidation.normalizedExactBase64($0, field: "signature_b64")
         }
         let normalizedTarget = try normalizeToriiContractTargetSelector(
             contractAddress: contractAddress,
@@ -11421,7 +11434,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         )
         let normalizedPublicKeyHex = try ToriiRequestValidation.normalizedOptional32ByteHex(publicKeyHex, field: "public_key_hex")
         let normalizedSignatureB64 = try signatureB64.map {
-            try ToriiRequestValidation.normalizedBase64($0, field: "signature_b64")
+            try ToriiRequestValidation.normalizedExactBase64($0, field: "signature_b64")
         }
         let normalizedFeeSponsor = try feeSponsor.map {
             try normalizeToriiAccountIdQueryValue($0, field: "fee_sponsor")
@@ -11543,7 +11556,7 @@ public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
         let normalizedEntrypoint = try ToriiRequestValidation.normalizedNonEmpty(entrypoint, field: "entrypoint")
         let normalizedPublicKeyHex = try ToriiRequestValidation.normalizedOptional32ByteHex(publicKeyHex, field: "public_key_hex")
         let normalizedSignatureB64 = try signatureB64.map {
-            try ToriiRequestValidation.normalizedBase64($0, field: "signature_b64")
+            try ToriiRequestValidation.normalizedExactBase64($0, field: "signature_b64")
         }
         let normalizedGasAssetId = try gasAssetId.map {
             try normalizeToriiAssetIdQueryValue($0, field: "gas_asset_id")
@@ -11616,7 +11629,7 @@ public struct ToriiMultisigContractCallApproveRequest: Encodable, Sendable {
         )
         let normalizedPublicKeyHex = try ToriiRequestValidation.normalizedOptional32ByteHex(publicKeyHex, field: "public_key_hex")
         let normalizedSignatureB64 = try signatureB64.map {
-            try ToriiRequestValidation.normalizedBase64($0, field: "signature_b64")
+            try ToriiRequestValidation.normalizedExactBase64($0, field: "signature_b64")
         }
         let normalizedProposalId = try ToriiRequestValidation.normalizedOptionalNonEmpty(proposalId, field: "proposal_id")
         let normalizedInstructionsHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
@@ -14245,6 +14258,28 @@ public struct ToriiBridgeProofSubmitRequest: Encodable, Sendable, Equatable {
         case tronVerifierAddress = "tron_verifier_address"
         case proofBytesHex = "proof_bytes_hex"
         case creationTimeMs = "creation_time_ms"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedSignatureB64 = try signatureB64.map {
+            try ToriiRequestValidation.normalizedExactBase64($0, field: "signature_b64")
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(authority, forKey: .authority)
+        try container.encodeIfPresent(privateKey, forKey: .privateKey)
+        try container.encodeIfPresent(publicKeyHex, forKey: .publicKeyHex)
+        try container.encodeIfPresent(normalizedSignatureB64, forKey: .signatureB64)
+        try container.encodeIfPresent(burnBundle, forKey: .burnBundle)
+        try container.encodeIfPresent(messageBundle, forKey: .messageBundle)
+        try container.encodeIfPresent(networkIdHex, forKey: .networkIdHex)
+        try container.encodeIfPresent(verifierAddressHex, forKey: .verifierAddressHex)
+        try container.encodeIfPresent(bridgeAddressHex, forKey: .bridgeAddressHex)
+        try container.encodeIfPresent(verifierCodeHashHex, forKey: .verifierCodeHashHex)
+        try container.encodeIfPresent(verifierKeyHashHex, forKey: .verifierKeyHashHex)
+        try container.encodeIfPresent(expectedDestinationBindingHashHex, forKey: .expectedDestinationBindingHashHex)
+        try container.encodeIfPresent(tronVerifierAddress, forKey: .tronVerifierAddress)
+        try container.encodeIfPresent(proofBytesHex, forKey: .proofBytesHex)
+        try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
     }
 }
 

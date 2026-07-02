@@ -140,12 +140,20 @@ impl PotrSignatureV1 {
                 reason: "invalid public key",
             }
         })?;
-        let signature = Signature::try_from_bytes(&self.signature).map_err(|_| {
-            PotrReceiptValidationError::InvalidSignature {
-                context,
-                reason: "invalid signature material",
-            }
-        })?;
+        let signature =
+            match algorithm {
+                Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(&self.signature)
+                    .map_err(|_| PotrReceiptValidationError::InvalidSignature {
+                        context,
+                        reason: "invalid signature material",
+                    })?,
+                _ => Signature::try_from_bytes(&self.signature).map_err(|_| {
+                    PotrReceiptValidationError::InvalidSignature {
+                        context,
+                        reason: "invalid signature material",
+                    }
+                })?,
+            };
         signature.verify(&public_key, payload).map_err(|_| {
             PotrReceiptValidationError::InvalidSignature {
                 context,

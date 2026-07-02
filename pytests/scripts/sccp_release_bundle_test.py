@@ -55,6 +55,25 @@ class HostilePublicKey:
         return "secret-token-hostile-key"
 
 
+class HashCollisionPublicKey:
+    """Mapping key that must not be compared with public schema strings."""
+
+    def __init__(self, target: str) -> None:
+        self.target = target
+
+    def __hash__(self) -> int:
+        return hash(self.target)
+
+    def __eq__(self, other):
+        raise AssertionError("secret-token hostile __eq__")
+
+    def __str__(self):
+        raise AssertionError("secret-token hostile __str__")
+
+    def __repr__(self):
+        return "secret-token-collision-key"
+
+
 def skip_unless_system_temp_is_symlink() -> None:
     if not Path("/tmp").is_symlink():
         pytest.skip("/tmp is not a symlink on this platform")
@@ -2110,6 +2129,129 @@ def fixed_hex32(seed: int) -> str:
     """Return a non-zero 32-byte hex fixture."""
 
     return "0x" + f"{seed % 256:02x}" * 32
+
+
+def release_module_domain(module, name: str) -> int:
+    if hasattr(module, name):
+        return getattr(module, name)
+    return getattr(module, f"_{name.lower()}")()
+
+
+def active_template_hash_from_release_module(module, lane: str, field: str) -> bytes:
+    if hasattr(module, "_all_lanes_module"):
+        all_lanes = module._all_lanes_module()
+    else:
+        all_lanes = module._load_all_lanes_module()
+    helper = all_lanes._load_sibling_module("sccp_source_template_hashes.py")
+    for template_lane, template_field, template_hash in (
+        helper.sccp_active_source_template_component_hashes()
+    ):
+        if template_lane == lane and template_field == field:
+            return template_hash
+    raise AssertionError(f"missing active {lane} template hash for {field}")
+
+
+def test_release_bundle_template_helpers_reject_foreign_active_lane_templates():
+    bundle = load_bundle_module()
+    report = load_report_module()
+    verifier = load_verify_helpers()
+
+    for module in (bundle, verifier):
+        eth_domain = release_module_domain(module, "SCCP_DOMAIN_ETH")
+        solana_template = active_template_hash_from_release_module(
+            module,
+            "Solana",
+            "consensus_verifier_hash",
+        )
+        forged_hash = "0x" + solana_template.hex()
+        assert solana_template in module._source_adapter_gate_template_hashes(
+            eth_domain
+        )
+
+        record_errors = module._source_record_template_hash_errors(
+            "cryptographic_evidence row",
+            eth_domain,
+            {"source_verifier_material_hash": forged_hash},
+        )
+        gate_errors = module._source_adapter_gate_template_hash_errors(
+            "cryptographic_evidence source_adapter_gate_hash",
+            eth_domain,
+            forged_hash,
+        )
+        audit_errors = module._source_adapter_gate_template_audit_errors(
+            "cryptographic_evidence source_adapter_gate_audit_hashes",
+            eth_domain,
+            {"evm_source_gate_hash": forged_hash},
+        )
+        canary_errors = module._route_canary_template_hash_errors(
+            "cryptographic_evidence route_canary",
+            eth_domain,
+            {"route_canary_evidence_hash": forged_hash},
+        )
+
+        combined_errors = "\n".join(
+            [*record_errors, *gate_errors, *audit_errors, *canary_errors]
+        )
+        assert (
+            "source_verifier_material_hash must be deployed evidence, "
+            "not built-in template material"
+        ) in combined_errors
+        assert (
+            "source_adapter_gate_hash must be deployed gate evidence, "
+            "not built-in template material"
+        ) in combined_errors
+        assert (
+            "evm_source_gate_hash must be deployed audit evidence, "
+            "not built-in template material"
+        ) in combined_errors
+        assert (
+            "route_canary_evidence_hash must be live evidence, "
+            "not built-in template material"
+        ) in combined_errors
+
+    eth_domain = report.SCCP_DOMAIN_ETH
+    solana_template = active_template_hash_from_release_module(
+        report,
+        "Solana",
+        "consensus_verifier_hash",
+    )
+    forged_hash = "0x" + solana_template.hex()
+    assert solana_template in report._source_adapter_gate_template_hashes(eth_domain)
+    report_errors = [
+        *report._public_cryptographic_source_record_template_hash_errors(
+            "readiness cryptographic row",
+            eth_domain,
+            {"source_verifier_material_hash": forged_hash},
+        ),
+        *report._public_cryptographic_source_adapter_gate_template_hash_errors(
+            "readiness cryptographic row",
+            eth_domain,
+            forged_hash,
+            {"evm_source_gate_hash": forged_hash},
+        ),
+        *report._public_cryptographic_route_canary_template_hash_errors(
+            "readiness cryptographic row",
+            eth_domain,
+            {"route_canary_evidence_hash": forged_hash},
+        ),
+    ]
+    report_error_text = "\n".join(report_errors)
+    assert (
+        "source_verifier_material_hash must be deployed evidence, "
+        "not built-in template material"
+    ) in report_error_text
+    assert (
+        "source_adapter_gate_hash must be deployed gate evidence, "
+        "not built-in template material"
+    ) in report_error_text
+    assert (
+        "evm_source_gate_hash must be deployed audit evidence, "
+        "not built-in template material"
+    ) in report_error_text
+    assert (
+        "route_canary_evidence_hash must be live evidence, "
+        "not built-in template material"
+    ) in report_error_text
 
 
 def fixed_tron_address(seed: int) -> str:
@@ -10307,6 +10449,22 @@ def test_release_bundle_rejects_copied_crypto_source_adapter_gate_hash_role_repl
         "must not reuse route_canary_message_id"
     ) in errors
 
+    route_call_data_hash = fixed_hex32(0x98)
+    row["route_canary_call_data_sha256"] = route_call_data_hash
+    row["source_adapter_gate_hash"] = route_call_data_hash
+    row["source_adapter_gate_audit_hashes"]["solana_full_light_client_gate_hash"] = (
+        route_call_data_hash
+    )
+
+    errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+    # Source-inventory marker: bundle crypto source-gate transcript replay rejects route_canary_call_data_sha256
+    assert (
+        f"{label} source_adapter_gate hash role "
+        "source_adapter_gate_audit_hashes.solana_full_light_client_gate_hash "
+        "must not reuse route_canary_call_data_sha256"
+    ) in errors
+
 
 def test_release_bundle_rejects_copied_crypto_route_canary_transcript_replay() -> None:
     """Copied crypto rows must not publish transcript hashes as canary evidence."""
@@ -10359,8 +10517,18 @@ def test_release_bundle_rejects_copied_crypto_route_canary_transcript_replay() -
     errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
 
     assert (
-        f"{label} route_canary hash role route_canary_evidence_hash "
-        "must not reuse route_canary_message_id"
+        f"{label} route_canary hash role route_canary_message_id "
+        "must not reuse route_canary_evidence_hash"
+    ) in errors
+
+    row["route_canary_evidence_hash"] = row["route_canary_call_data_sha256"]
+
+    errors = bundle._cryptographic_evidence_row_bundle_errors(row, label)
+
+    # Source-inventory marker: bundle crypto route-canary transcript replay rejects route_canary_call_data_sha256
+    assert (
+        f"{label} route_canary hash role route_canary_call_data_sha256 "
+        "must not reuse route_canary_evidence_hash"
     ) in errors
 
 
@@ -20854,6 +21022,14 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
                         "validation_status": "passed",
                         "validation_blockers": [],
                     },
+                    HashCollisionPublicKey("phase_evidence_source_gate"): {
+                        "validation_status": "passed",
+                        "validation_blockers": [],
+                    },
+                    "proof_request_bundle_gate": {
+                        HashCollisionPublicKey("validation_status"): "passed",
+                        "validation_blockers": [],
+                    },
                     "operator attestation": {
                         "validation_status": "passed",
                         "validation_blockers": [],
@@ -20946,6 +21122,14 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
         "contains unknown field: operator_attestation"
     ) in captured.err
     assert (
+        "bundled report.source_inventory['proof_request_bundle_gate'] "
+        "contains malformed unknown field name"
+    ) in captured.err
+    assert (
+        "bundled report.source_inventory['proof_request_bundle_gate'] "
+        "missing field: validation_status"
+    ) in captured.err
+    assert (
         "bundled report.source_inventory['release_public_json_root_schema_gate'] "
         "contains unknown field name with surrounding whitespace"
     ) in captured.err
@@ -20989,6 +21173,7 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
     assert "secret-token gate blocker" not in captured.err
     assert "hostile" not in captured.err
     assert "__str__" not in captured.err
+    assert "__eq__" not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -31523,6 +31708,29 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "or case-variant aliases remain forged evidence"
     ) in errors
 
+    trx_metadata_percent_line = next(
+        line
+        for line in markdown.splitlines()
+        if line.startswith("- TRX XML metadata percent decoding")
+    )
+    weakened = markdown.replace(f"{trx_metadata_percent_line}\n", "")
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: TRX XML metadata percent decoding is bounded "
+        "and fail-closed"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: sensitive metadata hidden behind nested "
+        "percent encoding"
+    ) in errors
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        "release evidence marker: values still percent-decodable after eight "
+        "rounds remain forged evidence"
+    ) in errors
+
     vstest_success_line = next(
         line
         for line in markdown.splitlines()
@@ -33444,7 +33652,15 @@ def test_release_bundle_verifier_redacts_hostile_public_schema_keys(
                 hostile_key: {
                     "validation_status": "blocked",
                     "validation_blockers": ["operator review pending"],
-                }
+                },
+                HashCollisionPublicKey("phase_evidence_source_gate"): {
+                    "validation_status": "passed",
+                    "validation_blockers": [],
+                },
+                "proof_request_bundle_gate": {
+                    HashCollisionPublicKey("validation_status"): "passed",
+                    "validation_blockers": [],
+                },
             }
         )
     )
@@ -33495,7 +33711,12 @@ def test_release_bundle_verifier_redacts_hostile_public_schema_keys(
                 "required_domains": [],
                 "supported_launch_domains": [],
                 "unsupported_launch_domains": [],
-                "lanes": [{hostile_key: "secret-token lane note"}],
+                "lanes": [
+                    {
+                        HashCollisionPublicKey("domain"): "secret-token domain alias",
+                        hostile_key: "secret-token lane note",
+                    }
+                ],
                 "blockers": [],
                 "release_checklist": {"ready": True, "items": []},
                 hostile_key: "secret-token summary note",
@@ -33579,9 +33800,24 @@ def test_release_bundle_verifier_redacts_hostile_public_schema_keys(
     rendered = "\n".join(errors)
     assert errors
     assert "malformed" in rendered
+    assert (
+        "readiness report source_inventory contains malformed unknown gate name"
+        in rendered
+    )
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate contains "
+        "malformed unknown field name"
+    ) in rendered
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate missing "
+        "field: validation_status"
+    ) in rendered
+    assert "all-lanes summary lane 0 contains malformed unknown field name" in rendered
+    assert "all-lanes summary lane 0 missing field: domain" in rendered
     assert "secret-token" not in rendered
     assert "hostile" not in rendered
     assert "AssertionError" not in rendered
+    assert "__eq__" not in rendered
 
 
 def test_release_bundle_verifier_rejects_non_utf8_manifest_json(
@@ -38091,6 +38327,21 @@ def test_release_bundle_verifier_decodes_active_launch_blocker_domain_prefixes(
     assert f"{prefix}{other_lane}" not in rendered
 
 
+def test_release_bundle_verifier_public_blocker_keys_casefold_decoded_text() -> None:
+    """Strict verifier public blocker keys must casefold decoded text."""
+
+    verifier = load_verify_helpers()
+
+    assert (
+        verifier._canonical_public_blocker_key("Route%20Canary%20Stra%C3%9Fe")
+        == "route canary strasse"
+    )
+    assert (
+        verifier._decoded_sensitive_public_marker_text("API%20KEY%20Stra%C3%9Fe")
+        == "api key strasse"
+    )
+
+
 def test_release_bundle_verifier_blocks_malformed_native_prover_blockers(
     tmp_path: Path,
 ) -> None:
@@ -41435,6 +41686,21 @@ def test_release_bundle_public_blocker_helpers_reject_decoded_unsafe_text() -> N
         )
 
 
+def test_release_bundle_public_blocker_keys_casefold_decoded_text() -> None:
+    """Bundle builder public blocker keys must casefold decoded text."""
+
+    bundle = load_bundle_module()
+
+    assert (
+        bundle._canonical_public_blocker_key("Route%20Canary%20Stra%C3%9Fe")
+        == "route canary strasse"
+    )
+    assert (
+        bundle._decoded_sensitive_public_marker_text("API%20KEY%20Stra%C3%9Fe")
+        == "api key strasse"
+    )
+
+
 def test_release_bundle_public_sensitive_markers_reject_encoded_confusables() -> None:
     """Bundle and verifier helpers must redact decoded homoglyph secrets."""
 
@@ -44377,17 +44643,142 @@ def test_release_bundle_verifier_rejects_route_canary_evidence_hash_role_reuse(
         ) in verified.stdout
 
 
+def test_release_bundle_all_lanes_route_canary_transcript_fields_follow_template_tuple() -> None:
+    """Route-canary transcript role helpers must derive from the central tuple."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    evm_expected = (
+        "transaction_hash",
+        "receipt_block_hash",
+        "block_receipts_root",
+        "call_data_sha256",
+        "message_id",
+        "payload_hash",
+        "statement_hash",
+        "commitment_root",
+        "finality_height",
+        "finality_block_hash",
+        "evidence_hash",
+    )
+    tron_expected = (
+        "transaction_id",
+        "message_id",
+        "call_data_sha256",
+        "payload_hash",
+        "statement_hash",
+        "commitment_root",
+        "finality_height",
+        "finality_block_hash",
+        "signature_sha256",
+        "evidence_hash",
+    )
+
+    assert (
+        bundle._all_lanes_route_canary_transcript_hash_fields(
+            verifier.SCCP_DOMAIN_ETH
+        )
+        == evm_expected
+    )
+    assert (
+        verifier._all_lanes_route_canary_transcript_hash_fields(
+            verifier.SCCP_DOMAIN_BSC
+        )
+        == evm_expected
+    )
+    assert (
+        bundle._all_lanes_route_canary_transcript_hash_fields(
+            verifier.SCCP_DOMAIN_TRON
+        )
+        == tron_expected
+    )
+    assert (
+        verifier._all_lanes_route_canary_transcript_hash_fields(
+            verifier.SCCP_DOMAIN_TRON
+        )
+        == tron_expected
+    )
+
+
+def test_release_bundle_all_lanes_source_gate_route_canary_roles_use_hash_fields_only() -> None:
+    """Source-gate role checks must reserve hash roles, not scalar canary fields."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    evm_expected = (
+        "transaction_hash",
+        "receipt_block_hash",
+        "block_receipts_root",
+        "call_data_sha256",
+        "message_id",
+        "payload_hash",
+        "statement_hash",
+        "commitment_root",
+        "finality_height",
+        "finality_block_hash",
+    )
+    tron_expected = (
+        "call_data_sha256",
+        "message_id",
+        "payload_hash",
+        "statement_hash",
+        "commitment_root",
+        "finality_height",
+        "finality_block_hash",
+        "transaction_id",
+        "signature_sha256",
+    )
+    ton_expected = ("ton_account_state_hash", "ton_last_transaction_hash")
+
+    assert (
+        bundle._all_lanes_route_canary_source_gate_hash_role_fields(
+            verifier.SCCP_DOMAIN_ETH
+        )
+        == evm_expected
+    )
+    assert (
+        verifier._all_lanes_route_canary_source_gate_hash_role_fields(
+            verifier.SCCP_DOMAIN_BSC
+        )
+        == evm_expected
+    )
+    assert (
+        bundle._all_lanes_route_canary_source_gate_hash_role_fields(
+            verifier.SCCP_DOMAIN_TRON
+        )
+        == tron_expected
+    )
+    assert (
+        verifier._all_lanes_route_canary_source_gate_hash_role_fields(
+            verifier.SCCP_DOMAIN_TON
+        )
+        == ton_expected
+    )
+    for forbidden in (
+        "evidence_hash",
+        "route_allowlist_hash",
+        "destination_binding_hash",
+        "log_index",
+        "block_number",
+        "ton_last_transaction_lt",
+        "solana_programdata_slot",
+    ):
+        assert forbidden not in evm_expected
+        assert forbidden not in tron_expected
+        assert forbidden not in ton_expected
+
+
 def test_release_bundle_all_lanes_route_canary_rejects_source_gate_hash_matrix() -> None:
     """All active EVM canary hash roles must reject same-lane source-gate replay."""
 
     verifier = load_verify_helpers()
-    canary_hash_fields = (
-        "evidence_hash",
-        "transaction_hash",
-        "receipt_block_hash",
-        "block_receipts_root",
-        "message_id",
+    canary_hash_fields = tuple(
+        sorted(
+            set(verifier.ALL_LANES_EVM_ROUTE_CANARY_KEYS)
+            & set(verifier.ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS)
+        )
     )
+    assert "call_data_sha256" in canary_hash_fields
     label = "all-lanes summary lane domain 1 route_allowlist route_canary"
     for target_field in canary_hash_fields:
         lane = evm_route_canary_lane(verifier, verifier.SCCP_DOMAIN_ETH, 0x10)
@@ -44410,13 +44801,13 @@ def test_release_bundle_all_lanes_route_canary_sweeps_upstream_hash_replay() -> 
     """Cross-lane replay checks must cover every active canary/upstream hash pair."""
 
     verifier = load_verify_helpers()
-    canary_hash_fields = (
-        "evidence_hash",
-        "transaction_hash",
-        "receipt_block_hash",
-        "block_receipts_root",
-        "message_id",
+    canary_hash_fields = tuple(
+        sorted(
+            set(verifier.ALL_LANES_EVM_ROUTE_CANARY_KEYS)
+            & set(verifier.ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS)
+        )
     )
+    assert "call_data_sha256" in canary_hash_fields
     upstream_roles = (
         (
             "source_verifier_material_hash",
@@ -48019,6 +48410,36 @@ def test_release_bundle_verifier_rejects_crypto_source_gate_transcript_replay(
         in verified.stdout
     )
 
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 1)
+    route_call_data_hash = row["route_canary_call_data_sha256"]
+    row["source_adapter_gate_hash"] = route_call_data_hash
+    row["source_adapter_gate_audit_hashes"]["evm_source_gate_hash"] = (
+        route_call_data_hash
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    # Source-inventory marker: strict verifier crypto source-gate transcript replay rejects route_canary_call_data_sha256
+    assert (
+        "readiness report cryptographic evidence row source_adapter_gate hash role "
+        "source_adapter_gate_audit_hashes.evm_source_gate_hash must not reuse "
+        "route_canary_call_data_sha256"
+    ) in verified.stdout
+
 
 def test_release_bundle_verifier_rejects_crypto_route_canary_transcript_replay(
     tmp_path: Path,
@@ -48048,12 +48469,37 @@ def test_release_bundle_verifier_rejects_crypto_route_canary_transcript_replay(
     assert verified.returncode == 1
     assert (
         "readiness report cryptographic evidence row route_canary hash role "
-        "route_canary_evidence_hash must not reuse route_canary_message_id"
+        "route_canary_message_id must not reuse route_canary_evidence_hash"
     ) in verified.stdout
     assert (
         "readiness report cryptographic_evidence does not match embedded lane evidence"
         in verified.stdout
     )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 1)
+    row["route_canary_evidence_hash"] = row["route_canary_call_data_sha256"]
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    # Source-inventory marker: strict verifier crypto route-canary transcript replay rejects route_canary_call_data_sha256
+    assert (
+        "readiness report cryptographic evidence row route_canary hash role "
+        "route_canary_call_data_sha256 must not reuse route_canary_evidence_hash"
+    ) in verified.stdout
 
     tron_tmp_path = tmp_path / "tron"
     tron_tmp_path.mkdir()
@@ -48080,7 +48526,7 @@ def test_release_bundle_verifier_rejects_crypto_route_canary_transcript_replay(
     assert verified.returncode == 1
     assert (
         "readiness report cryptographic evidence row route_canary hash role "
-        "route_canary_evidence_hash must not reuse route_canary_signature_sha256"
+        "route_canary_signature_sha256 must not reuse route_canary_evidence_hash"
     ) in verified.stdout
     assert (
         "readiness report cryptographic_evidence does not match embedded lane evidence"
@@ -59409,6 +59855,9 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
         "TRUSTED_VSTEST_METADATA_ATTRIBUTES_BY_ELEMENT",
         "urllib.parse.unquote",
         "iter_percent_decoded_trx_attribute_values",
+        "TRX_ATTRIBUTE_PERCENT_DECODE_MAX_ROUNDS = 8",
+        "for _round in range(TRX_ATTRIBUTE_PERCENT_DECODE_MAX_ROUNDS)",
+        "requires TRX XML metadata to avoid deeply nested percent encoding",
         "not is_printable_ascii_trx_attribute_value(value)",
         "has_sensitive_trx_attribute_value(value)",
         'not segments[-1].endswith(".dll")',
@@ -59434,6 +59883,8 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
         "unexpected-trusted-attribute",
         "schema-known-sensitive-attribute",
         "schema-known-percent-sensitive-attribute",
+        "schema-known-deep-percent-sensitive-attribute",
+        "schema-known-excessive-percent-encoding",
         "schema-known-percent-control-attribute",
         "schema-known-percent-nonascii-attribute",
         "schema-known-freeform-duration-attribute",

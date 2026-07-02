@@ -31761,7 +31761,7 @@ impl<'state> StateBlock<'state> {
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
             crypto: self.crypto.clone(),
-            nexus: self.state_ref.nexus_snapshot(),
+            nexus: self.nexus.clone(),
             lane_manifests: self.lane_manifests.clone(),
             lane_privacy_registry: self.lane_privacy_registry.clone(),
             lane_compliance: self.lane_compliance.clone(),
@@ -32212,6 +32212,9 @@ impl<'state> StateBlock<'state> {
     ) -> Vec<EventBox> {
         let block_hash = block.as_ref().hash();
         trace!(%block_hash, "Applying block");
+        crate::bridge::validate_sccp_commitment_root_for_signed_block(block.as_ref()).expect(
+            "committed block failed SCCP commitment validation before apply_without_execution",
+        );
 
         let block_height = block
             .as_ref()
@@ -34008,6 +34011,440 @@ mod state_commit_lock_order_tests {
                 .is_some(),
             "published lane should survive prebuilt block serialization"
         );
+    }
+
+    #[test]
+    fn transaction_uses_prebuilt_block_nexus_snapshot_after_shared_catalog_update() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        state.nexus.write().enabled = true;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let block_catalog = block.nexus.lane_catalog.clone();
+
+        let updated_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfigModel::default(),
+                LaneConfigModel {
+                    id: LaneId::new(1),
+                    alias: "post-block-beta".to_owned(),
+                    ..LaneConfigModel::default()
+                },
+            ],
+        )
+        .expect("updated lane catalog");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&updated_catalog);
+            nexus.lane_catalog = updated_catalog;
+        }
+        assert!(
+            state
+                .nexus_snapshot()
+                .lane_catalog
+                .by_alias("post-block-beta")
+                .is_some(),
+            "shared Nexus catalog update should be visible to new state snapshots"
+        );
+
+        let tx = block.transaction();
+
+        assert_eq!(tx.nexus.lane_catalog, block_catalog);
+        assert!(
+            tx.nexus.lane_catalog.by_alias("post-block-beta").is_none(),
+            "transactions opened from a prebuilt block must not observe later Nexus catalog updates"
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "committed block failed SCCP commitment validation before apply_without_execution"
+    )]
+    fn apply_without_execution_rejects_duplicate_sccp_records_before_state_mutation() {
+        let keypair = crate::state::checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 44,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 1,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x0000000000000000000000000000000000000044".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+        let record = iroha_data_model::isi::bridge::RecordSccpMessage::new(payload_bytes.clone());
+        let tx = iroha_data_model::transaction::TransactionBuilder::new(
+            ChainId::from("apply-sccp-duplicate"),
+            authority,
+        )
+        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
+            iroha_data_model::transaction::IvmProved {
+                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
+                    0x01, 0x02, 0x03,
+                ]),
+                overlay: vec![
+                    iroha_data_model::isi::InstructionBox::from(record.clone()),
+                    iroha_data_model::isi::InstructionBox::from(record),
+                ]
+                .into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            },
+        ))
+        .sign(keypair.private_key());
+        let entry_hash = tx.hash_as_entrypoint();
+        let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
+        let leader = crate::state::checked_keypair();
+        let mut block: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
+            .chain(0, None)
+            .sign(leader.private_key())
+            .unpack(|_| {})
+            .into();
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![Ok(
+                    iroha_data_model::transaction::DataTriggerSequence::default(),
+                )],
+            )
+            .expect("test block entrypoint hash should match payload");
+        let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
+        let root = crate::bridge::sccp_commitment_root_from_messages(&messages)
+            .expect("deduplicated SCCP root");
+        block.set_sccp_commitment_root(Some(root));
+        let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let mut state_block = state.block(committed.as_ref().header());
+
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "committed block failed SCCP commitment validation before apply_without_execution"
+    )]
+    fn apply_without_execution_rejects_invalid_sccp_record_payload_before_state_mutation() {
+        let keypair = crate::state::checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let record = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+            b"not a canonical SCCP payload".to_vec(),
+        );
+        let tx = iroha_data_model::transaction::TransactionBuilder::new(
+            ChainId::from("apply-sccp-invalid-record"),
+            authority,
+        )
+        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
+            iroha_data_model::transaction::IvmProved {
+                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
+                    0x01, 0x02, 0x03,
+                ]),
+                overlay: vec![iroha_data_model::isi::InstructionBox::from(record)].into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            },
+        ))
+        .sign(keypair.private_key());
+        let entry_hash = tx.hash_as_entrypoint();
+        let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
+        let leader = crate::state::checked_keypair();
+        let mut block: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
+            .chain(0, None)
+            .sign(leader.private_key())
+            .unpack(|_| {})
+            .into();
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![Ok(
+                    iroha_data_model::transaction::DataTriggerSequence::default(),
+                )],
+            )
+            .expect("test block entrypoint hash should match payload");
+        let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let mut state_block = state.block(committed.as_ref().header());
+
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "committed block failed SCCP commitment validation before apply_without_execution"
+    )]
+    fn apply_without_execution_rejects_unbound_sccp_record_route_before_state_mutation() {
+        let keypair = crate::state::checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 47,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 1,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x0000000000000000000000000000000000000047".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:bsc:xor".to_vec(),
+        });
+        let record = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+            iroha_sccp::canonical_sccp_payload_bytes(&payload),
+        );
+        let tx = iroha_data_model::transaction::TransactionBuilder::new(
+            ChainId::from("apply-sccp-unbound-route"),
+            authority,
+        )
+        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
+            iroha_data_model::transaction::IvmProved {
+                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
+                    0x01, 0x02, 0x03,
+                ]),
+                overlay: vec![iroha_data_model::isi::InstructionBox::from(record)].into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            },
+        ))
+        .sign(keypair.private_key());
+        let entry_hash = tx.hash_as_entrypoint();
+        let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
+        let leader = crate::state::checked_keypair();
+        let mut block: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
+            .chain(0, None)
+            .sign(leader.private_key())
+            .unpack(|_| {})
+            .into();
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![Ok(
+                    iroha_data_model::transaction::DataTriggerSequence::default(),
+                )],
+            )
+            .expect("test block entrypoint hash should match payload");
+        let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let mut state_block = state.block(committed.as_ref().header());
+
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "committed block failed SCCP commitment validation before apply_without_execution"
+    )]
+    fn apply_without_execution_rejects_unbound_sccp_route_activation_before_state_mutation() {
+        let keypair = crate::state::checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let payload =
+            iroha_sccp::SccpPayloadV1::RouteActivate(iroha_sccp::RouteActivatePayloadV1 {
+                version: 1,
+                source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                nonce: 48,
+                asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                asset_id: b"xor#universal".to_vec(),
+                route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                route_id: b"nexus:bsc:xor".to_vec(),
+            });
+        let record = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+            iroha_sccp::canonical_sccp_payload_bytes(&payload),
+        );
+        let tx = iroha_data_model::transaction::TransactionBuilder::new(
+            ChainId::from("apply-sccp-unbound-route-activation"),
+            authority,
+        )
+        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
+            iroha_data_model::transaction::IvmProved {
+                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
+                    0x01, 0x02, 0x03,
+                ]),
+                overlay: vec![iroha_data_model::isi::InstructionBox::from(record)].into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            },
+        ))
+        .sign(keypair.private_key());
+        let entry_hash = tx.hash_as_entrypoint();
+        let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
+        let leader = crate::state::checked_keypair();
+        let mut block: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
+            .chain(0, None)
+            .sign(leader.private_key())
+            .unpack(|_| {})
+            .into();
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![Ok(
+                    iroha_data_model::transaction::DataTriggerSequence::default(),
+                )],
+            )
+            .expect("test block entrypoint hash should match payload");
+        let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let mut state_block = state.block(committed.as_ref().header());
+
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "committed block failed SCCP commitment validation before apply_without_execution"
+    )]
+    fn apply_without_execution_rejects_malformed_sccp_asset_scope_before_state_mutation() {
+        let keypair = crate::state::checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 49,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal#shadow".to_vec(),
+            amount: 1,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x0000000000000000000000000000000000000049".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let record = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+            iroha_sccp::canonical_sccp_payload_bytes(&payload),
+        );
+        let tx = iroha_data_model::transaction::TransactionBuilder::new(
+            ChainId::from("apply-sccp-malformed-asset-scope"),
+            authority,
+        )
+        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
+            iroha_data_model::transaction::IvmProved {
+                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
+                    0x01, 0x02, 0x03,
+                ]),
+                overlay: vec![iroha_data_model::isi::InstructionBox::from(record)].into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            },
+        ))
+        .sign(keypair.private_key());
+        let entry_hash = tx.hash_as_entrypoint();
+        let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
+        let leader = crate::state::checked_keypair();
+        let mut block: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
+            .chain(0, None)
+            .sign(leader.private_key())
+            .unpack(|_| {})
+            .into();
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![Ok(
+                    iroha_data_model::transaction::DataTriggerSequence::default(),
+                )],
+            )
+            .expect("test block entrypoint hash should match payload");
+        let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let mut state_block = state.block(committed.as_ref().header());
+
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "committed block failed SCCP commitment validation before apply_without_execution"
+    )]
+    fn apply_without_execution_rejects_resultless_sccp_root_before_state_mutation() {
+        let keypair = crate::state::checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 45,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 1,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x0000000000000000000000000000000000000045".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+        let record = iroha_data_model::isi::bridge::RecordSccpMessage::new(payload_bytes);
+        let tx = iroha_data_model::transaction::TransactionBuilder::new(
+            ChainId::from("apply-sccp-resultless"),
+            authority,
+        )
+        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
+            iroha_data_model::transaction::IvmProved {
+                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
+                    0x01, 0x02, 0x03,
+                ]),
+                overlay: vec![iroha_data_model::isi::InstructionBox::from(record)].into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            },
+        ))
+        .sign(keypair.private_key());
+        let accepted = crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx));
+        let leader = crate::state::checked_keypair();
+        let mut block: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
+            .chain(0, None)
+            .sign(leader.private_key())
+            .unpack(|_| {})
+            .into();
+        let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
+        let root = crate::bridge::sccp_commitment_root_from_messages(&messages)
+            .expect("resultless SCCP root");
+        block.set_sccp_commitment_root(Some(root));
+        let committed = crate::block::ValidBlock::committed_from_replay_signed_block(block);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let mut state_block = state.block(committed.as_ref().header());
+
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
     }
 
     #[test]

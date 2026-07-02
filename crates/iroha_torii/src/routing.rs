@@ -3684,69 +3684,11 @@ fn decode_app_api_detached_signature(signature_b64: &str) -> Result<Signature> {
     let signature_bytes = base64::engine::general_purpose::STANDARD
         .decode(signature_b64.as_bytes())
         .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
-    validate_app_api_ed25519_signature_bytes(&signature_bytes)?;
-    Signature::try_from_bytes(&signature_bytes)
-        .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))
-}
-
-#[cfg(feature = "app_api")]
-fn validate_app_api_ed25519_signature_bytes(signature: &[u8]) -> Result<()> {
-    if signature.len() != ed25519_dalek::SIGNATURE_LENGTH {
-        return Err(conversion_error(format!(
-            "invalid signature_b64: signature must be {} bytes",
-            ed25519_dalek::SIGNATURE_LENGTH
-        )));
-    }
-    if signature.iter().all(|byte| *byte == 0) {
-        return Err(conversion_error(
-            "invalid signature_b64: signature payload must not be all zero".to_owned(),
-        ));
-    }
-    let r_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = signature
-        .get(..ed25519_dalek::PUBLIC_KEY_LENGTH)
-        .ok_or_else(|| conversion_error("invalid signature_b64: signature R missing".to_owned()))?
-        .try_into()
-        .map_err(|_| {
-            conversion_error("invalid signature_b64: signature R has invalid length".to_owned())
-        })?;
-    if !app_api_ed25519_compressed_y_is_canonical(&r_bytes) {
-        return Err(conversion_error(
-            "invalid signature_b64: signature R is not a canonical Ed25519 point".to_owned(),
-        ));
-    }
-    let r_point = ed25519_dalek::VerifyingKey::from_bytes(&r_bytes).map_err(|err| {
+    iroha_crypto::ed25519_parse_signature(&signature_bytes).map_err(|err| {
         conversion_error(format!(
-            "invalid signature_b64: signature R is not a canonical Ed25519 point: {err}"
+            "invalid signature_b64: Ed25519 signature failed admission: {err}"
         ))
-    })?;
-    if r_point.is_weak() {
-        return Err(conversion_error(
-            "invalid signature_b64: signature R is small-order".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(feature = "app_api")]
-fn app_api_ed25519_compressed_y_is_canonical(
-    bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
-) -> bool {
-    const ED25519_FIELD_MODULUS_LE: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
-        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0x7f,
-    ];
-
-    let mut y = *bytes;
-    y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
-    for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
-        match y[idx].cmp(&ED25519_FIELD_MODULUS_LE[idx]) {
-            std::cmp::Ordering::Less => return true,
-            std::cmp::Ordering::Greater => return false,
-            std::cmp::Ordering::Equal => {}
-        }
-    }
-    false
+    })
 }
 
 #[cfg(all(feature = "app_api", test))]
@@ -3849,7 +3791,7 @@ mod app_api_transaction_signing_tests {
         let err = decode_app_api_detached_signature(&signature_b64)
             .expect_err("all-zero detached signatures must fail at admission");
 
-        assert!(expect_conversion(err).contains("signature payload must not be all zero"));
+        assert!(expect_conversion(err).contains("Ed25519 signature failed admission"));
     }
 
     #[test]
@@ -3859,18 +3801,18 @@ mod app_api_transaction_signing_tests {
         let short_signature_b64 = base64::engine::general_purpose::STANDARD.encode([0xAA_u8; 3]);
         let err = decode_app_api_detached_signature(&short_signature_b64)
             .expect_err("short detached signature must fail at admission");
-        assert!(expect_conversion(err).contains("signature must be 64 bytes"));
+        assert!(expect_conversion(err).contains("Ed25519 signature failed admission"));
 
         for (label, r_bytes, expected) in [
             (
                 "small-order",
                 ED25519_SMALL_ORDER_POINT,
-                "signature R is small-order",
+                "Ed25519 signature failed admission",
             ),
             (
                 "noncanonical",
                 ED25519_NONCANONICAL_IDENTITY,
-                "signature R is not a canonical Ed25519 point",
+                "Ed25519 signature failed admission",
             ),
         ] {
             let mut signature = [0x42_u8; ed25519_dalek::SIGNATURE_LENGTH];
@@ -4941,6 +4883,16 @@ pub fn verify_signed_query_request(
     query: SignedQuery,
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
     let iroha_data_model::query::QuerySignature(sig) = &query.signature;
+    if matches!(
+        query.payload.authority.signatory().try_algorithm(),
+        Ok(Algorithm::Ed25519)
+    ) {
+        iroha_crypto::ed25519_parse_signature(sig.payload()).map_err(|err| {
+            Error::from(ValidationFail::NotPermitted(format!(
+                "query signature material failed admission: {err}"
+            )))
+        })?;
+    }
     sig.verify(query.payload.authority.signatory(), &query.payload)
         .map_err(|_| {
             Error::from(ValidationFail::NotPermitted(
@@ -4952,9 +4904,10 @@ pub fn verify_signed_query_request(
 
 #[cfg(test)]
 mod signed_query_verification_tests {
+    use iroha_crypto::SignatureOf;
     use iroha_data_model::{
         account::AccountId,
-        query::{QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion},
+        query::{QueryRequest, QuerySignature, SingularQueryBox, runtime::prelude::FindAbiVersion},
     };
 
     use super::*;
@@ -4964,6 +4917,18 @@ mod signed_query_verification_tests {
         QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
             .with_authority(authority)
             .sign(key_pair)
+    }
+
+    const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    fn signature_of_with_malformed_ed25519_r<T>(signature: &SignatureOf<T>) -> SignatureOf<T> {
+        let mut payload = signature.payload().to_vec();
+        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
+            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        SignatureOf::from_signature(Signature::from_bytes(&payload))
     }
 
     #[test]
@@ -5004,6 +4969,28 @@ mod signed_query_verification_tests {
         signed.payload.authority = AccountId::new(other.public_key().clone());
 
         assert!(verify_signed_query_request(signed).is_err());
+    }
+
+    #[test]
+    fn verify_signed_query_rejects_malformed_ed25519_signature_r() {
+        let signer = checked_routing_fixture_keypair(
+            0xe6,
+            Algorithm::Ed25519,
+            "derive signed query malformed signature fixture key",
+        );
+        let mut signed = signed_find_abi_version(&signer);
+        signed.signature =
+            QuerySignature(signature_of_with_malformed_ed25519_r(&signed.signature.0));
+
+        let err = match verify_signed_query_request(signed) {
+            Ok(_) => panic!("malformed signed query signature R must fail admission"),
+            Err(err) => err,
+        };
+        let message = format!("{err:?}");
+        assert!(
+            message.contains("query signature material failed admission"),
+            "unexpected signed query admission error: {message}"
+        );
     }
 }
 
@@ -10888,6 +10875,34 @@ mod sccp_message_backend_tests {
         }
     }
 
+    fn sample_route_activate_message_bundle(
+        nonce: u64,
+        asset_id: &[u8],
+        route_id: &[u8],
+    ) -> NexusSccpMessageProofV1 {
+        let payload = SccpPayloadV1::RouteActivate(iroha_sccp::RouteActivatePayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: asset_id.to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: route_id.to_vec(),
+        });
+        let commitment = iroha_sccp::hub_commitment_from_sccp_payload(&payload);
+        let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
+        let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+        NexusSccpMessageProofV1 {
+            version: 1,
+            commitment_root,
+            commitment,
+            merkle_proof,
+            payload,
+            finality_proof: sample_sccp_finality_proof_bytes(commitment_root),
+        }
+    }
+
     fn sample_eth_inbound_message_bundle_with_nexus_finality(
         nonce: u64,
     ) -> NexusSccpMessageProofV1 {
@@ -13559,6 +13574,71 @@ mod sccp_message_backend_tests {
             mint.destination.definition().to_string(),
             "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
         );
+    }
+
+    #[test]
+    fn activate_route_governed_payload_uses_route_local_asset_key_from_scoped_asset_id() {
+        let bundle = sample_route_activate_message_bundle(53, b"xor#universal", b"nexus:eth:xor");
+        let expected_route = "nexus:eth:xor"
+            .parse::<Name>()
+            .expect("expected route name");
+        let (payload, route) =
+            default_activate_route_governed_payload(&bundle, Some(&expected_route))
+                .expect("route activation payload");
+
+        assert_eq!(route, expected_route);
+        let payload_value = norito::json::from_str::<Value>(payload.as_ref())
+            .expect("route activation payload json");
+        let object = payload_value
+            .as_object()
+            .expect("route activation payload object");
+        assert_eq!(
+            object.get("message_id").and_then(Value::as_str),
+            Some(hex::encode(bundle.commitment.message_id).as_str())
+        );
+        assert_eq!(
+            object.get("route").and_then(Value::as_str),
+            Some("nexus:eth:xor")
+        );
+        assert_eq!(object.get("asset_key").and_then(Value::as_str), Some("xor"));
+        assert_eq!(
+            object.get("remote_domain").and_then(Value::as_u64),
+            Some(u64::from(iroha_sccp::SCCP_DOMAIN_SORA))
+        );
+    }
+
+    #[test]
+    fn activate_route_governed_payload_rejects_malformed_asset_scope() {
+        for (nonce, asset_id, expected) in [
+            (
+                54,
+                b"xor#".as_slice(),
+                "asset_id asset scope must not be empty",
+            ),
+            (
+                55,
+                b"xor#universal#shadow".as_slice(),
+                "asset_id must contain at most one `#` scope separator",
+            ),
+            (
+                56,
+                b"#universal".as_slice(),
+                "asset_id route-local asset key must not be empty",
+            ),
+            (
+                57,
+                b"bad key#universal".as_slice(),
+                "asset_id route-local asset key `bad key`",
+            ),
+        ] {
+            let bundle = sample_route_activate_message_bundle(nonce, asset_id, b"nexus:eth:xor");
+            let err = default_activate_route_governed_payload(&bundle, None)
+                .expect_err("malformed route activation asset_id must be rejected");
+            assert!(
+                conversion_message(&err).is_some_and(|message| message.contains(expected)),
+                "expected `{expected}` in {err:?}"
+            );
+        }
     }
 
     #[test]
@@ -23256,6 +23336,41 @@ fn parse_bridge_name_from_utf8(codec: u8, bytes: &[u8], label: &str) -> Result<N
 }
 
 #[cfg(feature = "app_api")]
+fn parse_sccp_route_asset_key_from_utf8(codec: u8, bytes: &[u8], label: &str) -> Result<Name> {
+    if codec != iroha_sccp::SCCP_CODEC_TEXT_UTF8 {
+        return Err(conversion_error(format!(
+            "{label} must be encoded as UTF-8 text for the proof-driven bridge settlement path"
+        )));
+    }
+    let literal = std::str::from_utf8(bytes)
+        .map_err(|err| conversion_error(format!("{label} is not valid UTF-8: {err}")))?;
+    let mut parts = literal.split('#');
+    let asset_key = parts.next().unwrap_or_default();
+    if asset_key.is_empty() {
+        return Err(conversion_error(format!(
+            "{label} route-local asset key must not be empty"
+        )));
+    }
+    if let Some(scope) = parts.next() {
+        if scope.is_empty() {
+            return Err(conversion_error(format!(
+                "{label} asset scope must not be empty after `#`"
+            )));
+        }
+        if parts.next().is_some() {
+            return Err(conversion_error(format!(
+                "{label} must contain at most one `#` scope separator"
+            )));
+        }
+    }
+    asset_key.parse::<Name>().map_err(|err| {
+        conversion_error(format!(
+            "{label} route-local asset key `{asset_key}` from `{literal}` is not a valid Name: {err}"
+        ))
+    })
+}
+
+#[cfg(feature = "app_api")]
 fn default_finalize_inbound_settlement_payload(
     bundle: &NexusSccpMessageProofV1,
     route: &Name,
@@ -23325,8 +23440,11 @@ fn default_activate_route_governed_payload(
             )));
         }
     }
-    let asset_key =
-        parse_bridge_name_from_utf8(payload.asset_id_codec, &payload.asset_id, "asset_id")?;
+    let asset_key = parse_sccp_route_asset_key_from_utf8(
+        payload.asset_id_codec,
+        &payload.asset_id,
+        "asset_id",
+    )?;
     let mut object = Map::new();
     object.insert(
         "message_id".into(),

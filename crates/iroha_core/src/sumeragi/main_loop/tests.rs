@@ -177928,6 +177928,25 @@ fn validation_reject_reason_label_covers_error_categories() {
     );
     assert_eq!(reason_sccp_duplicate, super::VALIDATION_REASON_EXECUTION);
 
+    let reason_sccp_result_count = super::validation_reject_reason_label(
+        &BlockValidationError::SccpTransactionResultCountMismatch {
+            external_entrypoints: 2,
+            results: 1,
+        },
+    );
+    assert_eq!(reason_sccp_result_count, super::VALIDATION_REASON_EXECUTION);
+
+    let reason_sccp_invalid_record =
+        super::validation_reject_reason_label(&BlockValidationError::SccpInvalidOutboundRecord {
+            tx_index: 0,
+            instruction_index: 0,
+            reason: "invalid SCCP record fixture",
+        });
+    assert_eq!(
+        reason_sccp_invalid_record,
+        super::VALIDATION_REASON_EXECUTION
+    );
+
     let reason_stateless = super::validation_reject_reason_label(
         &BlockValidationError::InvalidGenesis(crate::block::InvalidGenesisError::InvalidSignature),
     );

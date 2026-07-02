@@ -281,7 +281,11 @@ public final class OfflineNoteNearbyEnvelope {
       }
     }
     try {
-      return Base64.getUrlDecoder().decode(value);
+      final byte[] decoded = Base64.getUrlDecoder().decode(value);
+      if (!Base64.getUrlEncoder().withoutPadding().encodeToString(decoded).equals(value)) {
+        return null;
+      }
+      return decoded;
     } catch (IllegalArgumentException ex) {
       return null;
     }

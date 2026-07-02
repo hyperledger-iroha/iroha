@@ -5560,6 +5560,36 @@ esac
             "requires TRX VSTest attributes to contain no sensitive metadata",
         ),
         (
+            "schema-known-deep-percent-sensitive-attribute",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" '
+                'testName="Hyperledger.Iroha.Sdk.Tests.SccpFake.Passes" '
+                'outcome="Passed" '
+                'computerName="ci-runner%2525253Aoperator%2525252Fprivate%2525252Fsccp-dotnet-sdk.trx" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes" /></UnitTest></TestDefinitions></TestRun>\n'
+            ),
+            "requires TRX VSTest attributes to contain no sensitive metadata",
+        ),
+        (
+            "schema-known-excessive-percent-encoding",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" '
+                'testName="Hyperledger.Iroha.Sdk.Tests.SccpFake.Passes" '
+                'outcome="Passed" '
+                'computerName="ci-runner%25252525252525253Avalue" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes" /></UnitTest></TestDefinitions></TestRun>\n'
+            ),
+            "requires TRX XML metadata to avoid deeply nested percent encoding",
+        ),
+        (
             "schema-known-percent-control-attribute",
             (
                 '<TestRun><Results><UnitTestResult testId="sccp-test" '
