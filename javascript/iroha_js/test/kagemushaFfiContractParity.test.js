@@ -17829,18 +17829,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*13\\s\*;[\s\S]*?C native bridge ABI version/u,
-    "SDK parity guard must pin the native C bridge ABI-13 advertisement",
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*14\\s\*;[\s\S]*?C native bridge ABI version/u,
+    "SDK parity guard must pin the native C bridge ABI-14 advertisement",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
-    /CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;/u,
-    "native C bridge ABI negative control must mutate ABI 13 back to the stale ABI 12 value",
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 14;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;/u,
+    "native C bridge ABI negative control must mutate ABI 14 back to the stale ABI 13 value",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
-    /expected_labels\s*=\s*\([\s\S]*?C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*13\\s\*;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
-    "native C bridge ABI negative control must require the exact ABI-13 diagnostic",
+    /expected_labels\s*=\s*\([\s\S]*?C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*14\\s\*;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "native C bridge ABI negative control must require the exact ABI-14 diagnostic",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,

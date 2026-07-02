@@ -974,12 +974,7 @@ fn verify_device_attestation(
         "Offline Notes V2 attestation receipt",
     )?
     .to_string();
-    verify_optional_attestation_binding(
-        request,
-        "platform",
-        &platform,
-        "Offline Notes V2 device_binding.platform does not match attestation receipt.",
-    )?;
+    verify_optional_attestation_platform_binding(request, &platform)?;
     let assertion_scheme = required_exact_protocol_string(
         receipt,
         "assertion_scheme",
@@ -2882,6 +2877,46 @@ fn verify_optional_attestation_binding(
         ));
     }
     Ok(())
+}
+
+fn verify_optional_attestation_platform_binding(
+    request: &ParsedOfflineRequest,
+    expected: &str,
+) -> Result<(), Error> {
+    if let Some(actual) = optional_exact_protocol_string(
+        &request.device_binding,
+        "platform",
+        "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
+        "Offline Notes V2 device_binding",
+    )? && !attestation_platforms_match(actual, expected)
+    {
+        return Err(validation(
+            "OFFLINE_V2_ATTESTATION_PROFILE_MISMATCH",
+            "Offline Notes V2 device_binding.platform does not match attestation receipt.",
+        ));
+    }
+    Ok(())
+}
+
+fn attestation_platforms_match(actual: &str, expected: &str) -> bool {
+    if actual == expected {
+        return true;
+    }
+    match (
+        canonical_attestation_platform(actual),
+        canonical_attestation_platform(expected),
+    ) {
+        (Some(actual), Some(expected)) => actual == expected,
+        _ => false,
+    }
+}
+
+fn canonical_attestation_platform(platform: &str) -> Option<&'static str> {
+    match platform {
+        "ios" | "ios-app-attest" | "ios-appattest" => Some("ios-appattest"),
+        "android" | "android-keymint" => Some("android-keymint"),
+        _ => None,
+    }
 }
 
 fn json_object(entries: Vec<(&str, Value)>) -> Value {
@@ -5068,6 +5103,40 @@ mod tests {
         assert_eq!(attestation.platform, "ios-appattest");
         assert_eq!(attestation.assertion_scheme, "apple-appattest-counter-v1");
         assert_eq!(attestation.assertion_key_algorithm, "app-attest-p256");
+    }
+
+    #[test]
+    fn attestation_receipt_accepts_canonical_ios_receipt_with_ios_binding_alias() {
+        let (issuer, verifier) = sample_issuer();
+        let note_key = [0xA5; 32];
+        let assertion_key = sample_p256_assertion_key();
+        let mut request = sample_request(&verifier, note_key, assertion_key.clone());
+        insert_device_binding_field(&mut request, "platform", string_value("ios"));
+        let mut receipt = signed_attestation_receipt(
+            &verifier,
+            &request.account_literal,
+            &request.device_id,
+            &note_key,
+            &assertion_key,
+            true,
+        );
+        insert_field(&mut receipt, "platform", string_value("ios-appattest"));
+        insert_field(
+            &mut receipt,
+            "assertion_scheme",
+            string_value("apple-appattest-counter-v1"),
+        );
+        insert_field(
+            &mut receipt,
+            "assertion_key_algorithm",
+            string_value("app-attest-p256"),
+        );
+        let receipt = resign_attestation_receipt(&verifier, receipt);
+        replace_attestation_receipt(&mut request, receipt);
+
+        let attestation =
+            verify_device_attestation(&issuer, &request, NOW_MS).expect("iOS platform alias");
+        assert_eq!(attestation.platform, "ios-appattest");
     }
 
     #[test]

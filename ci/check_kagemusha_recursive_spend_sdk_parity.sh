@@ -4477,7 +4477,7 @@ def check_c_bridge(texts, errors):
     require_regex(
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
-        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*13\s*;",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*14\s*;",
         "C native bridge ABI version",
         errors,
     )
@@ -71088,11 +71088,11 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     target = "crates/connect_norito_bridge/src/lib.rs"
     original = mutated[target]
     updated = original.replace(
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 14;",
         "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;",
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;",
         1,
     )
-    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;" in updated:
+    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 14;" in updated:
         raise SystemExit("negative control failed: unable to mutate native C bridge ABI version")
     mutated[target] = updated
     try:
@@ -71100,7 +71100,7 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*13\s*;",
+            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*14\s*;",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:

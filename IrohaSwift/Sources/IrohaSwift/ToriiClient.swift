@@ -9348,6 +9348,8 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
         case offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
         case offlineKagemushaRecursiveCompactCircuitId = "offline_kagemusha_recursive_compact_circuit_id"
         case offlineKagemushaRecursiveCompactArtifactsAvailable = "offline_kagemusha_recursive_compact_artifacts_available"
+        case removedOfflineKagemushaAbi7 = "offline_kagemusha_abi7"
+        case removedOfflineKagemushaAbi7BridgeAbiVersion = "offline_kagemusha_abi7_bridge_abi_version"
         case offlineTelemetry = "offline_telemetry"
         case offlineNote = "offline_note"
         case offlineOneUseKeys = "offline_one_use_keys"
@@ -9383,8 +9385,9 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
-        try Self.rejectUnknownFields(in: decoder.container(keyedBy: ReadinessField.self))
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        try Self.rejectRemovedAbi7Fields(in: container)
+        try Self.rejectUnknownFields(in: decoder.container(keyedBy: ReadinessField.self))
         let hasRecursiveCompactFamily = Self.containsAny(
             container,
             keys: [
@@ -9448,6 +9451,19 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
                 forKey: key,
                 in: container,
                 debugDescription: "\(key.stringValue) is not a supported offline readiness field"
+            )
+        }
+    }
+
+    private static func rejectRemovedAbi7Fields(
+        in container: KeyedDecodingContainer<CodingKeys>
+    ) throws {
+        for key in [CodingKeys.removedOfflineKagemushaAbi7, .removedOfflineKagemushaAbi7BridgeAbiVersion]
+            where container.contains(key) {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) is not supported; use offline_kagemusha_recursive_compact_*"
             )
         }
     }

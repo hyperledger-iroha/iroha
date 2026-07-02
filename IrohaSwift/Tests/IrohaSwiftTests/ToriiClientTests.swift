@@ -9670,7 +9670,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineReadinessRejectsMalformedRecursiveCompactReadiness() async throws {
+    func testGetOfflineReadinessRejectsMalformedKagemushaAbiVersions() async throws {
         func payload(extra: String = "",
                      compactAvailable: String = "true",
                      compactMode: String = "\"recursive_compact_v1\"",
@@ -9691,6 +9691,8 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let cases: [(Data, String)] = [
+            (payload(extra: "\"offline_kagemusha_abi7\": true,"), "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_bridge_abi_version\": 7,"), "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*"),
             (payload(compact: "0"), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer"),
             (payload(compact: "\" 7\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string"),
             (payload(compact: "\"007\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string"),

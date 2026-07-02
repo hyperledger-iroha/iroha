@@ -24,7 +24,7 @@ final class OfflineProofVerifierTests: XCTestCase {
 
     func testCounterpartyVerifierRequiresIosChallengeHash() throws {
         let binding = try ToriiOfflineDeviceBinding(
-            platform: OfflineNoteV2Constants.iosAppAttestPlatform,
+            platform: "ios",
             attestationKeyId: "attestation-key",
             deviceId: "ios-device",
             offlinePublicKey: "offline-public-key",
@@ -45,8 +45,8 @@ final class OfflineProofVerifierTests: XCTestCase {
         }
     }
 
-    func testCounterpartyVerifierRejectsRemovedPlatformAliasesAndDispatchesAndroidKeyMint() throws {
-        for platform in ["ios", "ios-app-attest"] {
+    func testCounterpartyVerifierRejectsRemovedPlatformAliasesBeforeDispatch() throws {
+        for platform in ["ios-appattest", "ios-app-attest"] {
             XCTAssertThrowsError(try ToriiOfflineDeviceBinding(
                 platform: platform,
                 attestationKeyId: "attestation-key",
@@ -58,8 +58,18 @@ final class OfflineProofVerifierTests: XCTestCase {
             }
         }
 
+        XCTAssertThrowsError(try ToriiOfflineDeviceBinding(
+            platform: " ios",
+            attestationKeyId: "attestation-key",
+            deviceId: "ios-device",
+            offlinePublicKey: "offline-public-key",
+            attestationReportBase64: ""
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("platform"))
+        }
+
         let androidBinding = try ToriiOfflineDeviceBinding(
-            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+            platform: "android-keymint",
             attestationKeyId: "attestation-key",
             deviceId: "android-device",
             offlinePublicKey: "offline-public-key",
@@ -77,11 +87,31 @@ final class OfflineProofVerifierTests: XCTestCase {
                 "Offline device binding is incomplete."
             )
         }
+
+        let genericAndroidBinding = try ToriiOfflineDeviceBinding(
+            platform: "android",
+            attestationKeyId: "attestation-key",
+            deviceId: "android-device",
+            offlinePublicKey: "offline-public-key",
+            attestationReportBase64: ""
+        )
+        XCTAssertThrowsError(
+            try CounterpartyOfflineProofVerifier().verifyDeviceBinding(
+                accountId: "account",
+                binding: genericAndroidBinding,
+                expectedChallengeHashHex: nil
+            )
+        ) { error in
+            XCTAssertEqual(
+                (error as? OfflineProofVerifierError)?.errorDescription,
+                "Offline device binding is incomplete."
+            )
+        }
     }
 
     func testCounterpartyVerifierRejectsPaddedPlatformBeforeDispatch() {
         XCTAssertThrowsError(try ToriiOfflineDeviceBinding(
-            platform: " \(OfflineNoteV2Constants.iosAppAttestPlatform)",
+            platform: " ios",
             attestationKeyId: "attestation-key",
             deviceId: "ios-device",
             offlinePublicKey: "offline-public-key",
@@ -135,7 +165,7 @@ final class OfflineProofVerifierTests: XCTestCase {
 
     func testIosVerifierRejectsWrongProofPlatformBeforeDispatch() throws {
         let binding = try ToriiOfflineDeviceBinding(
-            platform: OfflineNoteV2Constants.iosAppAttestPlatform,
+            platform: "ios",
             attestationKeyId: "attestation-key",
             deviceId: "ios-device",
             offlinePublicKey: "offline-public-key",
@@ -161,7 +191,7 @@ final class OfflineProofVerifierTests: XCTestCase {
 
     func testAndroidVerifierRejectsWrongBindingPlatformBeforeDispatch() throws {
         let binding = try ToriiOfflineDeviceBinding(
-            platform: OfflineNoteV2Constants.iosAppAttestPlatform,
+            platform: "ios",
             attestationKeyId: "attestation-key",
             deviceId: "ios-device",
             offlinePublicKey: "offline-public-key",
@@ -185,7 +215,7 @@ final class OfflineProofVerifierTests: XCTestCase {
             environment: String = "production"
         ) throws -> ToriiOfflineDeviceBinding {
             try ToriiOfflineDeviceBinding(
-                platform: OfflineNoteV2Constants.iosAppAttestPlatform,
+                platform: "ios",
                 attestationKeyId: "attestation-key",
                 deviceId: "ios-device",
                 offlinePublicKey: "offline-public-key",

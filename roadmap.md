@@ -7854,7 +7854,7 @@ networks as remaining launch work for this release.
   payloads through `validate_hedging_payload_bytes`, and `sorafs-validate
   hedging`/`billing` provides local operator validation for those artifacts.
   The source bridge surface now exposes the same validator through
-  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 13
+  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 14
   `connect_norito_sorafs_reference_validate_hedging_json`, and Kotlin/JVM,
   Java Android, and Swift SDK wrappers. The SFM-5 rollout evidence gate now
   validates feed-collector, reference-price, billing-cycle,
