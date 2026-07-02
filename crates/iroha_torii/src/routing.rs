@@ -7373,7 +7373,8 @@ fn sccp_configured_counterparty_capability(
         })?;
 
     let configured = (|| -> Result<Option<iroha_sccp::SccpLaneProductionReadinessV1>> {
-        let Some(material) = sccp_configured_source_verifier_material_for_domain(zk_config, domain)?
+        let Some(material) =
+            sccp_configured_source_verifier_material_for_domain(zk_config, domain)?
         else {
             return Ok(None);
         };
@@ -7457,16 +7458,13 @@ fn sccp_capabilities_snapshot(state: &CoreState) -> Result<SccpCapabilitiesDto> 
             sccp_configured_all_lanes_launch_ready(&zk_config).is_ok()
         }
         iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => {
-            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_ETH)
-                .is_ok()
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_ETH).is_ok()
         }
         iroha_sccp::SccpLaunchModeV1::BscMainnetLane => {
-            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_BSC)
-                .is_ok()
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_BSC).is_ok()
         }
         iroha_sccp::SccpLaunchModeV1::TonMainnetLane => {
-            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_TON)
-                .is_ok()
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_TON).is_ok()
         }
     };
     Ok(SccpCapabilitiesDto {
@@ -13277,7 +13275,6 @@ mod sccp_message_backend_tests {
             tron_network: chain.clone(),
             chain,
             chain_id_hex: "0x61".to_owned(),
-            ton_finalize_message_value_nano: None,
             explorer_url: is_bsc.then(|| "https://testnet.bscscan.com".to_owned()),
             explorer_host: is_bsc.then(|| "testnet.bscscan.com".to_owned()),
             counterparty_account_codec: is_bsc.then_some(iroha_sccp::SCCP_CODEC_EVM_HEX),

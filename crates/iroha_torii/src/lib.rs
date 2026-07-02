@@ -53130,7 +53130,6 @@ pub(crate) mod tests_runtime_handlers {
             tron_network: "nile".to_owned(),
             chain: "tron-nile".to_owned(),
             chain_id_hex: "0xcd8690dc".to_owned(),
-            ton_finalize_message_value_nano: None,
             explorer_url: None,
             explorer_host: None,
             counterparty_account_codec: None,
