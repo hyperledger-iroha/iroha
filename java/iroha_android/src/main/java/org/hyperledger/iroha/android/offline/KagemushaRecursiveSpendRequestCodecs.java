@@ -923,7 +923,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.recordBundle = copyOf(recordBundle, "recordBundle");
       this.pallasOpenEnvelopes = copyOf(pallasOpenEnvelopes, "pallasOpenEnvelopes");
       this.currentNote = Objects.requireNonNull(currentNote, "currentNote");
-      this.outputProofCircuitId = outputProofCircuitId;
+      this.outputProofCircuitId = Objects.requireNonNull(outputProofCircuitId, "outputProofCircuitId");
       this.previousLineageVerifierRecord = previousLineageVerifierRecord;
       this.previousProofOpenEnvelopes = copyNullable(previousProofOpenEnvelopes);
       this.lineageVerifierKey = copyNullable(lineageVerifierKey);

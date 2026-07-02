@@ -22130,7 +22130,6 @@ mod tests {
             lineage_verifier_record: None,
             lineage_verifier_records: Vec::new(),
             block_height: None,
-            lineage_verifier_records: Vec::new(),
         }
     }
 

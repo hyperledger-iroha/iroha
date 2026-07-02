@@ -19470,6 +19470,13 @@ def check_python(texts, errors):
     torii_client = texts["python/iroha_torii_client/client.py"]
     torii_init = texts["python/iroha_torii_client/__init__.py"]
     torii_tests = texts["python/iroha_torii_client/tests/test_client.py"]
+    require_not_regex(
+        texts,
+        wrapper,
+        r"output_proof_circuit_id: str \| None = None",
+        "Python append request must require an explicit output proof circuit id",
+        errors,
+    )
     require_contains(
         texts,
         "python/iroha_torii_client/client.py",
@@ -21357,6 +21364,13 @@ def check_swift(texts, errors):
     torii_offline_cash_api_models_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiOfflineCashAPIModelsTests.swift"
     nfc_mobile_transport = "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift"
     transport_ui_test = "IrohaSwift/Tests/IrohaSwiftTransportUITests/OfflineTransferWidgetTests.swift"
+    require_not_regex(
+        texts,
+        request_codecs,
+        r"outputProofCircuitId: String\? = nil|public let outputProofCircuitId: String\?",
+        "Swift append request must require an explicit output proof circuit id",
+        errors,
+    )
     require_contains(
         texts,
         offline_cash_models,
@@ -24428,6 +24442,20 @@ def check_java_kotlin(texts, errors):
     java_file_key_export_store = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/export/FileKeyExportStore.java"
     java_in_memory_key_export_store = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/export/InMemoryKeyExportStore.java"
     java_key_attestation = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeyAttestation.java"
+    require_not_regex(
+        texts,
+        kotlin_request_codecs,
+        r"outputCircuitId: String\? = null|val outputProofCircuitId: String\? = null",
+        "Kotlin append request builders must require an explicit output proof circuit id",
+        errors,
+    )
+    require_regex(
+        texts,
+        java_request_codecs,
+        r"this\.outputProofCircuitId = Objects\.requireNonNull\(outputProofCircuitId, \"outputProofCircuitId\"\);",
+        "Android Java append request must require an explicit output proof circuit id",
+        errors,
+    )
     java_key_gen_parameters = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeyGenParameters.java"
     java_keystore_key_provider = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeystoreKeyProvider.java"
     java_system_android_keystore_backend = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/SystemAndroidKeystoreBackend.java"
@@ -24680,7 +24708,7 @@ def check_java_kotlin(texts, errors):
     require_block_regex(
         texts,
         kotlin_request_codecs,
-        "    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        hop: VerifiedFoldHopEvidence?,\n        spendableNote: SpendableNoteDescriptor?,\n        outputCircuitId: String? = null,",
+        "    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        hop: VerifiedFoldHopEvidence?,\n        spendableNote: SpendableNoteDescriptor?,\n        outputCircuitId: String,",
         "    @JvmStatic\n    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        hop: VerifiedFoldHopEvidence?,\n        pallasOpenEnvelopes: ByteArray?,",
         r"val previousSummary = preflightAppendPreviousLineageForAutoGeneration\([\s\S]*?preflightAppendLineageKeyMaterialForAutoGeneration\([\s\S]*?outputCircuitId,[\s\S]*?lineageVerifierKey,[\s\S]*?lineageProvingKeyArchive,[\s\S]*?\)[\s\S]*?val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)",
         "Kotlin typed recursive spend append auto Pallas lineage-key material preflight",
@@ -24690,7 +24718,7 @@ def check_java_kotlin(texts, errors):
     require_block_regex(
         texts,
         kotlin_request_codecs,
-        "    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        hop: VerifiedFoldHopEvidence?,\n        spendableNote: SpendableNoteDescriptor?,\n        outputCircuitId: String?,\n        previousLineageVerifierRecord: VerifierRecordRef?,\n        previousProofOpenEnvelopes: ByteArray?,\n        lineageKeyArtifacts:",
+        "    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        hop: VerifiedFoldHopEvidence?,\n        spendableNote: SpendableNoteDescriptor?,\n        outputCircuitId: String,\n        previousLineageVerifierRecord: VerifierRecordRef?,\n        previousProofOpenEnvelopes: ByteArray?,\n        lineageKeyArtifacts:",
         "    @JvmStatic\n    @JvmOverloads\n    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        proofOutputArchive: ByteArray?,",
         r"val checkedLineageKeyArtifacts = preflightAppendLineageKeyArtifactsForAutoGeneration\([\s\S]*?outputCircuitId,[\s\S]*?lineageKeyArtifacts,[\s\S]*?\)[\s\S]*?val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)[\s\S]*?lineageKeyArtifacts = checkedLineageKeyArtifacts",
         "Kotlin typed recursive spend append typed-artifact auto Pallas preflight",
@@ -30453,6 +30481,13 @@ def check_java_kotlin(texts, errors):
 def check_csharp(texts, errors):
     script = read(CSHARP_SDK_TEST_COMMAND)
     test_project = read("csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj")
+    require_not_regex(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+        r"string\? outputProofCircuitId = null",
+        "C# append request helpers must require an explicit output proof circuit id",
+        errors,
+    )
     require(
         'DOTNET_BIN="${KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN:-dotnet}"' in script,
         "Kagemusha C# SDK script must keep the documented dotnet override variable",
