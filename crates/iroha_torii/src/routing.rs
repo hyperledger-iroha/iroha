@@ -7360,7 +7360,8 @@ fn sccp_configured_counterparty_capability(
         })?;
 
     let configured = (|| -> Result<Option<iroha_sccp::SccpLaneProductionReadinessV1>> {
-        let Some(material) = sccp_configured_source_verifier_material_for_domain(zk_config, domain)?
+        let Some(material) =
+            sccp_configured_source_verifier_material_for_domain(zk_config, domain)?
         else {
             return Ok(None);
         };
@@ -7425,7 +7426,11 @@ fn sccp_configured_counterparty_capability(
             production_readiness.production_ready = false;
             production_readiness.routes_allowlisted = false;
             production_readiness.route_allowlist.routes_allowlisted = false;
-            if !production_readiness.blockers.iter().any(|blocker| blocker == &reason) {
+            if !production_readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker == &reason)
+            {
                 production_readiness.blockers.push(reason);
             }
         }
@@ -7501,16 +7506,13 @@ fn sccp_capabilities_snapshot(state: &CoreState) -> Result<SccpCapabilitiesDto> 
             sccp_configured_all_lanes_launch_ready(&zk_config).is_ok()
         }
         iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => {
-            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_ETH)
-                .is_ok()
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_ETH).is_ok()
         }
         iroha_sccp::SccpLaunchModeV1::BscMainnetLane => {
-            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_BSC)
-                .is_ok()
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_BSC).is_ok()
         }
         iroha_sccp::SccpLaunchModeV1::TonMainnetLane => {
-            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_TON)
-                .is_ok()
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_TON).is_ok()
         }
     };
     Ok(SccpCapabilitiesDto {
@@ -9488,7 +9490,10 @@ mod sccp_message_backend_tests {
         .expect("valid SCCP message submit lane catalog");
         {
             let mut nexus = state.nexus.write();
+            nexus.enabled = true;
             nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog.clone();
         }
 
@@ -12115,7 +12120,7 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn destination_binding_query_respects_ethereum_lane_launch_policy() {
+    fn destination_binding_query_respects_ton_lane_launch_policy() {
         let bundle = sample_tron_message_bundle(49);
         let mut fields = SccpEvmDestinationQuery {
             network_id_hex: Some(format!("0x{}", "71".repeat(32))),
@@ -12174,8 +12179,7 @@ mod sccp_message_backend_tests {
         )
         .expect_err("TRON destination bindings must wait for their lane launch");
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP Ethereum mainnet lane launch policy")
-                && message.contains("domain 5")
+            message.contains("SCCP TON mainnet lane launch policy") && message.contains("domain 5")
         }));
 
         let err = validate_sccp_destination_binding_matches_configured_launch_policy(
@@ -12187,13 +12191,12 @@ mod sccp_message_backend_tests {
             "validated strict-disabled destination bindings must still wait for lane launch",
         );
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP Ethereum mainnet lane launch policy")
-                && message.contains("domain 5")
+            message.contains("SCCP TON mainnet lane launch policy") && message.contains("domain 5")
         }));
     }
 
     #[test]
-    fn configured_ethereum_mainnet_lane_launch_accepts_eth_without_all_lanes() {
+    fn configured_single_lane_launch_accepts_eth_without_all_lanes() {
         let mut zk = iroha_core::state::default_zk_config();
         zk.sccp_source_verifier_materials.clear();
         zk.sccp_source_adapter_engine_deployments.clear();
@@ -12229,14 +12232,10 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn configured_ethereum_mainnet_lane_launch_rejects_bsc() {
+    fn configured_non_ton_lane_launch_accepts_bsc_with_activation_material() {
         let zk = test_configured_sccp_all_lanes_zk_config();
-        let err = sccp_configured_launch_ready_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_BSC)
-            .expect_err("BSC must wait until its lane policy opens");
-        assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP Ethereum mainnet lane launch policy")
-                && message.contains("domain 2")
-        }));
+        sccp_configured_launch_ready_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_BSC)
+            .expect("configured BSC lane material should satisfy activation readiness");
     }
 
     #[test]
@@ -13302,7 +13301,10 @@ mod sccp_message_backend_tests {
             .find(|entry| entry.domain == iroha_sccp::SCCP_DOMAIN_TON)
             .expect("TON counterparty");
         assert!(!ton.production_ready);
-        assert_eq!(ton.disabled_reason.as_deref(), Some(disabled_reason.as_str()));
+        assert_eq!(
+            ton.disabled_reason.as_deref(),
+            Some(disabled_reason.as_str())
+        );
         assert!(!ton.production_readiness.production_ready);
         assert!(!ton.production_readiness.routes_allowlisted);
         assert!(
@@ -13312,9 +13314,11 @@ mod sccp_message_backend_tests {
                 .any(|blocker| blocker == &disabled_reason),
             "disabled route reason should be surfaced as a capability blocker"
         );
-        let err =
-            sccp_configured_launch_ready_for_domain(&state.zk_snapshot(), iroha_sccp::SCCP_DOMAIN_TON)
-                .expect_err("disabled route manifest must fail launch readiness");
+        let err = sccp_configured_launch_ready_for_domain(
+            &state.zk_snapshot(),
+            iroha_sccp::SCCP_DOMAIN_TON,
+        )
+        .expect_err("disabled route manifest must fail launch readiness");
         assert!(conversion_message(&err).is_some_and(|message| message == disabled_reason));
     }
 

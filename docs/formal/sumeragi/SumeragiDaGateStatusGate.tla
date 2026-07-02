@@ -30,7 +30,7 @@ ManifestReadFailedRecord == 5
 ManifestSpoolScanRecord == 6
 CurrentNoneClearsReason == 7
 ClearMissingLocalDataSatisfies == 8
-ClearManifestDoesNotSatisfy == 9
+ClearManifestSatisfies == 9
 NoneToNoneDoesNotSatisfy == 10
 RepeatedMissingAccumulates == 11
 RepeatedManifestAccumulates == 12
@@ -42,8 +42,13 @@ SnapshotProjectsCounters == 17
 MissingLocalDataGetterMatches == 18
 TopLevelSnapshotIncludesDaGate == 19
 ResetAfterRecordsClears == 20
+MissingToManifestSatisfies == 21
+ManifestToMissingSatisfies == 22
+ManifestToDifferentSatisfies == 23
+ManifestIdentityDoesNotSatisfy == 24
+NoneToManifestDoesNotSatisfy == 25
 
-Candidates == 1..20
+Candidates == 1..25
 
 ResetCounters == 1
 ResetReason == 2
@@ -66,8 +71,9 @@ SnapshotSatisfiedMatches == 18
 SnapshotCountersMatch == 19
 GetterMissingLocalDataMatches == 20
 TopLevelDaGateMatches == 21
+SetSatisfiedManifestGuardRecovered == 22
 
-Actions == 1..21
+Actions == 1..22
 
 AllResetActions == {ResetCounters, ResetReason, ResetSatisfied}
 
@@ -89,16 +95,17 @@ SpecActions(candidate) ==
     [] candidate = ClearMissingLocalDataSatisfies ->
       {SetReasonNone, SetSatisfiedMissingDataRecovered,
        CountersPreservedOnClear}
-    [] candidate = ClearManifestDoesNotSatisfy ->
-      {SetReasonNone, LastSatisfiedUnchanged, CountersPreservedOnClear}
+    [] candidate = ClearManifestSatisfies ->
+      {SetReasonNone, SetSatisfiedManifestGuardRecovered,
+       CountersPreservedOnClear}
     [] candidate = NoneToNoneDoesNotSatisfy ->
       {SetReasonNone, LastSatisfiedUnchanged, CountersPreservedOnClear}
     [] candidate = RepeatedMissingAccumulates ->
       {IncrementMissingLocalData, SameCounterAccumulates,
-       SnapshotCountersMatch}
+       LastSatisfiedUnchanged, SnapshotCountersMatch}
     [] candidate = RepeatedManifestAccumulates ->
       {IncrementManifestGuard, SameCounterAccumulates,
-       SnapshotCountersMatch}
+       LastSatisfiedUnchanged, SnapshotCountersMatch}
     [] candidate = LastReasonOverwrites ->
       {SetReasonManifestHashMismatch, LastReasonOverwritesAction,
        SnapshotReasonMatches}
@@ -116,6 +123,21 @@ SpecActions(candidate) ==
       {TopLevelDaGateMatches}
     [] candidate = ResetAfterRecordsClears ->
       AllResetActions
+    [] candidate = MissingToManifestSatisfies ->
+      {IncrementManifestGuard, SetReasonManifestMissing,
+       SetSatisfiedMissingDataRecovered}
+    [] candidate = ManifestToMissingSatisfies ->
+      {IncrementMissingLocalData, SetReasonMissingLocalData,
+       SetSatisfiedManifestGuardRecovered}
+    [] candidate = ManifestToDifferentSatisfies ->
+      {IncrementManifestGuard, SetReasonManifestHashMismatch,
+       SetSatisfiedManifestGuardRecovered, LastReasonOverwritesAction}
+    [] candidate = ManifestIdentityDoesNotSatisfy ->
+      {IncrementManifestGuard, SameCounterAccumulates,
+       LastSatisfiedUnchanged, SnapshotCountersMatch}
+    [] candidate = NoneToManifestDoesNotSatisfy ->
+      {IncrementManifestGuard, SetReasonManifestMissing,
+       LastSatisfiedUnchanged}
     [] OTHER -> {}
 
 ImplementationActions(candidate) ==
@@ -158,9 +180,13 @@ ImplementationActions(candidate) ==
     [] candidate = ClearMissingLocalDataSatisfies /\
           Bug = "missing_recovery_clears_counter" ->
       spec \ {CountersPreservedOnClear}
-    [] candidate = ClearManifestDoesNotSatisfy /\
-          Bug = "manifest_clear_sets_satisfied" ->
-      spec \cup {SetSatisfiedMissingDataRecovered}
+    [] candidate = ClearManifestSatisfies /\
+          Bug = "manifest_clear_not_satisfied" ->
+      spec \ {SetSatisfiedManifestGuardRecovered}
+    [] candidate = ClearManifestSatisfies /\
+          Bug = "manifest_clear_sets_missing_satisfied" ->
+      (spec \ {SetSatisfiedManifestGuardRecovered}) \cup
+        {SetSatisfiedMissingDataRecovered}
     [] candidate = NoneToNoneDoesNotSatisfy /\
           Bug = "none_to_none_sets_satisfied" ->
       spec \cup {SetSatisfiedMissingDataRecovered}
@@ -199,17 +225,36 @@ ImplementationActions(candidate) ==
     [] candidate = ResetAfterRecordsClears /\
           Bug = "reset_after_records_keeps_status" ->
       spec \ {ResetReason, ResetSatisfied}
+    [] candidate = MissingToManifestSatisfies /\
+          Bug = "missing_to_manifest_not_satisfied" ->
+      spec \ {SetSatisfiedMissingDataRecovered}
+    [] candidate = MissingToManifestSatisfies /\
+          Bug = "missing_to_manifest_sets_manifest_satisfied" ->
+      (spec \ {SetSatisfiedMissingDataRecovered}) \cup
+        {SetSatisfiedManifestGuardRecovered}
+    [] candidate = ManifestToMissingSatisfies /\
+          Bug = "manifest_to_missing_not_satisfied" ->
+      spec \ {SetSatisfiedManifestGuardRecovered}
+    [] candidate = ManifestToDifferentSatisfies /\
+          Bug = "manifest_to_different_not_satisfied" ->
+      spec \ {SetSatisfiedManifestGuardRecovered}
+    [] candidate = ManifestIdentityDoesNotSatisfy /\
+          Bug = "manifest_identity_sets_satisfied" ->
+      spec \cup {SetSatisfiedManifestGuardRecovered}
+    [] candidate = NoneToManifestDoesNotSatisfy /\
+          Bug = "none_to_manifest_sets_satisfied" ->
+      spec \cup {SetSatisfiedManifestGuardRecovered}
     [] OTHER -> spec
 
 Init ==
   checked = 0
 
 Next ==
-  /\ checked < 20
+  /\ checked < 25
   /\ checked' = checked + 1
 
 TypeInvariant ==
-  checked \in 0..20
+  checked \in 0..25
 
 DaGateStatusActionsMatchSpec ==
   \A candidate \in Candidates:
@@ -271,9 +316,13 @@ BugMissingRecoveryClearsCounter ==
   ImplementationActions(ClearMissingLocalDataSatisfies) =
     SpecActions(ClearMissingLocalDataSatisfies)
 
-BugManifestClearSetsSatisfied ==
-  ImplementationActions(ClearManifestDoesNotSatisfy) =
-    SpecActions(ClearManifestDoesNotSatisfy)
+BugManifestClearNotSatisfied ==
+  ImplementationActions(ClearManifestSatisfies) =
+    SpecActions(ClearManifestSatisfies)
+
+BugManifestClearSetsMissingSatisfied ==
+  ImplementationActions(ClearManifestSatisfies) =
+    SpecActions(ClearManifestSatisfies)
 
 BugNoneToNoneSetsSatisfied ==
   ImplementationActions(NoneToNoneDoesNotSatisfy) =
@@ -322,6 +371,30 @@ BugResetAfterRecordsKeepsCounters ==
 BugResetAfterRecordsKeepsStatus ==
   ImplementationActions(ResetAfterRecordsClears) =
     SpecActions(ResetAfterRecordsClears)
+
+BugMissingToManifestNotSatisfied ==
+  ImplementationActions(MissingToManifestSatisfies) =
+    SpecActions(MissingToManifestSatisfies)
+
+BugMissingToManifestSetsManifestSatisfied ==
+  ImplementationActions(MissingToManifestSatisfies) =
+    SpecActions(MissingToManifestSatisfies)
+
+BugManifestToMissingNotSatisfied ==
+  ImplementationActions(ManifestToMissingSatisfies) =
+    SpecActions(ManifestToMissingSatisfies)
+
+BugManifestToDifferentNotSatisfied ==
+  ImplementationActions(ManifestToDifferentSatisfies) =
+    SpecActions(ManifestToDifferentSatisfies)
+
+BugManifestIdentitySetsSatisfied ==
+  ImplementationActions(ManifestIdentityDoesNotSatisfy) =
+    SpecActions(ManifestIdentityDoesNotSatisfy)
+
+BugNoneToManifestSetsSatisfied ==
+  ImplementationActions(NoneToManifestDoesNotSatisfy) =
+    SpecActions(NoneToManifestDoesNotSatisfy)
 
 =============================================================================
 ====

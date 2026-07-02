@@ -2859,12 +2859,6 @@ mod chained {
             self.0.header.creation_time()
         }
 
-        /// Header that would be signed if the builder were signed in its current state.
-        #[must_use]
-        pub(crate) fn header(&self) -> BlockHeader {
-            self.0.header
-        }
-
         /// Attach a DA commitment bundle and update the header hash accordingly.
         #[must_use]
         pub fn with_da_commitments(mut self, commitments: Option<DaCommitmentBundle>) -> Self {

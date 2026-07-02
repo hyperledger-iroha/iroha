@@ -19,6 +19,18 @@ evidence-scripts phase, and both release-readiness and strict release-bundle
 transcript inventories require that test before certification evidence can
 pass.
 
+TON source-adapter readiness now stays aligned with the governed
+full-light-client audit policy: readiness-positive test fixtures use the
+governed audit hash tuple, request-bound audit hash replays fail closed at the
+production-readiness gate, and the focused `iroha_sccp` TON suite is green.
+
+Outbound SCCP record admission is now canonical-only, outbound replay identity
+is lane-independent, and inbound proof replay keys bind the proof-derived
+payload hash before receipt or settlement effects. Remaining SCCP launch work is
+focused on completing the remaining Torii focused validation, keeping the
+five-network production-corridor evidence current, and retiring any leftover
+pre-release client or script payload-alias assumptions outside production.
+
 ## Release and Stabilization
 
 **Status:** active.
@@ -71,7 +83,14 @@ pass.
   parsing rejects uncompressed all-zero coordinate material before backend
   parsing, central Ed25519 public-key parsing rejects all-zero material before
   curve decompression, the shared Ed25519 single verifier rejects noncanonical
-  or small-order signature `R` encodings before dalek `verify_strict`, SoraNet
+  or small-order signature `R` encodings before dalek `verify_strict`, generic
+  `Signature::verify` and typed `SignatureOf<T>::verify` coverage now pin the
+  same malformed-`R` rejection for opaque Ed25519 signatures constructed from
+  bytes, RAM-LFE signed receipt and output-opening coverage now pins
+  small-order and noncanonical Ed25519 `R` rejection before signature
+  verification, identifier resolution receipt and SoraNet VPN usage-voucher
+  coverage now pin the same malformed-`R` pair for externally supplied Ed25519
+  signatures, SoraNet
   SRCv2 certificate verification now routes Ed25519 signatures through that
 		  strict `R` parser before backend verification, SoraFS manifest Ed25519
 			  verifier helpers reject noncanonical or small-order signature `R` material
@@ -135,7 +154,10 @@ pass.
   use the same malformed-`R` admission before assertion verification, Offline
   Notes V1/V2 legacy helper and issuer JSON/base64 signature paths route raw
   Ed25519 buffers through the central malformed-`R` parser before verification
-  or signature wrapping, alias storage emits a checked nonzero placeholder
+  or signature wrapping, and Offline Notes V1 body-proof, attestation receipt,
+  and lineage issuer base64 fields now preserve raw JSON text through exact
+  standard-base64 admission instead of trimming before verification, alias
+  storage emits a checked nonzero placeholder
   attestation signature until real alias attestation signing is wired in,
   query signature archived Norito decoding now has fallible checked
   `QuerySignature`/`SignedQuery` admission instead of infallible decode

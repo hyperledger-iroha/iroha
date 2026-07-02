@@ -53920,7 +53920,9 @@ pub(crate) mod tests_runtime_handlers {
         {
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
             let state = Arc::get_mut(&mut app_mut.state).expect("unique core state");
-            state.zk.sccp_route_manifests.push(configured_route.clone());
+            let mut zk = state.zk_snapshot();
+            zk.sccp_route_manifests.push(configured_route.clone());
+            state.set_zk(zk);
         }
 
         let response = routing::handle_v1_sccp_manifests(app.state.as_ref(), None)
