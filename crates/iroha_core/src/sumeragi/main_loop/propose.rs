@@ -2026,7 +2026,7 @@ impl Actor {
         };
         let frontier_commit_qc_blocks_yield = frontier_commit_qc_observed && !recovery_exhausted;
         let competing_quorum_blocks_yield =
-            competing_quorum_locked && !new_view_qc_supersedes_owner;
+            competing_quorum_locked && !new_view_qc_supersedes_owner && owner_age < yield_age;
         if owner_qc_observed
             || frontier_commit_qc_blocks_yield
             || local_vote_consensus_locked
@@ -4698,6 +4698,7 @@ impl Actor {
         } else {
             payload_cooldown
         };
+        cooldown = cooldown.max(CACHED_PROPOSAL_REBROADCAST_COOLDOWN_FLOOR);
         if self.relay_backpressure_active(now, payload_cooldown)
             && (!frontier_recovery_cached || prior_body_rebroadcast)
         {

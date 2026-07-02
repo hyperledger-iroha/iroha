@@ -461,13 +461,21 @@ impl AccountAddress {
         encoded: &str,
         expected_discriminant: Option<u16>,
     ) -> Result<Self, AccountAddressError> {
-        let (found, canonical) = decode_i105_literal(encoded)?;
-        if let Some(expected) = expected_discriminant
-            && found != expected
-        {
-            return Err(AccountAddressError::UnexpectedNetworkPrefix { expected, found });
-        }
+        let (_, canonical) = decode_i105_literal(encoded, expected_discriminant)?;
         Self::from_canonical_bytes(&canonical)
+    }
+
+    /// Return the chain discriminant embedded in a canonical I105 literal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountAddressError`] if the string is not a valid I105 literal.
+    pub fn i105_discriminant(encoded: &str) -> Result<u16, AccountAddressError> {
+        let trimmed = encoded.trim();
+        let (discriminant, canonical) = decode_i105_literal(trimmed, None)?;
+        let address = Self::from_canonical_bytes(&canonical)?;
+        address.ensure_canonical_i105_literal(trimmed, discriminant)?;
+        Ok(discriminant)
     }
 
     fn ensure_canonical_i105_literal(
@@ -513,9 +521,10 @@ impl AccountAddress {
                     other => other,
                 }
             })?;
-        let expected = expected_discriminant
-            .or_else(|| i105_discriminant_from_sentinel(trimmed))
-            .ok_or(AccountAddressError::UnsupportedAddressFormat)?;
+        let expected = match expected_discriminant {
+            Some(discriminant) => discriminant,
+            None => Self::i105_discriminant(trimmed)?,
+        };
         address.ensure_canonical_i105_literal(trimmed, expected)?;
         Ok(address)
     }
@@ -1035,40 +1044,6 @@ fn i105_sentinel_for_discriminant(discriminant: u16) -> String {
     }
 }
 
-fn i105_discriminant_from_sentinel(input: &str) -> Option<u16> {
-    for (discriminant, sentinel) in [
-        (CHAIN_DISCRIMINANT_SORA, I105_SENTINEL_SORA),
-        (CHAIN_DISCRIMINANT_TEST, I105_SENTINEL_TEST),
-        (CHAIN_DISCRIMINANT_DEV, I105_SENTINEL_DEV),
-    ] {
-        if input.starts_with(sentinel) {
-            return Some(discriminant);
-        }
-    }
-    i105_discriminant_from_numeric_sentinel(input)
-}
-
-fn i105_discriminant_from_numeric_sentinel(input: &str) -> Option<u16> {
-    if let Some(rest) = input.strip_prefix(I105_SENTINEL_FALLBACK_PREFIX) {
-        return parse_i105_numeric_sentinel(rest);
-    }
-    None
-}
-
-fn parse_i105_numeric_sentinel(rest: &str) -> Option<u16> {
-    let mut digits = String::new();
-    for ch in rest.chars().take(5) {
-        if !ch.is_ascii_digit() {
-            break;
-        }
-        digits.push(ch);
-    }
-    if digits.is_empty() {
-        return None;
-    }
-    digits.parse::<u16>().ok()
-}
-
 /// Stable error codes surfaced by address encoders/decoders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccountAddressErrorCode {
@@ -1309,15 +1284,90 @@ fn encode_i105_literal(prefix: u16, canonical: &[u8]) -> Result<String, AccountA
     Ok(output)
 }
 
-fn decode_i105_literal(input: &str) -> Result<(u16, Vec<u8>), AccountAddressError> {
-    let Some(discriminant) = i105_discriminant_from_sentinel(input) else {
+fn decode_i105_literal(
+    input: &str,
+    expected_discriminant: Option<u16>,
+) -> Result<(u16, Vec<u8>), AccountAddressError> {
+    let (found, canonical) = decode_i105_literal_with_embedded_discriminant(input)?;
+    if let Some(expected) = expected_discriminant
+        && found != expected
+    {
+        return Err(AccountAddressError::UnexpectedNetworkPrefix { expected, found });
+    }
+    Ok((found, canonical))
+}
+
+fn decode_i105_literal_with_embedded_discriminant(
+    input: &str,
+) -> Result<(u16, Vec<u8>), AccountAddressError> {
+    for (discriminant, sentinel) in [
+        (CHAIN_DISCRIMINANT_SORA, I105_SENTINEL_SORA),
+        (CHAIN_DISCRIMINANT_TEST, I105_SENTINEL_TEST),
+        (CHAIN_DISCRIMINANT_DEV, I105_SENTINEL_DEV),
+    ] {
+        if let Some(payload) = input.strip_prefix(sentinel) {
+            return decode_i105_payload(payload).map(|canonical| (discriminant, canonical));
+        }
+    }
+
+    let Some(rest) = input.strip_prefix(I105_SENTINEL_FALLBACK_PREFIX) else {
         return Err(AccountAddressError::MissingI105Sentinel);
     };
-    let payload = input
-        .strip_prefix(&i105_sentinel_for_discriminant(discriminant))
-        .ok_or(AccountAddressError::MissingI105Sentinel)?;
-    let canonical = decode_i105_payload(payload)?;
-    Ok((discriminant, canonical))
+    let mut decoded = None;
+    let mut first_err = None;
+    let mut structural_err = None;
+    for sentinel_len in 1..=5 {
+        let Some((candidate, payload)) = numeric_i105_sentinel_candidate(rest, sentinel_len) else {
+            continue;
+        };
+        match decode_i105_payload(payload) {
+            Ok(canonical) => {
+                let address = match AccountAddress::from_canonical_bytes(&canonical) {
+                    Ok(address) => address,
+                    Err(err) => {
+                        structural_err.get_or_insert(err);
+                        first_err.get_or_insert(err);
+                        continue;
+                    }
+                };
+                if let Err(err) = address.ensure_canonical_i105_literal(input, candidate) {
+                    structural_err.get_or_insert(err);
+                    first_err.get_or_insert(err);
+                    continue;
+                }
+                if decoded.replace((candidate, canonical)).is_some() {
+                    return Err(AccountAddressError::UnsupportedAddressFormat);
+                }
+            }
+            Err(err) => {
+                first_err.get_or_insert(err);
+            }
+        };
+    }
+    decoded.ok_or_else(|| {
+        structural_err
+            .or(first_err)
+            .unwrap_or(AccountAddressError::MissingI105Sentinel)
+    })
+}
+
+fn numeric_i105_sentinel_candidate(rest: &str, len: usize) -> Option<(u16, &str)> {
+    let mut end = 0;
+    for (index, ch) in rest.char_indices().take(len) {
+        if !ch.is_ascii_digit() {
+            return None;
+        }
+        end = index + ch.len_utf8();
+    }
+    if end == 0 || rest[..end].chars().count() != len {
+        return None;
+    }
+    let discriminant = rest[..end].parse::<u16>().ok()?;
+    let sentinel = i105_sentinel_for_discriminant(discriminant);
+    if sentinel.strip_prefix(I105_SENTINEL_FALLBACK_PREFIX)? != &rest[..end] {
+        return None;
+    }
+    Some((discriminant, &rest[end..]))
 }
 
 fn encode_base_n(bytes: &[u8], base: u32) -> Result<Vec<u8>, AccountAddressError> {
@@ -1670,7 +1720,7 @@ mod tests {
     }
 
     #[test]
-    fn i105_sentinel_parsing_covers_known_numeric_and_invalid_prefixes() {
+    fn i105_discriminant_decoding_covers_known_numeric_and_invalid_prefixes() {
         assert_eq!(
             i105_sentinel_for_discriminant(CHAIN_DISCRIMINANT_SORA),
             I105_SENTINEL_SORA
@@ -1685,24 +1735,41 @@ mod tests {
         );
         assert_eq!(i105_sentinel_for_discriminant(42), "n42");
 
-        assert_eq!(
-            i105_discriminant_from_sentinel("sora1"),
-            Some(CHAIN_DISCRIMINANT_SORA)
-        );
-        assert_eq!(
-            i105_discriminant_from_sentinel("test1"),
-            Some(CHAIN_DISCRIMINANT_TEST)
-        );
-        assert_eq!(
-            i105_discriminant_from_sentinel("dev1"),
-            Some(CHAIN_DISCRIMINANT_DEV)
-        );
-        assert_eq!(i105_discriminant_from_sentinel("n42payload"), Some(42));
-        assert_eq!(i105_discriminant_from_sentinel("n00042payload"), Some(42));
-        assert_eq!(i105_discriminant_from_sentinel("n"), None);
-        assert_eq!(i105_discriminant_from_sentinel("nabc"), None);
-        assert_eq!(i105_discriminant_from_sentinel("n65536payload"), None);
-        assert_eq!(i105_discriminant_from_sentinel("x42payload"), None);
+        let address = AccountAddress::from_account_id(&AccountId::new(ed25519_pk()))
+            .expect("address encoding");
+        for discriminant in [
+            CHAIN_DISCRIMINANT_SORA,
+            CHAIN_DISCRIMINANT_TEST,
+            CHAIN_DISCRIMINANT_DEV,
+            42,
+        ] {
+            let literal = address
+                .to_i105_for_discriminant(discriminant)
+                .expect("i105 encoding");
+            assert_eq!(
+                AccountAddress::i105_discriminant(&literal).expect("valid i105 discriminant"),
+                discriminant
+            );
+        }
+
+        assert!(matches!(
+            AccountAddress::i105_discriminant("x42payload"),
+            Err(AccountAddressError::MissingI105Sentinel)
+        ));
+        assert!(AccountAddress::i105_discriminant("n").is_err());
+        assert!(AccountAddress::i105_discriminant("nabc").is_err());
+        assert!(AccountAddress::i105_discriminant("n65536payload").is_err());
+
+        let invalid_header_literal =
+            encode_i105_literal(42, &[0b0001_0000]).expect("encode checksum-valid invalid header");
+        assert!(matches!(
+            AccountAddress::from_i105_for_discriminant(&invalid_header_literal, Some(42)),
+            Err(AccountAddressError::UnknownAddressClass(2))
+        ));
+        assert!(matches!(
+            AccountAddress::i105_discriminant(&invalid_header_literal),
+            Err(AccountAddressError::UnknownAddressClass(2))
+        ));
     }
 
     #[test]
@@ -2438,6 +2505,32 @@ mod tests {
     }
 
     #[test]
+    fn parse_encoded_accepts_numeric_i105_without_global_discriminant() {
+        let _guard = guard_default_label();
+        let account = AccountId::new(ed25519_pk());
+        let address = AccountAddress::from_account_id(&account).expect("encode");
+        let literal = address.to_i105_for_discriminant(42).expect("i105");
+
+        assert_eq!(
+            AccountAddress::i105_discriminant(&literal).expect("decode discriminant"),
+            42
+        );
+        let inferred = AccountAddress::parse_encoded(&literal, None)
+            .expect("embedded discriminant should parse");
+        let explicit = AccountAddress::parse_encoded(&literal, Some(42))
+            .expect("explicit discriminant should parse");
+
+        assert_eq!(
+            inferred.canonical_bytes().unwrap(),
+            address.canonical_bytes().unwrap()
+        );
+        assert_eq!(
+            explicit.canonical_bytes().unwrap(),
+            address.canonical_bytes().unwrap()
+        );
+    }
+
+    #[test]
     fn parse_encoded_trims_i105_literal() {
         let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
@@ -2470,6 +2563,82 @@ mod tests {
         let err = AccountAddress::parse_encoded(&noncanonical, None)
             .expect_err("numeric sentinel must use canonical decimal form");
         assert!(matches!(err, AccountAddressError::UnsupportedAddressFormat));
+    }
+
+    #[test]
+    fn parse_encoded_rejects_wrong_expected_numeric_discriminant() {
+        let _guard = guard_default_label();
+        let account = AccountId::new(ed25519_pk());
+        let address = AccountAddress::from_account_id(&account).expect("encode");
+        let literal = address.to_i105_for_discriminant(42).expect("i105");
+        let foreign = literal.replacen("n42", "n43", 1);
+
+        let inferred = AccountAddress::parse_encoded(&foreign, None)
+            .expect("foreign embedded discriminant is valid when no prefix is expected");
+        assert_eq!(
+            inferred.canonical_bytes().unwrap(),
+            address.canonical_bytes().unwrap()
+        );
+
+        let err = AccountAddress::parse_encoded(&foreign, Some(42))
+            .expect_err("explicit expected discriminant must reject foreign prefix");
+        assert!(matches!(
+            err,
+            AccountAddressError::UnexpectedNetworkPrefix {
+                expected: 42,
+                found: 43
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_encoded_rejects_foreign_numeric_discriminant_that_extends_expected_prefix() {
+        let _guard = guard_default_label();
+        let account = AccountId::new(ed25519_pk());
+        let address = AccountAddress::from_account_id(&account).expect("encode");
+        let foreign = address
+            .to_i105_for_discriminant(421)
+            .expect("foreign i105 with longer numeric sentinel");
+        assert!(
+            foreign.starts_with("n421"),
+            "fixture must extend the expected n42 sentinel"
+        );
+
+        let inferred = AccountAddress::parse_encoded(&foreign, None)
+            .expect("foreign embedded discriminant is valid when no prefix is expected");
+        assert_eq!(
+            inferred.canonical_bytes().unwrap(),
+            address.canonical_bytes().unwrap()
+        );
+
+        let err = AccountAddress::parse_encoded(&foreign, Some(42))
+            .expect_err("expected n42 must reject foreign n421 prefix");
+        assert!(matches!(
+            err,
+            AccountAddressError::UnexpectedNetworkPrefix {
+                expected: 42,
+                found: 421
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_encoded_rejects_numeric_i105_payload_tampering() {
+        let _guard = guard_default_label();
+        let account = AccountId::new(ed25519_pk());
+        let address = AccountAddress::from_account_id(&account).expect("encode");
+        let literal = address.to_i105_for_discriminant(42).expect("i105");
+        let mut chars = literal.chars().collect::<Vec<_>>();
+        let last = chars.len().saturating_sub(1);
+        chars[last] = if chars[last] == '1' { '2' } else { '1' };
+        let tampered = chars.into_iter().collect::<String>();
+
+        let err = AccountAddress::parse_encoded(&tampered, None)
+            .expect_err("payload/checksum tampering must be rejected");
+        assert!(matches!(
+            err,
+            AccountAddressError::ChecksumMismatch | AccountAddressError::InvalidI105Char(_)
+        ));
     }
 
     #[test]

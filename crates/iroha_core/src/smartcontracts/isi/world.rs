@@ -11906,6 +11906,10 @@ pub mod isi {
                     .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
                 {
                     Some(dataspace)
+                } else if let Some(dataspace) =
+                    asset_definition_declared_home_dataspace_id(state_transaction, &asset_definition)
+                {
+                    Some(dataspace)
                 } else {
                     crate::smartcontracts::isi::asset::isi::unique_account_dataspace_hint(
                         state_transaction,
@@ -11925,6 +11929,46 @@ pub mod isi {
         state_transaction
             .world
             .resolve_asset_id_for_current_scope(&asset_id)
+    }
+
+    fn asset_definition_declared_home_dataspace_id(
+        state_transaction: &StateTransaction<'_, '_>,
+        asset_definition: &iroha_data_model::asset::AssetDefinition,
+    ) -> Option<DataSpaceId> {
+        let dataspace_alias = state_transaction
+            .world
+            .asset_definition_alias_bindings
+            .get(asset_definition.id())
+            .map(|binding| binding.alias.dataspace_segment().to_owned())
+            .or_else(|| {
+                asset_definition
+                    .alias()
+                    .as_ref()
+                    .map(|alias| alias.dataspace_segment().to_owned())
+            })
+            .or_else(|| {
+                asset_definition
+                    .id()
+                    .try_domain()
+                    .map(|domain| domain.dataspace().as_ref().to_owned())
+            })?;
+
+        if dataspace_alias.eq_ignore_ascii_case("universal") {
+            return None;
+        }
+
+        state_transaction
+            .nexus
+            .dataspace_catalog
+            .by_alias(&dataspace_alias)
+            .or_else(|| {
+                state_transaction
+                    .world
+                    .dataspace_catalog
+                    .by_alias(&dataspace_alias)
+            })
+            .map(|entry| entry.id)
+            .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
     }
 
     impl Execute for zk::Shield {
@@ -20041,6 +20085,127 @@ pub mod isi {
 
         #[cfg(feature = "zk-stark")]
         #[test]
+        fn zk_ace_authorized_transfer_uses_definition_home_dataspace_on_universal_route() {
+            let fixture = zk_ace_transfer_fixture();
+            let home_dataspace = DataSpaceId::new(8);
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: home_dataspace,
+                    alias: "paynet".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+            stx.world.dataspace_catalog = dataspace_catalog;
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            {
+                let definition = stx
+                    .world
+                    .asset_definition_mut(&fixture.asset_def_id)
+                    .expect("asset definition exists");
+                definition.balance_scope_policy = AssetBalancePolicy::DataspaceRestricted;
+            }
+            stx.world
+                .bind_asset_definition_alias(
+                    &fixture.asset_def_id,
+                    "zkace#paynet".parse().expect("asset alias"),
+                    None,
+                    None,
+                    0,
+                )
+                .expect("bind asset definition alias");
+            let home_source_asset = AssetId::with_scope(
+                fixture.asset_def_id.clone(),
+                ALICE_ID.clone(),
+                AssetBalanceScope::Dataspace(home_dataspace),
+            );
+            let (home_source_asset_id, home_source_asset_value) =
+                Asset::new(home_source_asset.clone(), Numeric::new(100, 0)).into_key_value();
+            stx.world
+                .assets
+                .insert(home_source_asset_id.clone(), home_source_asset_value);
+            stx.world.track_asset_holder(&home_source_asset_id);
+
+            let vk_commitment = install_zk_ace_verifier(
+                &mut stx,
+                &fixture.vk_id,
+                ConfidentialStatus::Active,
+                ZK_ACE_TEST_MAX_PROOF_BYTES,
+            );
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register ZK-ACE identity commitment");
+
+            let amount = 7;
+            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                &fixture.witness,
+                fixture.policy_hash,
+                fixture.vk_id.clone(),
+                vk_commitment,
+            );
+            let transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                tx_digest,
+                stx.chain_id.clone(),
+                replay_nullifier,
+                fixture.policy_hash,
+                proof,
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x72);
+            transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect("ZK-ACE transfer should debit the definition home dataspace");
+
+            assert_eq!(
+                numeric_balance(&stx, &home_source_asset),
+                Numeric::new(93, 0)
+            );
+            let receiver_asset = AssetId::with_scope(
+                fixture.asset_def_id.clone(),
+                fixture.receiver.clone(),
+                AssetBalanceScope::Dataspace(home_dataspace),
+            );
+            assert_eq!(numeric_balance(&stx, &receiver_asset), Numeric::new(7, 0));
+            let global_source_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
+            assert_eq!(
+                numeric_balance(&stx, &global_source_asset),
+                Numeric::new(100, 0)
+            );
+            let global_receiver_asset =
+                AssetId::new(fixture.asset_def_id.clone(), fixture.receiver.clone());
+            assert!(
+                stx.world.assets.get(&global_receiver_asset).is_none(),
+                "definition-home transfer must not create a global receiver bucket"
+            );
+        }
+
+        #[cfg(feature = "zk-stark")]
+        #[test]
         fn zk_ace_identity_allowlist_is_canonical_and_enforced() {
             let fixture = zk_ace_transfer_fixture();
             let block = new_dummy_block();
@@ -21245,6 +21410,58 @@ pub mod isi {
             assert!(
                 stx.world.assets.get(&universal_asset_id).is_none(),
                 "universal route must not debit a universal bucket when the account has one private dataspace binding"
+            );
+            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
+        }
+
+        #[test]
+        fn shield_restricted_asset_uses_definition_home_dataspace_on_universal_route() {
+            let home_dataspace = DataSpaceId::new(8);
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                None,
+                &[],
+                &[(AssetBalanceScope::Dataspace(home_dataspace), 10)],
+            );
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: home_dataspace,
+                    alias: "paynet".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+            stx.world.dataspace_catalog = dataspace_catalog;
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world
+                .bind_asset_definition_alias(
+                    &asset_def_id,
+                    "ticket#paynet".parse().expect("asset alias"),
+                    None,
+                    None,
+                    0,
+                )
+                .expect("bind asset definition alias");
+
+            shield_amount(&mut stx, &asset_def_id, 3)
+                .expect("universal route should use the asset definition home dataspace");
+
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(7, 0));
+            let universal_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
+            );
+            assert!(
+                stx.world.assets.get(&universal_asset_id).is_none(),
+                "definition-home routing must not fall back to a universal bucket"
             );
             assert_eq!(commitment_count(&stx, &asset_def_id), 1);
         }

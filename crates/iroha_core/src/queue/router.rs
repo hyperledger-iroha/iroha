@@ -30,7 +30,11 @@ use iroha_data_model::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode,
         },
-        zk::{AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, Shield, Unshield, ZkTransfer},
+        zk::{
+            AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, RegisterZkAceIdentityCommitment,
+            RevokeZkAceIdentityCommitment, RotateZkAceIdentityCommitment, Shield,
+            SubmitZkAceAuthorizedTransfer, Unshield, ZkTransfer,
+        },
     },
     musubi::{MusubiNamespace, MusubiPackageId},
     nexus::{
@@ -2283,6 +2287,18 @@ fn offline_note_asset_definition_target(any: &dyn std::any::Any) -> Option<&Asse
     }
     if let Some(register_pool) = any.downcast_ref::<RegisterAssetHiddenZkPool>() {
         return Some(&register_pool.storage_asset);
+    }
+    if let Some(register) = any.downcast_ref::<RegisterZkAceIdentityCommitment>() {
+        return Some(&register.asset);
+    }
+    if let Some(rotate) = any.downcast_ref::<RotateZkAceIdentityCommitment>() {
+        return Some(&rotate.asset);
+    }
+    if let Some(revoke) = any.downcast_ref::<RevokeZkAceIdentityCommitment>() {
+        return Some(&revoke.asset);
+    }
+    if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
+        return Some(&transfer.asset);
     }
     None
 }
@@ -8194,6 +8210,7 @@ mod tests {
     #[test]
     fn native_zk_asset_instruction_routes_to_asset_definition_dataspace_without_explicit_rule() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("builderland");
         let lane_id = LaneId::new(2);
         let dataspace_id = DataSpaceId::new(10);
         let asset_definition = AssetDefinitionId::new(
@@ -8212,24 +8229,128 @@ mod tests {
                 (lane_id, dataspace_id),
             ]),
         );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Shield::new(
-                asset_definition,
-                alice_id.clone(),
-                10,
-                [0x44; 32],
-                ConfidentialEncryptedPayload::new([0x11; 32], [0x22; 24], vec![0x33; 16]),
-            ))],
-        );
 
-        assert_eq!(
-            router
-                .try_route(&tx)
-                .expect("Shield should route from its asset definition dataspace"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
+        let proof = || {
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+                VerifyingKeyId::new("halo2/ipa", "zk-route-test"),
+            )
+        };
+        let encrypted_payload =
+            || ConfidentialEncryptedPayload::new([0x11; 32], [0x22; 24], vec![0x33; 16]);
+        let cases: Vec<(&str, InstructionBox)> = vec![
+            (
+                "shield",
+                Shield::new(
+                    asset_definition.clone(),
+                    alice_id.clone(),
+                    10,
+                    [0x44; 32],
+                    encrypted_payload(),
+                )
+                .into(),
+            ),
+            (
+                "zk_transfer",
+                ZkTransfer::new(
+                    asset_definition.clone(),
+                    vec![[0x55; 32]],
+                    vec![[0x66; 32]],
+                    proof(),
+                    Some([0x77; 32]),
+                )
+                .into(),
+            ),
+            (
+                "unshield",
+                Unshield::new(
+                    asset_definition.clone(),
+                    alice_id.clone(),
+                    5,
+                    vec![[0x88; 32]],
+                    proof(),
+                    Some([0x99; 32]),
+                )
+                .into(),
+            ),
+            (
+                "register_asset_hidden_zk_pool",
+                RegisterAssetHiddenZkPool::new(
+                    "pool-a".to_owned(),
+                    asset_definition.clone(),
+                    [0xAA; 32],
+                    VerifyingKeyId::new("halo2/ipa", "asset-hidden-vk"),
+                )
+                .into(),
+            ),
+            (
+                "register_zk_ace_identity_commitment",
+                RegisterZkAceIdentityCommitment::new(
+                    asset_definition.clone(),
+                    [0x11; 32],
+                    [0x22; 32],
+                    vec![alice_id.clone()],
+                    "transfer".to_owned(),
+                    "zk-ace-route-test".to_owned(),
+                    VerifyingKeyId::new("stark/fri", "zk-ace-vk"),
+                )
+                .into(),
+            ),
+            (
+                "rotate_zk_ace_identity_commitment",
+                RotateZkAceIdentityCommitment::new(
+                    asset_definition.clone(),
+                    [0x11; 32],
+                    [0x12; 32],
+                    [0x22; 32],
+                    vec![alice_id.clone()],
+                    "transfer".to_owned(),
+                    "zk-ace-route-test".to_owned(),
+                    VerifyingKeyId::new("stark/fri", "zk-ace-vk"),
+                )
+                .into(),
+            ),
+            (
+                "revoke_zk_ace_identity_commitment",
+                RevokeZkAceIdentityCommitment::new(
+                    asset_definition.clone(),
+                    [0x11; 32],
+                    Some([0x33; 32]),
+                )
+                .into(),
+            ),
+            (
+                "submit_zk_ace_authorized_transfer",
+                SubmitZkAceAuthorizedTransfer::new(
+                    alice_id.clone(),
+                    bob_id,
+                    asset_definition,
+                    7,
+                    [0x11; 32],
+                    [0x33; 32],
+                    ChainId::from("chain"),
+                    "zk-ace-route-test".to_owned(),
+                    "transfer".to_owned(),
+                    [0x44; 32],
+                    [0x22; 32],
+                    proof(),
+                )
+                .into(),
+            ),
+        ];
+
+        for (label, instruction) in cases {
+            let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
+
+            assert_eq!(
+                router
+                    .try_route(&tx)
+                    .unwrap_or_else(|err| panic!("{label} should route: {err:?}")),
+                RoutingDecision::new(lane_id, dataspace_id),
+                "{label} should route from its asset definition dataspace"
+            );
+        }
     }
 
     #[test]

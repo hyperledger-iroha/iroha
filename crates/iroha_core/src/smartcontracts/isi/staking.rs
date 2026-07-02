@@ -151,7 +151,15 @@ impl Execute for RegisterPublicLaneValidator {
             self.lane_id,
             "register_public_lane_validator",
         )?;
-        ensure_validator_authority(authority, &self.validator, "register_public_lane_validator")?;
+        let is_genesis_bootstrap =
+            state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty();
+        if !is_genesis_bootstrap {
+            ensure_validator_authority(
+                authority,
+                &self.validator,
+                "register_public_lane_validator",
+            )?;
+        }
         ensure_registration_uses_validator_stake(
             &self.validator,
             &self.stake_account,
@@ -2349,9 +2357,37 @@ mod tests {
     }
 
     #[test]
-    fn register_rejects_non_validator_authority() {
+    fn register_allows_genesis_bootstrap_authority() {
         let state = setup_state();
         let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, _, _, _) = prepare_accounts(&mut stx);
+        RegisterPublicLaneValidator {
+            lane_id: LaneId::new(81),
+            peer_id: validator_peer_id(&validator),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Numeric::new(1_000, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("genesis authority may bootstrap validator registration");
+
+        assert!(
+            stx.world
+                .public_lane_validators
+                .get(&(LaneId::new(81), validator))
+                .is_some(),
+            "genesis bootstrap registration must create a validator record"
+        );
+    }
+
+    #[test]
+    fn register_rejects_non_validator_authority() {
+        let state = setup_state();
+        let block = new_block_with_height(2);
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 

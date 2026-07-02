@@ -110,6 +110,15 @@ use norito::json::Value as JsonValue;
 use rust_decimal::Decimal;
 use sha2::Digest as _;
 
+const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+
+fn is_public_taira_chain_id(chain_id: &ChainId) -> bool {
+    matches!(
+        chain_id.as_str(),
+        PUBLIC_TAIRA_CHAIN_ID | "iroha3-taira" | "taira"
+    )
+}
+
 fn taira_legacy_replay_confidential_digest(
     expected: Option<ConfidentialFeatureDigest>,
     actual: Option<ConfidentialFeatureDigest>,
@@ -5848,13 +5857,26 @@ pub(crate) mod valid {
             };
             let actual_digest = block.header().confidential_features();
             if actual_digest != expected_digest {
-                if allow_missing_legacy_context
-                    && taira_legacy_replay_confidential_digest(expected_digest, actual_digest)
+                let is_legacy_taira_digest =
+                    taira_legacy_replay_confidential_digest(expected_digest, actual_digest);
+                let is_public_taira_genesis =
+                    block.header().is_genesis() && is_public_taira_chain_id(chain_id);
+                if is_legacy_taira_digest
+                    && (allow_missing_legacy_context || is_public_taira_genesis)
                 {
-                    iroha_logger::debug!(
-                        block_height,
-                        "accepting legacy Taira confidential feature digest during replay"
-                    );
+                    if is_public_taira_genesis && !allow_missing_legacy_context {
+                        iroha_logger::warn!(
+                            block_height,
+                            chain_id = chain_id.as_str(),
+                            "accepting public Taira genesis with legacy confidential feature digest"
+                        );
+                    } else {
+                        iroha_logger::debug!(
+                            block_height,
+                            chain_id = chain_id.as_str(),
+                            "accepting legacy Taira confidential feature digest during replay"
+                        );
+                    }
                 } else {
                     return Err(BlockValidationError::ConfidentialFeaturesMismatch {
                         expected: expected_digest,
@@ -21054,6 +21076,18 @@ mod tests {
             Some(expected),
             None
         ));
+    }
+
+    #[test]
+    fn public_taira_chain_id_guard_accepts_only_taira_ids() {
+        assert!(is_public_taira_chain_id(&ChainId::from(
+            "809574f5-fee7-5e69-bfcf-52451e42d50f"
+        )));
+        assert!(is_public_taira_chain_id(&ChainId::from("iroha3-taira")));
+        assert!(is_public_taira_chain_id(&ChainId::from("taira")));
+        assert!(!is_public_taira_chain_id(&ChainId::from(
+            "00000000-0000-0000-0000-000000000000"
+        )));
     }
 
     fn native_amx_test_catalog(
