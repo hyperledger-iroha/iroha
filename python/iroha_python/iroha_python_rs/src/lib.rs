@@ -64,7 +64,10 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     name::Name,
-    nexus::{DataSpaceId, LaneId, LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash},
+    nexus::{
+        DataSpaceId, FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect,
+        LaneId, LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash,
+    },
     nft::NftId,
     peer::PeerId,
     permission::Permission,
@@ -4407,6 +4410,49 @@ fn decode_transaction_receipt_json_py(receipt_bytes: &[u8]) -> PyResult<String> 
         })?;
     json::to_json(&receipt)
         .map_err(|err| PyValueError::new_err(format!("failed to serialize receipt: {err}")))
+}
+
+#[pyfunction]
+#[pyo3(name = "zk_ace_verifying_key_registration_payload_v1")]
+fn zk_ace_verifying_key_registration_payload_v1_py(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    let record = zk_ace_prover::zk_ace_verifying_key_record_v1(1).map_err(|err| {
+        PyValueError::new_err(format!(
+            "failed to build ZK-ACE verifying-key registration payload: {err}"
+        ))
+    })?;
+    let key_bytes = record
+        .key
+        .as_ref()
+        .ok_or_else(|| {
+            PyValueError::new_err("ZK-ACE verifying-key record is missing inline key bytes")
+        })?
+        .bytes
+        .clone();
+    let payload = PyDict::new(py);
+    payload.set_item(
+        "backend",
+        iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+    )?;
+    payload.set_item(
+        "name",
+        iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+    )?;
+    payload.set_item("version", record.version)?;
+    payload.set_item("circuit_id", record.circuit_id)?;
+    payload.set_item(
+        "public_inputs_schema_hash_hex",
+        hex_encode(record.public_inputs_schema_hash),
+    )?;
+    payload.set_item("curve", record.curve)?;
+    payload.set_item("vk_len", record.vk_len)?;
+    payload.set_item("max_proof_bytes", record.max_proof_bytes)?;
+    payload.set_item("commitment_hex", hex_encode(record.commitment))?;
+    if let Some(gas_schedule_id) = record.gas_schedule_id {
+        payload.set_item("gas_schedule_id", gas_schedule_id)?;
+    }
+    payload.set_item("vk_bytes", BASE64.encode(&key_bytes))?;
+    payload.set_item("status", "Active")?;
+    Ok(payload.into_any().unbind())
 }
 
 #[pyfunction]
@@ -17531,6 +17577,30 @@ impl Instruction {
     }
 
     #[classmethod]
+    #[pyo3(signature = (sponsor, policy_name = "default"))]
+    fn upsert_fee_sponsor_policy(
+        _cls: &Bound<'_, PyType>,
+        sponsor: &str,
+        policy_name: &str,
+    ) -> PyResult<Self> {
+        let sponsor: AccountId = parse_account_id(sponsor).map_err(|err| {
+            PyValueError::new_err(format!("invalid fee sponsor account `{sponsor}`: {err}"))
+        })?;
+        ensure_ed25519_account(&sponsor)?;
+        let policy_name: Name = policy_name.parse().map_err(|err| {
+            PyValueError::new_err(format!("invalid fee sponsor policy `{policy_name}`: {err}"))
+        })?;
+        let policy = FeeSponsorPolicy {
+            id: FeeSponsorPolicyId::new(sponsor, policy_name),
+            enabled: true,
+            max_fee: None,
+            rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
+        };
+        let instruction = iroha_data_model::isi::nexus::UpsertFeeSponsorPolicy { policy };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
     fn register_domain<'py>(
         _cls: &Bound<'py, PyType>,
         py: Python<'py>,
@@ -22762,6 +22832,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         decode_transaction_receipt_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        zk_ace_verifying_key_registration_payload_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

@@ -3831,6 +3831,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-compact-key-staged-runner-temp-cleanup-sync-failure",
     "--negative-control-compact-key-staged-runner-child-log-file",
     "--negative-control-compact-key-staged-runner-supervisor-output-pipe",
+    "--negative-control-staged-runner-heavy-job-lock",
+    "--negative-control-staged-runner-rss-limit-termination",
+    "--negative-control-staged-runner-residual-process-group",
+    "--negative-control-staged-runner-existing-heavy-job-conflict",
+    "--negative-control-staged-runner-resource-report-fields",
     "--negative-control-staged-runner-relative-repo-root-child-path",
     "--negative-control-compact-key-staged-runner-execution-log-sha256",
     "--negative-control-compact-key-staged-runner-resume-replace-conflict",
@@ -3982,6 +3987,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-lineage-proof-staged-runner-temp-cleanup-sync-failure",
     "--negative-control-lineage-proof-staged-runner-child-log-file",
     "--negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
+    "--negative-control-staged-runner-heavy-job-lock",
+    "--negative-control-staged-runner-rss-limit-termination",
+    "--negative-control-staged-runner-residual-process-group",
+    "--negative-control-staged-runner-existing-heavy-job-conflict",
+    "--negative-control-staged-runner-resource-report-fields",
     "--negative-control-lineage-proof-staged-runner-execution-log-sha256",
     "--negative-control-lineage-proof-staged-runner-resume-replace-conflict",
     "--negative-control-lineage-proof-staged-runner-resume-artifact-content",
@@ -4004,6 +4014,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-compact-key-finalizer-execution-elapsed-binding",
     "--negative-control-compact-key-finalizer-execution-log-sha256",
     "--negative-control-compact-key-finalizer-private-permissions",
+    "--negative-control-staged-finalizer-rss-terminated-report",
     "--negative-control-compact-key-generator-log-binding",
     "--negative-control-compact-key-helper-output-private-permissions",
     "--negative-control-compact-key-staged-runner-heartbeat",
@@ -4046,6 +4057,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-workflow-negative-control-handler-duplicates",
     "--negative-control-workflow-negative-control-requirement-duplicates",
     "--negative-control-workflow-negative-control-duplicates",
+    "--negative-control-staged-resource-guard-workflow-path",
     "--negative-control-workflow",
     "--negative-control-lineage-proof-timestamp-raw",
     "--negative-control-lineage-proof-readiness-direct-hash-shape",
@@ -5641,8 +5653,33 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-compact-key-staged-runner-supervisor-output-pipe",
-      /break\\n            except subprocess\.TimeoutExpired:[\s\S]*?sys\.stdout\.buffer\.write\(b\\"\\"\)[\s\S]*?break\\n            except subprocess\.TimeoutExpired:/u,
+      /scripts\/kagemusha_staged_resource_guard\.py[\s\S]*?process\.wait\(timeout=timeout\)[\s\S]*?process\.wait\(\)/u,
       "ABI-7 recursive compact key staged runner supervisor output pipe",
+    ],
+    [
+      "--negative-control-staged-runner-heavy-job-lock",
+      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?lock_context = resource_guard\.acquire_heavy_job_lock\(args\.resource_lock_file\)[\s\S]*?lock_context = contextlib\.nullcontext\(\)/u,
+      "Kagemusha staged runner heavy-job lock gate",
+    ],
+    [
+      "--negative-control-staged-runner-rss-limit-termination",
+      /scripts\/kagemusha_staged_resource_guard\.py[\s\S]*?if last_rss_bytes > max_rss_bytes:[\s\S]*?if False and last_rss_bytes > max_rss_bytes:/u,
+      "Kagemusha staged resource guard RSS termination gate",
+    ],
+    [
+      "--negative-control-staged-runner-residual-process-group",
+      /scripts\/kagemusha_staged_resource_guard\.py[\s\S]*?if residual_rss_bytes > 0:[\s\S]*?if False and residual_rss_bytes > 0:/u,
+      "Kagemusha staged resource guard residual process-group gate",
+    ],
+    [
+      "--negative-control-staged-runner-existing-heavy-job-conflict",
+      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?conflict_errors = resource_guard\.validate_no_conflicting_heavy_jobs\(\)[\s\S]*?conflict_errors = \[\]/u,
+      "Kagemusha staged runner existing heavy-job conflict gate",
+    ],
+    [
+      "--negative-control-staged-runner-resource-report-fields",
+      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?\*\*resource_summary\.report_fields\(\),[\s\S]*?"",/u,
+      "Kagemusha staged runner resource report fields gate",
     ],
     [
       "--negative-control-staged-runner-relative-repo-root-child-path",
@@ -6581,7 +6618,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
-      /break\\n            except subprocess\.TimeoutExpired:[\s\S]*?sys\.stdout\.buffer\.write\(b\\"\\"\)[\s\S]*?break\\n            except subprocess\.TimeoutExpired:/u,
+      /scripts\/kagemusha_staged_resource_guard\.py[\s\S]*?process\.wait\(timeout=timeout\)[\s\S]*?process\.wait\(\)/u,
       "Reserved-lineage proof staged runner supervisor output pipe",
     ],
     [
@@ -6673,6 +6710,16 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-workflow-negative-control-duplicates",
       /production-readiness negative-control workflow duplicate gate[\s\S]*?workflow_command \+ "\\n          " \+ workflow_command/u,
       "production-readiness negative-control workflow duplicate gate",
+    ],
+    [
+      "--negative-control-staged-finalizer-rss-terminated-report",
+      /kagemusha_finalize_lineage_proof_staged_run\.py[\s\S]*?kagemusha_finalize_recursive_compact_key_staged_run\.py[\s\S]*?require_not_terminated=True[\s\S]*?require_not_terminated=False/u,
+      "Kagemusha staged finalizer RSS-terminated report gate",
+    ],
+    [
+      "--negative-control-staged-resource-guard-workflow-path",
+      /staged resource guard workflow path[\s\S]*?scripts\/kagemusha_staged_resource_guard\.py/u,
+      "staged resource guard workflow path",
     ],
     [
       "--negative-control-lineage-proof-timestamp-raw",
@@ -9710,6 +9757,18 @@ test("Kagemusha staged runner negative controls pin heartbeat observability", ()
     expectedModes,
     "Kagemusha staged runner heartbeat guard",
   );
+  assertContainsAll(
+    readiness,
+    [
+      "scripts/kagemusha_staged_resource_guard.py",
+      "def run_with_resource_guard(",
+      "process.wait(timeout=timeout)",
+      "except subprocess.TimeoutExpired:",
+      "[kagemusha-staged-runner] {heartbeat_label} heartbeat ",
+      "[kagemusha-staged-runner] {heartbeat_label} rss-limit ",
+    ],
+    "production readiness guard must pin shared staged resource heartbeat loop",
+  );
   for (const mode of expectedModes) {
     assert.ok(
       readiness.includes(`ci/check_kagemusha_production_readiness.sh ${mode}`),
@@ -9721,12 +9780,12 @@ test("Kagemusha staged runner negative controls pin heartbeat observability", ()
   const branchSpecs = [
     [
       "--negative-control-lineage-proof-staged-runner-heartbeat",
-      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 300\.0[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 0\.0[\s\S]*?\[kagemusha-staged-runner\] lineage-proof heartbeat [\s\S]*?\[kagemusha-staged-runner\] lineage-proof quiet /u,
+      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 300\.0[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 0\.0[\s\S]*?kagemusha_staged_resource_guard\.py[\s\S]*?\[kagemusha-staged-runner\] \{heartbeat_label\} heartbeat [\s\S]*?\[kagemusha-staged-runner\] \{heartbeat_label\} quiet /u,
       "lineage staged runner heartbeat",
     ],
     [
       "--negative-control-compact-key-staged-runner-heartbeat",
-      /kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 300\.0[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 0\.0[\s\S]*?\[kagemusha-staged-runner\] compact-keygen heartbeat [\s\S]*?\[kagemusha-staged-runner\] compact-keygen quiet /u,
+      /kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 300\.0[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 0\.0[\s\S]*?kagemusha_staged_resource_guard\.py[\s\S]*?\[kagemusha-staged-runner\] \{heartbeat_label\} heartbeat [\s\S]*?\[kagemusha-staged-runner\] \{heartbeat_label\} quiet /u,
       "compact staged runner heartbeat",
     ],
   ];
@@ -10288,6 +10347,7 @@ test("recursive Kagemusha active marker scan covers workflow-backed and C# test 
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
     "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs",
+    "scripts/kagemusha_staged_resource_guard.py",
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
@@ -10348,6 +10408,7 @@ test("recursive Kagemusha active marker scan covers workflow-backed and C# test 
       "Android device-lab instrumentation active marker",
       "Android recursive spend instrumentation active marker",
       "payload benchmark active marker",
+      "staged resource guard script active marker",
       "C# recursive spend active marker",
       "C# wallet-note strict-state active marker",
       "C# wallet-note strict-state test active marker",
@@ -17768,18 +17829,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*12\\s\*;[\s\S]*?C native bridge ABI version/u,
-    "SDK parity guard must pin the native C bridge ABI-12 advertisement",
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*13\\s\*;[\s\S]*?C native bridge ABI version/u,
+    "SDK parity guard must pin the native C bridge ABI-13 advertisement",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
-    /CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;/u,
-    "native C bridge ABI negative control must mutate ABI 12 back to the stale ABI 10 value",
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;/u,
+    "native C bridge ABI negative control must mutate ABI 13 back to the stale ABI 12 value",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
-    /expected_labels\s*=\s*\([\s\S]*?C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*12\\s\*;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
-    "native C bridge ABI negative control must require the exact ABI-12 diagnostic",
+    /expected_labels\s*=\s*\([\s\S]*?C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*13\\s\*;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "native C bridge ABI negative control must require the exact ABI-13 diagnostic",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,

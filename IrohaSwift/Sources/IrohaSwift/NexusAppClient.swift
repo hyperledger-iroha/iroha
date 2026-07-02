@@ -726,16 +726,17 @@ private enum SwiftNexusTransferPayloadEncoder {
         return try OfflineNorito.canonicalAssetIdLiteral(candidate)
     }
 
-    fileprivate static func normalizedValidationFeePolicyHash(_ value: String) throws -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hexDigits = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
-        guard trimmed == value,
-              trimmed.count == 64,
-              trimmed.unicodeScalars.allSatisfy({ hexDigits.contains($0) }) else {
-            throw ValidationFeeTransferRequestError.malformedPolicyHash(value)
-        }
-        return trimmed.lowercased()
+}
+
+private func normalizedValidationFeePolicyHash(_ value: String) throws -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    let hexDigits = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+    guard trimmed == value,
+          trimmed.count == 64,
+          trimmed.unicodeScalars.allSatisfy({ hexDigits.contains($0) }) else {
+        throw ValidationFeeTransferRequestError.malformedPolicyHash(value)
     }
+    return trimmed.lowercased()
 }
 
 extension SwiftTransactionEncoder {
@@ -779,8 +780,7 @@ extension SwiftTransactionEncoder {
         }
         let destination = ids.accountIds["destination"] ?? principal.destination
         let treasury = ids.accountIds["treasury"] ?? request.treasuryAccountId
-        let normalizedPolicyHash = try SwiftNexusTransferPayloadEncoder
-            .normalizedValidationFeePolicyHash(request.policyHashHex)
+        let normalizedPolicyHash = try normalizedValidationFeePolicyHash(request.policyHashHex)
         guard request.policyVersion > 0 else {
             throw ValidationFeeTransferRequestError.invalidPolicyVersion
         }

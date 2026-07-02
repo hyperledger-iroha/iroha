@@ -20,6 +20,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import check_android_device_lab_slot as device_lab  # noqa: E402
+import kagemusha_staged_resource_guard as resource_guard  # noqa: E402
 import kagemusha_production_readiness as readiness  # noqa: E402
 import kagemusha_recursive_compact_key_evidence as compact_evidence  # noqa: E402
 
@@ -39,6 +40,9 @@ MAX_EXIT_MARKER_BYTES = 32
 STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0
 COMMAND_LAUNCH_FAILURE_DETAIL = "process launch failed"
 DEFAULT_COMPACT_KEY_COMMAND = compact_evidence.DEFAULT_COMPACT_KEY_COMMAND
+DEFAULT_MAX_RSS_GB = resource_guard.DEFAULT_MAX_RSS_GB
+DEFAULT_RSS_SAMPLE_INTERVAL_SECONDS = resource_guard.DEFAULT_RSS_SAMPLE_INTERVAL_SECONDS
+DEFAULT_RESOURCE_LOCK_FILE = resource_guard.DEFAULT_RESOURCE_LOCK_FILE
 FORBIDDEN_CHILD_ENV_KEYS = frozenset(
     (readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV,)
 )
@@ -561,6 +565,23 @@ def _preflight_paths(args: argparse.Namespace) -> tuple[Path | None, list[str]]:
             replace=replace_outputs,
         )
     )
+    lock_error = _secret_path_error(args.resource_lock_file, "--resource-lock-file")
+    if lock_error is not None:
+        errors.append(lock_error)
+    else:
+        errors.extend(
+            validate_directory_path(
+                args.resource_lock_file.parent,
+                "--resource-lock-file parent",
+                must_exist=True,
+            )
+        )
+    errors.extend(
+        resource_guard.validate_resource_options(
+            max_rss_gb=args.max_rss_gb,
+            rss_sample_interval_seconds=args.rss_sample_interval_seconds,
+        )
+    )
     return staged_root, errors
 
 
@@ -904,7 +925,10 @@ def _run_command_to_log(
     heartbeat_interval_seconds: float = STAGED_COMMAND_HEARTBEAT_SECONDS,
     executable_repo_root: Path | None = None,
     iroha_bin: Path | None = None,
-) -> int:
+    max_rss_bytes: int = resource_guard.rss_limit_bytes_from_gb(DEFAULT_MAX_RSS_GB),
+    rss_sample_interval_seconds: float = DEFAULT_RSS_SAMPLE_INTERVAL_SECONDS,
+    rss_sampler: Callable[[int], int] = resource_guard.rss_bytes_for_pid,
+) -> resource_guard.GuardedCommandResult:
     """Run compact keygen with child output owned directly by ``log_path``."""
 
     child_env = (
@@ -920,29 +944,22 @@ def _run_command_to_log(
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             env=child_env,
+            start_new_session=True,
         )
         started = time.monotonic()
-        while True:
-            try:
-                exit_code = (
-                    process.wait(timeout=heartbeat_interval_seconds)
-                    if heartbeat_interval_seconds > 0
-                    else process.wait()
-                )
-                break
-            except subprocess.TimeoutExpired:
-                elapsed_seconds = max(time.monotonic() - started, 0.0)
-                log_handle.write(
-                    (
-                        "[kagemusha-staged-runner] compact-keygen heartbeat "
-                        f"elapsed_seconds={elapsed_seconds:.6f}\n"
-                    ).encode("utf-8")
-                )
-                log_handle.flush()
-                os.fsync(log_handle.fileno())
+        result = resource_guard.run_with_resource_guard(
+            process=process,
+            log_handle=log_handle,
+            heartbeat_label="compact-keygen",
+            started_monotonic=started,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            max_rss_bytes=max_rss_bytes,
+            rss_sample_interval_seconds=rss_sample_interval_seconds,
+            rss_sampler=rss_sampler,
+        )
         log_handle.flush()
         os.fsync(log_handle.fileno())
-        return exit_code
+        return result
 
 
 def _install_log_temp(temp_log: Path, final_log: Path, *, replace: bool) -> list[str]:
@@ -1085,6 +1102,7 @@ def _write_execution_report(
     exit_code: int,
     elapsed_seconds: float,
     generator_log_path: Path,
+    resource_summary: resource_guard.ResourceSummary,
     replace: bool,
 ) -> list[str]:
     generator_log_digest, digest_errors = compact_evidence._sha256_file(
@@ -1107,6 +1125,7 @@ def _write_execution_report(
         "generator_log_path": GENERATOR_LOG_FILENAME,
         "generator_log_sha256": generator_log_digest,
         "generator_log_size_bytes": generator_log_size,
+        **resource_summary.report_fields(),
     }
     try:
         text = json.dumps(
@@ -1132,6 +1151,7 @@ def _write_run_report(
     exit_code: int,
     elapsed_seconds: float,
     generator_log_path: Path,
+    resource_summary: resource_guard.ResourceSummary,
     replace: bool,
 ) -> list[str]:
     try:
@@ -1145,6 +1165,7 @@ def _write_run_report(
         "elapsed_seconds": round(max(elapsed_seconds, 0.0), 6),
         "generator_log_path": GENERATOR_LOG_FILENAME,
         "generator_log_size_bytes": generator_log_size,
+        **resource_summary.report_fields(),
     }
     try:
         text = json.dumps(
@@ -1241,6 +1262,9 @@ def _validate_reusable_execution_report(args: argparse.Namespace) -> list[str]:
         "generator_log_path",
         "generator_log_sha256",
         "generator_log_size_bytes",
+        "max_rss_bytes",
+        "rss_limit_bytes",
+        "terminated_for_rss_limit",
     }
     extra_keys = sorted(set(document) - allowed_keys)
     if extra_keys:
@@ -1254,6 +1278,13 @@ def _validate_reusable_execution_report(args: argparse.Namespace) -> list[str]:
         return [f"{label} schema must be {EXECUTION_REPORT_SCHEMA}"]
     if document["phase"] != "recursive compact keygen command":
         return [f"{label} phase must be recursive compact keygen command"]
+    resource_errors = resource_guard.validate_report_resource_fields(
+        document,
+        label,
+        require_not_terminated=True,
+    )
+    if resource_errors:
+        return resource_errors
     command_errors = _validate_report_command(
         document["command"],
         label,
@@ -1331,6 +1362,9 @@ def _validate_reusable_run_report(args: argparse.Namespace) -> list[str]:
         "elapsed_seconds",
         "generator_log_path",
         "generator_log_size_bytes",
+        "max_rss_bytes",
+        "rss_limit_bytes",
+        "terminated_for_rss_limit",
     }
     extra_keys = sorted(set(document) - allowed_keys)
     if extra_keys:
@@ -1342,6 +1376,13 @@ def _validate_reusable_run_report(args: argparse.Namespace) -> list[str]:
         return [f"{label} is missing {missing_keys[0]}"]
     if document["schema"] != STAGED_RUN_REPORT_SCHEMA:
         return [f"{label} schema must be {STAGED_RUN_REPORT_SCHEMA}"]
+    resource_errors = resource_guard.validate_report_resource_fields(
+        document,
+        label,
+        require_not_terminated=True,
+    )
+    if resource_errors:
+        return resource_errors
     command_errors = _validate_report_command(
         document["command"],
         label,
@@ -1484,20 +1525,49 @@ def run_staged_keygen(
     if temp_cleanup_errors:
         return 1, temp_cleanup_errors
 
+    conflict_errors = resource_guard.validate_no_conflicting_heavy_jobs()
+    if conflict_errors:
+        return 1, conflict_errors
+
     command = shlex.split(DEFAULT_COMPACT_KEY_COMMAND)
     started = time.monotonic()
+    rss_limit_bytes = resource_guard.rss_limit_bytes_from_gb(args.max_rss_gb)
+    resource_summary = resource_guard.ResourceSummary.empty(rss_limit_bytes)
     try:
-        exit_code = (
-            runner(command, staged_root, temp_log)
-            if runner is not None
-            else _run_command_to_log(
-                command,
-                staged_root,
-                temp_log,
-                executable_repo_root=args.repo_root,
-                iroha_bin=args.iroha_bin,
-            )
-        )
+        try:
+            lock_context = resource_guard.acquire_heavy_job_lock(args.resource_lock_file)
+            with lock_context:
+                if runner is not None:
+                    exit_code = runner(command, staged_root, temp_log)
+                    resource_summary = resource_guard.ResourceSummary.empty(rss_limit_bytes)
+                else:
+                    command_result = _run_command_to_log(
+                        command,
+                        staged_root,
+                        temp_log,
+                        executable_repo_root=args.repo_root,
+                        iroha_bin=args.iroha_bin,
+                        max_rss_bytes=rss_limit_bytes,
+                        rss_sample_interval_seconds=args.rss_sample_interval_seconds,
+                    )
+                    exit_code = command_result.exit_code
+                    resource_summary = command_result.resource_summary
+        except resource_guard.HeavyJobLockUnavailable:
+            return 1, [
+                (
+                    "another Kagemusha staged heavy job is already running; "
+                    f"lock file {args.resource_lock_file} is held"
+                )
+            ]
+        except OSError as exc:
+            if temp_log.exists() or temp_log.is_symlink():
+                raise
+            return 1, [
+                (
+                    "staged recursive compact keygen resource lock could not be "
+                    f"acquired: {COMMAND_LAUNCH_FAILURE_DETAIL}"
+                )
+            ]
     except OSError:
         temp_identity, temp_identity_errors = _regular_file_identity_for_unlink(
             temp_log,
@@ -1527,6 +1597,7 @@ def run_staged_keygen(
         exit_code=exit_code,
         elapsed_seconds=elapsed_seconds,
         generator_log_path=final_log,
+        resource_summary=resource_summary,
         replace=replace_outputs,
     )
     if execution_report_errors:
@@ -1537,6 +1608,7 @@ def run_staged_keygen(
         exit_code=exit_code,
         elapsed_seconds=elapsed_seconds,
         generator_log_path=final_log,
+        resource_summary=resource_summary,
         replace=replace_outputs,
     )
     if report_errors:
@@ -1586,6 +1658,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "generator log, execution report, run report, and exit marker validate; "
             "otherwise replace invalid regular staged outputs and rerun."
         ),
+    )
+    parser.add_argument(
+        "--max-rss-gb",
+        type=float,
+        default=DEFAULT_MAX_RSS_GB,
+        help="Maximum child-process RSS in GiB before the staged keygen is stopped.",
+    )
+    parser.add_argument(
+        "--rss-sample-interval-seconds",
+        type=float,
+        default=DEFAULT_RSS_SAMPLE_INTERVAL_SECONDS,
+        help="Seconds between child RSS samples while the staged keygen is running.",
+    )
+    parser.add_argument(
+        "--resource-lock-file",
+        type=Path,
+        default=DEFAULT_RESOURCE_LOCK_FILE,
+        help="Shared lock file preventing concurrent Kagemusha staged heavy jobs.",
     )
     return parser.parse_args(argv)
 

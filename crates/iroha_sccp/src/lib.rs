@@ -33326,7 +33326,11 @@ fn hash_block_header_for_sccp_finality(header: &BlockHeader) -> H256 {
 fn nexus_validator_set_hash_from_public_keys(public_keys: &[String]) -> Option<H256> {
     let validator_set = public_keys
         .iter()
-        .map(|key| key.parse::<iroha_crypto::PublicKey>().ok().map(PeerId::from))
+        .map(|key| {
+            key.parse::<iroha_crypto::PublicKey>()
+                .ok()
+                .map(PeerId::from)
+        })
         .collect::<Option<Vec<_>>>()?;
     let hash = iroha_crypto::HashOf::<Vec<PeerId>>::new(&validator_set);
     let mut out = [0u8; 32];
@@ -72926,9 +72930,7 @@ mod tests {
 
         let mut wrong_hash = valid.clone();
         wrong_hash.commit_qc.validator_set_hash[0] ^= 0x01;
-        assert!(!verify_nexus_bridge_finality_proof_structure(
-            &wrong_hash
-        ));
+        assert!(!verify_nexus_bridge_finality_proof_structure(&wrong_hash));
 
         let mut swapped_roster = valid;
         swapped_roster.commit_qc.validator_public_keys = sample_nexus_validator_public_keys(1);

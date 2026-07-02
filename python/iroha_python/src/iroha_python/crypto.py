@@ -158,6 +158,7 @@ __all__ = [
     "buildConfidentialUnshieldProofV3",
     "build_confidential_asset_hidden_transfer_proof_v1",
     "buildConfidentialAssetHiddenTransferProofV1",
+    "zk_ace_verifying_key_registration_payload_v1",
     "build_zk_ace_authorization_proof_v1",
     "zk_ace_build_transfer_authorization_v1",
     "privacy_bridge_abi_version",
@@ -1154,6 +1155,19 @@ buildConfidentialUnshieldProofV3 = build_confidential_unshield_proof_v3
 buildConfidentialAssetHiddenTransferProofV1 = (
     build_confidential_asset_hidden_transfer_proof_v1
 )
+
+
+def zk_ace_verifying_key_registration_payload_v1() -> Dict[str, Any]:
+    """Build the canonical active ZK-ACE verifier-key registration payload."""
+
+    if not hasattr(_crypto, "zk_ace_verifying_key_registration_payload_v1"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing ZK-ACE verifier-key support; rebuild the extension"
+        )
+    payload = _crypto.zk_ace_verifying_key_registration_payload_v1()
+    if not isinstance(payload, Mapping):
+        raise RuntimeError("ZK-ACE verifier-key builder returned a non-object payload")
+    return dict(payload)
 
 
 def zk_ace_build_transfer_authorization_v1(

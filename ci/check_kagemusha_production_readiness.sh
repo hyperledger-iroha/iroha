@@ -4239,6 +4239,9 @@ TEXT_REQUIREMENTS = {
         "command must not contain secret-looking material",
         "validate_exit_marker",
         "validate_staged_run_report",
+        "resource_guard.validate_report_resource_fields(",
+        "require_not_terminated=True",
+        "terminated_for_rss_limit",
         "validate_staged_execution_report",
         "expected_elapsed_seconds",
         "elapsed_seconds must match staged run report",
@@ -4361,6 +4364,9 @@ TEXT_REQUIREMENTS = {
         "command must not contain secret-looking material",
         "validate_exit_marker",
         "validate_staged_run_report",
+        "resource_guard.validate_report_resource_fields(",
+        "require_not_terminated=True",
+        "terminated_for_rss_limit",
         "validate_staged_execution_reports",
         "must be a non-zero SHA-256 hex digest",
         "log_sha256 must match staged log SHA-256",
@@ -4449,6 +4455,8 @@ TEXT_REQUIREMENTS = {
         "env.pop(key, None)",
         "else _scrubbed_child_env()",
         "env=child_env",
+        "resource_guard.validate_resource_options(",
+        '_secret_path_error(args.resource_lock_file, "--resource-lock-file")',
         "def _secret_path_error",
         'if device_lab._contains_control_character(path_text):\n        return f"{label} must not contain control characters"',
         "path_text != path_text.strip()",
@@ -4551,12 +4559,19 @@ TEXT_REQUIREMENTS = {
         "lineage_evidence._sha256_file(",
         "log_sha256 must match staged {profile} lineage key artifact log SHA-256",
         "lineage_key_artifact_logs",
+        "**resource_summary.report_fields(),",
+        "conflict_errors = resource_guard.validate_no_conflicting_heavy_jobs()",
+        "lock_context = resource_guard.acquire_heavy_job_lock(args.resource_lock_file)",
+        "another Kagemusha staged heavy job is already running; ",
+        "--max-rss-gb",
+        "--rss-sample-interval-seconds",
+        "--resource-lock-file",
         "subprocess.Popen(",
         "stdout=log_handle",
         "stderr=subprocess.STDOUT",
-        "process.wait(timeout=heartbeat_interval_seconds)",
-        "except subprocess.TimeoutExpired:",
-        "[kagemusha-staged-runner] lineage-proof heartbeat ",
+        "start_new_session=True",
+        "resource_guard.run_with_resource_guard(",
+        'heartbeat_label="lineage-proof"',
         "os.fchmod(log_handle.fileno(), 0o600)",
         "os.fsync(log_handle.fileno())",
         "shlex.split(DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND)",
@@ -4593,6 +4608,8 @@ TEXT_REQUIREMENTS = {
         "env.pop(key, None)",
         "else _scrubbed_child_env()",
         "env=child_env",
+        "resource_guard.validate_resource_options(",
+        '_secret_path_error(args.resource_lock_file, "--resource-lock-file")',
         "CONTROL_EXIT_MARKER_REDACTION",
         "SECRET_EXIT_MARKER_REDACTION",
         "def _secret_path_error",
@@ -4695,14 +4712,21 @@ TEXT_REQUIREMENTS = {
         "generator_log_sha256",
         "compact_evidence._sha256_file(",
         "generator_log_sha256 must match staged generator log SHA-256",
+        "**resource_summary.report_fields(),",
+        "conflict_errors = resource_guard.validate_no_conflicting_heavy_jobs()",
+        "lock_context = resource_guard.acquire_heavy_job_lock(args.resource_lock_file)",
+        "another Kagemusha staged heavy job is already running; ",
+        "--max-rss-gb",
+        "--rss-sample-interval-seconds",
+        "--resource-lock-file",
         "text != \"0\\n\" and stripped == \"0\"",
         "staged keygen exit marker must be exactly 0 followed by newline for resume",
         "subprocess.Popen(",
         "stdout=log_handle",
         "stderr=subprocess.STDOUT",
-        "process.wait(timeout=heartbeat_interval_seconds)",
-        "except subprocess.TimeoutExpired:",
-        "[kagemusha-staged-runner] compact-keygen heartbeat ",
+        "start_new_session=True",
+        "resource_guard.run_with_resource_guard(",
+        'heartbeat_label="compact-keygen"',
         "os.fchmod(log_handle.fileno(), 0o600)",
         "os.fsync(log_handle.fileno())",
         "shlex.split(DEFAULT_COMPACT_KEY_COMMAND)",
@@ -4717,6 +4741,62 @@ TEXT_REQUIREMENTS = {
         "staged keygen exit marker",
         "--staged-artifact-dir must end with artifacts/kagemusha",
         "_install_log_temp",
+    ),
+    "scripts/kagemusha_staged_resource_guard.py": (
+        "Resource guards for long-running Kagemusha staged subprocesses.",
+        "DEFAULT_MAX_RSS_GB = 8.0",
+        'DEFAULT_RESOURCE_LOCK_FILE = Path("/tmp").resolve() / "iroha-codex-kagemusha-heavy-job.lock"',
+        "PS_COMMAND = next(",
+        "Path(\"/bin/ps\"), Path(\"/usr/bin/ps\")",
+        'encoding="utf-8"',
+        'errors="replace"',
+        "HEAVY_JOB_COMMAND_MARKERS = (",
+        "iroha app zk kagemusha recursive-compact-key-artifacts",
+        "iroha app zk kagemusha lineage-key-artifacts",
+        "kagemusha_recursive_spend_lineage_init_append_from_record_archives_proves_reserved_lineage_output",
+        "def validate_resource_options(",
+        "def validate_report_resource_fields(",
+        "if require_not_terminated and terminated:",
+        "def acquire_heavy_job_lock(",
+        "fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)",
+        "raise HeavyJobLockUnavailable from exc",
+        "def _rss_bytes_from_owned_ps(",
+        '[PS_COMMAND, "-axo", "pid=,ppid=,pgid=,rss="]',
+        '[PS_COMMAND, "-o", "rss=", "-p", str(pid)]',
+        "def _command_tokens(",
+        "shlex.split(command)",
+        "def _command_is_heavy_job(",
+        "HEAVY_IROHA_SUBCOMMANDS = (",
+        "HEAVY_CARGO_TEST_MARKER = (",
+        "def find_running_heavy_jobs(",
+        "if _command_is_heavy_job(command):",
+        "def validate_no_conflicting_heavy_jobs(",
+        "another Kagemusha staged heavy job is already running outside this",
+        "owned_process_group_id = pgid_by_pid.get(root_pid, root_pid)",
+        "if pgid_by_pid.get(pid) == owned_process_group_id",
+        "children_by_parent.setdefault(parent_pid, []).append(pid)",
+        "stack.extend(children_by_parent.get(pid, ()))",
+        "def _process_group_exists(",
+        "os.killpg(process_group_id, 0)",
+        "def terminate_owned_process(",
+        "process_group_signal_sent = True",
+        "if not _process_group_exists(pid):",
+        "os.killpg(pid, signal.SIGTERM)",
+        "os.killpg(pid, signal.SIGKILL)",
+        "def run_with_resource_guard(",
+        "process.wait(timeout=timeout)",
+        "residual_rss_bytes = max(0, int(rss_sampler(pid)))",
+        "if residual_rss_bytes > 0:",
+        "process-group-residual ",
+        "except subprocess.TimeoutExpired:",
+        "if last_rss_bytes > max_rss_bytes:",
+        "[kagemusha-staged-runner] {heartbeat_label} heartbeat ",
+        "[kagemusha-staged-runner] {heartbeat_label} rss-limit ",
+        "rss_bytes={last_rss_bytes} ",
+        "max_rss_bytes={peak_rss_bytes} ",
+        "rss_limit_bytes={max_rss_bytes}",
+        "process_terminator(process)",
+        "ResourceSummary(",
     ),
     "scripts/kagemusha_release_bundle.py": (
         "Validate and manifest a Kagemusha production release evidence bundle",
@@ -6358,6 +6438,17 @@ TEXT_REQUIREMENTS = {
         "test_repeatable_android_roots_aggregate_signed_matrix",
         "test_release_bundle_accepts_repeatable_android_roots",
         "test_staged_json_loaders_redact_nonfinite_constants",
+        "test_staged_resource_guard_counts_descendant_rss",
+        "test_staged_resource_guard_counts_owned_process_group_after_parent_exit",
+        "test_staged_resource_guard_falls_back_to_direct_pid_rss",
+        "test_staged_resource_guard_terminates_owned_process_group",
+        "test_staged_resource_guard_kills_residual_group_after_parent_reaped",
+        "test_staged_resource_guard_terminates_residual_group_after_child_exit",
+        "test_staged_resource_guard_detects_running_heavy_jobs",
+        "test_staged_resource_guard_ignores_marker_text_in_unrelated_commands",
+        "test_compact_key_staged_runner_rejects_conflicting_legacy_heavy_job",
+        "test_lineage_proof_staged_runner_rejects_conflicting_legacy_heavy_job",
+        "test_staged_resource_report_fields_fail_closed",
         "test_staged_path_validators_reject_control_directory_paths_before_metadata",
         "test_staged_path_validators_reject_alias_directory_paths_before_metadata",
         "test_staged_finalizers_reject_exit_file_path_shape_before_directory_metadata",
@@ -6720,6 +6811,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_finalizer_rejects_run_report_exit_mismatch",
         "test_compact_key_staged_finalizer_rejects_run_report_command_mismatch",
         "test_compact_key_staged_finalizer_rejects_run_report_log_size_drift",
+        "test_compact_key_staged_finalizer_rejects_rss_terminated_report",
         "test_compact_key_staged_finalizer_rejects_symlinked_run_report",
         "test_compact_key_staged_finalizer_rejects_hardlinked_run_report",
         "test_compact_key_staged_finalizer_redacts_secret_duplicate_run_report_key",
@@ -6740,6 +6832,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_finalizer_reports_temp_parent_cleanup_sync_failure",
         "test_compact_key_staged_runner_outputs_finalize_successfully",
         "test_compact_key_staged_runner_resume_reuses_complete_keygen",
+        "test_compact_key_staged_runner_rejects_concurrent_heavy_job_lock",
         "test_compact_key_staged_runner_rejects_replace_with_resume_keygen",
         "test_compact_key_staged_runner_resume_replaces_failed_keygen",
         "test_compact_key_staged_runner_resume_rebuilds_placeholder_key_artifact",
@@ -6768,6 +6861,10 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_staged_runner_replace_removes_stale_temp_log",
         "test_compact_key_staged_runner_rejects_symlinked_exit_marker",
         "test_compact_key_staged_runner_writes_child_output_directly_to_log_file",
+        "start_new_session: bool",
+        "staged child must be isolated",
+        "test_compact_key_staged_runner_writes_fsynced_heartbeats_while_waiting",
+        "test_compact_key_staged_runner_terminates_child_over_rss_limit",
         "test_compact_key_staged_runner_finds_repo_local_iroha_with_empty_path",
         "test_compact_key_staged_runner_scrubs_runtime_keygen_env",
         "test_compact_key_staged_runner_scrubs_runtime_keygen_env_without_repo_root",
@@ -6808,6 +6905,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_finalizer_rejects_run_report_log_size_drift",
         "test_lineage_proof_staged_finalizer_rejects_run_report_missing_key_log",
         "test_lineage_proof_staged_finalizer_rejects_run_report_key_log_size_drift",
+        "test_lineage_proof_staged_finalizer_rejects_rss_terminated_report",
         "test_lineage_proof_staged_finalizer_rejects_symlinked_run_report",
         "test_lineage_proof_staged_finalizer_rejects_hardlinked_run_report",
         "test_lineage_proof_staged_finalizer_redacts_secret_duplicate_run_report_key",
@@ -6828,6 +6926,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_finalizer_reports_temp_parent_cleanup_sync_failure",
         "test_lineage_proof_staged_runner_outputs_finalize_successfully",
         "test_lineage_proof_staged_runner_resume_reuses_completed_init_phase",
+        "test_lineage_proof_staged_runner_rejects_concurrent_heavy_job_lock",
         "test_lineage_proof_staged_runner_rejects_replace_with_resume_key_artifacts",
         "test_lineage_proof_staged_runner_resume_replaces_failed_append_phase",
         "test_lineage_proof_staged_runner_resume_regenerates_placeholder_init_phase",
@@ -6859,6 +6958,8 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_staged_runner_replace_removes_stale_keygen_temp_log",
         "test_lineage_proof_staged_runner_rejects_symlinked_exit_marker",
         "test_lineage_proof_staged_runner_writes_child_output_directly_to_log_file",
+        "test_lineage_proof_staged_runner_writes_fsynced_heartbeats_while_waiting",
+        "test_lineage_proof_staged_runner_terminates_child_over_rss_limit",
         "test_lineage_proof_staged_runner_finds_repo_local_iroha_with_empty_path",
         "test_lineage_proof_staged_runner_explicit_iroha_bin_precedes_stale_release",
         "test_lineage_proof_staged_runner_rejects_symlinked_iroha_bin",
@@ -7766,7 +7867,7 @@ TEXT_REQUIREMENTS = {
         "build_proof_attachment_from_json_rejects_empty_proof_bytes",
     ),
     "crates/connect_norito_bridge/src/lib.rs": (
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;",
         "KagemushaRecursiveCompactUnavailable",
         "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive",
         "is_kagemusha_recursive_compact_unavailable_error",
@@ -7984,6 +8085,7 @@ WORKFLOW_REQUIREMENTS = (
     '"scripts/kagemusha_recursive_compact_key_evidence.py"',
     '"scripts/kagemusha_run_lineage_proof_staged.py"',
     '"scripts/kagemusha_run_recursive_compact_keygen_staged.py"',
+    '"scripts/kagemusha_staged_resource_guard.py"',
     '"scripts/kagemusha_finalize_lineage_proof_staged_run.py"',
     '"scripts/kagemusha_finalize_recursive_compact_key_staged_run.py"',
     '"scripts/kagemusha_release_bundle.py"',
@@ -8780,6 +8882,11 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-child-log-file",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-heavy-job-lock",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-rss-limit-termination",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-residual-process-group",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-existing-heavy-job-conflict",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-resource-report-fields",
     "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-relative-repo-root-child-path",
     "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-iroha-bin-validation",
     "ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-runtime-keygen-env-scrub",
@@ -8790,6 +8897,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-execution-log-sha256",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-execution-log-sha256",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-execution-elapsed-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-staged-finalizer-rss-terminated-report",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-replace-conflict",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-artifact-content",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-resume-replace-conflict",
@@ -8993,6 +9101,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-workflow-negative-control-handler-duplicates",
     "ci/check_kagemusha_production_readiness.sh --negative-control-workflow-negative-control-requirement-duplicates",
     "ci/check_kagemusha_production_readiness.sh --negative-control-workflow-negative-control-duplicates",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-staged-resource-guard-workflow-path",
     "ci/check_kagemusha_production_readiness.sh --negative-control-workflow",
     "ci/check_kagemusha_production_readiness.sh",
 )
@@ -20473,9 +20582,9 @@ if mode == "--negative-control-lineage-proof-staged-runner-supervisor-output-pip
     run_negative_control(
         "Reserved-lineage proof staged runner supervisor output pipe",
         lambda: override_text(
-            "scripts/kagemusha_run_lineage_proof_staged.py",
-            "                break\n            except subprocess.TimeoutExpired:",
-            "                sys.stdout.buffer.write(b\"\")\n                break\n            except subprocess.TimeoutExpired:",
+            "scripts/kagemusha_staged_resource_guard.py",
+            "process.wait(timeout=timeout)",
+            "process.wait()",
         ),
     )
     raise SystemExit(0)
@@ -20484,9 +20593,85 @@ if mode == "--negative-control-compact-key-staged-runner-supervisor-output-pipe"
     run_negative_control(
         "ABI-7 recursive compact key staged runner supervisor output pipe",
         lambda: override_text(
-            "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
-            "                break\n            except subprocess.TimeoutExpired:",
-            "                sys.stdout.buffer.write(b\"\")\n                break\n            except subprocess.TimeoutExpired:",
+            "scripts/kagemusha_staged_resource_guard.py",
+            "process.wait(timeout=timeout)",
+            "process.wait()",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-staged-runner-heavy-job-lock":
+    run_negative_control(
+        "Kagemusha staged runner heavy-job lock gate",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "lock_context = resource_guard.acquire_heavy_job_lock(args.resource_lock_file)",
+                "lock_context = contextlib.nullcontext()",
+            ),
+            override_text(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "lock_context = resource_guard.acquire_heavy_job_lock(args.resource_lock_file)",
+                "lock_context = contextlib.nullcontext()",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-staged-runner-rss-limit-termination":
+    run_negative_control(
+        "Kagemusha staged resource guard RSS termination gate",
+        lambda: override_text(
+            "scripts/kagemusha_staged_resource_guard.py",
+            "if last_rss_bytes > max_rss_bytes:",
+            "if False and last_rss_bytes > max_rss_bytes:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-staged-runner-residual-process-group":
+    run_negative_control(
+        "Kagemusha staged resource guard residual process-group gate",
+        lambda: override_text(
+            "scripts/kagemusha_staged_resource_guard.py",
+            "if residual_rss_bytes > 0:",
+            "if False and residual_rss_bytes > 0:",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-staged-runner-existing-heavy-job-conflict":
+    run_negative_control(
+        "Kagemusha staged runner existing heavy-job conflict gate",
+        lambda: (
+            override_text_all(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "conflict_errors = resource_guard.validate_no_conflicting_heavy_jobs()",
+                "conflict_errors = []",
+            ),
+            override_text_all(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "conflict_errors = resource_guard.validate_no_conflicting_heavy_jobs()",
+                "conflict_errors = []",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-staged-runner-resource-report-fields":
+    run_negative_control(
+        "Kagemusha staged runner resource report fields gate",
+        lambda: (
+            override_text_all(
+                "scripts/kagemusha_run_lineage_proof_staged.py",
+                "        **resource_summary.report_fields(),\n",
+                "",
+            ),
+            override_text_all(
+                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+                "        **resource_summary.report_fields(),\n",
+                "",
+            ),
         ),
     )
     raise SystemExit(0)
@@ -20555,9 +20740,9 @@ if mode == "--negative-control-lineage-proof-staged-runner-heartbeat":
                 "STAGED_COMMAND_HEARTBEAT_SECONDS = 0.0",
             ),
             override_text(
-                "scripts/kagemusha_run_lineage_proof_staged.py",
-                "[kagemusha-staged-runner] lineage-proof heartbeat ",
-                "[kagemusha-staged-runner] lineage-proof quiet ",
+                "scripts/kagemusha_staged_resource_guard.py",
+                "[kagemusha-staged-runner] {heartbeat_label} heartbeat ",
+                "[kagemusha-staged-runner] {heartbeat_label} quiet ",
             ),
         ),
     )
@@ -20573,9 +20758,9 @@ if mode == "--negative-control-compact-key-staged-runner-heartbeat":
                 "STAGED_COMMAND_HEARTBEAT_SECONDS = 0.0",
             ),
             override_text(
-                "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
-                "[kagemusha-staged-runner] compact-keygen heartbeat ",
-                "[kagemusha-staged-runner] compact-keygen quiet ",
+                "scripts/kagemusha_staged_resource_guard.py",
+                "[kagemusha-staged-runner] {heartbeat_label} heartbeat ",
+                "[kagemusha-staged-runner] {heartbeat_label} quiet ",
             ),
         ),
     )
@@ -20632,6 +20817,24 @@ if mode == "--negative-control-compact-key-finalizer-execution-elapsed-binding":
             "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
             "elapsed_seconds must match staged run report",
             "elapsed_seconds may drift from staged run report",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-staged-finalizer-rss-terminated-report":
+    run_negative_control(
+        "Kagemusha staged finalizer RSS-terminated report gate",
+        lambda: (
+            override_text_all(
+                "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
+                "require_not_terminated=True",
+                "require_not_terminated=False",
+            ),
+            override_text_all(
+                "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
+                "require_not_terminated=True",
+                "require_not_terminated=False",
+            ),
         ),
     )
     raise SystemExit(0)
@@ -21511,6 +21714,17 @@ if mode == "--negative-control-workflow-negative-control-duplicates":
             WORKFLOW_PATH,
             workflow_command,
             workflow_command + "\n          " + workflow_command,
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-staged-resource-guard-workflow-path":
+    run_negative_control(
+        "staged resource guard workflow path",
+        lambda: override_text(
+            WORKFLOW_PATH,
+            '      - "scripts/kagemusha_staged_resource_guard.py"\n',
+            "",
         ),
     )
     raise SystemExit(0)

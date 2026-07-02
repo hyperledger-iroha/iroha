@@ -21,6 +21,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import check_android_device_lab_slot as device_lab  # noqa: E402
+import kagemusha_staged_resource_guard as resource_guard  # noqa: E402
 import kagemusha_production_readiness as readiness  # noqa: E402
 import kagemusha_recursive_compact_key_evidence as compact_evidence  # noqa: E402
 
@@ -692,6 +693,9 @@ def validate_staged_run_report(
         "elapsed_seconds",
         "generator_log_path",
         "generator_log_size_bytes",
+        "max_rss_bytes",
+        "rss_limit_bytes",
+        "terminated_for_rss_limit",
     }
     extra_keys = sorted(set(document) - allowed_keys)
     if extra_keys:
@@ -703,6 +707,13 @@ def validate_staged_run_report(
         return None, [f"{label} is missing {missing_keys[0]}"]
     if document["schema"] != STAGED_RUN_REPORT_SCHEMA:
         return None, [f"{label} schema must be {STAGED_RUN_REPORT_SCHEMA}"]
+    resource_errors = resource_guard.validate_report_resource_fields(
+        document,
+        label,
+        require_not_terminated=True,
+    )
+    if resource_errors:
+        return None, resource_errors
     command_errors = _validate_report_command(
         document["command"],
         label,
@@ -791,6 +802,9 @@ def validate_staged_execution_report(
         "generator_log_path",
         "generator_log_sha256",
         "generator_log_size_bytes",
+        "max_rss_bytes",
+        "rss_limit_bytes",
+        "terminated_for_rss_limit",
     }
     extra_keys = sorted(set(document) - allowed_keys)
     if extra_keys:
@@ -804,6 +818,13 @@ def validate_staged_execution_report(
         return [f"{label} schema must be {EXECUTION_REPORT_SCHEMA}"]
     if document["phase"] != "recursive compact keygen command":
         return [f"{label} phase must be recursive compact keygen command"]
+    resource_errors = resource_guard.validate_report_resource_fields(
+        document,
+        label,
+        require_not_terminated=True,
+    )
+    if resource_errors:
+        return resource_errors
     command_errors = _validate_report_command(
         document["command"],
         label,

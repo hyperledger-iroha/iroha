@@ -1384,13 +1384,36 @@ mod tests {
         let chain_id: ChainId = iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1
             .parse()
             .expect("chain id");
+        let commitment_root = [8; 32];
+        let mut header = BlockHeader::new(
+            NonZeroU64::new(7).expect("non-zero test height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        header.set_sccp_commitment_root(Some(commitment_root));
+        let block_header_bytes =
+            norito::to_bytes(&header).expect("encode SCCP finality fixture header");
+        let mut block_hash = [0u8; 32];
+        block_hash.copy_from_slice(header.hash().as_ref().as_ref());
+        let validator_keypair = checked_bls_keypair();
+        let validator_public_keys = vec![validator_keypair.public_key().to_string()];
+        let validator_set = vec![PeerId::new(validator_keypair.public_key().clone())];
+        let mut validator_set_hash = [0u8; 32];
+        validator_set_hash.copy_from_slice(
+            iroha_crypto::HashOf::<Vec<PeerId>>::new(&validator_set)
+                .as_ref()
+                .as_ref(),
+        );
         let finality = NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: chain_id.to_string(),
             height: 7,
-            block_hash: [7; 32],
-            commitment_root: [8; 32],
-            block_header_bytes: vec![0x42],
+            block_hash,
+            commitment_root,
+            block_header_bytes,
             commit_qc: iroha_sccp::NexusCommitQcV1 {
                 version: 1,
                 phase: NexusConsensusPhaseV1::Commit,
@@ -1398,14 +1421,15 @@ mod tests {
                 view: 0,
                 epoch: 0,
                 mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_owned(),
-                subject_block_hash: [7; 32],
+                subject_block_hash: block_hash,
                 parent_state_root: [1; 32],
                 post_state_root: [2; 32],
                 chain_order_hash: [3; 32],
                 rechain_seq: 0,
                 highest_qc: None,
+                validator_set_hash,
                 validator_set_hash_version: 1,
-                validator_public_keys: vec!["not-a-bls-key".to_owned()],
+                validator_public_keys,
                 validator_set_pops: vec![vec![1; 48]],
                 signers_bitmap: vec![0b0000_0001],
                 bls_aggregate_signature: vec![2; 96],

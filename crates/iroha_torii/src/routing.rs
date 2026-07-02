@@ -9211,10 +9211,7 @@ mod sccp_message_backend_tests {
         }
     }
 
-    fn sample_sccp_finality_block_header(
-        height: u64,
-        commitment_root: [u8; 32],
-    ) -> BlockHeader {
+    fn sample_sccp_finality_block_header(height: u64, commitment_root: [u8; 32]) -> BlockHeader {
         let mut header = BlockHeader::new(
             core::num::NonZeroU64::new(height).expect("non-zero finality height"),
             None,
@@ -9550,7 +9547,8 @@ mod sccp_message_backend_tests {
                 rechain_seq: 0,
                 highest_qc: None,
                 validator_set_hash,
-                validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
                 validator_public_keys,
                 validator_set_pops: vec![vec![0xAA]],
                 signers_bitmap: vec![0x01],
@@ -10362,7 +10360,8 @@ mod sccp_message_backend_tests {
                 rechain_seq: 0,
                 highest_qc: None,
                 validator_set_hash,
-                validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
                 validator_public_keys,
                 validator_set_pops: vec![vec![0xAA]],
                 signers_bitmap: vec![0x01],

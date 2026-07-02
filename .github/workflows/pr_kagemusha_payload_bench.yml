@@ -29,6 +29,7 @@ on:
       - "scripts/kagemusha_recursive_compact_key_evidence.py"
       - "scripts/kagemusha_run_lineage_proof_staged.py"
       - "scripts/kagemusha_run_recursive_compact_keygen_staged.py"
+      - "scripts/kagemusha_staged_resource_guard.py"
       - "scripts/kagemusha_finalize_lineage_proof_staged_run.py"
       - "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py"
       - "scripts/kagemusha_release_bundle.py"
@@ -2330,6 +2331,11 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-child-log-file
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-supervisor-output-pipe
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-supervisor-output-pipe
+          ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-heavy-job-lock
+          ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-rss-limit-termination
+          ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-residual-process-group
+          ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-existing-heavy-job-conflict
+          ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-resource-report-fields
           ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-relative-repo-root-child-path
           ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-iroha-bin-validation
           ci/check_kagemusha_production_readiness.sh --negative-control-staged-runner-runtime-keygen-env-scrub
@@ -2340,6 +2346,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-finalizer-execution-log-sha256
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-execution-log-sha256
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-finalizer-execution-elapsed-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-staged-finalizer-rss-terminated-report
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-replace-conflict
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-staged-runner-resume-artifact-content
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-staged-runner-resume-replace-conflict
@@ -2418,6 +2425,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-workflow-negative-control-handler-duplicates
           ci/check_kagemusha_production_readiness.sh --negative-control-workflow-negative-control-requirement-duplicates
           ci/check_kagemusha_production_readiness.sh --negative-control-workflow-negative-control-duplicates
+          ci/check_kagemusha_production_readiness.sh --negative-control-staged-resource-guard-workflow-path
           ci/check_kagemusha_production_readiness.sh --negative-control-workflow
       - name: Kagemusha production readiness
         run: ci/check_kagemusha_production_readiness.sh

@@ -3034,7 +3034,12 @@ and completed history lives in [`status.md`](./status.md).
   evidence, durable trusted-signer public key material, and physical Android
   standard-matrix plus offline D2D transport evidence for every required
   standard family. Keep further lineage and compact retries deferred while live
-  cargo/rustc or compact keygen jobs are still consuming the host.
+  cargo/rustc or compact keygen jobs are still consuming the host, and run any
+  retry through the staged runners' shared heavy-job lock plus
+  process-tree/process-group RSS guard so a runaway proof/keygen child,
+  descendant, or residual same-group worker cannot silently consume the
+  workstation. New staged retries must also fail closed while legacy Kagemusha
+  heavy jobs are already live outside the guard.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
   account-address exactness, Offline Cash issuer-key configuration snapshot,
@@ -7383,7 +7388,7 @@ and completed history lives in [`status.md`](./status.md).
   payloads through `validate_hedging_payload_bytes`, and `sorafs-validate
   hedging`/`billing` provides local operator validation for those artifacts.
   The source bridge surface now exposes the same validator through
-  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 12
+  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 13
   `connect_norito_sorafs_reference_validate_hedging_json`, and Kotlin/JVM,
   Java Android, and Swift SDK wrappers. The SFM-5 rollout evidence gate now
 	  validates feed-collector, reference-price, billing-cycle,

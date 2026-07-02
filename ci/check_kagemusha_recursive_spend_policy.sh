@@ -2184,6 +2184,7 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "scripts/kagemusha_release_bundle.py",
     "scripts/kagemusha_run_lineage_proof_staged.py",
     "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+    "scripts/kagemusha_staged_resource_guard.py",
     "scripts/sign_android_device_lab_evidence.py",
     "scripts/tests/check_android_device_lab_slot_test.py",
     "scripts/tests/kagemusha_production_readiness_test.py",
@@ -9513,6 +9514,13 @@ if mode == "--negative-control-active-kagemusha-todo":
             '"""Roll up Kagemusha production-readiness evidence into a strict summary."""\n'
             "# TODO: bypass Kagemusha production-readiness artifact validation",
             "production-readiness script active marker",
+        ),
+        (
+            "scripts/kagemusha_staged_resource_guard.py",
+            '"""Resource guards for long-running Kagemusha staged subprocesses."""',
+            '"""Resource guards for long-running Kagemusha staged subprocesses."""\n'
+            "# TODO: bypass Kagemusha staged resource guard review",
+            "staged resource guard script active marker",
         ),
         (
             "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
