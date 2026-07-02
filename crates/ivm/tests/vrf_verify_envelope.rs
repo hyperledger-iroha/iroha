@@ -1,4 +1,5 @@
 #![cfg(feature = "ivm_vrf_tests")]
+use group::prime::PrimeCurveAffine;
 use ivm::{self, IVM, IVMHost, Memory, PointerType};
 
 mod common;
@@ -22,7 +23,7 @@ fn vrf_verify_wrong_tlv_type_sets_err_type() {
     let mut vm = IVM::new(0);
     vm.set_host(host);
     // Put a JSON TLV (wrong type) in INPUT and set r10
-    let payload = br#"{\"backend\":\"halo2/ipa\"}"#;
+    let payload = br#"{"backend":"halo2/ipa"}"#;
     let tlv = build_tlv(PointerType::Json, payload);
     vm.memory.preload_input(0, &tlv).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
@@ -80,7 +81,7 @@ fn vrf_verify_with_valid_lengths_and_chain_yields_verify_error() {
         input: b"hello".to_vec(),
     };
     let body = norito::to_bytes(&req).expect("encode");
-    let tlv = super::super::build_tlv(ivm::PointerType::NoritoBytes, &body);
+    let tlv = build_tlv(ivm::PointerType::NoritoBytes, &body);
     vm.memory.preload_input(0, &tlv).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let _ = unsafe {

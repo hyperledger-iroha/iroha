@@ -70,12 +70,24 @@ impl PotrSignatureV1 {
                         reason: "ed25519 signatures require 32-byte public keys and 64-byte signatures",
                     });
                 }
+                if crate::inert_bytes(&self.public_key) || crate::inert_bytes(&self.signature) {
+                    return Err(PotrReceiptValidationError::InvalidSignature {
+                        context,
+                        reason: "ed25519 public key and signature material must not be all zero",
+                    });
+                }
             }
             PotrSignatureAlgorithm::Dilithium3 => {
                 if self.public_key.is_empty() || self.signature.is_empty() {
                     return Err(PotrReceiptValidationError::InvalidSignature {
                         context,
                         reason: "dilithium3 signatures must include non-empty public key and signature buffers",
+                    });
+                }
+                if crate::inert_bytes(&self.public_key) || crate::inert_bytes(&self.signature) {
+                    return Err(PotrReceiptValidationError::InvalidSignature {
+                        context,
+                        reason: "dilithium3 public key and signature material must not be all zero",
                     });
                 }
             }
@@ -91,7 +103,35 @@ impl PotrSignatureV1 {
     ) -> Result<(), PotrReceiptValidationError> {
         self.validate(context)?;
         let algorithm = match self.algorithm {
-            PotrSignatureAlgorithm::Ed25519 => Algorithm::Ed25519,
+            PotrSignatureAlgorithm::Ed25519 => {
+                let public_key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] =
+                    self.public_key.as_slice().try_into().map_err(|_| {
+                        PotrReceiptValidationError::InvalidSignature {
+                            context,
+                            reason: "invalid public key",
+                        }
+                    })?;
+                crate::checked_ed25519_verifying_key_from_bytes(&public_key_bytes).map_err(
+                    |reason| PotrReceiptValidationError::InvalidSignature {
+                        context,
+                        reason: ed25519_public_key_error_reason(&reason),
+                    },
+                )?;
+                let signature_bytes: [u8; ed25519_dalek::SIGNATURE_LENGTH] =
+                    self.signature.as_slice().try_into().map_err(|_| {
+                        PotrReceiptValidationError::InvalidSignature {
+                            context,
+                            reason: "invalid signature material",
+                        }
+                    })?;
+                crate::checked_ed25519_signature_from_bytes(&signature_bytes).map_err(
+                    |reason| PotrReceiptValidationError::InvalidSignature {
+                        context,
+                        reason: ed25519_signature_error_reason(&reason),
+                    },
+                )?;
+                Algorithm::Ed25519
+            }
             PotrSignatureAlgorithm::Dilithium3 => Algorithm::MlDsa,
         };
         let public_key = PublicKey::from_bytes(algorithm, &self.public_key).map_err(|_| {
@@ -113,6 +153,28 @@ impl PotrSignatureV1 {
             }
         })?;
         Ok(())
+    }
+}
+
+fn ed25519_public_key_error_reason(reason: &str) -> &'static str {
+    if reason.contains("all zero") {
+        "ed25519 public key and signature material must not be all zero"
+    } else if reason.contains("small-order") {
+        "ed25519 public key is small-order (weak); rejected"
+    } else {
+        "invalid public key"
+    }
+}
+
+fn ed25519_signature_error_reason(reason: &str) -> &'static str {
+    if reason.contains("all zero") {
+        "ed25519 public key and signature material must not be all zero"
+    } else if reason.contains("small-order") {
+        "ed25519 signature R is small-order (weak); rejected"
+    } else if reason.contains("not a canonical") {
+        "ed25519 signature R is not a canonical Ed25519 point"
+    } else {
+        "invalid signature material"
     }
 }
 
@@ -283,6 +345,16 @@ mod tests {
     use super::*;
     use crate::proof_stream::ProofStreamTier;
 
+    const SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn base_receipt() -> PotrReceiptV1 {
         PotrReceiptV1 {
             version: POTR_RECEIPT_VERSION_V1,
@@ -426,9 +498,46 @@ mod tests {
             receipt.validate(),
             Err(PotrReceiptValidationError::InvalidSignature {
                 context: "gateway",
-                reason: "invalid signature material",
+                reason: "ed25519 public key and signature material must not be all zero",
             })
         ));
+    }
+
+    #[test]
+    fn gateway_signature_rejects_malformed_signature_r() {
+        let signing_key = SigningKey::from_bytes(&[0x22; 32]);
+
+        for (label, replacement_r, expected_reason) in [
+            (
+                "small-order",
+                SMALL_ORDER_R,
+                "ed25519 signature R is small-order",
+            ),
+            (
+                "noncanonical",
+                NONCANONICAL_R,
+                "ed25519 signature R is not a canonical",
+            ),
+        ] {
+            let mut receipt = base_receipt();
+            let mut signature = sign_receipt(&receipt, &signing_key);
+            signature.signature[..32].copy_from_slice(&replacement_r);
+            receipt.gateway_signature = Some(signature);
+
+            let Err(err) = receipt.validate() else {
+                panic!("{label} signature R must fail validation");
+            };
+            assert!(
+                matches!(
+                    &err,
+                    PotrReceiptValidationError::InvalidSignature {
+                        context: "gateway",
+                        reason
+                    } if reason.contains(expected_reason)
+                ),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

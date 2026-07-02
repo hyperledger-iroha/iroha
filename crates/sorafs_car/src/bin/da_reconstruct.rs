@@ -718,7 +718,8 @@ mod tests {
         kzg_hasher.finalize_xof().fill(&mut kzg_bytes);
         let kzg_commitment = KzgCommitment::new(kzg_bytes);
         let proof_digest = Hash::prehashed(*blake3::hash(b"da-fixture-proof").as_bytes());
-        let acknowledgement_sig = Signature::from_bytes(&[0xA5; 64]);
+        let acknowledgement_sig = Signature::try_from_bytes(&[0xA5; 64])
+            .expect("DA reconstruction fixture acknowledgement signature is nonzero");
         let record = DaCommitmentRecord::new(
             manifest.lane_id,
             manifest.epoch,

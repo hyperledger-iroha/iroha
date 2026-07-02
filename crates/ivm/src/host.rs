@@ -1806,26 +1806,38 @@ impl IVMHost for DefaultHost {
                     if bytes.len() != 48 {
                         return None;
                     }
+                    if bytes.iter().all(|&byte| byte == 0) {
+                        return None;
+                    }
                     let mut arr = [0u8; 48];
                     arr.copy_from_slice(bytes);
-                    let ct = G1Affine::from_compressed(&arr);
-                    if ct.is_some().into() {
-                        Some(ct.unwrap())
-                    } else {
+                    let point = G1Affine::from_compressed(&arr).into_option()?;
+                    if bool::from(point.is_identity()) {
+                        return None;
+                    }
+                    if point.to_compressed() != arr {
                         None
+                    } else {
+                        Some(point)
                     }
                 }
                 fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
                     if bytes.len() != 96 {
                         return None;
                     }
+                    if bytes.iter().all(|&byte| byte == 0) {
+                        return None;
+                    }
                     let mut arr = [0u8; 96];
                     arr.copy_from_slice(bytes);
-                    let ct = G2Affine::from_compressed(&arr);
-                    if ct.is_some().into() {
-                        Some(ct.unwrap())
-                    } else {
+                    let point = G2Affine::from_compressed(&arr).into_option()?;
+                    if bool::from(point.is_identity()) {
+                        return None;
+                    }
+                    if point.to_compressed() != arr {
                         None
+                    } else {
+                        Some(point)
                     }
                 }
                 fn hash_to_g2(msg: &[u8]) -> G2Affine {
@@ -1976,26 +1988,38 @@ impl IVMHost for DefaultHost {
                     if bytes.len() != 48 {
                         return None;
                     }
+                    if bytes.iter().all(|&byte| byte == 0) {
+                        return None;
+                    }
                     let mut arr = [0u8; 48];
                     arr.copy_from_slice(bytes);
-                    let ct = G1Affine::from_compressed(&arr);
-                    if ct.is_some().into() {
-                        Some(ct.unwrap())
-                    } else {
+                    let point = G1Affine::from_compressed(&arr).into_option()?;
+                    if bool::from(point.is_identity()) {
+                        return None;
+                    }
+                    if point.to_compressed() != arr {
                         None
+                    } else {
+                        Some(point)
                     }
                 }
                 fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
                     if bytes.len() != 96 {
                         return None;
                     }
+                    if bytes.iter().all(|&byte| byte == 0) {
+                        return None;
+                    }
                     let mut arr = [0u8; 96];
                     arr.copy_from_slice(bytes);
-                    let ct = G2Affine::from_compressed(&arr);
-                    if ct.is_some().into() {
-                        Some(ct.unwrap())
-                    } else {
+                    let point = G2Affine::from_compressed(&arr).into_option()?;
+                    if bool::from(point.is_identity()) {
+                        return None;
+                    }
+                    if point.to_compressed() != arr {
                         None
+                    } else {
+                        Some(point)
                     }
                 }
                 fn hash_to_g2(msg: &[u8]) -> G2Affine {

@@ -4638,7 +4638,8 @@ fn verify_manifest_signatures(
             return Err("signer_multihash does not match encoded public key".into());
         }
 
-        let signature = Signature::from_bytes(&signature_bytes);
+        let signature = Signature::try_from_bytes(&signature_bytes)
+            .map_err(|err| format!("invalid signature material: {err}"))?;
         signature
             .verify(&public_key, manifest_digest)
             .map_err(|err| format!("signature verification failed: {err}"))?;
@@ -7865,7 +7866,8 @@ mod tests {
             PublicKey::from_bytes(Algorithm::Ed25519, &advert.signature.public_key)
                 .expect("decode advert signing public key");
         let advert_body_bytes = to_bytes(&advert.body).expect("encode advert body");
-        Signature::from_bytes(&advert.signature.signature)
+        Signature::try_from_bytes(&advert.signature.signature)
+            .expect("provider advert fixture signature is non-empty and nonzero")
             .verify(&advert_public_key, &advert_body_bytes)
             .expect("provider advert signature verifies");
 

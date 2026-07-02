@@ -750,7 +750,9 @@ fn verify_signature(
         PublicKey::from_bytes(Algorithm::Ed25519, &signature.public_key).map_err(|err| {
             format!("failed to parse Ed25519 public key for artefact verification: {err}")
         })?;
-    let sig = Signature::from_bytes(&signature.signature);
+    let sig = Signature::try_from_bytes(&signature.signature).map_err(|err| {
+        format!("failed to parse Ed25519 signature for artefact verification: {err}")
+    })?;
     let typed = SignatureOf::<RansTablesV1>::from_signature(sig);
     typed
         .verify(&public_key, payload)

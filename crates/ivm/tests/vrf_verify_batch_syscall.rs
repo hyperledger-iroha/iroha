@@ -28,6 +28,20 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+fn run_vrf_verify_batch(req: VrfVerifyBatchRequest) -> (u64, u64, u64) {
+    let body = norito::to_bytes(&req).expect("encode batch");
+    let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
+
+    let mut vm = IVM::new(10_000);
+    vm.memory.preload_input(0, &tlv_env).expect("preload input");
+    vm.set_register(10, Memory::INPUT_START);
+
+    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY_BATCH as u8]);
+    vm.load_program(&prog).unwrap();
+    vm.run().unwrap();
+    (vm.register(10), vm.register(11), vm.register(12))
+}
+
 #[test]
 fn syscall_vrf_verify_batch_two_items_ok() {
     // Item 1: Normal (SigInG2)
@@ -269,4 +283,64 @@ fn syscall_vrf_verify_batch_chain_mismatch_reports_index() {
     assert_eq!(vm.register(11), 8, "status must be ERR_CHAIN (8)");
     assert_eq!(vm.register(12), 1, "failing index must be 1");
     assert_eq!(vm.register(10), 0, "output pointer must be 0 on error");
+}
+
+#[test]
+fn syscall_vrf_verify_batch_rejects_inert_material_with_index() {
+    let chain = b"test-chain";
+    let input = b"ivm:vrf:batch-inert";
+    let cases = [
+        (
+            VrfVerifyRequest {
+                variant: 1,
+                pk: vec![0u8; 48],
+                proof: G2Affine::generator().to_compressed().to_vec(),
+                chain_id: chain.to_vec(),
+                input: input.to_vec(),
+            },
+            4,
+            "all-zero normal public key",
+        ),
+        (
+            VrfVerifyRequest {
+                variant: 1,
+                pk: G1Affine::generator().to_compressed().to_vec(),
+                proof: vec![0u8; 96],
+                chain_id: chain.to_vec(),
+                input: input.to_vec(),
+            },
+            5,
+            "all-zero normal proof",
+        ),
+        (
+            VrfVerifyRequest {
+                variant: 2,
+                pk: G2Affine::identity().to_compressed().to_vec(),
+                proof: G1Affine::generator().to_compressed().to_vec(),
+                chain_id: chain.to_vec(),
+                input: input.to_vec(),
+            },
+            4,
+            "identity small public key",
+        ),
+        (
+            VrfVerifyRequest {
+                variant: 2,
+                pk: G2Affine::generator().to_compressed().to_vec(),
+                proof: G1Affine::identity().to_compressed().to_vec(),
+                chain_id: chain.to_vec(),
+                input: input.to_vec(),
+            },
+            5,
+            "identity small proof",
+        ),
+    ];
+
+    for (item, expected_status, label) in cases {
+        let req = VrfVerifyBatchRequest { items: vec![item] };
+        let (output_ptr, status, failed_index) = run_vrf_verify_batch(req);
+        assert_eq!(output_ptr, 0, "{label} must not return output");
+        assert_eq!(status, expected_status, "{label} status");
+        assert_eq!(failed_index, 0, "{label} failed index");
+    }
 }

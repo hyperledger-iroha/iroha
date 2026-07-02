@@ -378,6 +378,9 @@ impl PdpProofV1 {
         if self.signature.is_empty() {
             return Err(PdpProofValidationError::MissingSignature);
         }
+        if self.signature.iter().all(|byte| *byte == 0) {
+            return Err(PdpProofValidationError::InertSignature);
+        }
         if self.proof_leaves.is_empty() {
             return Err(PdpProofValidationError::EmptyProofSet);
         }
@@ -427,4 +430,45 @@ pub enum PdpProofValidationError {
     /// Proof signature missing.
     #[error("proof signature must be present")]
     MissingSignature,
+    /// Proof signature must not be an inert all-zero placeholder.
+    #[error("proof signature must not be all zero")]
+    InertSignature,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_proof() -> PdpProofV1 {
+        PdpProofV1 {
+            version: PDP_PROOF_VERSION_V1,
+            challenge_id: [0x11; 32],
+            manifest_digest: [0x22; 32],
+            provider_id: [0x33; 32],
+            epoch_id: 7,
+            proof_leaves: vec![PdpProofLeafV1 {
+                segment_index: 0,
+                segment_hash: [0x44; 32],
+                segment_merkle_path: vec![[0x55; 32]],
+                hot_leaves: vec![PdpHotLeafProofV1 {
+                    leaf_index: 0,
+                    leaf_hash: [0x66; 32],
+                    leaf_merkle_path: vec![[0x77; 32]],
+                }],
+            }],
+            signature: vec![0x88; 64],
+            issued_at_unix: 1,
+        }
+    }
+
+    #[test]
+    fn pdp_proof_rejects_all_zero_signature_material() {
+        let mut proof = sample_proof();
+        proof.signature = vec![0u8; 64];
+
+        assert_eq!(
+            proof.validate(),
+            Err(PdpProofValidationError::InertSignature)
+        );
+    }
 }

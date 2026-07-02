@@ -7502,6 +7502,12 @@ def _active_launch_route_canary_metadata_blockers(
             f"{lane_label}: route canary evidence source must be {ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}"
         )
     for field, label in (
+        ("call_data_sha256", "call data SHA-256"),
+        ("payload_hash", "payload hash"),
+        ("statement_hash", "statement hash"),
+        ("commitment_root", "commitment root"),
+        ("finality_height", "finality height"),
+        ("finality_block_hash", "finality block hash"),
         ("transaction_hash", "transaction hash"),
         ("receipt_block_hash", "receipt block hash"),
         ("block_receipts_root", "block receipts root"),
@@ -7511,6 +7517,12 @@ def _active_launch_route_canary_metadata_blockers(
             blockers.append(
                 f"{lane_label}: route canary {label} must be a canonical non-zero bytes32 hex string"
             )
+    blockers.extend(
+        _active_launch_route_canary_template_hash_blockers(
+            lane_label,
+            canary,
+        )
+    )
     if (
         type(canary.get("receipt_block_number")) is not int
         or canary.get("receipt_block_number") <= 0
@@ -7518,6 +7530,28 @@ def _active_launch_route_canary_metadata_blockers(
         blockers.append(
             f"{lane_label}: route canary receipt block number must be a positive integer"
         )
+    # Source-inventory marker: route canary log_index must be a u32 integer
+    if (
+        type(canary.get("log_index")) is not int
+        or canary.get("log_index") < 0
+        or canary.get("log_index") > 0xFFFF_FFFF
+    ):
+        blockers.append(f"{lane_label}: route canary log_index must be a u32 integer")
+    # Source-inventory marker: route canary target_domain must be active launch domain
+    # Source-inventory marker: route canary proof_version must be 1
+    # Source-inventory marker: route canary proof_source_domain must be SORA domain
+    for field, expected, expected_label in (
+        ("target_domain", ACTIVE_LAUNCH_DOMAIN, "active launch domain"),
+        ("proof_version", 1, "1"),
+        ("proof_source_domain", SCCP_DOMAIN_SORA, "SORA domain"),
+    ):
+        raw = canary.get(field)
+        if type(raw) is not int:
+            blockers.append(f"{lane_label}: route canary {field} must be an integer")
+        elif raw != expected:
+            blockers.append(
+                f"{lane_label}: route canary {field} must be {expected_label}"
+            )
     if (
         "message_proof_used" in canary
         and type(canary.get("message_proof_used")) is not bool
@@ -7538,6 +7572,12 @@ def _active_launch_route_canary_metadata_blockers(
         blockers.append(f"{lane_label}: route canary receipt block must be finalized")
     canary_hash_roles = (
         ("evidence hash", canary.get("evidence_hash")),
+        ("call data SHA-256", canary.get("call_data_sha256")),
+        ("payload hash", canary.get("payload_hash")),
+        ("statement hash", canary.get("statement_hash")),
+        ("commitment root", canary.get("commitment_root")),
+        ("finality height", canary.get("finality_height")),
+        ("finality block hash", canary.get("finality_block_hash")),
         ("transaction hash", canary.get("transaction_hash")),
         ("receipt block hash", canary.get("receipt_block_hash")),
         ("block receipts root", canary.get("block_receipts_root")),
@@ -7553,6 +7593,99 @@ def _active_launch_route_canary_metadata_blockers(
                 (*upstream_hash_roles, *canary_hash_roles[:index]),
             )
         )
+    return blockers
+
+
+def _active_launch_route_canary_binding_hash_blockers(
+    lane_label: str,
+    lane: dict[str, Any],
+    canary: dict[str, Any],
+) -> list[str]:
+    """Return blockers for route-canary hashes that bind copied route evidence."""
+
+    blockers: list[str] = []
+    route_summary = lane.get("route_allowlist")
+    if not isinstance(route_summary, dict):
+        route_summary = {}
+    destination_binding = lane.get("destination_binding")
+    if not isinstance(destination_binding, dict):
+        destination_binding = {}
+
+    route_hash = canary.get("route_allowlist_hash")
+    if not _is_nonzero_hex32(route_hash):
+        # Source-inventory marker: route canary route allowlist hash must be a canonical non-zero bytes32 hex string
+        blockers.append(
+            f"{lane_label}: route canary route allowlist hash must be a canonical non-zero bytes32 hex string"
+        )
+    expected_route_hash = route_summary.get("route_allowlist_hash")
+    if (
+        _is_nonzero_hex32(route_hash)
+        and _is_nonzero_hex32(expected_route_hash)
+        and route_hash != expected_route_hash
+    ):
+        # Source-inventory marker: route canary route allowlist hash must match route_allowlist_hash
+        blockers.append(
+            f"{lane_label}: route canary route allowlist hash must match route_allowlist_hash"
+        )
+
+    destination_hash = canary.get("destination_binding_hash")
+    if not _is_nonzero_hex32(destination_hash):
+        # Source-inventory marker: route canary destination binding hash must be a canonical non-zero bytes32 hex string
+        blockers.append(
+            f"{lane_label}: route canary destination binding hash must be a canonical non-zero bytes32 hex string"
+        )
+    expected_destination_hash = destination_binding.get("destination_binding_hash")
+    if (
+        _is_nonzero_hex32(destination_hash)
+        and _is_nonzero_hex32(expected_destination_hash)
+        and destination_hash != expected_destination_hash
+    ):
+        # Source-inventory marker: route canary destination binding hash must match destination_binding_hash
+        blockers.append(
+            f"{lane_label}: route canary destination binding hash must match destination_binding_hash"
+        )
+    return blockers
+
+
+def _active_launch_route_canary_template_hash_blockers(
+    lane_label: str,
+    canary: Any,
+) -> list[str]:
+    """Return blockers when copied active route-canary hashes replay templates."""
+
+    if not isinstance(canary, dict):
+        return []
+    template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
+        f"{lane_label}: route canary",
+        ACTIVE_LAUNCH_DOMAIN,
+    )
+    if template_errors:
+        return template_errors
+    if not template_hashes:
+        return []
+    blockers: list[str] = []
+    for field, label in (
+        ("evidence_hash", "evidence hash"),
+        ("call_data_sha256", "call data SHA-256"),
+        ("payload_hash", "payload hash"),
+        ("statement_hash", "statement hash"),
+        ("commitment_root", "commitment root"),
+        ("finality_height", "finality height"),
+        ("finality_block_hash", "finality block hash"),
+        ("transaction_hash", "transaction hash"),
+        ("receipt_block_hash", "receipt block hash"),
+        ("block_receipts_root", "block receipts root"),
+        ("message_id", "message id"),
+    ):
+        value = canary.get(field)
+        if not _is_nonzero_hex32(value):
+            continue
+        assert isinstance(value, str)
+        if bytes.fromhex(value[2:]) in template_hashes:
+            # Source-inventory marker: route canary hashes must be live evidence, not built-in template material
+            blockers.append(
+                f"{lane_label}: route canary {label} must be live evidence, not built-in template material"
+            )
     return blockers
 
 
@@ -7661,6 +7794,12 @@ def _active_launch_governed_deployment_metadata_blockers(
             "governed deployment",
         )
     )
+    blockers.extend(
+        _active_launch_source_record_template_hash_blockers(
+            lane_label,
+            source_hashes,
+        )
+    )
 
     destination_binding = lane.get("destination_binding")
     if not isinstance(destination_binding, dict):
@@ -7688,6 +7827,13 @@ def _active_launch_governed_deployment_metadata_blockers(
             "destination binding hash",
             supplied_hash,
             source_hash_roles,
+        )
+    )
+    blockers.extend(
+        _active_launch_destination_binding_template_hash_blockers(
+            lane_label,
+            supplied_hash,
+            expected_hash,
         )
     )
     if not _is_nonzero_hex32(expected_hash):
@@ -7758,6 +7904,114 @@ def _active_launch_governed_deployment_metadata_blockers(
         blockers.append(
             f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must match audit hash evm_source_gate_hash"
         )
+    blockers.extend(
+        _active_launch_source_adapter_gate_template_hash_blockers(
+            lane_label,
+            gate_hash,
+            audit_hashes,
+        )
+    )
+    return blockers
+
+
+def _active_launch_destination_binding_template_hash_blockers(
+    lane_label: str,
+    supplied_hash: Any,
+    expected_hash: Any,
+) -> list[str]:
+    """Return blockers when copied active destination hashes replay templates."""
+
+    template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
+        f"{lane_label}: governed deployment destination binding",
+        ACTIVE_LAUNCH_DOMAIN,
+    )
+    if template_errors:
+        return template_errors
+    if not template_hashes:
+        return []
+    blockers: list[str] = []
+    for value, label in (
+        (supplied_hash, "destination binding hash"),
+        (expected_hash, "expected destination binding hash"),
+    ):
+        if not _is_nonzero_hex32(value):
+            continue
+        assert isinstance(value, str)
+        if bytes.fromhex(value[2:]) in template_hashes:
+            # Source-inventory marker: destination binding hashes must be destination binding evidence, not built-in template material
+            blockers.append(
+                f"{lane_label}: governed deployment {label} must be destination binding evidence, not built-in template material"
+            )
+    return blockers
+
+
+def _active_launch_source_adapter_gate_template_hash_blockers(
+    lane_label: str,
+    gate_hash: Any,
+    audit_hashes: Any,
+) -> list[str]:
+    """Return blockers when copied active source-gate hashes replay templates."""
+
+    template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
+        f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate",
+        ACTIVE_LAUNCH_DOMAIN,
+    )
+    if template_errors:
+        return template_errors
+    if not template_hashes:
+        return []
+    blockers: list[str] = []
+    if _is_nonzero_hex32(gate_hash):
+        assert isinstance(gate_hash, str)
+        if bytes.fromhex(gate_hash[2:]) in template_hashes:
+            blockers.append(
+                f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be deployed gate evidence, not built-in template material"
+            )
+    if isinstance(audit_hashes, dict):
+        audit_hash = audit_hashes.get("evm_source_gate_hash")
+        if _is_nonzero_hex32(audit_hash):
+            assert isinstance(audit_hash, str)
+            if bytes.fromhex(audit_hash[2:]) in template_hashes:
+                blockers.append(
+                    f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes evm_source_gate_hash must be deployed audit evidence, not built-in template material"
+                )
+    return blockers
+
+
+def _active_launch_source_record_template_hash_blockers(
+    lane_label: str,
+    source_hashes: Any,
+) -> list[str]:
+    """Return blockers when copied active source records replay templates."""
+
+    if not isinstance(source_hashes, dict):
+        return []
+    template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
+        f"{lane_label}: governed deployment source records",
+        ACTIVE_LAUNCH_DOMAIN,
+    )
+    if template_errors:
+        return template_errors
+    if not template_hashes:
+        return []
+    blockers: list[str] = []
+    for field, label in (
+        ("source_verifier_material_hash", "source verifier material hash"),
+        (
+            "source_adapter_engine_deployment_hash",
+            "source adapter engine deployment hash",
+        ),
+    ):
+        value = source_hashes.get(field)
+        if not _is_nonzero_hex32(value):
+            continue
+        assert isinstance(value, str)
+        if bytes.fromhex(value[2:]) in template_hashes:
+            # Source-inventory marker: governed deployment source verifier material hash must be deployed evidence, not built-in template material
+            # Source-inventory marker: governed deployment source adapter engine deployment hash must be deployed evidence, not built-in template material
+            blockers.append(
+                f"{lane_label}: governed deployment {label} must be deployed evidence, not built-in template material"
+            )
     return blockers
 
 
@@ -7947,6 +8201,13 @@ def _active_launch_route_allowlist_binding_blockers(
             ),
         )
     )
+    blockers.extend(
+        _active_launch_route_allowlist_template_hash_blockers(
+            lane_label,
+            supplied_hash,
+            expected_hash,
+        )
+    )
     if not _is_nonzero_hex32(expected_hash):
         blockers.append(
             f"{lane_label}: expected route allowlist hash must be a canonical non-zero bytes32 hex string"
@@ -7963,6 +8224,37 @@ def _active_launch_route_allowlist_binding_blockers(
         blockers.append(
             f"{lane_label}: route allowlist expected hash match flag must be true"
         )
+    return blockers
+
+
+def _active_launch_route_allowlist_template_hash_blockers(
+    lane_label: str,
+    supplied_hash: Any,
+    expected_hash: Any,
+) -> list[str]:
+    """Return blockers when copied active route hashes replay templates."""
+
+    template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
+        f"{lane_label}: route allowlist",
+        ACTIVE_LAUNCH_DOMAIN,
+    )
+    if template_errors:
+        return template_errors
+    if not template_hashes:
+        return []
+    blockers: list[str] = []
+    for value, label in (
+        (supplied_hash, "route allowlist hash"),
+        (expected_hash, "expected route allowlist hash"),
+    ):
+        if not _is_nonzero_hex32(value):
+            continue
+        assert isinstance(value, str)
+        if bytes.fromhex(value[2:]) in template_hashes:
+            # Source-inventory marker: route allowlist hashes must be route binding evidence, not built-in template material
+            blockers.append(
+                f"{lane_label}: {label} must be route binding evidence, not built-in template material"
+            )
     return blockers
 
 
@@ -8082,6 +8374,13 @@ def _active_launch_release_checklist(
             lane_label,
             canary,
             _active_launch_route_canary_upstream_hash_roles(lane),
+        )
+    )
+    canary_blockers.extend(
+        _active_launch_route_canary_binding_hash_blockers(
+            lane_label,
+            lane,
+            canary,
         )
     )
     if (
@@ -10446,7 +10745,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, duplicate-alias, accessor-backed alias suppression, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
             "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
-            "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, and non-string section-key blockers before all-lanes evidence can satisfy production readiness.",
+            "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, non-string section-key, not-ready nested schema, hash/flag-coherence, and route-canary proof-context/hash-role/common/truth-semantic blockers before all-lanes evidence can satisfy production readiness.",
             "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
             "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, route-canary hash replay rejection, and upstream route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
             "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed release-checklist roots, malformed lane metadata, and verifier recomputation before production readiness can pass.",

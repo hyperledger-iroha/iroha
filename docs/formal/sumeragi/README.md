@@ -93,23 +93,30 @@ Helper operand polarity checks unwrap one-line `LET` helper aliases.
 Transitive exactness predicate chains must not hide undefined helpers.
 Quantified exactness helper formulas must not hide undefined helpers.
 Undefined helper scans preserve quantified binding scope.
+Undefined helper scans preserve unbounded quantified binding scope.
+Undefined helper scans reject relation-bearing quantified binding prefixes.
 Undefined helper scans preserve tuple-pattern quantifier domains.
 Undefined helper scans preserve LET binding scope.
 Undefined helper scans preserve parameterized LET operator scope.
 Undefined helper scans preserve CHOOSE binding scope.
 Undefined helper scans preserve LAMBDA binding scope.
+Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes.
 Undefined helper scans preserve standard TLA set/operator identifiers.
 Undefined helper scans preserve ENABLED/UNCHANGED operand scope.
 Undefined helper scans preserve CASE branch scope.
 Undefined helper scans preserve relation operand scope.
 Undefined helper scans preserve operator-call argument scope.
 Undefined helper scans preserve arithmetic/set infix operand scope.
+Undefined helper scans preserve sequence/function infix operand scope.
 Undefined helper scans preserve explicit set literal element scope.
 Undefined helper scans preserve unary set-operator operand scope.
 Undefined helper scans preserve set-comprehension binding scope.
 Undefined helper scans preserve set-comprehension outer enclosure scope.
 Undefined helper scans preserve function-constructor binding scope.
 Undefined helper scans preserve function-set domain and range scope.
+Function-set scans preserve CASE domain branch arrows.
+Function-set scans preserve record maplet CASE values.
+Function-set scans preserve record set/update CASE values.
 Undefined helper scans preserve record field label scope.
 Undefined helper scans preserve record set field label scope.
 Undefined helper scans preserve record update field label scope.
@@ -122,15 +129,19 @@ Quantified helper restatement checks reject pure top-level boolean compositions.
 Quantified helper restatement checks reject identity-literal gates.
 Quantified helper restatement checks propagate known truth values.
 Quantified formula prefix scans preserve escaped string literal colons.
+Quantified formula prefix scans preserve tuple literal maplet colons.
+Quantified helper formula scans require scoped binding prefixes.
 Quantified bound identifier scans preserve escaped string literal domains.
 Quantified helper bound-domain checks preserve escaped string literal domains.
 Quantified helper bound-domain checks include comma-shared bindings.
 Quantified helper bound-domain checks skip tuple-pattern component domains.
 Quantified helper singleton-domain checks preserve tuple literal elements.
+Quantified helper vacuity checks include unbounded static bodies.
 Line comment scans preserve escaped string literal comment markers.
 Static outer wrapper scans preserve escaped string literal parentheses.
 Semantic identifier scans ignore escaped string literal contents.
 Top-level relation and boolean scans preserve tuple literal operators.
+Top-level relation scans reject whole-body control/action wrappers.
 Top-level boolean scans preserve escaped string literal operators.
 Top-level boolean/equality detector helpers preserve tuple literal operators.
 Top-level keyword scans preserve tuple literal keywords.
@@ -138,7 +149,9 @@ Top-level CASE branch scans preserve tuple literal arms and conditions.
 Top-level keyword and CASE branch scans preserve escaped string literal delimiters.
 Top-level CASE branch scans distinguish unary temporal boxes from arm separators.
 Quantified exactness helper formulas must use their bound identifiers.
+Quantified exactness helper formulas must not duplicate bound identifiers.
 Quantified unused-bound checks include later binding groups.
+Quantified unused-bound checks include unbounded bindings.
 Quantified bound identifier scans include later tuple-pattern binding groups.
 Quantified exactness helper formulas must not select predicates with control flow.
 Quantified exactness helper formulas must not appear below top-level negation operands.
@@ -175,6 +188,10 @@ Quantified-predicate exactness boolean-composition helper operands are checked t
 Literal-gated quantified-predicate exactness boolean-composition helper operands are checked through identity literals.
 Exactness boolean-composition checks unwrap one-line `LET` helper aliases.
 Unary-temporal exactness helper wrappers must not hide quantified formulas.
+Static action/set/choice exactness helper wrappers must not hide quantified formulas.
+Static action/set/choice exactness helper wrappers traverse structured operands.
+Structured exactness helper operands must not hide quantified formulas.
+Structured exactness helper operands must not hide control-flow predicate selection.
 Unary-temporal quantified, parameterized-call, and control-flow checks split top-level boolean operands before peeling temporal wrappers.
 Unary-temporal quantified checks unwrap one-line `LET` helper aliases.
 Unary-temporal parameterized-call checks unwrap one-line `LET` helper aliases.
@@ -196,6 +213,7 @@ Negated unary-temporal boolean-only helper wrappers count as literal helpers too
 Compound boolean-only temporal helper wrappers count as literal helpers too.
 Compound exactness helper traversal includes disjunction, implication, equivalence, and negation operands.
 Helper reference traversal unwraps one-line `LET` helper aliases.
+Exactness vacuous-helper checks inspect static and structured operands.
 LET helper alias unwrapping preserves static unary result wrappers.
 LET binding scans preserve tuple literal definition bodies.
 LET binding scans preserve escaped string literal definition bodies.
@@ -220,6 +238,10 @@ temporal predicates before composition.
 Transitive allowlisted temporal helper chains must not hide whole-body control-flow predicate-selection helpers.
 Transitive allowlisted temporal helper chains must not hide nested control-flow predicate-selection helpers.
 Unary-temporal temporal helper wrappers must not hide control-flow predicate selection.
+Static action/set/choice temporal helper wrappers must not hide quantified formulas.
+Static action/set/choice temporal helper wrappers traverse structured operands.
+Structured temporal helper operands must not hide quantified formulas.
+Structured temporal helper operands must not hide control-flow predicate selection.
 Unary-temporal temporal LET-alias helper wrappers must name concrete temporal predicates.
 Transitive allowlisted temporal helper chains must not hide whole-body temporal-helper boolean-composition helpers.
 Temporal-helper boolean-composition checks traverse boolean operands.
@@ -237,23 +259,30 @@ hide `TypeInvariant`, generic correctness, or `*Exactness` identifiers.
 Transitive allowlisted temporal helper chains must not hide undefined helpers.
 Quantified temporal helper formulas must not hide undefined helpers.
 Undefined helper scans preserve quantified binding scope.
+Undefined helper scans preserve unbounded quantified binding scope.
+Undefined helper scans reject relation-bearing quantified binding prefixes.
 Undefined helper scans preserve tuple-pattern quantifier domains.
 Undefined helper scans preserve LET binding scope.
 Undefined helper scans preserve parameterized LET operator scope.
 Undefined helper scans preserve CHOOSE binding scope.
 Undefined helper scans preserve LAMBDA binding scope.
+Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes.
 Undefined helper scans preserve standard TLA set/operator identifiers.
 Undefined helper scans preserve ENABLED/UNCHANGED operand scope.
 Undefined helper scans preserve CASE branch scope.
 Undefined helper scans preserve relation operand scope.
 Undefined helper scans preserve operator-call argument scope.
 Undefined helper scans preserve arithmetic/set infix operand scope.
+Undefined helper scans preserve sequence/function infix operand scope.
 Undefined helper scans preserve explicit set literal element scope.
 Undefined helper scans preserve unary set-operator operand scope.
 Undefined helper scans preserve set-comprehension binding scope.
 Undefined helper scans preserve set-comprehension outer enclosure scope.
 Undefined helper scans preserve function-constructor binding scope.
 Undefined helper scans preserve function-set domain and range scope.
+Function-set scans preserve CASE domain branch arrows.
+Function-set scans preserve record maplet CASE values.
+Function-set scans preserve record set/update CASE values.
 Undefined helper scans preserve record field label scope.
 Undefined helper scans preserve record set field label scope.
 Undefined helper scans preserve record update field label scope.
@@ -266,15 +295,19 @@ Quantified helper restatement checks reject pure top-level boolean compositions.
 Quantified helper restatement checks reject identity-literal gates.
 Quantified helper restatement checks propagate known truth values.
 Quantified formula prefix scans preserve escaped string literal colons.
+Quantified formula prefix scans preserve tuple literal maplet colons.
+Quantified helper formula scans require scoped binding prefixes.
 Quantified bound identifier scans preserve escaped string literal domains.
 Quantified helper bound-domain checks preserve escaped string literal domains.
 Quantified helper bound-domain checks include comma-shared bindings.
 Quantified helper bound-domain checks skip tuple-pattern component domains.
 Quantified helper singleton-domain checks preserve tuple literal elements.
+Quantified helper vacuity checks include unbounded static bodies.
 Line comment scans preserve escaped string literal comment markers.
 Static outer wrapper scans preserve escaped string literal parentheses.
 Semantic identifier scans ignore escaped string literal contents.
 Top-level relation and boolean scans preserve tuple literal operators.
+Top-level relation scans reject whole-body control/action wrappers.
 Top-level boolean scans preserve escaped string literal operators.
 Top-level boolean/equality detector helpers preserve tuple literal operators.
 Top-level keyword scans preserve tuple literal keywords.
@@ -282,7 +315,9 @@ Top-level CASE branch scans preserve tuple literal arms and conditions.
 Top-level keyword and CASE branch scans preserve escaped string literal delimiters.
 Top-level CASE branch scans distinguish unary temporal boxes from arm separators.
 Quantified temporal helper formulas must use their bound identifiers.
+Quantified temporal helper formulas must not duplicate bound identifiers.
 Quantified unused-bound checks include later binding groups.
+Quantified unused-bound checks include unbounded bindings.
 Quantified bound identifier scans include later tuple-pattern binding groups.
 Quantified temporal helper formulas must not select predicates with control flow.
 Quantified helper body control-flow checks reject non-transparent `LET` bodies.
@@ -315,6 +350,7 @@ Compound temporal helper traversal includes disjunction operands.
 Compound temporal helper traversal includes implication operands.
 Compound temporal helper traversal includes equivalence operands.
 Compound temporal helper traversal includes negation operands.
+Temporal vacuous-helper checks inspect static and structured operands.
 Exactness and correctness-envelope conjunct references must resolve to zero-arity
 operator definitions, including bounded temporal exception helper chains.
 Transitive exactness predicate chains must also resolve through zero-arity
@@ -30669,6 +30705,16 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Undefined-helper scans inside quantified helper formulas must preserve
   quantified binding scope, so a helper-like name bound by an inner quantifier
   cannot mask a free helper obligation with the same name in the outer body.
+  Unbounded quantified scopes must be preserved too, so `\A MissingHelper: P`
+  and `\E MissingHelper: P` keep `MissingHelper` local to the quantified body.
+  Those unbounded quantified helpers still participate in vacuity and
+  unused-bound checks, so `\A MissingHelper: TRUE` and
+  `\A MissingHelper: ConcretePredicate` cannot pass as meaningful proof
+  obligations.
+  Relation-bearing quantified prefixes such as
+  `\A MissingHelper \subseteq MissingDomain: P` must not bind
+  `MissingHelper`; their prefix and body operands remain visible to
+  undefined-helper scans.
   Tuple-pattern quantifier domains must remain visible to undefined-helper
   scans, so `\A <<x, y>> \in MissingDomain: P(x, y)` still reports
   `MissingDomain` while `x` and `y` stay local to the quantified body.

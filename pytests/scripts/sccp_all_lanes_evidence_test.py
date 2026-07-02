@@ -10469,6 +10469,68 @@ def test_all_lanes_cli_rejects_copied_ready_source_record_template_replay(capsys
     assert "Traceback" not in captured.err
 
 
+def test_all_lanes_cli_rejects_copied_destination_and_route_template_replay(capsys):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    forged_hashes = set()
+    destination_fields = (
+        "destination_binding_hash",
+        "expected_destination_binding_hash",
+    )
+    route_fields = (
+        "route_allowlist_hash",
+        "expected_route_allowlist_hash",
+    )
+
+    for domain, (_index, lane) in lanes.items():
+        profile = module.LANE_PROFILES[domain]
+        template_hash = next(
+            iter(module._source_material_template_hashes(profile).values())
+        )
+        forged_hash = "0x" + template_hash.hex()
+        for field in destination_fields:
+            lane["destination_binding"][field] = forged_hash
+        for field in route_fields:
+            lane["route_allowlist"][field] = forged_hash
+        forged_hashes.add(forged_hash)
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    for _domain, (index, _lane) in lanes.items():
+        for field in destination_fields:
+            assert (
+                f"all-lanes summary lanes[{index}].destination_binding.{field} "
+                "must be destination binding evidence, not built-in template material"
+            ) in blockers
+        for field in route_fields:
+            assert (
+                f"all-lanes summary lanes[{index}].route_allowlist.{field} "
+                "must be route binding evidence, not built-in template material"
+            ) in blockers
+    for forged_hash in forged_hashes:
+        assert forged_hash not in captured.out
+        assert forged_hash[2:] not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_all_lanes_cli_rejects_copied_route_canary_template_replay(capsys):
     module = load_evidence_module()
     original_load = module.load_evidence_bundle
@@ -11204,7 +11266,7 @@ def test_all_lanes_cli_rejects_copied_not_ready_nested_scalar_shape_drift(capsys
         (
             tron_index,
             "route_allowlist.route_canary.signature_recovered_address must be "
-            "a non-zero TRON address",
+            "a non-zero canonical 0x41-prefixed 21-byte hex string",
         ),
     )
     for lane_index, expected in expected_blockers:
@@ -11476,6 +11538,127 @@ def test_all_lanes_cli_rejects_active_copied_evm_route_canary_proof_drift_when_l
     for expected in expected_blockers:
         assert f"all-lanes summary lanes[{eth_index}].{expected}" in blockers
     assert "operator pending active route canary proof audit" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_all_lanes_cli_rejects_copied_not_ready_route_canary_proof_context_drift(
+    capsys,
+):
+    module = load_evidence_module()
+    original_load = module.load_evidence_bundle
+    original_validate = module.validate_evidence_bundle
+    summary = copy.deepcopy(module.validate_evidence_bundle(complete_bundle(module)))
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending external verifier deployment"]
+    lanes = {
+        lane["domain"]: (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+    }
+    bsc_index, bsc_lane = lanes[module.SCCP_DOMAIN_BSC]
+    sol_index, sol_lane = lanes[module.SCCP_DOMAIN_SOL]
+    ton_index, ton_lane = lanes[module.SCCP_DOMAIN_TON]
+    tron_index, tron_lane = lanes[module.SCCP_DOMAIN_TRON]
+    for lane in (bsc_lane, sol_lane, ton_lane, tron_lane):
+        lane["production_ready"] = False
+        lane["blockers"] = ["operator pending not-ready route canary proof audit"]
+
+    bsc_canary = bsc_lane["route_allowlist"]["route_canary"]
+    bsc_canary["receipt_block_number"] = 0
+    bsc_canary["log_index"] = 0x1_0000_0000
+    bsc_canary["target_domain"] = module.SCCP_DOMAIN_TRON
+    bsc_canary["proof_version"] = 2
+    bsc_canary["proof_source_domain"] = module.SCCP_DOMAIN_BSC
+    sol_canary = sol_lane["route_allowlist"]["route_canary"]
+    sol_canary["solana_programdata_address"] = "not-base58"
+    sol_canary["solana_programdata_slot"] = "0"
+    ton_canary = ton_lane["route_allowlist"]["route_canary"]
+    ton_canary["ton_last_transaction_lt"] = "0"
+    tron_canary = tron_lane["route_allowlist"]["route_canary"]
+    tron_canary["block_number"] = 0
+    tron_canary["block_timestamp"] = -1
+    tron_canary["log_index"] = 0x1_0000_0000
+    tron_canary["target_domain"] = module.SCCP_DOMAIN_BSC
+    tron_canary["proof_version"] = 2
+    tron_canary["proof_source_domain"] = module.SCCP_DOMAIN_TRON
+    tron_canary["transaction_owner_address"] = "0x41" + "11" * 20
+    tron_canary["signature_recovered_address"] = "0x41" + "22" * 20
+
+    module.load_evidence_bundle = lambda paths: {}
+    module.validate_evidence_bundle = lambda records: summary
+    try:
+        exit_code = module.main(["evidence.toml"])
+    finally:
+        module.load_evidence_bundle = original_load
+        module.validate_evidence_bundle = original_validate
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "lanes" not in payload
+    assert "operator pending external verifier deployment" in blockers
+    # Source-inventory marker: not-ready route_canary proof context proof_source_domain must stay SORA domain
+    # Source-inventory marker: not-ready route_canary proof context owner recovery must stay bound
+    expected_blockers = (
+        (
+            bsc_index,
+            "route_allowlist.route_canary.receipt_block_number must be a positive integer",
+        ),
+        (bsc_index, "route_allowlist.route_canary.log_index must be a u32 integer"),
+        (
+            bsc_index,
+            "route_allowlist.route_canary.target_domain must match lane domain",
+        ),
+        (bsc_index, "route_allowlist.route_canary.proof_version must be 1"),
+        (
+            bsc_index,
+            "route_allowlist.route_canary.proof_source_domain must be SORA domain",
+        ),
+        (
+            sol_index,
+            "route_allowlist.route_canary.solana_programdata_address must be a non-zero canonical base58 Solana address",
+        ),
+        (
+            sol_index,
+            "route_allowlist.route_canary.solana_programdata_slot must be a canonical positive decimal string",
+        ),
+        (
+            ton_index,
+            "route_allowlist.route_canary.ton_last_transaction_lt must be a canonical positive decimal string",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary.block_number must be a positive integer",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary.block_timestamp must be a non-negative integer",
+        ),
+        (tron_index, "route_allowlist.route_canary.log_index must be a u32 integer"),
+        (
+            tron_index,
+            "route_allowlist.route_canary.target_domain must match lane domain",
+        ),
+        (tron_index, "route_allowlist.route_canary.proof_version must be 1"),
+        (
+            tron_index,
+            "route_allowlist.route_canary.proof_source_domain must be SORA domain",
+        ),
+        (
+            tron_index,
+            "route_allowlist.route_canary.signature_recovered_address must match transaction_owner_address",
+        ),
+    )
+    for lane_index, expected in expected_blockers:
+        assert f"all-lanes summary lanes[{lane_index}].{expected}" in blockers
+    assert "operator pending not-ready route canary proof audit" not in captured.out
+    for forged_value in (
+        "not-base58",
+        "0x41" + "11" * 20,
+        "0x41" + "22" * 20,
+    ):
+        assert forged_value not in captured.out
     assert "Traceback" not in captured.err
 
 
@@ -13357,7 +13540,7 @@ def test_all_lanes_cli_rejects_copied_ready_route_canary_scalar_drift(capsys):
     tron_canary["block_timestamp"] = -1
     tron_canary["raw_data_owner_matches_transaction"] = "yes"
     tron_canary["signature_recovers_to_owner"] = False
-    tron_canary["signature_recovered_address"] = "0x41" + "99" * 20
+    tron_canary["signature_recovered_address"] = "0x41" + "AA" * 20
     sol_canary = sol_lane["route_allowlist"]["route_canary"]
     sol_canary["solana_programdata_address"] = " forged-address "
     sol_canary["solana_programdata_slot"] = 42
@@ -13397,14 +13580,14 @@ def test_all_lanes_cli_rejects_copied_ready_route_canary_scalar_drift(capsys):
         "route_allowlist.route_canary.block_timestamp must be a non-negative integer",
         "route_allowlist.route_canary.raw_data_owner_matches_transaction must be a boolean",
         "route_allowlist.route_canary.signature_recovers_to_owner must be true",
-        "route_allowlist.route_canary.signature_recovered_address must match "
-        "transaction_owner_address",
+        "route_allowlist.route_canary.signature_recovered_address must be a "
+        "non-zero canonical 0x41-prefixed 21-byte hex string",
     )
     for expected in tron_scalar_blockers:
         assert f"all-lanes summary lanes[{tron_index}].{expected}" in blockers
     sol_scalar_blockers = (
         "route_allowlist.route_canary.solana_programdata_address must be a "
-        "non-empty canonical string",
+        "non-zero canonical base58 Solana address",
         "route_allowlist.route_canary.solana_programdata_slot must be a "
         "canonical positive decimal string",
     )
@@ -13419,6 +13602,7 @@ def test_all_lanes_cli_rejects_copied_ready_route_canary_scalar_drift(capsys):
     assert "forged-status" not in captured.out
     assert "forged-source" not in captured.out
     assert "forged-address" not in captured.out
+    assert "0x41" + "AA" * 20 not in captured.out
     assert "Traceback" not in captured.err
 
 
@@ -14714,6 +14898,73 @@ def test_all_lanes_release_checklist_rejects_route_hash_governed_replay():
         assert replay_hash not in unresolved_blockers, case_id
 
 
+def test_all_lanes_release_checklist_rejects_destination_and_route_template_replays():
+    module = load_evidence_module()
+    summary = module.validate_evidence_bundle(complete_bundle(module))
+    base_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    profile = module.LANE_PROFILES[module.SCCP_DOMAIN_ETH]
+    template_hash = next(
+        iter(module._source_material_template_hashes(profile).values())
+    )
+    replay_hash = "0x" + template_hash.hex()
+    cases = (
+        (
+            "destination_binding_template_replay",
+            ("destination_binding", "destination_binding_hash"),
+            "governed_deployment_evidence",
+            "domain 1 (eth): destination binding hash must be "
+            "destination binding evidence, not built-in template material",
+        ),
+        (
+            "expected_destination_binding_template_replay",
+            ("destination_binding", "expected_destination_binding_hash"),
+            "governed_deployment_evidence",
+            "domain 1 (eth): expected destination binding hash must be "
+            "destination binding evidence, not built-in template material",
+        ),
+        (
+            "route_allowlist_template_replay",
+            ("route_allowlist", "route_allowlist_hash"),
+            "route_allowlist_binding",
+            "domain 1 (eth): route allowlist hash must be "
+            "route binding evidence, not built-in template material",
+        ),
+        (
+            "expected_route_allowlist_template_replay",
+            ("route_allowlist", "expected_route_allowlist_hash"),
+            "route_allowlist_binding",
+            "domain 1 (eth): expected route allowlist hash must be "
+            "route binding evidence, not built-in template material",
+        ),
+    )
+
+    for case_id, path, item_id, expected in cases:
+        lane = copy.deepcopy(base_lane)
+        container_name, field = path
+        lane[container_name][field] = replay_hash
+        if container_name == "route_allowlist" and field == "route_allowlist_hash":
+            lane["route_allowlist"]["route_canary"][
+                "route_allowlist_hash"
+            ] = replay_hash
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        blockers = "\n".join(items[item_id]["blockers"])
+        unresolved_blockers = "\n".join(
+            items["no_unresolved_blockers"]["blockers"]
+        )
+
+        assert checklist["ready"] is False, case_id
+        assert items[item_id]["ready"] is False, case_id
+        assert items["no_unresolved_blockers"]["ready"] is False, case_id
+        assert expected in blockers, case_id
+        assert expected in unresolved_blockers, case_id
+        assert replay_hash not in blockers, case_id
+        assert replay_hash not in unresolved_blockers, case_id
+
+
 def test_all_lanes_release_checklist_bounds_route_allowlist_recompute_failures():
     module = load_evidence_module()
     summary = module.validate_evidence_bundle(complete_bundle(module))
@@ -15212,11 +15463,11 @@ def test_all_lanes_release_checklist_rejects_route_canary_proof_context_drift():
             "domain 1 (eth): route canary proof_source_domain must be SORA domain",
         ),
         (
-            "checklist_solana_programdata_address_padded",
+            "checklist_solana_programdata_address_non_base58",
             module.SCCP_DOMAIN_SOL,
             "solana_programdata_address",
-            " padded-address ",
-            "domain 3 (sol): route canary solana_programdata_address must be a non-empty canonical string",
+            "not-base58",
+            "domain 3 (sol): route canary solana_programdata_address must be a non-zero canonical base58 Solana address",
         ),
         (
             "checklist_solana_programdata_slot_scalar",
@@ -15265,7 +15516,14 @@ def test_all_lanes_release_checklist_rejects_route_canary_proof_context_drift():
             module.SCCP_DOMAIN_TRON,
             "transaction_owner_address",
             "0x41" + "00" * 20,
-            "domain 5 (tron): route canary transaction_owner_address must be a non-zero TRON address",
+            "domain 5 (tron): route canary transaction_owner_address must be a non-zero canonical 0x41-prefixed 21-byte hex string",
+        ),
+        (
+            "checklist_tron_owner_uppercase_address",
+            module.SCCP_DOMAIN_TRON,
+            "transaction_owner_address",
+            "0x41" + "AA" * 20,
+            "domain 5 (tron): route canary transaction_owner_address must be a non-zero canonical 0x41-prefixed 21-byte hex string",
         ),
         (
             "checklist_tron_recovered_owner_drift",

@@ -30,11 +30,19 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{AppState, Error, SharedAppState, app_auth, json_ok, routing};
 
+const P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN: usize = 65;
+const OFFLINE_KEY_CERTIFICATE_SIGNATURE_PLACEHOLDER: [u8; 64] = [0xA6; 64];
+
 const ENDPOINT_KEYS_REFILL: &str = "v1/offline/keys/refill";
 const ENDPOINT_NOTES_ISSUE: &str = "v1/offline/notes/issue";
 const PATH_KEYS_REFILL: &str = "/v1/offline/keys/refill";
 const PATH_NOTES_ISSUE: &str = "/v1/offline/notes/issue";
 const OFFLINE_REVOCATION_BUNDLE_TTL_MS: u64 = 5 * 60 * 1_000;
+
+fn offline_key_certificate_signature_placeholder() -> Signature {
+    Signature::try_from_bytes(&OFFLINE_KEY_CERTIFICATE_SIGNATURE_PLACEHOLDER)
+        .expect("Offline Notes key-certificate placeholder signature is non-empty and nonzero")
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct OfflineIssuerRuntime {
@@ -296,21 +304,59 @@ fn verify_ed25519_signature(
     payload: &[u8],
     signature: &[u8],
 ) -> Result<(), &'static str> {
-    let public_key: [u8; 32] = public_key
-        .try_into()
-        .map_err(|_| "ed25519_public_key_invalid")?;
-    let signature: [u8; 64] = signature
-        .try_into()
-        .map_err(|_| "ed25519_signature_invalid")?;
-    if signature.iter().all(|byte| *byte == 0) {
-        return Err("signature_invalid");
+    if signature.len() != 64 {
+        return Err("ed25519_signature_invalid");
     }
-    let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&public_key)
+    let verifying_key = PublicKey::from_bytes(Algorithm::Ed25519, public_key)
         .map_err(|_| "ed25519_public_key_invalid")?;
-    let signature = ed25519_dalek::Signature::from_bytes(&signature);
-    verifying_key
-        .verify_strict(payload, &signature)
+    let signature =
+        checked_ed25519_signature_from_bytes(signature).map_err(|_| "signature_invalid")?;
+    signature
+        .verify(&verifying_key, payload)
         .map_err(|_| "signature_invalid")
+}
+
+fn checked_ed25519_signature_from_bytes(signature: &[u8]) -> Result<Signature, ()> {
+    validate_ed25519_signature_r(signature)?;
+    Signature::try_from_bytes(signature).map_err(|_| ())
+}
+
+fn validate_ed25519_signature_r(signature: &[u8]) -> Result<(), ()> {
+    if signature.len() != ed25519_dalek::SIGNATURE_LENGTH {
+        return Err(());
+    }
+    let r_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = signature
+        .get(..ed25519_dalek::PUBLIC_KEY_LENGTH)
+        .ok_or(())?
+        .try_into()
+        .map_err(|_| ())?;
+    if !ed25519_compressed_y_is_canonical(&r_bytes) {
+        return Err(());
+    }
+    let r_point = ed25519_dalek::VerifyingKey::from_bytes(&r_bytes).map_err(|_| ())?;
+    if r_point.is_weak() {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn ed25519_compressed_y_is_canonical(bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]) -> bool {
+    const ED25519_FIELD_MODULUS_LE: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    let mut y = *bytes;
+    y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
+    for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
+        match y[idx].cmp(&ED25519_FIELD_MODULUS_LE[idx]) {
+            std::cmp::Ordering::Less => return true,
+            std::cmp::Ordering::Greater => return false,
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+    false
 }
 
 fn verify_p256_signature(
@@ -318,15 +364,27 @@ fn verify_p256_signature(
     payload: &[u8],
     signature: &[u8],
 ) -> Result<(), &'static str> {
+    if p256_public_key_has_zero_coordinate_material(public_key) {
+        return Err("p256_public_key_invalid");
+    }
     let verifying_key =
         P256VerifyingKey::from_sec1_bytes(public_key).map_err(|_| "p256_public_key_invalid")?;
     if !signature.is_empty() && signature.iter().all(|byte| *byte == 0) {
         return Err("p256_signature_invalid");
     }
     let signature = P256Signature::from_der(signature).map_err(|_| "p256_signature_invalid")?;
+    if signature.normalize_s().is_some() {
+        return Err("p256_signature_invalid");
+    }
     verifying_key
         .verify(payload, &signature)
         .map_err(|_| "signature_invalid")
+}
+
+fn p256_public_key_has_zero_coordinate_material(public_key: &[u8]) -> bool {
+    public_key.len() == P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN
+        && public_key.first().copied() == Some(0x04)
+        && public_key[1..].iter().all(|byte| *byte == 0)
 }
 
 fn rejected_transfer(transfer_id: &str, reason: &'static str) -> Value {
@@ -1379,7 +1437,7 @@ fn build_chain_certificate(
         assertion_public_key: attestation.assertion_public_key.clone(),
         assertion_usage_count_limit: usage_limit,
         one_use: true,
-        issuer_signature: Signature::from_bytes(&[0_u8; 64]),
+        issuer_signature: offline_key_certificate_signature_placeholder(),
     };
     let signing_bytes =
         certificate
@@ -1815,8 +1873,12 @@ fn verify_json_signature(
     let signature_bytes = BASE64_STANDARD
         .decode(signature_base64)
         .map_err(|_| validation(code, message))?;
-    let signature =
-        Signature::try_from_bytes(&signature_bytes).map_err(|_| validation(code, message))?;
+    let signature = if matches!(public_key.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        checked_ed25519_signature_from_bytes(&signature_bytes)
+            .map_err(|_| validation(code, message))?
+    } else {
+        Signature::try_from_bytes(&signature_bytes).map_err(|_| validation(code, message))?
+    };
     signature
         .verify(public_key, &bytes)
         .map_err(|_| validation(code, message))
@@ -1867,6 +1929,7 @@ fn validation_owned(code: &'static str, message: String) -> Error {
 mod tests {
     use super::*;
     use axum::http::{HeaderMap, HeaderValue, Method, Uri};
+    use ed25519_dalek::Signer as _;
     use iroha_core::prelude::World;
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
@@ -1880,6 +1943,7 @@ mod tests {
             CanonicalRequestWitnessV1,
         },
     };
+    use p256::ecdsa::signature::Signer as _;
 
     const NOW_MS: u64 = 1_700_000_000_000;
     const REPORT_BYTES: &[u8] = b"offline-platform-attestation";
@@ -1945,6 +2009,64 @@ mod tests {
     }
 
     #[test]
+    fn legacy_ed25519_signature_helper_rejects_all_zero_public_key_material() {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x31; 32]);
+        let payload = b"offline-helper";
+        let signature = signing_key.sign(payload).to_bytes();
+
+        let err = verify_ed25519_signature(&[0u8; 32], payload, &signature)
+            .expect_err("all-zero Ed25519 helper public keys must fail closed");
+
+        assert_eq!(err, "ed25519_public_key_invalid");
+    }
+
+    #[test]
+    fn key_certificate_placeholder_signature_is_checked_nonzero() {
+        let signature = offline_key_certificate_signature_placeholder();
+        let payload = signature.payload();
+
+        assert_eq!(payload, OFFLINE_KEY_CERTIFICATE_SIGNATURE_PLACEHOLDER);
+        assert!(!payload.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn legacy_ed25519_signature_helper_rejects_small_order_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x31; 32]);
+        let public_key = signing_key.verifying_key().to_bytes();
+        let payload = b"offline-helper";
+        let mut signature = signing_key.sign(payload).to_bytes();
+        signature[..32].copy_from_slice(&SMALL_ORDER_R);
+
+        let err = verify_ed25519_signature(&public_key, payload, &signature)
+            .expect_err("small-order Ed25519 signature R must fail closed");
+
+        assert_eq!(err, "signature_invalid");
+    }
+
+    #[test]
+    fn legacy_ed25519_signature_helper_rejects_noncanonical_signature_r() {
+        const NONCANONICAL_R: [u8; 32] = [
+            0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x31; 32]);
+        let public_key = signing_key.verifying_key().to_bytes();
+        let payload = b"offline-helper";
+        let mut signature = signing_key.sign(payload).to_bytes();
+        signature[..32].copy_from_slice(&NONCANONICAL_R);
+
+        let err = verify_ed25519_signature(&public_key, payload, &signature)
+            .expect_err("noncanonical Ed25519 signature R must fail closed");
+
+        assert_eq!(err, "signature_invalid");
+    }
+
+    #[test]
     fn legacy_p256_signature_helper_rejects_all_zero_signature_material() {
         let signing_key = p256::ecdsa::SigningKey::from_bytes(&[0x31; 32].into())
             .expect("deterministic P-256 key");
@@ -1954,6 +2076,78 @@ mod tests {
             .expect_err("all-zero P-256 helper signatures must fail closed");
 
         assert_eq!(err, "p256_signature_invalid");
+    }
+
+    #[test]
+    fn legacy_p256_signature_helper_rejects_high_s_signature_material() {
+        fn low_s_p256_signature(signature: P256Signature) -> P256Signature {
+            signature.normalize_s().unwrap_or(signature)
+        }
+
+        fn high_s_p256_signature(signature: P256Signature) -> P256Signature {
+            const P256_ORDER: [u8; 32] = [
+                0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2,
+                0xfc, 0x63, 0x25, 0x51,
+            ];
+            let low_s = low_s_p256_signature(signature);
+            let low_s_bytes = low_s.to_bytes();
+            let mut high_s_bytes = [0_u8; 64];
+            high_s_bytes[..32].copy_from_slice(&low_s_bytes[..32]);
+
+            let mut borrow = 0_u16;
+            for i in (0..32).rev() {
+                let minuend = i16::from(P256_ORDER[i]) - i16::from(borrow as u8);
+                let subtrahend = i16::from(low_s_bytes[32 + i]);
+                if minuend >= subtrahend {
+                    high_s_bytes[32 + i] = (minuend - subtrahend) as u8;
+                    borrow = 0;
+                } else {
+                    high_s_bytes[32 + i] = (minuend + 256 - subtrahend) as u8;
+                    borrow = 1;
+                }
+            }
+            assert_eq!(borrow, 0);
+            let high_s = P256Signature::from_slice(&high_s_bytes).expect("high-S signature");
+            assert!(high_s.normalize_s().is_some());
+            high_s
+        }
+
+        let signing_key = p256::ecdsa::SigningKey::from_bytes(&[0x31; 32].into())
+            .expect("deterministic P-256 key");
+        let public_key = signing_key.verifying_key().to_encoded_point(false);
+        let payload = b"offline-helper-high-s";
+        let signature: P256Signature = signing_key.sign(payload);
+        let low_s = low_s_p256_signature(signature);
+        verify_p256_signature(public_key.as_bytes(), payload, low_s.to_der().as_bytes())
+            .expect("low-S P-256 helper signature must verify");
+
+        let high_s = high_s_p256_signature(low_s);
+        signing_key
+            .verifying_key()
+            .verify(payload, &high_s)
+            .expect("high-S counterpart remains mathematically valid ECDSA");
+
+        let err = verify_p256_signature(public_key.as_bytes(), payload, high_s.to_der().as_bytes())
+            .expect_err("high-S P-256 helper signatures must fail closed");
+
+        assert_eq!(err, "p256_signature_invalid");
+    }
+
+    #[test]
+    fn legacy_p256_signature_helper_rejects_all_zero_public_key_material() {
+        let signing_key = p256::ecdsa::SigningKey::from_bytes(&[0x31; 32].into())
+            .expect("deterministic P-256 key");
+        let payload = b"offline-helper";
+        let signature: p256::ecdsa::Signature = signing_key.sign(payload);
+        let mut public_key = Vec::with_capacity(P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN);
+        public_key.push(0x04);
+        public_key.extend_from_slice(&[0u8; 64]);
+
+        let err = verify_p256_signature(&public_key, payload, signature.to_der().as_bytes())
+            .expect_err("all-zero P-256 helper public keys must fail closed");
+
+        assert_eq!(err, "p256_public_key_invalid");
     }
 
     fn sample_request(

@@ -4,7 +4,7 @@ mod common;
 // Helpers: BLS Hash-to-curve mirroring host logic
 use blstrs::{G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
 use common::assemble_syscalls;
-use group::{Curve, Group};
+use group::{Curve, Group, prime::PrimeCurveAffine};
 use ivm::vrf::VrfVerifyRequest;
 
 fn hash_to_g1(msg: &[u8]) -> G1Affine {
@@ -26,6 +26,20 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let h: [u8; 32] = Hash::new(payload).into();
     out.extend_from_slice(&h);
     out
+}
+
+fn run_vrf_verify(req: VrfVerifyRequest) -> (u64, u64) {
+    let body = norito::to_bytes(&req).expect("encode vrf request");
+    let tlv_env = make_tlv(PointerType::NoritoBytes as u16, &body);
+
+    let mut vm = IVM::new(10_000);
+    vm.memory.preload_input(0, &tlv_env).expect("preload input");
+    vm.set_register(10, Memory::INPUT_START);
+
+    let prog = assemble_syscalls(&[ivm::syscalls::SYSCALL_VRF_VERIFY as u8]);
+    vm.load_program(&prog).unwrap();
+    vm.run().unwrap();
+    (vm.register(10), vm.register(11))
 }
 
 #[test]
@@ -186,4 +200,120 @@ fn syscall_vrf_verify_rejects_wrong_proof_length() {
     let status = vm.register(11);
     // Expect ERR_PROOF (5) or ERR_VERIFY (6) depending on exact failure point
     assert!(status == 5 || status == 6, "unexpected status: {status}");
+}
+
+#[test]
+fn syscall_vrf_verify_rejects_inert_normal_material_before_pairing() {
+    let chain = b"test-chain";
+    let input = b"ivm:vrf:inert";
+    let cases = [
+        (
+            VrfVerifyRequest {
+                variant: 1,
+                pk: vec![0u8; 48],
+                proof: G2Affine::generator().to_compressed().to_vec(),
+                chain_id: chain.to_vec(),
+                input: input.to_vec(),
+            },
+            4,
+            "all-zero normal public key",
+        ),
+        (
+            VrfVerifyRequest {
+                variant: 1,
+                pk: G1Affine::generator().to_compressed().to_vec(),
+                proof: vec![0u8; 96],
+                chain_id: chain.to_vec(),
+                input: input.to_vec(),
+            },
+            5,
+            "all-zero normal proof",
+        ),
+        (
+            VrfVerifyRequest {
+                variant: 1,
+                pk: G1Affine::identity().to_compressed().to_vec(),
+                proof: G2Affine::generator().to_compressed().to_vec(),
+                chain_id: chain.to_vec(),
+                input: input.to_vec(),
+            },
+            4,
+            "identity normal public key",
+        ),
+        (
+            VrfVerifyRequest {
+                variant: 1,
+                pk: G1Affine::generator().to_compressed().to_vec(),
+                proof: G2Affine::identity().to_compressed().to_vec(),
+                chain_id: chain.to_vec(),
+                input: input.to_vec(),
+            },
+            5,
+            "identity normal proof",
+        ),
+    ];
+
+    for (req, expected_status, label) in cases {
+        let (output_ptr, status) = run_vrf_verify(req);
+        assert_eq!(output_ptr, 0, "{label} must not return output");
+        assert_eq!(status, expected_status, "{label} status");
+    }
+}
+
+#[test]
+fn syscall_vrf_verify_rejects_inert_small_material_before_pairing() {
+    let chain = b"test-chain";
+    let input = b"ivm:vrf:inert-small";
+    let cases = [
+        (
+            VrfVerifyRequest {
+                variant: 2,
+                pk: vec![0u8; 96],
+                proof: G1Affine::generator().to_compressed().to_vec(),
+                chain_id: chain.to_vec(),
+                input: input.to_vec(),
+            },
+            4,
+            "all-zero small public key",
+        ),
+        (
+            VrfVerifyRequest {
+                variant: 2,
+                pk: G2Affine::generator().to_compressed().to_vec(),
+                proof: vec![0u8; 48],
+                chain_id: chain.to_vec(),
+                input: input.to_vec(),
+            },
+            5,
+            "all-zero small proof",
+        ),
+        (
+            VrfVerifyRequest {
+                variant: 2,
+                pk: G2Affine::identity().to_compressed().to_vec(),
+                proof: G1Affine::generator().to_compressed().to_vec(),
+                chain_id: chain.to_vec(),
+                input: input.to_vec(),
+            },
+            4,
+            "identity small public key",
+        ),
+        (
+            VrfVerifyRequest {
+                variant: 2,
+                pk: G2Affine::generator().to_compressed().to_vec(),
+                proof: G1Affine::identity().to_compressed().to_vec(),
+                chain_id: chain.to_vec(),
+                input: input.to_vec(),
+            },
+            5,
+            "identity small proof",
+        ),
+    ];
+
+    for (req, expected_status, label) in cases {
+        let (output_ptr, status) = run_vrf_verify(req);
+        assert_eq!(output_ptr, 0, "{label} must not return output");
+        assert_eq!(status, expected_status, "{label} status");
+    }
 }

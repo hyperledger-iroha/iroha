@@ -560,6 +560,52 @@ def test_live_ton_last_transaction_lt_rejects_boolean_json_value():
         raise AssertionError("boolean live TON last_transaction_lt was accepted")
 
 
+def test_ton_live_cli_parsers_reject_non_string_values_without_stringification():
+    module = load_live_module()
+
+    class HostileTonLiveParserValue:
+        def __str__(self):
+            raise AssertionError("secret-token-ton-live-parser-value stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token-ton-live-parser-value repr leaked")
+
+        def strip(self):
+            raise AssertionError("secret-token-ton-live-parser-value strip called")
+
+        def startswith(self, _prefix):
+            raise AssertionError("secret-token-ton-live-parser-value startswith called")
+
+        def split(self, _sep=None):
+            raise AssertionError("secret-token-ton-live-parser-value split called")
+
+        def lower(self):
+            raise AssertionError("secret-token-ton-live-parser-value lower called")
+
+    hostile = HostileTonLiveParserValue()
+    cases = (
+        (
+            lambda value: module._parse_ton_raw_address(
+                value,
+                label="verifier contract address",
+            ),
+            "verifier contract address must be workchain:account_hex",
+        ),
+        (
+            lambda value: module._parse_hex32(value, label="route allowlist hash"),
+            "route allowlist hash must be canonical lowercase 0x hex",
+        ),
+    )
+
+    for parser, expected_message in cases:
+        try:
+            parser(hostile)
+        except module.argparse.ArgumentTypeError as exc:
+            assert str(exc) == expected_message
+        else:
+            raise AssertionError("non-string TON live parser value was accepted")
+
+
 def live_args(module, *, code_hash, account_state_hash):
     return SimpleNamespace(
         route_allowlist_hash=bytes.fromhex(TON_ROUTE_ALLOWLIST_HASH_VECTOR),

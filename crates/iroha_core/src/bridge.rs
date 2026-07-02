@@ -227,6 +227,7 @@ fn collect_sccp_messages_from_executable<F>(
     executable: &Executable,
     seen: &mut BTreeSet<SccpOutboundMessageKey>,
     is_already_recorded: &F,
+    deduplicate: bool,
     out: &mut Vec<RecordedSccpMessage>,
 ) where
     F: Fn(&SccpOutboundMessageKey) -> bool,
@@ -239,10 +240,15 @@ fn collect_sccp_messages_from_executable<F>(
             return;
         }
         let key = sccp_outbound_message_key(&payload);
-        if seen.contains(&key) || is_already_recorded(&key) {
+        if is_already_recorded(&key) {
             return;
         }
-        seen.insert(key);
+        if deduplicate {
+            if seen.contains(&key) {
+                return;
+            }
+            seen.insert(key);
+        }
         out.push(RecordedSccpMessage {
             tx_index,
             instruction_index,
@@ -288,6 +294,7 @@ where
                 signed.instructions(),
                 &mut seen,
                 &is_already_recorded,
+                true,
                 &mut messages,
             );
         }
@@ -315,6 +322,7 @@ pub fn collect_sccp_messages_from_signed_block(block: &SignedBlock) -> Vec<Recor
             transaction.instructions(),
             &mut seen,
             &|_| false,
+            false,
             &mut messages,
         );
     }
@@ -1384,13 +1392,32 @@ mod tests {
         let chain_id: ChainId = iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1
             .parse()
             .expect("chain id");
+        let validator_keypair = checked_bls_keypair();
+        let validator_set = vec![PeerId::new(validator_keypair.public_key().clone())];
+        let validator_set_hash = {
+            let hash = HashOf::new(&validator_set);
+            let mut out = [0u8; 32];
+            out.copy_from_slice(hash.as_ref().as_ref());
+            out
+        };
+        let commitment_root = [8; 32];
+        let mut block_header = BlockHeader::new(
+            core::num::NonZeroU64::new(7).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        block_header.set_sccp_commitment_root(Some(commitment_root));
+        let block_hash = sccp_block_hash_to_h256(&block_header.hash());
         let finality = NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: chain_id.to_string(),
             height: 7,
-            block_hash: [7; 32],
-            commitment_root: [8; 32],
-            block_header_bytes: vec![0x42],
+            block_hash,
+            commitment_root,
+            block_header_bytes: norito::to_bytes(&block_header).expect("encode block header"),
             commit_qc: iroha_sccp::NexusCommitQcV1 {
                 version: 1,
                 phase: NexusConsensusPhaseV1::Commit,
@@ -1398,14 +1425,15 @@ mod tests {
                 view: 0,
                 epoch: 0,
                 mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_owned(),
-                subject_block_hash: [7; 32],
+                subject_block_hash: block_hash,
                 parent_state_root: [1; 32],
                 post_state_root: [2; 32],
                 chain_order_hash: [3; 32],
                 rechain_seq: 0,
                 highest_qc: None,
-                validator_set_hash_version: 1,
-                validator_public_keys: vec!["not-a-bls-key".to_owned()],
+                validator_set_hash,
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_public_keys: vec![validator_keypair.public_key().to_string()],
                 validator_set_pops: vec![vec![1; 48]],
                 signers_bitmap: vec![0b0000_0001],
                 bls_aggregate_signature: vec![2; 96],
@@ -1840,6 +1868,33 @@ mod tests {
     }
 
     #[test]
+    fn collect_sccp_messages_from_accepted_transactions_deduplicates_binary_and_hex_aliases() {
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            8,
+            b"0x0000000000000000000000000000000000000224",
+        ));
+        let hex_alias = format!("0x{}", hex::encode(&payload)).into_bytes();
+
+        for (first, second) in [
+            (payload.clone(), hex_alias.clone()),
+            (hex_alias.clone(), payload.clone()),
+        ] {
+            let first = accepted_transaction_with_sccp_payload(first);
+            let second = accepted_transaction_with_sccp_payload(second);
+
+            let messages = collect_sccp_messages_from_accepted_transactions(&[first, second]);
+
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].tx_index, 0);
+            assert_eq!(messages[0].instruction_index, 0);
+            assert_eq!(
+                messages[0].payload,
+                iroha_sccp::decode_canonical_sccp_payload_bytes(&payload).expect("payload decodes")
+            );
+        }
+    }
+
+    #[test]
     fn collect_sccp_messages_from_accepted_transactions_deduplicates_same_overlay_key() {
         let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
             8,
@@ -1883,7 +1938,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_sccp_messages_from_block_deduplicates_successful_outbound_keys() {
+    fn collect_sccp_messages_from_block_preserves_successful_duplicate_outbound_keys() {
         let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
             10,
             b"0x0000000000000000000000000000000000000443",
@@ -1902,12 +1957,14 @@ mod tests {
 
         let messages = collect_sccp_messages_from_signed_block(&block);
 
-        assert_eq!(messages.len(), 1);
+        assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].tx_index, 0);
+        assert_eq!(messages[1].tx_index, 1);
         assert_eq!(
             messages[0].payload,
             iroha_sccp::decode_canonical_sccp_payload_bytes(&payload).expect("payload decodes")
         );
+        assert_eq!(messages[1].payload, messages[0].payload);
     }
 
     #[test]

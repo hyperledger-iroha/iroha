@@ -53,6 +53,10 @@ def default_block_tag_for_domain(domain: int) -> str:
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        )
     if value.startswith("0X"):
         raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
     if not value.startswith("0x"):
@@ -91,6 +95,8 @@ def _load_evidence_module(domain: int) -> Any:
 def parse_domain(value: str) -> int:
     """Parse an EVM-family source domain selector."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
     if value != value.strip():
         raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
     text = value.lower()
@@ -109,6 +115,10 @@ def parse_domain(value: str) -> int:
 
 
 def _parse_hex_bytes(value: str, *, label: str, byte_length: int) -> bytes:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        )
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -183,6 +193,10 @@ def _summary_runtime_bytes(
 
 
 def _parse_rpc_chain_id(value: str) -> int:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            "--expected-rpc-chain-id must be a canonical decimal integer"
+        )
     if value != value.strip():
         raise argparse.ArgumentTypeError(
             "--expected-rpc-chain-id must be a canonical decimal integer"
@@ -207,6 +221,11 @@ def _parse_rpc_chain_id(value: str) -> int:
 def parse_block_tag(value: str) -> str:
     """Parse a stable/canonical JSON-RPC block tag for read-only evidence."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            "--block-tag must be latest, safe, finalized, or a positive "
+            "canonical lowercase 0x block number"
+        )
     if value != value.strip():
         raise argparse.ArgumentTypeError(
             "--block-tag must not contain surrounding whitespace"

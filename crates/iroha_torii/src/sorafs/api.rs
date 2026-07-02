@@ -6541,12 +6541,24 @@ fn transparency_proof_token_verification_response(
         )
     })?;
     let verifying_key_bytes = decode_hex_32_field(&req.verifying_key_hex, "verifying_key_hex")?;
+    if verifying_key_bytes.iter().all(|byte| *byte == 0) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "invalid SoraFS proof-token verifying_key_hex: public key material must not be all zero",
+        ));
+    }
     let verifying_key = Ed25519VerifyingKey::from_bytes(&verifying_key_bytes).map_err(|err| {
         json_error(
             StatusCode::BAD_REQUEST,
             format!("invalid SoraFS proof-token verifying_key_hex: {err}"),
         )
     })?;
+    if verifying_key.is_weak() {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "invalid SoraFS proof-token verifying_key_hex: public key is small-order (weak); rejected",
+        ));
+    }
     let digest_inputs = match (
         req.digest_key_hex.as_deref(),
         req.evidence_digest_hex.as_deref(),
@@ -23219,6 +23231,42 @@ mod gateway_policy_violation_tests {
             "all-zero envelope signatures must fail before backend verification"
         );
 
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed_envelope = envelope.clone();
+            let signatures = malformed_envelope
+                .get_mut("signatures")
+                .and_then(Value::as_array_mut)
+                .expect("signature list");
+            let signature_entry = signatures
+                .first_mut()
+                .and_then(Value::as_object_mut)
+                .expect("signature entry");
+            let mut signature_bytes = signature.payload().to_vec();
+            signature_bytes[..32].copy_from_slice(&replacement_r);
+            signature_entry.insert(
+                "signature".into(),
+                Value::from(hex::encode(signature_bytes)),
+            );
+            let malformed_encoded =
+                norito::json::to_vec(&Value::Object(malformed_envelope)).expect("json");
+            assert!(
+                !validate_manifest_envelope_bytes(&record, &malformed_encoded),
+                "{label} envelope signature R must fail before backend verification"
+            );
+        }
+
         envelope.insert(
             "chunk_digest_sha3_256".into(),
             Value::from(hex::encode([0; 32])),
@@ -28650,6 +28698,22 @@ mod advert_tests {
             verifying_key_hex: hex::encode(signing.verifying_key().to_bytes()),
             evidence_digest_hex: None,
             digest_key_hex: Some(hex::encode([0x22; 32])),
+            now_unix: Some(1_700_000_120),
+        };
+        let response = handle_post_sorafs_transparency_token_verify(
+            State(app.clone()),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
+            JsonOnly(request),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let request = TransparencyProofTokenVerifyRequestDto {
+            token_b64: token.encode_base64(),
+            verifying_key_hex: hex::encode([0u8; 32]),
+            evidence_digest_hex: None,
+            digest_key_hex: None,
             now_unix: Some(1_700_000_120),
         };
         let response = handle_post_sorafs_transparency_token_verify(

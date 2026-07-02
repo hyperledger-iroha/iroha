@@ -1992,7 +1992,7 @@ mod tests {
     }
 
     #[test]
-    fn sccp_commitment_root_does_not_affect_block_hash() {
+    fn sccp_commitment_root_affects_block_hash() {
         let mut header = BlockHeader {
             height: NonZeroU64::new(123_456).unwrap(),
             prev_block_hash: Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
@@ -2016,7 +2016,7 @@ mod tests {
         let hash0 = header.hash();
         header.sccp_commitment_root = Some([0x42; 32]);
         let hash1 = header.hash();
-        assert_eq!(hash0, hash1);
+        assert_ne!(hash0, hash1);
     }
 
     #[test]

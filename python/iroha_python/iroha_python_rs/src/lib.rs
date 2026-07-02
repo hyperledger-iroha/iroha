@@ -521,6 +521,11 @@ fn fixed_array<const N: usize>(bytes: &[u8], context: &str) -> PyResult<[u8; N]>
     Ok(arr)
 }
 
+fn checked_signature_from_bytes(bytes: &[u8], context: &str) -> PyResult<Signature> {
+    Signature::try_from_bytes(bytes)
+        .map_err(|err| PyValueError::new_err(format!("{context} is malformed: {err}")))
+}
+
 fn py_text(value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
     let text = value
         .extract::<String>()
@@ -1124,7 +1129,7 @@ fn parse_wallet_signature(fields: &Bound<'_, PyDict>) -> PyResult<WalletSignatur
     };
     Ok(WalletSignatureV1::new(
         algorithm,
-        Signature::from_bytes(&sig),
+        checked_signature_from_bytes(&sig, "approve.signature")?,
     ))
 }
 
@@ -6105,6 +6110,30 @@ mod tests {
     fn py_err_message(err: pyo3::PyErr) -> String {
         ensure_python();
         Python::attach(|py| err.value(py).to_string())
+    }
+
+    #[test]
+    fn checked_signature_from_bytes_rejects_empty_and_all_zero_payloads() {
+        let empty = py_err_message(
+            checked_signature_from_bytes(&[], "signature").expect_err("empty signature must fail"),
+        );
+        assert!(
+            empty.contains("signature is malformed: signature payload must not be empty"),
+            "unexpected empty-signature error: {empty}"
+        );
+
+        let all_zero = py_err_message(
+            checked_signature_from_bytes(&[0u8; 64], "signature")
+                .expect_err("all-zero signature must fail"),
+        );
+        assert!(
+            all_zero.contains("signature is malformed: signature payload must not be all zero"),
+            "unexpected all-zero signature error: {all_zero}"
+        );
+
+        let accepted = checked_signature_from_bytes(&[0x42; 64], "signature")
+            .expect("nonzero opaque signature material is admitted for backend verification");
+        assert_eq!(accepted.payload(), &[0x42; 64]);
     }
 
     #[test]
@@ -19026,7 +19055,10 @@ impl TransactionBuilder {
 
         let signed = self
             .to_model_builder()
-            .build_with_signature(Signature::from_bytes(signature));
+            .build_with_signature(checked_signature_from_bytes(
+                signature,
+                "Ed25519 signature",
+            )?);
         signed.verify_signature().map_err(|err| {
             PyValueError::new_err(format!("signature verification failed: {err}"))
         })?;
@@ -19367,7 +19399,10 @@ fn verify_py(
 ) -> PyResult<bool> {
     let algorithm = parse_algorithm_arg(algorithm)?;
     let public_key = parse_public_key_for_algorithm(algorithm, public_key)?;
-    let signature = Signature::from_bytes(signature);
+    let signature = match Signature::try_from_bytes(signature) {
+        Ok(signature) => signature,
+        Err(_) => return Ok(false),
+    };
     Ok(signature.verify(&public_key, message).is_ok())
 }
 
@@ -19490,7 +19525,10 @@ fn sign_ed25519_py(py: Python<'_>, private_key: &[u8], message: &[u8]) -> PyResu
 /// Verify `signature` against `message` and the provided Ed25519 public key.
 fn verify_ed25519_py(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResult<bool> {
     let public_key = parse_public_key(public_key)?;
-    let signature = Signature::from_bytes(signature);
+    let signature = match Signature::try_from_bytes(signature) {
+        Ok(signature) => signature,
+        Err(_) => return Ok(false),
+    };
     Ok(signature.verify(&public_key, message).is_ok())
 }
 

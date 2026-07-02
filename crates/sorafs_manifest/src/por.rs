@@ -151,6 +151,9 @@ impl PorChallengeV1 {
         if self.drand_signature.is_empty() {
             return Err(PorChallengeValidationError::MissingDrandSignature);
         }
+        if crate::inert_bytes(&self.drand_signature) {
+            return Err(PorChallengeValidationError::InvalidDrandSignature);
+        }
         match (&self.vrf_output, &self.vrf_proof, self.forced) {
             (Some(output), proof_opt, _) => {
                 if output.iter().all(|&byte| byte == 0) {
@@ -225,6 +228,8 @@ pub enum PorChallengeValidationError {
     InvalidDrandRandomness,
     #[error("drand signature must be present")]
     MissingDrandSignature,
+    #[error("drand signature must not be all zero")]
+    InvalidDrandSignature,
     #[error("provider VRF output required unless challenge marked forced")]
     MissingVrfOutput,
     #[error("provider VRF output must be non-zero")]
@@ -332,7 +337,11 @@ impl PorProofV1 {
         }
         match self.signature.algorithm {
             SignatureAlgorithm::Ed25519 | SignatureAlgorithm::MultiSig => {
-                if self.signature.public_key.is_empty() || self.signature.signature.is_empty() {
+                if self.signature.public_key.is_empty()
+                    || self.signature.public_key.iter().all(|byte| *byte == 0)
+                    || self.signature.signature.is_empty()
+                    || self.signature.signature.iter().all(|byte| *byte == 0)
+                {
                     return Err(PorProofValidationError::InvalidSignature);
                 }
             }
@@ -462,7 +471,11 @@ impl AuditVerdictV1 {
             return Err(AuditVerdictValidationError::MissingSignatures);
         }
         for signature in &self.auditor_signatures {
-            if signature.public_key.is_empty() || signature.signature.is_empty() {
+            if signature.public_key.is_empty()
+                || signature.public_key.iter().all(|byte| *byte == 0)
+                || signature.signature.is_empty()
+                || signature.signature.iter().all(|byte| *byte == 0)
+            {
                 return Err(AuditVerdictValidationError::InvalidSignature);
             }
         }
@@ -1227,6 +1240,12 @@ mod tests {
             challenge.validate(),
             Err(PorChallengeValidationError::MissingDrandSignature)
         );
+
+        challenge.drand_signature = vec![0; 96];
+        assert_eq!(
+            challenge.validate(),
+            Err(PorChallengeValidationError::InvalidDrandSignature)
+        );
     }
 
     #[test]
@@ -1255,6 +1274,43 @@ mod tests {
     }
 
     #[test]
+    fn proof_validation_rejects_all_zero_signature_material() {
+        let mut proof = PorProofV1 {
+            version: POR_PROOF_VERSION_V1,
+            challenge_id: [1; 32],
+            manifest_digest: [2; 32],
+            provider_id: [3; 32],
+            samples: vec![PorProofSampleV1 {
+                sample_index: 10,
+                chunk_offset: 0,
+                chunk_size: 65_536,
+                chunk_digest: [4; 32],
+                leaf_digest: [5; 32],
+            }],
+            auth_path: vec![[6; 32], [7; 32]],
+            signature: AdvertSignature {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key: vec![8; 32],
+                signature: vec![0; 64],
+            },
+            submitted_at: 1_700_000_100,
+        };
+
+        assert_eq!(
+            proof.validate(),
+            Err(PorProofValidationError::InvalidSignature)
+        );
+
+        proof.signature.signature = vec![9; 64];
+        proof.signature.public_key = vec![0; 32];
+
+        assert_eq!(
+            proof.validate(),
+            Err(PorProofValidationError::InvalidSignature)
+        );
+    }
+
+    #[test]
     fn verdict_requires_signatures() {
         let verdict = AuditVerdictV1 {
             version: AUDIT_VERDICT_VERSION_V1,
@@ -1273,6 +1329,39 @@ mod tests {
             metadata: Vec::new(),
         };
         assert!(verdict.validate().is_ok());
+    }
+
+    #[test]
+    fn verdict_rejects_all_zero_auditor_signature_material() {
+        let mut verdict = AuditVerdictV1 {
+            version: AUDIT_VERDICT_VERSION_V1,
+            manifest_digest: [1; 32],
+            provider_id: [2; 32],
+            challenge_id: [3; 32],
+            proof_digest: Some([4; 32]),
+            outcome: AuditOutcomeV1::Success,
+            failure_reason: None,
+            decided_at: 1_700_000_500,
+            auditor_signatures: vec![AdvertSignature {
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key: vec![5; 32],
+                signature: vec![0; 64],
+            }],
+            metadata: Vec::new(),
+        };
+
+        assert_eq!(
+            verdict.validate(),
+            Err(AuditVerdictValidationError::InvalidSignature)
+        );
+
+        verdict.auditor_signatures[0].signature = vec![6; 64];
+        verdict.auditor_signatures[0].public_key = vec![0; 32];
+
+        assert_eq!(
+            verdict.validate(),
+            Err(AuditVerdictValidationError::InvalidSignature)
+        );
     }
 
     #[test]

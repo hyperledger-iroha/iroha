@@ -177305,6 +177305,15 @@ fn validation_reject_reason_label_covers_error_categories() {
         super::validation_reject_reason_label(&BlockValidationError::DuplicateTransactions);
     assert_eq!(reason_duplicate, super::VALIDATION_REASON_EXECUTION);
 
+    let reason_sccp_duplicate = super::validation_reject_reason_label(
+        &BlockValidationError::SccpDuplicateOutboundMessage {
+            source_domain: 1,
+            target_domain: 2,
+            message_id: [0xA5; 32],
+        },
+    );
+    assert_eq!(reason_sccp_duplicate, super::VALIDATION_REASON_EXECUTION);
+
     let reason_stateless = super::validation_reject_reason_label(
         &BlockValidationError::InvalidGenesis(crate::block::InvalidGenesisError::InvalidSignature),
     );
@@ -207142,6 +207151,41 @@ fn rbc_session_persist_roundtrip() {
     assert_eq!(rebuilt.payload_hash(), Some(payload_hash));
     assert_eq!(rebuilt.expected_chunk_digests.as_ref(), Some(&digests));
     assert!(rebuilt.recovered_from_disk());
+}
+
+#[test]
+fn rbc_session_from_persisted_rejects_all_zero_ready_and_deliver_signatures() {
+    let mut session = RbcSession::test_new(1, None, None, 42);
+    session.test_note_chunk(0, b"bytes".to_vec(), 1);
+    let manifest = SoftwareManifest::current();
+    let key = session_key();
+    let roster = vec![PeerId::new(checked_keypair().public_key().clone())];
+    let baseline = session.to_persisted(key, Hash::new(b"chain"), &manifest, &roster);
+
+    let mut all_zero_ready = baseline.clone();
+    all_zero_ready
+        .ready_signatures
+        .push(super::super::rbc_store::PersistedReady {
+            sender: 0,
+            signature: vec![0u8; 64],
+        });
+    let err = RbcSession::from_persisted_unchecked(&all_zero_ready)
+        .expect_err("all-zero persisted READY signature must fail rebuild");
+    assert_eq!(
+        err,
+        super::PersistedLoadError::InvalidMetadata("all-zero READY signature")
+    );
+
+    let mut all_zero_deliver = baseline;
+    all_zero_deliver.delivered = true;
+    all_zero_deliver.deliver_sender = Some(0);
+    all_zero_deliver.deliver_signature = Some(vec![0u8; 64]);
+    let err = RbcSession::from_persisted_unchecked(&all_zero_deliver)
+        .expect_err("all-zero persisted DELIVER signature must fail rebuild");
+    assert_eq!(
+        err,
+        super::PersistedLoadError::InvalidMetadata("all-zero DELIVER signature")
+    );
 }
 
 #[test]

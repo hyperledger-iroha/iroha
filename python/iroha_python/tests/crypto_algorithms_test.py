@@ -46,6 +46,7 @@ from iroha_python.crypto import (
     sign,
     supported_crypto_algorithms,
     verify,
+    verify_ed25519,
 )
 
 
@@ -308,6 +309,18 @@ def test_all_supported_algorithms_sign_verify_and_roundtrip_keys() -> None:
         assert parsed_private == keypair.private_key
         assert from_multihash == keypair
         assert CryptoKeyPair.from_private_key_multihash(private_multihash) == keypair
+
+
+def test_native_verify_rejects_empty_and_all_zero_signatures_before_backend() -> None:
+    keypair = derive_keypair_from_seed(
+        b"python native verify checked signature admission",
+        ED25519_ALGORITHM,
+    )
+    message = b"python native verify checked signature admission message"
+
+    for signature in (b"", bytes(64)):
+        assert not verify(ED25519_ALGORITHM, keypair.public_key, message, signature)
+        assert not verify_ed25519(keypair.public_key, message, signature)
 
 
 def _privacy_norito_frame(schema_byte: int) -> bytes:

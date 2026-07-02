@@ -12671,6 +12671,13 @@ mod tests {
         assert!(forced.sample_count > 0);
         assert_eq!(forced.sample_count, 128);
 
+        let mut inert_randomness = randomness.clone();
+        inert_randomness.drand_signature = vec![0; 96];
+        assert!(matches!(
+            handle.plan_por_challenges(inert_randomness, &HashMap::new()),
+            Err(PorChallengePlannerError::InvalidDrandSignature)
+        ));
+
         let mut vrf_records = HashMap::new();
         vrf_records.insert(
             forced.manifest_digest,

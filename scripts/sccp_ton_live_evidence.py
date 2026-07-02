@@ -77,7 +77,15 @@ def _summary_ready(summary: dict[str, Any], field: str) -> bool:
 
 
 def _parse_hex32(value: str, *, label: str) -> bytes:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     return evidence.parse_hex_bytes(value, label=label, byte_length=32)
+
+
+def _parse_ton_raw_address(value: str, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be workchain:account_hex")
+    return evidence.normalize_ton_raw_address(value, label=label)
 
 
 def _decode_hash_text(value: Any, *, label: str) -> bytes:
@@ -697,7 +705,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--verifier-contract-address",
         required=True,
-        type=lambda value: evidence.normalize_ton_raw_address(
+        type=lambda value: _parse_ton_raw_address(
             value,
             label="verifier contract address",
         ),
@@ -707,64 +715,57 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key-file", help="Runtime-only file containing the TON Center API key.")
     parser.add_argument(
         "--expected-account-state-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="expected account state hash",
-            byte_length=32,
         ),
         help="Pinned live TON account_state_hash for the verifier contract.",
     )
     parser.add_argument(
         "--expected-verifier-code-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="expected verifier code hash",
-            byte_length=32,
         ),
         help="Pinned live TON verifier code hash.",
     )
     parser.add_argument(
         "--route-allowlist-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="route allowlist hash",
-            byte_length=32,
         ),
         help="Governed TON route allowlist hash.",
     )
     parser.add_argument(
         "--source-verifier-material-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="source verifier material hash",
-            byte_length=32,
         ),
         help="Source verifier material record hash bound into the route allowlist.",
     )
     parser.add_argument(
         "--source-adapter-engine-deployment-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="source adapter engine deployment hash",
-            byte_length=32,
         ),
         help="Source adapter engine deployment record hash bound into the route allowlist.",
     )
     parser.add_argument(
         "--route-canary-evidence-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="route canary evidence hash",
-            byte_length=32,
         ),
         help="Post-deploy route canary evidence hash for all-lanes TOML metadata.",
     )
     parser.add_argument(
         "--expected-destination-binding-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="expected destination binding hash",
-            byte_length=32,
         ),
         help="Expected canonical SORA -> TON destination binding hash.",
     )

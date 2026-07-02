@@ -90,3 +90,41 @@ fn test_ecdsa_verify_bad_sig() {
     };
     assert!(circuit.verify().is_err());
 }
+
+#[test]
+fn test_ecdsa_verify_all_zero_public_key_is_false() {
+    let mut rng = OsRng;
+    let sk = SigningKey::random(&mut rng);
+    let msg = b"ecdsa zero public key";
+    let sig: k256::ecdsa::Signature = sk.sign(msg);
+    let hash = sha2::Sha256::digest(msg);
+    let mut sig_bytes = [0u8; 64];
+    sig_bytes.copy_from_slice(sig.to_bytes().as_slice());
+    let circuit = EcdsaVerifyCircuit {
+        public_key: [0u8; 33],
+        message_hash: hash.into(),
+        signature: sig_bytes,
+        result: false,
+    };
+
+    assert!(circuit.verify().is_ok());
+}
+
+#[test]
+fn test_ecdsa_verify_all_zero_signature_is_false() {
+    let mut rng = OsRng;
+    let sk = SigningKey::random(&mut rng);
+    let vk = sk.verifying_key();
+    let msg = b"ecdsa zero signature";
+    let hash = sha2::Sha256::digest(msg);
+    let mut pk_bytes = [0u8; 33];
+    pk_bytes.copy_from_slice(vk.to_encoded_point(true).as_bytes());
+    let circuit = EcdsaVerifyCircuit {
+        public_key: pk_bytes,
+        message_hash: hash.into(),
+        signature: [0u8; 64],
+        result: false,
+    };
+
+    assert!(circuit.verify().is_ok());
+}

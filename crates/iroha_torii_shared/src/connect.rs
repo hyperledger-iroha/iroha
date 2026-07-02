@@ -1129,7 +1129,8 @@ mod tests {
             }),
             sig_wallet: WalletSignatureV1::new(
                 Algorithm::Ed25519,
-                Signature::from_bytes(&[9u8; 64]),
+                Signature::try_from_bytes(&[9u8; 64])
+                    .expect("Connect approve fixture signature is non-empty and nonzero"),
             ),
         }
     }

@@ -752,8 +752,10 @@ mod tests {
             valid_from_unix,
             valid_until_unix,
             operator_account,
-            operator_signature: Signature::from_bytes(&[0; 64]),
-            governance_signature: Signature::from_bytes(&[1; 64]),
+            operator_signature: Signature::try_from_bytes(&[0xA6; 64])
+                .expect("RAD fixture operator signature is non-empty and nonzero"),
+            governance_signature: Signature::try_from_bytes(&[1; 64])
+                .expect("RAD fixture governance signature is non-empty and nonzero"),
             rotation_policy: RotationPolicyV1 {
                 max_lifetime_days: 30,
                 required_overlap_seconds: 86_400,

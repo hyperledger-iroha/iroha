@@ -50,6 +50,12 @@ const ISSUE_AMOUNT: &str = "52";
 const GENERATED_AT_MS: u64 = 1_706_000_000_000;
 const CREATED_AT_MS: u64 = 1_706_000_000_123;
 const ACCEPTED_AT_MS: u64 = 1_706_000_000_333;
+const OFFLINE_V2_KEY_CERTIFICATE_PLACEHOLDER_SIGNATURE: [u8; 64] = [0xA6; 64];
+
+fn offline_v2_key_certificate_placeholder_signature() -> Signature {
+    Signature::try_from_bytes(&OFFLINE_V2_KEY_CERTIFICATE_PLACEHOLDER_SIGNATURE)
+        .expect("Offline V2 vector key-certificate placeholder signature is non-empty and nonzero")
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let check_only = env::args().any(|arg| arg == "--check");
@@ -574,7 +580,7 @@ fn signed_certificate(
         assertion_public_key: assertion_public_key.clone(),
         assertion_usage_count_limit,
         one_use: true,
-        issuer_signature: Signature::from_bytes(&[0_u8; 64]),
+        issuer_signature: offline_v2_key_certificate_placeholder_signature(),
     };
     let signing_bytes = unsigned_certificate.signing_bytes()?;
     let issuer_signature = sign_offline_certificate_payload(issuer_key_pair, &signing_bytes)?;
@@ -1349,6 +1355,15 @@ mod tests {
                 "unexpected error for {platform}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn unsigned_certificate_placeholder_signature_is_checked_nonzero() {
+        let signature = offline_v2_key_certificate_placeholder_signature();
+        let payload = signature.payload();
+
+        assert_eq!(payload, OFFLINE_V2_KEY_CERTIFICATE_PLACEHOLDER_SIGNATURE);
+        assert!(!payload.iter().all(|byte| *byte == 0));
     }
 
     #[test]

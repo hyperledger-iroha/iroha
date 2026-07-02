@@ -180,8 +180,10 @@ mod tests {
             valid_from_unix: 1_700_000_000,
             valid_until_unix: 1_700_086_400,
             operator_account,
-            operator_signature: Signature::from_bytes(&[0; 64]),
-            governance_signature: Signature::from_bytes(&[1; 64]),
+            operator_signature: Signature::try_from_bytes(&[0xA6; 64])
+                .expect("RAD fixture operator signature is non-empty and nonzero"),
+            governance_signature: Signature::try_from_bytes(&[1; 64])
+                .expect("RAD fixture governance signature is non-empty and nonzero"),
             rotation_policy: RotationPolicyV1 {
                 max_lifetime_days: 30,
                 required_overlap_seconds: 86_400,
@@ -212,7 +214,7 @@ mod tests {
     fn rad_digest_remains_stable() {
         let rad = base_rad();
         let digest = compute_rad_digest(&rad).expect("digest");
-        expect!["1a5d020597b8b06eac604a456a248bf4747441600071a91ed029093fcd539dea"]
+        expect!["90ea6fb553abd091527d60c89ca8acf637b551abd127f9632878b4ef741a34da"]
             .assert_eq(&hex::encode(digest));
     }
 }

@@ -33081,6 +33081,31 @@ mod tests {
     }
 
     #[test]
+    fn sm2_public_key_prefixed_ffi_rejects_zero_coordinate_material() {
+        let distid = "connect-sm2-zero-coordinate-prefixed";
+        let distid_c = CString::new(distid).expect("distid c string");
+        let mut public_bytes = [0u8; 65];
+        public_bytes[0] = 0x04;
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_sm2_public_key_prefixed(
+                distid_c.as_ptr(),
+                distid_c.as_bytes().len() as c_ulong,
+                public_bytes.as_ptr(),
+                public_bytes.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(rc, ERR_SM2_PARSE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
     fn sm2_sign_ffi_uses_checked_signing_and_verifies() {
         let distid = "connect-sm2-checked-signing";
         let distid_c = CString::new(distid).expect("distid c string");
@@ -33134,6 +33159,36 @@ mod tests {
             )
         };
         assert_eq!(rc_bad, 0, "tampered SM2 signature must fail cleanly");
+    }
+
+    #[test]
+    fn sm2_verify_ffi_rejects_zero_coordinate_public_key_material() {
+        let distid = "connect-sm2-zero-coordinate-verify";
+        let distid_c = CString::new(distid).expect("distid c string");
+        let private = Sm2PrivateKey::from_seed(distid, b"connect-sm2-zero-coordinate-verify-seed")
+            .expect("derive SM2 key");
+        let message = b"connect-sm2-zero-coordinate-verify";
+        let signature = private
+            .try_sign(message)
+            .expect("fixture SM2 signature")
+            .to_bytes();
+        let mut public_bytes = [0u8; 65];
+        public_bytes[0] = 0x04;
+
+        let rc = unsafe {
+            connect_norito_sm2_verify(
+                distid_c.as_ptr(),
+                distid_c.as_bytes().len() as c_ulong,
+                public_bytes.as_ptr(),
+                public_bytes.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+            )
+        };
+
+        assert_eq!(rc, ERR_SM2_PARSE);
     }
 
     #[test]

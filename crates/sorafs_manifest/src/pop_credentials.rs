@@ -5,9 +5,7 @@
 use std::collections::BTreeSet;
 
 use blake3::Hasher;
-use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey, Verifier, VerifyingKey,
-};
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
@@ -141,11 +139,21 @@ impl PopSignatureV1 {
                         length: self.public_key.len(),
                     });
                 }
+                if crate::inert_bytes(&self.public_key) {
+                    return Err(PopCredentialValidationError::InvalidPublicKey {
+                        reason: "public key material must not be all zero".to_owned(),
+                    });
+                }
                 if self.signature.len() != SIGNATURE_LENGTH {
                     return Err(PopCredentialValidationError::InvalidSignatureLength {
                         length: self.signature.len(),
                     });
                 }
+                let mut signature = [0u8; SIGNATURE_LENGTH];
+                signature.copy_from_slice(&self.signature);
+                crate::checked_ed25519_signature_from_bytes(&signature).map_err(|reason| {
+                    PopCredentialValidationError::SignatureVerification { reason }
+                })?;
             }
         }
         Ok(())
@@ -1058,26 +1066,19 @@ fn verify_ed25519_pop_signature(
 ) -> Result<(), PopCredentialValidationError> {
     let mut public_key = [0u8; PUBLIC_KEY_LENGTH];
     public_key.copy_from_slice(&signature.public_key);
-    let verifying_key = VerifyingKey::from_bytes(&public_key).map_err(|err| {
-        PopCredentialValidationError::InvalidPublicKey {
-            reason: err.to_string(),
-        }
-    })?;
+    let verifying_key = crate::checked_ed25519_verifying_key_from_bytes(&public_key)
+        .map_err(|err| PopCredentialValidationError::InvalidPublicKey { reason: err })?;
 
     let mut signature_bytes = [0u8; SIGNATURE_LENGTH];
     signature_bytes.copy_from_slice(&signature.signature);
-    let signature =
-        crate::checked_ed25519_signature_from_bytes(&signature_bytes).ok_or_else(|| {
-            PopCredentialValidationError::SignatureVerification {
-                reason: "signature payload must not be all zero".to_owned(),
-            }
-        })?;
+    let signature = crate::checked_ed25519_signature_from_bytes(&signature_bytes)
+        .map_err(|reason| PopCredentialValidationError::SignatureVerification { reason })?;
 
-    verifying_key.verify(digest, &signature).map_err(|err| {
-        PopCredentialValidationError::SignatureVerification {
+    verifying_key
+        .verify_strict(digest, &signature)
+        .map_err(|err| PopCredentialValidationError::SignatureVerification {
             reason: err.to_string(),
-        }
-    })
+        })
 }
 
 fn validate_digest(

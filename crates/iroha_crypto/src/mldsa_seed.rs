@@ -102,6 +102,11 @@ pub mod mldsa65 {
                 "Invalid ML-DSA secret key length",
             )));
         }
+        if secret_key.as_bytes().iter().all(|&byte| byte == 0) {
+            return Err(Error::KeyGen(String::from(
+                "ML-DSA secret key material must not be all zero",
+            )));
+        }
 
         let mut rho = Zeroizing::new([0u8; SEEDBYTES]);
         let mut tr = Zeroizing::new([0u8; TRBYTES]);
@@ -516,6 +521,18 @@ pub mod mldsa65 {
             let err = public_key_from_secret(&secret).expect_err("tampered secret is inconsistent");
 
             assert!(matches!(err, Error::KeyGen(message) if message.contains("Inconsistent")));
+        }
+
+        #[test]
+        fn public_key_from_secret_rejects_all_zero_secret_material() {
+            let secret_bytes = vec![0u8; ffi::PQCLEAN_MLDSA65_CLEAN_CRYPTO_SECRETKEYBYTES];
+            let secret = mldsa65::SecretKey::from_bytes(&secret_bytes)
+                .expect("length-valid all-zero ML-DSA secret bytes");
+
+            let err = public_key_from_secret(&secret)
+                .expect_err("all-zero ML-DSA secret material must fail before unpack");
+
+            assert!(matches!(err, Error::KeyGen(message) if message.contains("all zero")));
         }
 
         #[test]

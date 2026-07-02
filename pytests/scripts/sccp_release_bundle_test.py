@@ -514,11 +514,23 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
     valid_canary = {
         "evidence_hash": fixed_hex32(0xA1),
         "evidence_source": verifier.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE,
+        "route_allowlist_hash": fixed_hex32(0xB6),
+        "destination_binding_hash": fixed_hex32(0xB7),
+        "call_data_sha256": fixed_hex32(0xA6),
+        "payload_hash": fixed_hex32(0xA7),
+        "statement_hash": fixed_hex32(0xA8),
+        "commitment_root": fixed_hex32(0xA9),
+        "finality_height": fixed_hex32(0xAA),
+        "finality_block_hash": fixed_hex32(0xAB),
         "transaction_hash": fixed_hex32(0xA2),
         "receipt_block_hash": fixed_hex32(0xA3),
         "block_receipts_root": fixed_hex32(0xA4),
         "message_id": fixed_hex32(0xA5),
         "receipt_block_number": 1,
+        "log_index": 0,
+        "target_domain": verifier.ACTIVE_LAUNCH_DOMAIN,
+        "proof_version": 1,
+        "proof_source_domain": verifier.SCCP_DOMAIN_SORA,
         "message_proof_used": True,
         "receipt_block_finalized": True,
     }
@@ -532,6 +544,83 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
         label,
         canary_with_missing_blockers,
     ) == []
+
+    binding_lane = {
+        "route_allowlist": {
+            "route_allowlist_hash": valid_canary["route_allowlist_hash"]
+        },
+        "destination_binding": {
+            "destination_binding_hash": valid_canary["destination_binding_hash"]
+        },
+    }
+    assert verifier._active_launch_route_canary_binding_hash_blockers(
+        label,
+        binding_lane,
+        valid_canary,
+    ) == []
+    route_canary_binding_hash_cases = (
+        (
+            "route_allowlist_hash",
+            "missing",
+            None,
+            "route canary route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist_hash",
+            "zero",
+            "0x" + "00" * 32,
+            "route canary route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist_hash",
+            "uppercase",
+            fixed_hex32(0xB6).upper(),
+            "route canary route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist_hash",
+            "mismatch",
+            fixed_hex32(0xFE),
+            "route canary route allowlist hash must match route_allowlist_hash",
+        ),
+        (
+            "destination_binding_hash",
+            "missing",
+            None,
+            "route canary destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding_hash",
+            "zero",
+            "0x" + "00" * 32,
+            "route canary destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding_hash",
+            "uppercase",
+            fixed_hex32(0xB7).upper(),
+            "route canary destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding_hash",
+            "mismatch",
+            fixed_hex32(0xFD),
+            "route canary destination binding hash must match destination_binding_hash",
+        ),
+    )
+    for field, case_id, value, expected_blocker in route_canary_binding_hash_cases:
+        canary = dict(valid_canary)
+        if case_id == "missing":
+            canary.pop(field)
+        else:
+            canary[field] = value
+        blockers = verifier._active_launch_route_canary_binding_hash_blockers(
+            label,
+            binding_lane,
+            canary,
+        )
+
+        assert f"{label}: {expected_blocker}" in blockers, f"{field}.{case_id}"
 
     route_canary_blocker_cases = (
         (
@@ -611,11 +700,46 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
     )
     canary_hash_roles = (
         ("evidence_hash", "evidence hash"),
+        ("call_data_sha256", "call data SHA-256"),
+        ("payload_hash", "payload hash"),
+        ("statement_hash", "statement hash"),
+        ("commitment_root", "commitment root"),
+        ("finality_height", "finality height"),
+        ("finality_block_hash", "finality block hash"),
         ("transaction_hash", "transaction hash"),
         ("receipt_block_hash", "receipt block hash"),
         ("block_receipts_root", "block receipts root"),
         ("message_id", "message id"),
     )
+    active_template_hash = "0x" + next(
+        iter(
+            verifier._source_adapter_gate_template_hashes(
+                verifier.ACTIVE_LAUNCH_DOMAIN
+            )
+        )
+    ).hex()
+    route_canary_template_hash_cases = tuple(
+        (
+            field,
+            field_label,
+            f"{label}: route canary {field_label} must be live evidence, not built-in template material",
+        )
+        for field, field_label in canary_hash_roles
+    )
+    assert (
+        "evidence_hash",
+        "evidence hash",
+        f"{label}: route canary evidence hash must be live evidence, not built-in template material",
+    ) in route_canary_template_hash_cases
+    for field, field_label, expected_blocker in route_canary_template_hash_cases:
+        canary = {**valid_canary, field: active_template_hash}
+        blockers = verifier._active_launch_route_canary_metadata_blockers(
+            label,
+            canary,
+        )
+
+        assert expected_blocker in blockers, field_label
+
     for canary_field, canary_label in canary_hash_roles:
         for upstream_label, upstream_hash in upstream_hash_roles:
             canary = {**valid_canary, canary_field: upstream_hash}
@@ -640,47 +764,11 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
         f"{upstream_hash_roles[-1][0]}"
     ) in blockers
 
-    route_canary_hash_role_reuse_cases = (
-        (
-            "transaction_hash",
-            "evidence_hash",
-            "transaction hash",
-            "evidence hash",
-        ),
-        (
-            "receipt_block_hash",
-            "evidence_hash",
-            "receipt block hash",
-            "evidence hash",
-        ),
-        (
-            "receipt_block_hash",
-            "transaction_hash",
-            "receipt block hash",
-            "transaction hash",
-        ),
-        (
-            "block_receipts_root",
-            "evidence_hash",
-            "block receipts root",
-            "evidence hash",
-        ),
-        (
-            "block_receipts_root",
-            "transaction_hash",
-            "block receipts root",
-            "transaction hash",
-        ),
-        (
-            "block_receipts_root",
-            "receipt_block_hash",
-            "block receipts root",
-            "receipt block hash",
-        ),
-        ("message_id", "evidence_hash", "message id", "evidence hash"),
-        ("message_id", "transaction_hash", "message id", "transaction hash"),
-        ("message_id", "receipt_block_hash", "message id", "receipt block hash"),
-        ("message_id", "block_receipts_root", "message id", "block receipts root"),
+    # Source-inventory marker: route_canary_hash_role_reuse_cases = (
+    route_canary_hash_role_reuse_cases = tuple(
+        (target_field, source_field, target_label, source_label)
+        for target_index, (target_field, target_label) in enumerate(canary_hash_roles)
+        for source_field, source_label in canary_hash_roles[:target_index]
     )
     for target_field, source_field, target_label, source_label in (
         route_canary_hash_role_reuse_cases
@@ -757,6 +845,16 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
     route_canary_hex32_exactness_cases = (
         ("evidence_hash", None, "evidence hash"),
         ("evidence_hash", fixed_hex32(0xA1).upper(), "evidence hash"),
+        ("call_data_sha256", None, "call data SHA-256"),
+        ("payload_hash", "0x" + "00" * 32, "payload hash"),
+        ("statement_hash", fixed_hex32(0xA8).upper(), "statement hash"),
+        ("commitment_root", 1, "commitment root"),
+        ("finality_height", "0x" + "00" * 32, "finality height"),
+        (
+            "finality_block_hash",
+            fixed_hex32(0xAB).upper(),
+            "finality block hash",
+        ),
         ("transaction_hash", "0x" + "00" * 32, "transaction hash"),
         ("receipt_block_hash", fixed_hex32(0xA3).upper(), "receipt block hash"),
         ("block_receipts_root", None, "block receipts root"),
@@ -798,6 +896,78 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
             f"{label}: route canary receipt block number must be a positive "
             "integer"
         ) in blockers
+        assert f"{label}: route canary receipt block must be finalized" not in blockers
+
+    route_canary_log_index_exactness_cases = (
+        ("string", "0"),
+        ("bool", True),
+        ("negative", -1),
+        ("overflow", 0x1_0000_0000),
+        ("missing", None),
+    )
+    for case_id, value in route_canary_log_index_exactness_cases:
+        canary = dict(valid_canary)
+        if case_id == "missing":
+            canary.pop("log_index")
+        else:
+            canary["log_index"] = value
+        blockers = verifier._active_launch_route_canary_metadata_blockers(
+            label,
+            canary,
+        )
+
+        assert (
+            f"{label}: route canary log_index must be a u32 integer"
+        ) in blockers, case_id
+        assert f"{label}: route canary message proof must be used" not in blockers
+        assert f"{label}: route canary receipt block must be finalized" not in blockers
+
+    route_canary_proof_context_exactness_cases = (
+        (
+            "target_domain",
+            verifier.SCCP_DOMAIN_BSC,
+            "route canary target_domain must be active launch domain",
+        ),
+        (
+            "target_domain",
+            "1",
+            "route canary target_domain must be an integer",
+        ),
+        (
+            "target_domain",
+            True,
+            "route canary target_domain must be an integer",
+        ),
+        (
+            "proof_version",
+            2,
+            "route canary proof_version must be 1",
+        ),
+        (
+            "proof_version",
+            "1",
+            "route canary proof_version must be an integer",
+        ),
+        (
+            "proof_source_domain",
+            verifier.ACTIVE_LAUNCH_DOMAIN,
+            "route canary proof_source_domain must be SORA domain",
+        ),
+        (
+            "proof_source_domain",
+            "0",
+            "route canary proof_source_domain must be an integer",
+        ),
+    )
+    for field, value, expected_blocker in route_canary_proof_context_exactness_cases:
+        canary = {**valid_canary, field: value}
+        blockers = verifier._active_launch_route_canary_metadata_blockers(
+            label,
+            canary,
+        )
+
+        assert f"{label}: {expected_blocker}" in blockers, field
+        assert f"{label}: route canary message proof must be used" not in blockers
         assert f"{label}: route canary receipt block must be finalized" not in blockers
 
     route_canary_message_proof_used_exactness_cases = (
@@ -1194,6 +1364,13 @@ def test_release_bundle_active_route_allowlist_metadata_rejects_exact_flag_and_r
             "route_allowlist": route_allowlist_with_missing_blockers,
         },
     ) == []
+    active_template_hash = "0x" + next(
+        iter(
+            verifier._source_adapter_gate_template_hashes(
+                verifier.ACTIVE_LAUNCH_DOMAIN
+            )
+        )
+    ).hex()
 
     reused_role_lane = {
         **valid_lane,
@@ -1254,6 +1431,37 @@ def test_release_bundle_active_route_allowlist_metadata_rejects_exact_flag_and_r
         )
 
         assert expected_blocker in blockers, role_name
+
+    for case_id, route_allowlist, expected_blocker in (
+        (
+            "template route hash",
+            {
+                **valid_lane["route_allowlist"],
+                "route_allowlist_hash": active_template_hash,
+                "expected_route_allowlist_hash": active_template_hash,
+                "expected_route_allowlist_hash_matches": True,
+            },
+            f"{label}: route allowlist hash must be route binding evidence, not built-in template material",
+        ),
+        (
+            "template expected route hash",
+            {
+                **valid_lane["route_allowlist"],
+                "expected_route_allowlist_hash": active_template_hash,
+                "expected_route_allowlist_hash_matches": True,
+            },
+            f"{label}: expected route allowlist hash must be route binding evidence, not built-in template material",
+        ),
+    ):
+        blockers = verifier._active_launch_route_allowlist_binding_blockers(
+            label,
+            {
+                **valid_lane,
+                "route_allowlist": route_allowlist,
+            },
+        )
+
+        assert expected_blocker in blockers, case_id
 
     expected_match_flag_exactness_cases = ("true", 1, False, None)
     for value in expected_match_flag_exactness_cases:
@@ -1370,6 +1578,13 @@ def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_a
         label,
         valid_lane,
     ) == []
+    active_template_hash = "0x" + next(
+        iter(
+            verifier._source_adapter_gate_template_hashes(
+                verifier.ACTIVE_LAUNCH_DOMAIN
+            )
+        )
+    ).hex()
     destination_with_missing_blockers = {
         **valid_lane["destination_binding"],
         "blockers": [],
@@ -1403,6 +1618,66 @@ def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_a
         label,
         reused_role_lane,
     )
+
+    for case_id, field, expected_blocker in (
+        (
+            "template source verifier material hash",
+            "source_verifier_material_hash",
+            f"{label}: governed deployment source verifier material hash must be deployed evidence, not built-in template material",
+        ),
+        (
+            "template source adapter deployment hash",
+            "source_adapter_engine_deployment_hash",
+            f"{label}: governed deployment source adapter engine deployment hash must be deployed evidence, not built-in template material",
+        ),
+    ):
+        lane = {
+            **valid_lane,
+            "source_record_hashes": {
+                **valid_lane["source_record_hashes"],
+                field: active_template_hash,
+            },
+        }
+
+        blockers = verifier._active_launch_governed_deployment_metadata_blockers(
+            label,
+            lane,
+        )
+
+        assert expected_blocker in blockers, case_id
+
+    for case_id, destination_binding, expected_blocker in (
+        (
+            "template destination binding hash",
+            {
+                **valid_lane["destination_binding"],
+                "destination_binding_hash": active_template_hash,
+                "expected_destination_binding_hash": active_template_hash,
+                "expected_destination_binding_hash_matches": True,
+            },
+            f"{label}: governed deployment destination binding hash must be destination binding evidence, not built-in template material",
+        ),
+        (
+            "template expected destination binding hash",
+            {
+                **valid_lane["destination_binding"],
+                "expected_destination_binding_hash": active_template_hash,
+                "expected_destination_binding_hash_matches": True,
+            },
+            f"{label}: governed deployment expected destination binding hash must be destination binding evidence, not built-in template material",
+        ),
+    ):
+        lane = {
+            **valid_lane,
+            "destination_binding": destination_binding,
+        }
+
+        blockers = verifier._active_launch_governed_deployment_metadata_blockers(
+            label,
+            lane,
+        )
+
+        assert expected_blocker in blockers, case_id
 
     for role_name, reused_hash, expected_blocker in (
         (
@@ -1465,6 +1740,37 @@ def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_a
         )
 
         assert expected_blocker in blockers, role_name
+
+    for case_id, source_gate, expected_blocker in (
+        (
+            "template gate hash",
+            {
+                **valid_lane["source_adapter_gate"],
+                "gate_hash": active_template_hash,
+                "audit_hashes": {"evm_source_gate_hash": active_template_hash},
+            },
+            f"{label}: active {verifier.ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be deployed gate evidence, not built-in template material",
+        ),
+        (
+            "template audit hash",
+            {
+                **valid_lane["source_adapter_gate"],
+                "audit_hashes": {"evm_source_gate_hash": active_template_hash},
+            },
+            f"{label}: active {verifier.ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes evm_source_gate_hash must be deployed audit evidence, not built-in template material",
+        ),
+    ):
+        lane = {
+            **valid_lane,
+            "source_adapter_gate": source_gate,
+        }
+
+        blockers = verifier._active_launch_governed_deployment_metadata_blockers(
+            label,
+            lane,
+        )
+
+        assert expected_blocker in blockers, case_id
 
     expected_destination_match_flag_exactness_cases = ("true", 1, False, None)
     for value in expected_destination_match_flag_exactness_cases:
@@ -8177,6 +8483,80 @@ def test_release_bundle_rejects_unknown_copied_crypto_evidence_before_render(
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
 
+def test_release_bundle_rejects_mixed_malformed_duplicate_crypto_rows_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Malformed copied crypto rows must not hide duplicate-domain diagnostics."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                eth_row = {
+                    field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS
+                }
+                eth_row.update({"domain": 1, "chain": "eth"})
+                duplicate_eth_row = dict(eth_row)
+                report["cryptographic_evidence"] = [
+                    "operator secret-token-crypto-row",
+                    eth_row,
+                    duplicate_eth_row,
+                ]
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("mixed malformed crypto rows were rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("mixed malformed crypto rows reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert (
+        "bundled report.cryptographic_evidence[0] must be an object"
+        in captured.err
+    )
+    assert "bundled report.cryptographic_evidence[2] duplicates domain 1" in (
+        captured.err
+    )
+    assert "bundled report.cryptographic_evidence must cover every embedded lane" in (
+        captured.err
+    )
+    assert "secret-token-crypto-row" not in captured.err
+    assert "secret-token-crypto-row" not in captured.out
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
 def test_release_bundle_numbers_repeated_copied_crypto_unknown_field_errors_before_render(
     tmp_path: Path,
     monkeypatch,
@@ -10568,6 +10948,84 @@ def test_release_bundle_rejects_public_source_record_template_hash_replays() -> 
                 ) in verifier_crypto_errors, (domain, source_field, template_field)
 
 
+def test_release_bundle_rejects_public_destination_and_route_template_hash_replays() -> None:
+    """Copied destination and route hashes must not replay built-in templates."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    all_lanes = bundle._all_lanes_module()
+    domains = (
+        all_lanes.SCCP_DOMAIN_ETH,
+        all_lanes.SCCP_DOMAIN_BSC,
+        all_lanes.SCCP_DOMAIN_SOL,
+        all_lanes.SCCP_DOMAIN_TON,
+        all_lanes.SCCP_DOMAIN_TRON,
+    )
+    cases = (
+        (
+            "destination_binding",
+            "destination_binding_hash",
+            "destination binding evidence",
+        ),
+        (
+            "destination_binding",
+            "expected_destination_binding_hash",
+            "destination binding evidence",
+        ),
+        (
+            "route_allowlist",
+            "route_allowlist_hash",
+            "route binding evidence",
+        ),
+        (
+            "route_allowlist",
+            "expected_route_allowlist_hash",
+            "route binding evidence",
+        ),
+    )
+
+    for domain in domains:
+        profile = all_lanes.LANE_PROFILES[domain]
+        template_hashes = all_lanes._source_material_template_hashes(profile)
+        for container_name, field, evidence_label in cases:
+            for template_field, template_hash in template_hashes.items():
+                lane = {
+                    "domain": domain,
+                    "chain": profile.chain,
+                    "production_ready": True,
+                    "destination_binding": {
+                        "destination_binding_hash": fixed_hex32(0xB1),
+                        "expected_destination_binding_hash": fixed_hex32(0xB1),
+                    },
+                    "route_allowlist": {
+                        "route_allowlist_hash": fixed_hex32(0xC1),
+                        "expected_route_allowlist_hash": fixed_hex32(0xC1),
+                    },
+                }
+                lane[container_name][field] = "0x" + template_hash.hex()
+                builder_label = "bundled report.evidence.lanes[0]"
+                builder_errors = bundle._all_lanes_nested_bundle_errors(
+                    lane,
+                    builder_label,
+                )
+
+                assert (
+                    f"{builder_label}.{container_name} {field} must be "
+                    f"{evidence_label}, not built-in template material"
+                ) in builder_errors, (domain, container_name, field, template_field)
+
+                verifier_errors = verifier._all_lanes_lane_schema_errors(
+                    "all-lanes summary",
+                    [lane],
+                )
+
+                assert (
+                    f"all-lanes summary lane domain {domain} {container_name} "
+                    f"{field} must be {evidence_label}, not built-in template "
+                    "material"
+                ) in verifier_errors, (domain, container_name, field, template_field)
+
+
 def test_release_bundle_rejects_public_route_canary_template_hash_replays() -> None:
     """Copied public route-canary evidence hashes must not replay templates."""
 
@@ -10790,6 +11248,666 @@ def test_release_bundle_rejects_copied_route_canary_transcript_template_replay_b
                 f"route_canary {transcript_field} must be live evidence, "
                 "not built-in template material"
             ) in verifier_errors, (domain, transcript_field, template_field)
+
+
+def test_release_bundle_rejects_not_ready_public_template_hash_replays() -> None:
+    """Copied not-ready lanes must still reject built-in template hashes."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    all_lanes = bundle._all_lanes_module()
+    domains = tuple(
+        domain
+        for domain in (
+            all_lanes.SCCP_DOMAIN_ETH,
+            all_lanes.SCCP_DOMAIN_BSC,
+            all_lanes.SCCP_DOMAIN_SOL,
+            all_lanes.SCCP_DOMAIN_TON,
+            all_lanes.SCCP_DOMAIN_TRON,
+        )
+        if domain != verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+
+    for domain in domains:
+        profile = all_lanes.LANE_PROFILES[domain]
+        template_field, template_hash = next(
+            iter(all_lanes._source_material_template_hashes(profile).items())
+        )
+        template_value = "0x" + template_hash.hex()
+        gate_field, audit_fields = all_lanes._source_adapter_gate_requirements(domain)
+        audit_hashes = {
+            field: fixed_hex32(0xE0 + index)
+            for index, field in enumerate(audit_fields)
+        }
+        audit_hashes[gate_field] = template_value
+        lane = {
+            "domain": domain,
+            "chain": profile.chain,
+            "production_ready": False,
+            "blockers": ["operator pending not-ready lane certification"],
+            "source_record_hashes": {
+                "source_verifier_material_hash": template_value,
+                "source_adapter_engine_deployment_hash": fixed_hex32(0xA2),
+            },
+            "source_adapter_gate": {
+                "required": False,
+                "ready": False,
+                "gate_hash": template_value,
+                "audit_hashes": audit_hashes,
+                "blockers": ["operator pending gate certification"],
+            },
+            "destination_binding": {
+                "destination_binding_hash": template_value,
+                "expected_destination_binding_hash": template_value,
+            },
+            "route_allowlist": {
+                "route_allowlist_hash": template_value,
+                "expected_route_allowlist_hash": template_value,
+                "route_canary": {
+                    "evidence_hash": template_value,
+                },
+            },
+        }
+
+        builder_label = "bundled report.evidence.lanes[0]"
+        builder_errors = bundle._all_lanes_nested_bundle_errors(
+            lane,
+            builder_label,
+        )
+        assert (
+            f"{builder_label}.source_record_hashes source_verifier_material_hash "
+            "must be deployed evidence, not built-in template material"
+        ) in builder_errors, (domain, template_field)
+        assert (
+            f"{builder_label}.source_adapter_gate gate_hash must be deployed "
+            "gate evidence, not built-in template material"
+        ) in builder_errors, (domain, template_field)
+        assert (
+            f"{builder_label}.source_adapter_gate audit_hashes {gate_field} "
+            "must be deployed audit evidence, not built-in template material"
+        ) in builder_errors, (domain, template_field)
+        assert (
+            f"{builder_label}.destination_binding destination_binding_hash must "
+            "be destination binding evidence, not built-in template material"
+        ) in builder_errors, (domain, template_field)
+        assert (
+            f"{builder_label}.route_allowlist route_allowlist_hash must be "
+            "route binding evidence, not built-in template material"
+        ) in builder_errors, (domain, template_field)
+        assert (
+            f"{builder_label}.route_allowlist.route_canary evidence_hash "
+            "must be live evidence, not built-in template material"
+        ) in builder_errors, (domain, template_field)
+
+        verifier_errors = verifier._all_lanes_lane_schema_errors(
+            "all-lanes summary",
+            [lane],
+        )
+        verifier_label = f"all-lanes summary lane domain {domain}"
+        assert (
+            f"{verifier_label} source_record_hashes source_verifier_material_hash "
+            "must be deployed evidence, not built-in template material"
+        ) in verifier_errors, (domain, template_field)
+        assert (
+            f"{verifier_label} source_adapter_gate gate_hash must be deployed "
+            "gate evidence, not built-in template material"
+        ) in verifier_errors, (domain, template_field)
+        assert (
+            f"{verifier_label} source_adapter_gate audit_hashes {gate_field} "
+            "must be deployed audit evidence, not built-in template material"
+        ) in verifier_errors, (domain, template_field)
+        assert (
+            f"{verifier_label} destination_binding destination_binding_hash must "
+            "be destination binding evidence, not built-in template material"
+        ) in verifier_errors, (domain, template_field)
+        assert (
+            f"{verifier_label} route_allowlist route_allowlist_hash must be "
+            "route binding evidence, not built-in template material"
+        ) in verifier_errors, (domain, template_field)
+        assert (
+            f"{verifier_label} route_allowlist route_canary evidence_hash must "
+            "be live evidence, not built-in template material"
+        ) in verifier_errors, (domain, template_field)
+
+
+def test_release_bundle_verifier_rejects_not_ready_public_nested_schema_drift() -> None:
+    """Strict verifier must not skip malformed nested not-ready lane evidence."""
+
+    verifier = load_verify_helpers()
+    domain = verifier.SCCP_DOMAIN_BSC
+    gate_field = "evm_source_gate_hash"
+    lane = {
+        "domain": domain,
+        "chain": "bsc",
+        "records": {
+            "source_verifier_material": False,
+            "source_adapter_deployment": False,
+            "destination_rollout": False,
+            "route_allowlist": False,
+        },
+        "production_ready": False,
+        "source_record_hashes": {
+            "source_verifier_material_hash": "not-a-source-hash",
+            "source_adapter_engine_deployment_hash": fixed_hex32(0xA2),
+            "operator secret seed phrase": "do not echo source",
+        },
+        "source_adapter_gate": {
+            "required": "true",
+            "ready": False,
+            "gate_hash": "not-a-gate-hash",
+            "audit_hashes": {
+                gate_field: "not-an-audit-hash",
+                "operator secret audit": fixed_hex32(0xA3),
+            },
+            "blockers": "operator secret gate blocker",
+            "operator secret gate": True,
+        },
+        "evm_live_metadata": {
+            "required": "true",
+            "ready": False,
+            "source_rpc_chain_id": " 56 ",
+            "source_block_tag": "latest",
+            "destination_rpc_chain_id": "56",
+            "destination_block_tag": "latest",
+            "operator secret metadata": True,
+        },
+        "destination_binding": {
+            "destination_binding_hash": "not-a-destination-hash",
+            "destination_binding_key": "bsc-destination",
+            "expected_destination_binding_hash": fixed_hex32(0xB2),
+            "expected_destination_binding_hash_matches": "true",
+            "recomputed": False,
+            "destination_network_id": "0x" + "11" * 32,
+            "destination_bridge_address": "0x" + "22" * 20,
+            "operator secret destination": True,
+        },
+        "route_allowlist": {
+            "route_allowlist_hash": True,
+            "expected_route_allowlist_hash": fixed_hex32(0xC2),
+            "expected_route_allowlist_hash_matches": "true",
+            "route_canary": {
+                "status": " passed ",
+                "evidence_hash": "not-a-canary-hash",
+                "evidence_source": "evm_message_proof_accepted_transaction",
+                "route_allowlist_hash": fixed_hex32(0xC2),
+                "destination_binding_hash": fixed_hex32(0xB2),
+                "evidence_bound": "true",
+                "log_index": "0",
+                "operator secret canary": True,
+            },
+            "operator secret route": True,
+        },
+        "blockers": ["operator pending not-ready lane certification"],
+    }
+
+    errors = verifier._all_lanes_lane_schema_errors("all-lanes summary", [lane])
+    rendered = "\n".join(errors)
+
+    expected_errors = (
+        "all-lanes summary lane domain 2 source_record_hashes contains unknown "
+        "field name with whitespace",
+        "all-lanes summary lane domain 2 source_record_hashes "
+        "source_verifier_material_hash must be a canonical bytes32 hex string",
+        "all-lanes summary lane domain 2 source_adapter_gate contains unknown "
+        "field name with whitespace",
+        "all-lanes summary lane domain 2 source_adapter_gate required must be a boolean",
+        "all-lanes summary lane domain 2 source_adapter_gate gate_hash must be "
+        "empty or a non-zero canonical bytes32 hex string",
+        "all-lanes summary lane domain 2 source_adapter_gate audit_hashes "
+        "contains unknown field name with whitespace",
+        "all-lanes summary lane domain 2 source_adapter_gate audit_hashes "
+        "evm_source_gate_hash must be a canonical bytes32 hex string",
+        "all-lanes summary lane domain 2 source_adapter_gate blockers must be "
+        "a list of non-empty strings with no surrounding whitespace",
+        "all-lanes summary lane domain 2 evm_live_metadata contains unknown "
+        "field name with whitespace",
+        "all-lanes summary lane domain 2 evm_live_metadata required must be a boolean",
+        "all-lanes summary lane domain 2 evm_live_metadata source_rpc_chain_id "
+        "must be a string with no surrounding whitespace",
+        "all-lanes summary lane domain 2 destination_binding contains unknown "
+        "field name with whitespace",
+        "all-lanes summary lane domain 2 destination_binding "
+        "destination_binding_hash must be a canonical bytes32 hex string",
+        "all-lanes summary lane domain 2 destination_binding "
+        "expected_destination_binding_hash_matches must be a boolean",
+        "all-lanes summary lane domain 2 route_allowlist contains unknown "
+        "field name with whitespace",
+        "all-lanes summary lane domain 2 route_allowlist route_allowlist_hash "
+        "must be a canonical bytes32 hex string",
+        "all-lanes summary lane domain 2 route_allowlist "
+        "expected_route_allowlist_hash_matches must be a boolean",
+        "all-lanes summary lane domain 2 route_allowlist route_canary contains "
+        "unknown field name with whitespace",
+        "all-lanes summary lane domain 2 route_allowlist route_canary "
+        "evidence_hash must be a canonical bytes32 hex string",
+        "all-lanes summary lane domain 2 route_allowlist route_canary status "
+        "must be a non-empty string with no surrounding whitespace",
+        "all-lanes summary lane domain 2 route_allowlist route_canary "
+        "evidence_bound must be a boolean",
+        "all-lanes summary lane domain 2 route_allowlist route_canary log_index "
+        "must be a non-negative integer",
+    )
+    for expected_error in expected_errors:
+        assert expected_error in rendered
+    for secret in (
+        "do not echo source",
+        "operator secret gate blocker",
+        "operator secret seed phrase",
+        "operator secret audit",
+        "operator secret gate",
+        "operator secret metadata",
+        "operator secret destination",
+        "operator secret route",
+        "operator secret canary",
+    ):
+        assert secret not in rendered
+
+
+def test_release_bundle_verifier_rejects_not_ready_public_nested_missing_fields() -> None:
+    """Copied not-ready nested lane evidence must still carry complete schemas."""
+
+    verifier = load_verify_helpers()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = evidence_module.validate_evidence_bundle(
+        helpers.complete_bundle(evidence_module)
+    )
+    lane = json.loads(
+        json.dumps(
+            next(
+                lane
+                for lane in summary["lanes"]
+                if lane["domain"] == verifier.SCCP_DOMAIN_BSC
+            )
+        )
+    )
+    lane["production_ready"] = False
+    lane["blockers"] = ["operator pending not-ready BSC lane certification"]
+    gate_field = "evm_source_gate_hash"
+
+    lane["source_record_hashes"].pop("source_verifier_material_hash", None)
+    lane["source_adapter_gate"].pop("gate_hash", None)
+    lane["source_adapter_gate"]["audit_hashes"].pop(gate_field, None)
+    lane["evm_live_metadata"].pop("source_block_tag", None)
+    lane["destination_binding"].pop("destination_bridge_address", None)
+    lane["route_allowlist"].pop("route_canary", None)
+
+    errors = verifier._all_lanes_lane_schema_errors("all-lanes summary", [lane])
+    rendered = "\n".join(errors)
+
+    expected_errors = (
+        "all-lanes summary lane domain 2 source_record_hashes missing field: "
+        "source_verifier_material_hash",
+        "all-lanes summary lane domain 2 source_adapter_gate missing field: "
+        "gate_hash",
+        "all-lanes summary lane domain 2 source_adapter_gate audit_hashes "
+        "missing field: evm_source_gate_hash",
+        "all-lanes summary lane domain 2 evm_live_metadata missing field: "
+        "source_block_tag",
+        "all-lanes summary lane domain 2 destination_binding missing field: "
+        "destination_bridge_address",
+        "all-lanes summary lane domain 2 route_allowlist missing field: "
+        "route_canary",
+    )
+    for expected_error in expected_errors:
+        assert expected_error in rendered
+    assert "operator pending not-ready BSC lane certification" not in rendered
+
+
+def test_release_bundle_verifier_rejects_not_ready_public_nested_hash_mismatch() -> None:
+    """Copied not-ready nested lane evidence must keep internal hashes coherent."""
+
+    verifier = load_verify_helpers()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = evidence_module.validate_evidence_bundle(
+        helpers.complete_bundle(evidence_module)
+    )
+    lane = json.loads(
+        json.dumps(
+            next(
+                lane
+                for lane in summary["lanes"]
+                if lane["domain"] == verifier.SCCP_DOMAIN_BSC
+            )
+        )
+    )
+    lane["production_ready"] = False
+    lane["blockers"] = ["operator pending not-ready BSC lane certification"]
+
+    destination_hash = lane["destination_binding"]["destination_binding_hash"]
+    route_hash = lane["route_allowlist"]["route_allowlist_hash"]
+    route_canary = lane["route_allowlist"]["route_canary"]
+    lane["destination_binding"]["expected_destination_binding_hash"] = next(
+        value for value in (fixed_hex32(0x91), fixed_hex32(0x92)) if value != destination_hash
+    )
+    lane["route_allowlist"]["expected_route_allowlist_hash"] = next(
+        value for value in (fixed_hex32(0x93), fixed_hex32(0x94)) if value != route_hash
+    )
+    route_canary["route_allowlist_hash"] = next(
+        value for value in (fixed_hex32(0x95), fixed_hex32(0x96)) if value != route_hash
+    )
+    route_canary["destination_binding_hash"] = next(
+        value
+        for value in (fixed_hex32(0x97), fixed_hex32(0x98))
+        if value != destination_hash
+    )
+
+    errors = verifier._all_lanes_lane_schema_errors("all-lanes summary", [lane])
+    rendered = "\n".join(errors)
+
+    expected_errors = (
+        "all-lanes summary lane domain 2 destination_binding "
+        "expected_destination_binding_hash must match destination_binding_hash",
+        "all-lanes summary lane domain 2 route_allowlist "
+        "expected_route_allowlist_hash must match route_allowlist_hash",
+        "all-lanes summary lane domain 2 route_allowlist route_canary "
+        "route_allowlist_hash must match lane route_allowlist_hash",
+        "all-lanes summary lane domain 2 route_allowlist route_canary "
+        "destination_binding_hash must match lane destination_binding_hash",
+    )
+    for expected_error in expected_errors:
+        assert expected_error in rendered
+    assert "operator pending not-ready BSC lane certification" not in rendered
+
+
+def test_release_bundle_verifier_rejects_not_ready_public_nested_false_match_flags() -> None:
+    """Copied not-ready nested match flags must agree with matching hashes."""
+
+    verifier = load_verify_helpers()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = evidence_module.validate_evidence_bundle(
+        helpers.complete_bundle(evidence_module)
+    )
+    lane = json.loads(
+        json.dumps(
+            next(
+                lane
+                for lane in summary["lanes"]
+                if lane["domain"] == verifier.SCCP_DOMAIN_BSC
+            )
+        )
+    )
+    lane["production_ready"] = False
+    lane["blockers"] = ["operator pending not-ready BSC lane certification"]
+    lane["destination_binding"]["expected_destination_binding_hash"] = lane[
+        "destination_binding"
+    ]["destination_binding_hash"]
+    lane["destination_binding"]["expected_destination_binding_hash_matches"] = False
+    lane["destination_binding"]["recomputed"] = False
+    lane["route_allowlist"]["expected_route_allowlist_hash"] = lane[
+        "route_allowlist"
+    ]["route_allowlist_hash"]
+    lane["route_allowlist"]["expected_route_allowlist_hash_matches"] = False
+
+    errors = verifier._all_lanes_lane_schema_errors("all-lanes summary", [lane])
+    rendered = "\n".join(errors)
+
+    expected_errors = (
+        "all-lanes summary lane domain 2 destination_binding "
+        "expected_destination_binding_hash_matches must be true when "
+        "expected_destination_binding_hash matches destination_binding_hash",
+        "all-lanes summary lane domain 2 destination_binding "
+        "recomputed must be true when expected_destination_binding_hash matches "
+        "destination_binding_hash",
+        "all-lanes summary lane domain 2 route_allowlist "
+        "expected_route_allowlist_hash_matches must be true when "
+        "expected_route_allowlist_hash matches route_allowlist_hash",
+    )
+    for expected_error in expected_errors:
+        assert expected_error in rendered
+    assert "operator pending not-ready BSC lane certification" not in rendered
+
+
+def test_release_bundle_verifier_rejects_not_ready_public_destination_domain_semantic_drift() -> None:
+    """Copied not-ready destination bindings must keep lane-specific fields."""
+
+    verifier = load_verify_helpers()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = evidence_module.validate_evidence_bundle(
+        helpers.complete_bundle(evidence_module)
+    )
+    domains = (
+        verifier.SCCP_DOMAIN_BSC,
+        verifier.SCCP_DOMAIN_SOL,
+        verifier.SCCP_DOMAIN_TON,
+        verifier.SCCP_DOMAIN_TRON,
+    )
+    lanes_by_domain = {lane["domain"]: lane for lane in summary["lanes"]}
+    for domain in domains:
+        lane = json.loads(json.dumps(lanes_by_domain[domain]))
+        lane["production_ready"] = False
+        lane["blockers"] = [
+            f"operator pending not-ready domain {domain} lane certification"
+        ]
+        destination = lane["destination_binding"]
+        if domain == verifier.SCCP_DOMAIN_BSC:
+            destination["destination_network_id"] = ""
+            destination["destination_bridge_address"] = ""
+            expected_errors = (
+                "destination_network_id must be a canonical bytes32 hex string",
+                "destination_bridge_address must be a canonical 20-byte hex string",
+            )
+        elif domain == verifier.SCCP_DOMAIN_TRON:
+            destination["destination_network_id"] = "0x" + "00" * 32
+            destination["destination_bridge_address"] = "0x" + "11" * 20
+            expected_errors = (
+                "destination_network_id must be a non-zero canonical bytes32 "
+                "hex string",
+                "destination_bridge_address is only valid for EVM-family lanes",
+            )
+        else:
+            destination["destination_network_id"] = "0x" + "22" * 32
+            destination["destination_bridge_address"] = "0x" + "33" * 20
+            expected_errors = (
+                "destination_network_id is only valid for EVM-family or TRON lanes",
+                "destination_bridge_address is only valid for EVM-family lanes",
+            )
+
+        errors = verifier._all_lanes_lane_schema_errors("all-lanes summary", [lane])
+        rendered = "\n".join(errors)
+        destination_label = (
+            f"all-lanes summary lane domain {domain} destination_binding"
+        )
+        for expected_error in expected_errors:
+            assert f"{destination_label} {expected_error}" in rendered
+        assert f"operator pending not-ready domain {domain}" not in rendered
+
+
+def test_release_bundle_verifier_rejects_not_ready_public_route_canary_proof_context_drift() -> None:
+    """Copied not-ready route canaries must keep lane-specific proof context."""
+
+    verifier = load_verify_helpers()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = evidence_module.validate_evidence_bundle(
+        helpers.complete_bundle(evidence_module)
+    )
+    domains = (
+        verifier.SCCP_DOMAIN_BSC,
+        verifier.SCCP_DOMAIN_SOL,
+        verifier.SCCP_DOMAIN_TON,
+        verifier.SCCP_DOMAIN_TRON,
+    )
+    lanes_by_domain = {lane["domain"]: lane for lane in summary["lanes"]}
+    for domain in domains:
+        lane = json.loads(json.dumps(lanes_by_domain[domain]))
+        lane["production_ready"] = False
+        lane["blockers"] = [
+            f"operator pending not-ready domain {domain} lane certification"
+        ]
+        route_canary = lane["route_allowlist"]["route_canary"]
+        if domain == verifier.SCCP_DOMAIN_BSC:
+            route_canary["receipt_block_number"] = 0
+            route_canary["log_index"] = 0x1_0000_0000
+            route_canary["target_domain"] = verifier.SCCP_DOMAIN_TRON
+            route_canary["proof_version"] = 2
+            route_canary["proof_source_domain"] = verifier.SCCP_DOMAIN_BSC
+            expected_errors = (
+                "receipt_block_number must be a positive integer",
+                "log_index must be a u32 integer",
+                "target_domain must be the lane domain",
+                "proof_version must be 1",
+                "proof_source_domain must be SORA",
+            )
+        elif domain == verifier.SCCP_DOMAIN_TRON:
+            route_canary["block_number"] = 0
+            route_canary["block_timestamp"] = -1
+            route_canary["log_index"] = 0x1_0000_0000
+            route_canary["target_domain"] = verifier.SCCP_DOMAIN_BSC
+            route_canary["proof_version"] = 2
+            route_canary["proof_source_domain"] = verifier.SCCP_DOMAIN_TRON
+            route_canary["transaction_owner_address"] = "0x41" + "11" * 20
+            route_canary["signature_recovered_address"] = "0x41" + "22" * 20
+            expected_errors = (
+                "block_number must be a positive integer",
+                "block_timestamp must be a non-negative integer",
+                "log_index must be a u32 integer",
+                "target_domain must be TRON",
+                "proof_version must be 1",
+                "proof_source_domain must be SORA",
+                "signature_recovered_address must match transaction_owner_address",
+            )
+        elif domain == verifier.SCCP_DOMAIN_SOL:
+            route_canary["solana_programdata_address"] = ""
+            route_canary["solana_programdata_slot"] = "0"
+            expected_errors = (
+                "solana_programdata_address must be a non-zero canonical "
+                "base58 Solana address",
+                "solana_programdata_slot must be a canonical positive decimal string",
+            )
+        else:
+            route_canary["ton_last_transaction_lt"] = "0"
+            expected_errors = (
+                "ton_last_transaction_lt must be a canonical positive decimal string",
+            )
+
+        errors = verifier._all_lanes_lane_schema_errors("all-lanes summary", [lane])
+        rendered = "\n".join(errors)
+        canary_label = (
+            f"all-lanes summary lane domain {domain} "
+            "route_allowlist route_canary"
+        )
+        for expected_error in expected_errors:
+            assert f"{canary_label} {expected_error}" in rendered
+        assert f"operator pending not-ready domain {domain}" not in rendered
+
+
+def test_release_bundle_verifier_rejects_not_ready_public_route_canary_hash_role_drift() -> None:
+    """Copied not-ready route-canary hashes must stay role-separated."""
+
+    verifier = load_verify_helpers()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = evidence_module.validate_evidence_bundle(
+        helpers.complete_bundle(evidence_module)
+    )
+    domains = (
+        verifier.SCCP_DOMAIN_BSC,
+        verifier.SCCP_DOMAIN_SOL,
+        verifier.SCCP_DOMAIN_TON,
+        verifier.SCCP_DOMAIN_TRON,
+    )
+    lanes_by_domain = {lane["domain"]: lane for lane in summary["lanes"]}
+    for domain in domains:
+        lane = json.loads(json.dumps(lanes_by_domain[domain]))
+        lane["production_ready"] = False
+        lane["blockers"] = [
+            f"operator pending not-ready domain {domain} lane certification"
+        ]
+        route_canary = lane["route_allowlist"]["route_canary"]
+        if domain == verifier.SCCP_DOMAIN_BSC:
+            route_canary["payload_hash"] = route_canary["evidence_hash"]
+            expected_error = "payload_hash must not reuse evidence_hash"
+        elif domain == verifier.SCCP_DOMAIN_SOL:
+            route_canary["evidence_hash"] = lane["route_allowlist"][
+                "route_allowlist_hash"
+            ]
+            expected_error = "evidence_hash must not reuse route_allowlist_hash"
+        elif domain == verifier.SCCP_DOMAIN_TON:
+            route_canary["ton_last_transaction_hash"] = lane["destination_binding"][
+                "destination_binding_hash"
+            ]
+            expected_error = (
+                "ton_last_transaction_hash must not reuse destination_binding_hash"
+            )
+        else:
+            route_canary["signature_sha256"] = route_canary["message_id"]
+            expected_error = "signature_sha256 must not reuse message_id"
+
+        errors = verifier._all_lanes_lane_schema_errors("all-lanes summary", [lane])
+        rendered = "\n".join(errors)
+        canary_label = (
+            f"all-lanes summary lane domain {domain} "
+            "route_allowlist route_canary"
+        )
+        assert f"{canary_label} hash role {expected_error}" in rendered
+        assert f"operator pending not-ready domain {domain}" not in rendered
+
+
+def test_release_bundle_verifier_rejects_not_ready_public_route_canary_common_semantic_drift() -> None:
+    """Copied not-ready route canaries must keep common public semantics."""
+
+    verifier = load_verify_helpers()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = evidence_module.validate_evidence_bundle(
+        helpers.complete_bundle(evidence_module)
+    )
+    domains = (
+        verifier.SCCP_DOMAIN_BSC,
+        verifier.SCCP_DOMAIN_SOL,
+        verifier.SCCP_DOMAIN_TON,
+        verifier.SCCP_DOMAIN_TRON,
+    )
+    required_truth_fields_by_domain = {
+        verifier.SCCP_DOMAIN_BSC: (
+            "message_proof_used",
+            "receipt_block_finalized",
+        ),
+        verifier.SCCP_DOMAIN_TRON: (
+            "message_proof_used",
+            "raw_data_owner_matches_transaction",
+            "signature_recovers_to_owner",
+        ),
+    }
+    lanes_by_domain = {lane["domain"]: lane for lane in summary["lanes"]}
+    for domain in domains:
+        lane = json.loads(json.dumps(lanes_by_domain[domain]))
+        lane["production_ready"] = False
+        lane["blockers"] = [
+            f"operator pending not-ready domain {domain} lane certification"
+        ]
+        route_canary = lane["route_allowlist"]["route_canary"]
+        route_canary["status"] = "failed"
+        route_canary["evidence_source"] = "operator_review_note"
+        route_canary["evidence_bound"] = False
+        for field in required_truth_fields_by_domain.get(domain, ()):
+            route_canary[field] = False
+
+        errors = verifier._all_lanes_lane_schema_errors("all-lanes summary", [lane])
+        rendered = "\n".join(errors)
+        canary_label = (
+            f"all-lanes summary lane domain {domain} "
+            "route_allowlist route_canary"
+        )
+        expected_source = verifier.ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN[domain]
+        expected_errors = (
+            f"{canary_label} status must be passed",
+            f"{canary_label} evidence_source must be {expected_source}",
+            f"{canary_label} evidence_bound must be true",
+            *(
+                f"{canary_label} {field} must be true"
+                for field in required_truth_fields_by_domain.get(domain, ())
+            ),
+        )
+        for expected_error in expected_errors:
+            assert expected_error in rendered
+        assert f"operator pending not-ready domain {domain}" not in rendered
+        assert "operator_review_note" not in rendered
+        assert "failed" not in rendered
 
 
 def test_release_bundle_template_loader_failures_are_bounded(monkeypatch) -> None:
@@ -17033,6 +18151,788 @@ def test_release_bundle_rejects_active_copied_source_record_missing_fields_when_
     assert "operator pending active source-record field certification" not in (
         captured.err
     )
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_not_ready_public_nested_missing_fields_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Non-active not-ready copied nested evidence must be complete before render."""
+
+    bundle = load_bundle_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    bsc_index, bsc_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == evidence_module.SCCP_DOMAIN_BSC
+    )
+    bsc_lane["production_ready"] = False
+    bsc_lane["blockers"] = ["operator pending not-ready BSC lane certification"]
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending not-ready BSC lane certification"]
+    gate_field, _audit_fields = evidence_module._source_adapter_gate_requirements(
+        evidence_module.SCCP_DOMAIN_BSC
+    )
+
+    bsc_lane["source_record_hashes"].pop("source_verifier_material_hash", None)
+    bsc_lane["source_adapter_gate"].pop("gate_hash", None)
+    bsc_lane["source_adapter_gate"]["audit_hashes"].pop(gate_field, None)
+    bsc_lane["evm_live_metadata"].pop("source_block_tag", None)
+    bsc_lane["destination_binding"].pop("destination_bridge_address", None)
+    bsc_lane["route_allowlist"].pop("route_canary", None)
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("not-ready nested missing fields rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("not-ready nested missing fields reached Markdown")
+
+    captured = capsys.readouterr()
+    lane_label = f"bundled report.evidence.lanes[{bsc_index}]"
+    assert "malformed SCCP release readiness report" in captured.err
+    expected_errors = (
+        f"{lane_label}.source_record_hashes missing field: source_verifier_material_hash",
+        f"{lane_label}.source_adapter_gate missing field: gate_hash",
+        f"{lane_label}.source_adapter_gate audit_hashes missing field: {gate_field}",
+        f"{lane_label}.evm_live_metadata missing field: source_block_tag",
+        f"{lane_label}.destination_binding missing field: destination_bridge_address",
+        f"{lane_label}.route_allowlist missing field: route_canary",
+    )
+    for expected_error in expected_errors:
+        assert expected_error in captured.err
+    assert "operator pending not-ready BSC lane certification" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_not_ready_public_nested_hash_mismatch_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Non-active not-ready copied nested hashes must agree before render."""
+
+    bundle = load_bundle_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    bsc_index, bsc_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == evidence_module.SCCP_DOMAIN_BSC
+    )
+    bsc_lane["production_ready"] = False
+    bsc_lane["blockers"] = ["operator pending not-ready BSC lane certification"]
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending not-ready BSC lane certification"]
+
+    destination_hash = bsc_lane["destination_binding"]["destination_binding_hash"]
+    route_hash = bsc_lane["route_allowlist"]["route_allowlist_hash"]
+    route_canary = bsc_lane["route_allowlist"]["route_canary"]
+    bsc_lane["destination_binding"]["expected_destination_binding_hash"] = next(
+        value for value in (fixed_hex32(0x91), fixed_hex32(0x92)) if value != destination_hash
+    )
+    bsc_lane["route_allowlist"]["expected_route_allowlist_hash"] = next(
+        value for value in (fixed_hex32(0x93), fixed_hex32(0x94)) if value != route_hash
+    )
+    route_canary["route_allowlist_hash"] = next(
+        value for value in (fixed_hex32(0x95), fixed_hex32(0x96)) if value != route_hash
+    )
+    route_canary["destination_binding_hash"] = next(
+        value
+        for value in (fixed_hex32(0x97), fixed_hex32(0x98))
+        if value != destination_hash
+    )
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("not-ready nested hash mismatches rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("not-ready nested hash mismatches reached Markdown")
+
+    captured = capsys.readouterr()
+    lane_label = f"bundled report.evidence.lanes[{bsc_index}]"
+    assert "malformed SCCP release readiness report" in captured.err
+    expected_errors = (
+        f"{lane_label}.destination_binding expected_destination_binding_hash "
+        "must match destination_binding_hash",
+        f"{lane_label}.route_allowlist expected_route_allowlist_hash "
+        "must match route_allowlist_hash",
+        f"{lane_label}.route_allowlist.route_canary route_allowlist_hash "
+        "must match lane route_allowlist_hash",
+        f"{lane_label}.route_allowlist.route_canary destination_binding_hash "
+        "must match lane destination_binding_hash",
+    )
+    for expected_error in expected_errors:
+        assert expected_error in captured.err
+    assert "operator pending not-ready BSC lane certification" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_not_ready_public_nested_false_match_flags_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Non-active not-ready copied match flags must stay coherent before render."""
+
+    bundle = load_bundle_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    bsc_index, bsc_lane = next(
+        (index, lane)
+        for index, lane in enumerate(summary["lanes"])
+        if lane["domain"] == evidence_module.SCCP_DOMAIN_BSC
+    )
+    bsc_lane["production_ready"] = False
+    bsc_lane["blockers"] = ["operator pending not-ready BSC lane certification"]
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending not-ready BSC lane certification"]
+    bsc_lane["destination_binding"]["expected_destination_binding_hash"] = bsc_lane[
+        "destination_binding"
+    ]["destination_binding_hash"]
+    bsc_lane["destination_binding"]["expected_destination_binding_hash_matches"] = False
+    bsc_lane["destination_binding"]["recomputed"] = False
+    bsc_lane["route_allowlist"]["expected_route_allowlist_hash"] = bsc_lane[
+        "route_allowlist"
+    ]["route_allowlist_hash"]
+    bsc_lane["route_allowlist"]["expected_route_allowlist_hash_matches"] = False
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("not-ready nested false match flags rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("not-ready nested false match flags reached Markdown")
+
+    captured = capsys.readouterr()
+    lane_label = f"bundled report.evidence.lanes[{bsc_index}]"
+    assert "malformed SCCP release readiness report" in captured.err
+    expected_errors = (
+        f"{lane_label}.destination_binding "
+        "expected_destination_binding_hash_matches must be true when "
+        "expected_destination_binding_hash matches destination_binding_hash",
+        f"{lane_label}.destination_binding recomputed must be true when "
+        "expected_destination_binding_hash matches destination_binding_hash",
+        f"{lane_label}.route_allowlist "
+        "expected_route_allowlist_hash_matches must be true when "
+        "expected_route_allowlist_hash matches route_allowlist_hash",
+    )
+    for expected_error in expected_errors:
+        assert expected_error in captured.err
+    assert "operator pending not-ready BSC lane certification" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_not_ready_public_route_canary_common_semantic_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Non-active not-ready route-canary common semantics must hold before render."""
+
+    bundle = load_bundle_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    verifier = load_verify_helpers()
+    domains = (
+        evidence_module.SCCP_DOMAIN_BSC,
+        evidence_module.SCCP_DOMAIN_SOL,
+        evidence_module.SCCP_DOMAIN_TON,
+        evidence_module.SCCP_DOMAIN_TRON,
+    )
+    required_truth_fields_by_domain = {
+        evidence_module.SCCP_DOMAIN_BSC: (
+            "message_proof_used",
+            "receipt_block_finalized",
+        ),
+        evidence_module.SCCP_DOMAIN_TRON: (
+            "message_proof_used",
+            "raw_data_owner_matches_transaction",
+            "signature_recovers_to_owner",
+        ),
+    }
+    mutated_lanes: list[tuple[int, int]] = []
+    for index, lane in enumerate(summary["lanes"]):
+        if lane["domain"] not in domains:
+            continue
+        domain = lane["domain"]
+        mutated_lanes.append((index, domain))
+        lane["production_ready"] = False
+        lane["blockers"] = [
+            f"operator pending not-ready domain {domain} lane certification"
+        ]
+        route_canary = lane["route_allowlist"]["route_canary"]
+        route_canary["status"] = "failed"
+        route_canary["evidence_source"] = "operator_review_note"
+        route_canary["evidence_bound"] = False
+        for field in required_truth_fields_by_domain.get(domain, ()):
+            route_canary[field] = False
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending not-ready lane certification"]
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("not-ready route-canary semantic drift rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("not-ready route-canary semantic drift reached Markdown")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert mutated_lanes
+    for lane_index, domain in mutated_lanes:
+        canary_label = (
+            f"bundled report.evidence.lanes[{lane_index}]."
+            "route_allowlist.route_canary"
+        )
+        expected_source = verifier.ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN[domain]
+        expected_errors = (
+            f"{canary_label} status must be passed",
+            f"{canary_label} evidence_source must be {expected_source}",
+            f"{canary_label} evidence_bound must be true",
+            *(
+                f"{canary_label} {field} must be true"
+                for field in required_truth_fields_by_domain.get(domain, ())
+            ),
+        )
+        for expected_error in expected_errors:
+            assert expected_error in captured.err
+    assert "operator pending not-ready" not in captured.err
+    assert "operator_review_note" not in captured.err
+    assert "failed" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_not_ready_public_destination_domain_semantic_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Not-ready destination domain drift must fail before Markdown rendering."""
+
+    bundle = load_bundle_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    domains = (
+        evidence_module.SCCP_DOMAIN_BSC,
+        evidence_module.SCCP_DOMAIN_SOL,
+        evidence_module.SCCP_DOMAIN_TON,
+        evidence_module.SCCP_DOMAIN_TRON,
+    )
+    expected_errors_by_domain = {}
+    mutated_lanes: list[tuple[int, int]] = []
+    for index, lane in enumerate(summary["lanes"]):
+        domain = lane["domain"]
+        if domain not in domains:
+            continue
+        mutated_lanes.append((index, domain))
+        lane["production_ready"] = False
+        lane["blockers"] = [
+            f"operator pending not-ready domain {domain} lane certification"
+        ]
+        destination = lane["destination_binding"]
+        if domain == evidence_module.SCCP_DOMAIN_BSC:
+            destination["destination_network_id"] = ""
+            destination["destination_bridge_address"] = ""
+            expected_errors_by_domain[domain] = (
+                "destination_network_id must be a non-zero canonical bytes32 "
+                "hex string",
+                "destination_bridge_address must be a non-zero canonical "
+                "20-byte hex string",
+            )
+        elif domain == evidence_module.SCCP_DOMAIN_TRON:
+            destination["destination_network_id"] = "0x" + "00" * 32
+            destination["destination_bridge_address"] = "0x" + "11" * 20
+            expected_errors_by_domain[domain] = (
+                "destination_network_id must be a non-zero canonical bytes32 "
+                "hex string",
+                "destination_bridge_address is only valid for EVM-family lanes",
+            )
+        else:
+            destination["destination_network_id"] = "0x" + "22" * 32
+            destination["destination_bridge_address"] = "0x" + "33" * 20
+            expected_errors_by_domain[domain] = (
+                "destination_network_id is only valid for EVM-family or TRON lanes",
+                "destination_bridge_address is only valid for EVM-family lanes",
+            )
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending not-ready lane certification"]
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("not-ready destination semantic drift rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("not-ready destination semantic drift reached Markdown")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert mutated_lanes
+    for lane_index, domain in mutated_lanes:
+        destination_label = (
+            f"bundled report.evidence.lanes[{lane_index}].destination_binding"
+        )
+        for expected_error in expected_errors_by_domain[domain]:
+            assert f"{destination_label} {expected_error}" in captured.err
+    assert "operator pending not-ready" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_not_ready_public_route_canary_proof_context_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Not-ready route-canary proof context drift must fail before rendering."""
+
+    bundle = load_bundle_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    domains = (
+        evidence_module.SCCP_DOMAIN_BSC,
+        evidence_module.SCCP_DOMAIN_SOL,
+        evidence_module.SCCP_DOMAIN_TON,
+        evidence_module.SCCP_DOMAIN_TRON,
+    )
+    expected_errors_by_domain = {}
+    mutated_lanes: list[tuple[int, int]] = []
+    for index, lane in enumerate(summary["lanes"]):
+        domain = lane["domain"]
+        if domain not in domains:
+            continue
+        mutated_lanes.append((index, domain))
+        lane["production_ready"] = False
+        lane["blockers"] = [
+            f"operator pending not-ready domain {domain} lane certification"
+        ]
+        route_canary = lane["route_allowlist"]["route_canary"]
+        if domain == evidence_module.SCCP_DOMAIN_BSC:
+            route_canary["receipt_block_number"] = 0
+            route_canary["log_index"] = 0x1_0000_0000
+            route_canary["target_domain"] = evidence_module.SCCP_DOMAIN_TRON
+            route_canary["proof_version"] = 2
+            route_canary["proof_source_domain"] = evidence_module.SCCP_DOMAIN_BSC
+            expected_errors_by_domain[domain] = (
+                "receipt_block_number must be a positive integer",
+                "log_index must be a u32 integer",
+                "target_domain must be the lane domain",
+                "proof_version must be 1",
+                "proof_source_domain must be SORA",
+            )
+        elif domain == evidence_module.SCCP_DOMAIN_TRON:
+            route_canary["block_number"] = 0
+            route_canary["block_timestamp"] = -1
+            route_canary["log_index"] = 0x1_0000_0000
+            route_canary["target_domain"] = evidence_module.SCCP_DOMAIN_BSC
+            route_canary["proof_version"] = 2
+            route_canary["proof_source_domain"] = evidence_module.SCCP_DOMAIN_TRON
+            route_canary["transaction_owner_address"] = "0x41" + "11" * 20
+            route_canary["signature_recovered_address"] = "0x41" + "22" * 20
+            expected_errors_by_domain[domain] = (
+                "block_number must be a positive integer",
+                "block_timestamp must be a non-negative integer",
+                "log_index must be a u32 integer",
+                "target_domain must be TRON",
+                "proof_version must be 1",
+                "proof_source_domain must be SORA",
+                "signature_recovered_address must match transaction_owner_address",
+            )
+        elif domain == evidence_module.SCCP_DOMAIN_SOL:
+            route_canary["solana_programdata_address"] = ""
+            route_canary["solana_programdata_slot"] = "0"
+            expected_errors_by_domain[domain] = (
+                "solana_programdata_address must be a non-zero canonical "
+                "base58 Solana address",
+                "solana_programdata_slot must be a canonical positive decimal string",
+            )
+        else:
+            route_canary["ton_last_transaction_lt"] = "0"
+            expected_errors_by_domain[domain] = (
+                "ton_last_transaction_lt must be a canonical positive decimal string",
+            )
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending not-ready lane certification"]
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("not-ready route-canary proof context rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("not-ready route-canary proof context reached Markdown")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert mutated_lanes
+    for lane_index, domain in mutated_lanes:
+        canary_label = (
+            f"bundled report.evidence.lanes[{lane_index}]."
+            "route_allowlist.route_canary"
+        )
+        for expected_error in expected_errors_by_domain[domain]:
+            assert f"{canary_label} {expected_error}" in captured.err
+    assert "operator pending not-ready" not in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_not_ready_public_route_canary_hash_role_drift_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Not-ready route-canary hash-role drift must fail before rendering."""
+
+    bundle = load_bundle_module()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = json.loads(
+        json.dumps(
+            evidence_module.validate_evidence_bundle(
+                helpers.complete_bundle(evidence_module)
+            )
+        )
+    )
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    domains = (
+        evidence_module.SCCP_DOMAIN_BSC,
+        evidence_module.SCCP_DOMAIN_SOL,
+        evidence_module.SCCP_DOMAIN_TON,
+        evidence_module.SCCP_DOMAIN_TRON,
+    )
+    expected_errors_by_domain = {}
+    mutated_lanes: list[tuple[int, int]] = []
+    for index, lane in enumerate(summary["lanes"]):
+        domain = lane["domain"]
+        if domain not in domains:
+            continue
+        mutated_lanes.append((index, domain))
+        lane["production_ready"] = False
+        lane["blockers"] = [
+            f"operator pending not-ready domain {domain} lane certification"
+        ]
+        route_canary = lane["route_allowlist"]["route_canary"]
+        if domain == evidence_module.SCCP_DOMAIN_BSC:
+            route_canary["payload_hash"] = route_canary["evidence_hash"]
+            expected_errors_by_domain[domain] = (
+                "payload_hash must not reuse evidence_hash"
+            )
+        elif domain == evidence_module.SCCP_DOMAIN_SOL:
+            route_canary["evidence_hash"] = lane["route_allowlist"][
+                "route_allowlist_hash"
+            ]
+            expected_errors_by_domain[domain] = (
+                "evidence_hash must not reuse route_allowlist_hash"
+            )
+        elif domain == evidence_module.SCCP_DOMAIN_TON:
+            route_canary["ton_last_transaction_hash"] = lane["destination_binding"][
+                "destination_binding_hash"
+            ]
+            expected_errors_by_domain[domain] = (
+                "ton_last_transaction_hash must not reuse destination_binding_hash"
+            )
+        else:
+            route_canary["signature_sha256"] = route_canary["message_id"]
+            expected_errors_by_domain[domain] = (
+                "signature_sha256 must not reuse message_id"
+            )
+    summary["production_ready"] = False
+    summary["blockers"] = ["operator pending not-ready lane certification"]
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            report = minimal_release_bundle_report()
+            if self.calls == 2:
+                report["evidence"] = summary
+            return report
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("not-ready route-canary hash-role drift rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("not-ready route-canary hash-role drift reached Markdown")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert mutated_lanes
+    for lane_index, domain in mutated_lanes:
+        canary_label = (
+            f"bundled report.evidence.lanes[{lane_index}]."
+            "route_allowlist.route_canary"
+        )
+        assert (
+            f"{canary_label} hash role {expected_errors_by_domain[domain]}"
+            in captured.err
+        )
+    assert "operator pending not-ready" not in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
 
@@ -29078,6 +30978,21 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "readiness report Markdown Required Release Evidence section missing "
         "release evidence marker: "
         "C#/.NET ETH/BSC source-material vectors"
+    ) in errors
+
+    not_ready_nested_marker = (
+        "not-ready nested schema, hash/flag-coherence, and route-canary "
+        "proof-context/hash-role/common/truth-semantic blockers"
+    )
+    assert not_ready_nested_marker in markdown
+    weakened = markdown.replace(
+        not_ready_nested_marker,
+        "not-ready nested schema blockers",
+    )
+    errors = verifier._readiness_markdown_invariant_errors(report, weakened)
+    assert (
+        "readiness report Markdown Required Release Evidence section missing "
+        f"release evidence marker: {not_ready_nested_marker}"
     ) in errors
 
     lane_cli_homoglyph_marker = "lane CLI homoglyph-secret redaction markers"
@@ -42695,6 +44610,81 @@ def test_release_bundle_verifier_rejects_route_canary_source_gate_hash_replay(
         "all-lanes summary lane domain 5 route_allowlist route_canary hash "
         "role evidence_hash must not reuse source_adapter_gate_hash"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_all_lanes_destination_route_template_replay(
+    tmp_path: Path,
+) -> None:
+    """Destination and route hashes must not replay source templates."""
+
+    verifier = load_verify_helpers()
+    template_hash = "0x" + next(
+        iter(verifier._source_adapter_gate_template_hashes(verifier.SCCP_DOMAIN_ETH))
+    ).hex()
+
+    def mutate_lane(lane: dict) -> None:
+        destination = lane["destination_binding"]
+        destination["destination_binding_hash"] = template_hash
+        destination["expected_destination_binding_hash"] = template_hash
+
+        route = lane["route_allowlist"]
+        route["route_allowlist_hash"] = template_hash
+        route["expected_route_allowlist_hash"] = template_hash
+        route["route_canary"]["route_allowlist_hash"] = template_hash
+        route["route_canary"]["destination_binding_hash"] = template_hash
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lane(report["evidence"]["lanes"][0])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lane(summary["lanes"][0])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "readiness report embedded evidence lane domain 1",
+        "all-lanes summary lane domain 1",
+    ):
+        assert (
+            f"{label} destination_binding destination_binding_hash must be "
+            "destination binding evidence, not built-in template material"
+        ) in verified.stdout
+        assert (
+            f"{label} destination_binding expected_destination_binding_hash "
+            "must be destination binding evidence, not built-in template material"
+        ) in verified.stdout
+        assert (
+            f"{label} route_allowlist route_allowlist_hash must be "
+            "route binding evidence, not built-in template material"
+        ) in verified.stdout
+        assert (
+            f"{label} route_allowlist expected_route_allowlist_hash must be "
+            "route binding evidence, not built-in template material"
+        ) in verified.stdout
+    assert template_hash not in verified.stdout
+    assert template_hash[2:] not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_all_lanes_expected_hash_drift(
@@ -57315,6 +59305,19 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
         "xml-delimiter-result-execution-id",
         "direct .NET TRX TestResults path must remain the only accepted path",
         "nested .NET TRX TestResults paths must remain rejected",
+        r"\( -type f -o -type l \)",
+        "test_sccp_production_corridor_dotnet_phase_rejects_nested_trx_symlink_inventory",
+        "compute_dotnet_bridge_sha256",
+        "hashlib.sha256",
+        'open(path, "rb")',
+        "requires Python hashlib to record the native bridge digest",
+        "requires canonical native bridge SHA-256 digest output",
+        "command -v sha256sum",
+        "shasum -a 256",
+        "2>/dev/null",
+        "test_sccp_production_corridor_dotnet_phase_uses_python_hashlib_not_path_hash_tools",
+        "secret-token-path-hash-tool-should-not-run",
+        "expected_bridge_sha256",
         r"^SCCP \.NET SDK version: 8\.0\.[1-9][0-9]*$",
         "test_release_readiness_report_rejects_dotnet_padded_or_tabbed_marker_separators",
         "test_release_bundle_verifier_rejects_dotnet_padded_or_tabbed_marker_separators",
@@ -57329,6 +59332,75 @@ def test_release_bundle_verifier_guards_release_corridor_phase_transcript_invent
         "test_release_readiness_report_rejects_decorated_phase_success_marker",
         "test_release_bundle_verifier_rejects_decorated_phase_success_marker",
         "test_sccp_production_corridor_dotnet_phase_rejects_utf16_dtd_trx",
+        "test_sccp_production_corridor_dotnet_phase_rejects_xml_processing_instruction_trx",
+        "test_sccp_production_corridor_dotnet_phase_rejects_xml_comment_trx",
+        "test_sccp_production_corridor_dotnet_phase_rejects_text_node_trx",
+        "TRUSTED_VSTEST_METADATA_ATTRIBUTES_BY_ELEMENT",
+        "urllib.parse.unquote",
+        "iter_percent_decoded_trx_attribute_values",
+        "not is_printable_ascii_trx_attribute_value(value)",
+        "has_sensitive_trx_attribute_value(value)",
+        'not segments[-1].endswith(".dll")',
+        'segment.endswith(".dll") for segment in segments[:-1]',
+        "TRX_DURATION_METADATA_RE",
+        "TRX_TIMESTAMP_METADATA_RE",
+        "TRX_GUID_METADATA_RE",
+        "TRX_ZERO_GUID_METADATA",
+        "is_canonical_trx_guid_metadata_value",
+        "TRX_RELATIVE_RESULTS_DIRECTORY_FORBIDDEN_RE",
+        "is_canonical_trx_relative_results_directory",
+        'element_name == "TestRun" and attribute_name == "id"',
+        'attribute_name == "relativeResultsDirectory"',
+        "is_canonical_trx_metadata_attribute",
+        "requires canonical TRX VSTest metadata attribute values",
+        "reject_untrusted_trx_attribute_metadata",
+        "requires TRX XML attributes to contain only printable ASCII metadata",
+        "requires TRX XML attributes to contain no sensitive metadata",
+        "reject_untrusted_trx_element_metadata",
+        "requires TRX XML element names to contain only printable ASCII metadata",
+        "requires TRX XML element names to contain no sensitive metadata",
+        "namespaced-trusted-attribute",
+        "unexpected-trusted-attribute",
+        "schema-known-sensitive-attribute",
+        "schema-known-percent-sensitive-attribute",
+        "schema-known-percent-control-attribute",
+        "schema-known-percent-nonascii-attribute",
+        "schema-known-freeform-duration-attribute",
+        "schema-known-percent-duration-attribute",
+        "schema-known-timestamp-without-zone-attribute",
+        "schema-known-percent-timestamp-attribute",
+        "schema-known-nonguid-testlist-attribute",
+        "schema-known-uppercase-testtype-attribute",
+        "schema-known-percent-guid-testlist-attribute",
+        "schema-known-zero-guid-testtype-attribute",
+        "schema-known-relative-results-path-attribute",
+        "schema-known-relative-results-percent-path-attribute",
+        "schema-known-relative-results-dot-component-attribute",
+        "schema-known-relative-results-uri-attribute",
+        "test-run-nonguid-id",
+        "test-run-uppercase-id",
+        "test-run-percent-guid-id",
+        "test-run-zero-guid-id",
+        "assembly-decoy-percent-control-path",
+        "assembly-decoy-nonascii-path",
+        "assembly-decoy-uri-delimiter-path",
+        "assembly-decoy-nondll-path",
+        "assembly-decoy-nested-dll-path",
+        "unknown-element-sensitive-attribute-name",
+        "unknown-element-percent-sensitive-attribute-value",
+        "unknown-element-percent-control-attribute-value",
+        "unknown-element-sensitive-name",
+        "unknown-element-percent-sensitive-namespace",
+        "unknown-element-percent-control-namespace",
+        "schema-known-control-attribute",
+        "schema-known-nonascii-attribute",
+        "requires TRX result to contain no XML comments",
+        "requires TRX result to contain no XML processing instructions",
+        "requires TRX VSTest attributes to be unqualified",
+        "requires TRX VSTest attributes to use the expected schema",
+        "requires TRX VSTest attributes to contain only printable ASCII metadata",
+        "requires TRX VSTest attributes to contain no sensitive metadata",
+        "requires TRX XML elements to contain no non-whitespace text",
     ):
         assert required_marker in inventory_markers
 
