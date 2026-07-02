@@ -30,8 +30,12 @@ use iroha_crypto::{
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 use iroha_data_model::{
-    account::{Account, address::AccountAddress},
+    account::{
+        Account,
+        address::{AccountAddress, AccountAddressError},
+    },
     asset::{
+        AssetBalanceScope,
         alias::AssetDefinitionAlias,
         definition::{AssetBalancePolicy, AssetConfidentialPolicy},
         prelude::{AssetDefinition, AssetDefinitionId, AssetId, Mintable},
@@ -64,7 +68,10 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     name::Name,
-    nexus::{DataSpaceId, LaneId, LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash},
+    nexus::{
+        DataSpaceId, FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect,
+        LaneId, LanePrivacyProof, LaneRelayEnvelope, compute_settlement_hash,
+    },
     nft::NftId,
     peer::PeerId,
     permission::Permission,
@@ -81,8 +88,9 @@ use iroha_data_model::{
         action::{Action as TriggerAction, Repeats},
     },
     zk::{
-        ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER, ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-        ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG, ZkAcePublicInputsV1, ZkAceWitnessV1,
+        OpenVerifyEnvelope, ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+        ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+        ZkAcePublicInputsV1, ZkAceWitnessV1,
     },
 };
 use iroha_primitives::{
@@ -400,29 +408,66 @@ fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()> {
 
 fn parse_account_id(value: &str) -> PyResult<AccountId> {
     let raw = value.trim();
-    let parsed = match i105_discriminant_hint(raw) {
-        Some(discriminant) => AccountAddress::parse_encoded(raw, Some(discriminant))
-            .and_then(|address| address.to_account_id())
-            .map_err(|err| err.to_string()),
-        None => AccountId::parse_encoded(raw)
+    let parsed = match AccountAddress::parse_encoded(raw, None) {
+        Ok(address) => address.to_account_id().map_err(|err| err.to_string()),
+        Err(AccountAddressError::UnsupportedAddressFormat) => AccountId::parse_encoded(raw)
             .map(|parsed| parsed.into_account_id())
             .map_err(|err| err.to_string()),
+        Err(err) => Err(err.to_string()),
     };
     parsed.map_err(|err| PyValueError::new_err(format!("invalid account id: {err}")))
 }
 
+fn parse_asset_id(value: &str) -> PyResult<AssetId> {
+    let raw = value.trim();
+    if let Ok(asset_id) = raw.parse::<AssetId>() {
+        return Ok(asset_id);
+    }
+
+    let mut parts = raw.split('#');
+    let definition_literal = parts.next().ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "invalid asset id `{value}`: missing asset definition id"
+        ))
+    })?;
+    let account_literal = parts.next().ok_or_else(|| {
+        PyValueError::new_err(format!("invalid asset id `{value}`: missing account id"))
+    })?;
+    let scope_literal = parts.next();
+    if parts.next().is_some() {
+        return Err(PyValueError::new_err(format!(
+            "invalid asset id `{value}`: too many `#` segments"
+        )));
+    }
+
+    let definition = AssetDefinitionId::parse_address_literal(definition_literal)
+        .map_err(|err| PyValueError::new_err(format!("invalid asset id `{value}`: {err}")))?;
+    let account = parse_account_id(account_literal)
+        .map_err(|err| PyValueError::new_err(format!("invalid asset id `{value}`: {err}")))?;
+    let scope = match scope_literal {
+        None => AssetBalanceScope::Global,
+        Some(raw_scope) => {
+            let Some(dataspace) = raw_scope.strip_prefix("dataspace:") else {
+                return Err(PyValueError::new_err(format!(
+                    "invalid asset id `{value}`: scope must use `dataspace:<id>`"
+                )));
+            };
+            let dataspace = dataspace
+                .parse::<u64>()
+                .map(DataSpaceId::new)
+                .map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "invalid asset id `{value}`: dataspace scope must be a u64"
+                    ))
+                })?;
+            AssetBalanceScope::Dataspace(dataspace)
+        }
+    };
+    Ok(AssetId::with_scope(definition, account, scope))
+}
+
 fn i105_discriminant_hint(input: &str) -> Option<u16> {
-    let raw = input.trim();
-    if raw.starts_with("sora") {
-        return Some(753);
-    }
-    if raw.starts_with("test") {
-        return Some(369);
-    }
-    if raw.starts_with("dev") {
-        return Some(0);
-    }
-    raw.strip_prefix('n')?.parse::<u16>().ok()
+    AccountAddress::i105_discriminant(input).ok()
 }
 
 fn ensure_ed25519_account(account: &AccountId) -> PyResult<()> {
@@ -1030,6 +1075,113 @@ fn zk_ace_authorization_json(
     );
     json::to_string(&json::Value::Object(root))
         .map_err(|err| PyValueError::new_err(format!("serialize ZK-ACE authorization: {err}")))
+}
+
+fn decode_zk_ace_authorized_transfer_archive(
+    bytes: &[u8],
+) -> PyResult<SubmitZkAceAuthorizedTransfer> {
+    let mut transfer_input = bytes;
+    if let Ok(transfer) = SubmitZkAceAuthorizedTransfer::decode_all(&mut transfer_input) {
+        return Ok(transfer);
+    }
+    if let Ok(transfer) = decode_from_bytes::<SubmitZkAceAuthorizedTransfer>(bytes) {
+        return Ok(transfer);
+    }
+
+    let mut instruction_input = bytes;
+    let instruction_box =
+        if let Ok(instruction_box) = InstructionBox::decode_all(&mut instruction_input) {
+            instruction_box
+        } else {
+            decode_from_bytes::<InstructionBox>(bytes).map_err(|err| {
+                PyValueError::new_err(format!(
+                    "failed to decode ZK-ACE authorized transfer archive: {err}"
+                ))
+            })?
+        };
+    let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*instruction_box;
+    instruction_ref
+        .as_any()
+        .downcast_ref::<SubmitZkAceAuthorizedTransfer>()
+        .cloned()
+        .ok_or_else(|| {
+            PyValueError::new_err("instruction archive is not SubmitZkAceAuthorizedTransfer")
+        })
+}
+
+#[pyfunction]
+#[pyo3(name = "zk_ace_authorized_transfer_digest_check")]
+fn zk_ace_authorized_transfer_digest_check_py(
+    py: Python<'_>,
+    instruction_archive_hex: &str,
+) -> PyResult<Py<PyDict>> {
+    let bytes = parse_hex_bytes_py(instruction_archive_hex, "instruction_archive_hex")?;
+    let transfer = decode_zk_ace_authorized_transfer_archive(&bytes)?;
+    let expected_tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
+        transfer.from(),
+        transfer.to(),
+        transfer.asset(),
+        *transfer.amount(),
+        transfer.chain_id(),
+        transfer.action_class().trim(),
+        transfer.policy_hash(),
+    );
+
+    let proof_envelope: OpenVerifyEnvelope = decode_from_bytes(&transfer.proof().proof.bytes)
+        .map_err(|err| {
+            PyValueError::new_err(format!("failed to decode ZK-ACE proof envelope: {err}"))
+        })?;
+    let proof_public_inputs: ZkAcePublicInputsV1 = decode_from_bytes(&proof_envelope.public_inputs)
+        .map_err(|err| {
+            PyValueError::new_err(format!("failed to decode ZK-ACE public inputs: {err}"))
+        })?;
+
+    let result = PyDict::new(py);
+    result.set_item("from", transfer.from().to_string())?;
+    result.set_item("to", transfer.to().to_string())?;
+    result.set_item("asset", transfer.asset().to_string())?;
+    result.set_item("amount", transfer.amount().to_string())?;
+    result.set_item("chain_id", transfer.chain_id().to_string())?;
+    result.set_item("domain_tag", transfer.domain_tag())?;
+    result.set_item("action_class", transfer.action_class())?;
+    result.set_item(
+        "identity_commitment",
+        hex_encode(transfer.identity_commitment()),
+    )?;
+    result.set_item("tx_digest", hex_encode(transfer.tx_digest()))?;
+    result.set_item("expected_tx_digest", hex_encode(expected_tx_digest))?;
+    result.set_item(
+        "tx_digest_matches",
+        *transfer.tx_digest() == expected_tx_digest,
+    )?;
+    result.set_item("replay_nullifier", hex_encode(transfer.replay_nullifier()))?;
+    result.set_item("policy_hash", hex_encode(transfer.policy_hash()))?;
+    result.set_item(
+        "proof_public_tx_digest",
+        hex_encode(proof_public_inputs.tx_digest),
+    )?;
+    result.set_item(
+        "proof_public_tx_digest_matches_instruction",
+        proof_public_inputs.tx_digest == *transfer.tx_digest(),
+    )?;
+    result.set_item("proof_public_from", proof_public_inputs.from.to_string())?;
+    result.set_item("proof_public_to", proof_public_inputs.to.to_string())?;
+    result.set_item("proof_public_asset", proof_public_inputs.asset.to_string())?;
+    result.set_item(
+        "proof_public_amount",
+        proof_public_inputs.amount.to_string(),
+    )?;
+    result.set_item(
+        "proof_public_fields_match_instruction",
+        proof_public_inputs.from == *transfer.from()
+            && proof_public_inputs.to == *transfer.to()
+            && proof_public_inputs.asset == *transfer.asset()
+            && proof_public_inputs.amount == *transfer.amount()
+            && proof_public_inputs.chain_id == *transfer.chain_id()
+            && proof_public_inputs.action_class == transfer.action_class().trim()
+            && proof_public_inputs.policy_hash == *transfer.policy_hash(),
+    )?;
+    Ok(result.unbind())
 }
 
 fn parse_u128_text(value: &str, context: &str) -> PyResult<u128> {
@@ -4352,6 +4504,7 @@ fn sorafs_sign_orderbook_payload_py(
 
 #[pyfunction]
 #[pyo3(name = "sorafs_build_signed_orderbook_order_request")]
+#[allow(clippy::too_many_arguments)] // Python field-level constructor surface
 fn sorafs_build_signed_orderbook_order_request_py(
     py: Python<'_>,
     order_id: &[u8],
@@ -4415,6 +4568,7 @@ fn sorafs_build_signed_orderbook_order_cancel_py(
 
 #[pyfunction]
 #[pyo3(name = "sorafs_build_signed_orderbook_settlement_receipt")]
+#[allow(clippy::too_many_arguments)] // Python field-level constructor surface
 fn sorafs_build_signed_orderbook_settlement_receipt_py(
     py: Python<'_>,
     receipt_id: &[u8],
@@ -4589,6 +4743,49 @@ fn decode_transaction_receipt_json_py(receipt_bytes: &[u8]) -> PyResult<String> 
         })?;
     json::to_json(&receipt)
         .map_err(|err| PyValueError::new_err(format!("failed to serialize receipt: {err}")))
+}
+
+#[pyfunction]
+#[pyo3(name = "zk_ace_verifying_key_registration_payload_v1")]
+fn zk_ace_verifying_key_registration_payload_v1_py(py: Python<'_>) -> PyResult<Py<PyAny>> {
+    let record = zk_ace_prover::zk_ace_verifying_key_record_v1(1).map_err(|err| {
+        PyValueError::new_err(format!(
+            "failed to build ZK-ACE verifying-key registration payload: {err}"
+        ))
+    })?;
+    let key_bytes = record
+        .key
+        .as_ref()
+        .ok_or_else(|| {
+            PyValueError::new_err("ZK-ACE verifying-key record is missing inline key bytes")
+        })?
+        .bytes
+        .clone();
+    let payload = PyDict::new(py);
+    payload.set_item(
+        "backend",
+        iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+    )?;
+    payload.set_item(
+        "name",
+        iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+    )?;
+    payload.set_item("version", record.version)?;
+    payload.set_item("circuit_id", record.circuit_id)?;
+    payload.set_item(
+        "public_inputs_schema_hash_hex",
+        hex_encode(record.public_inputs_schema_hash),
+    )?;
+    payload.set_item("curve", record.curve)?;
+    payload.set_item("vk_len", record.vk_len)?;
+    payload.set_item("max_proof_bytes", record.max_proof_bytes)?;
+    payload.set_item("commitment_hex", hex_encode(record.commitment))?;
+    if let Some(gas_schedule_id) = record.gas_schedule_id {
+        payload.set_item("gas_schedule_id", gas_schedule_id)?;
+    }
+    payload.set_item("vk_bytes", BASE64.encode(&key_bytes))?;
+    payload.set_item("status", "Active")?;
+    Ok(payload.into_any().unbind())
 }
 
 #[pyfunction]
@@ -6623,10 +6820,34 @@ mod tests {
             .expect("Taira I105")
     }
 
+    fn custom_i105_from_seed(seed: u8, discriminant: u16) -> String {
+        AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
+            .to_i105_for_discriminant(discriminant)
+            .expect("custom I105")
+    }
+
     fn sample_account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive Python fixture account key");
         AccountId::new(keypair.public_key().clone())
+    }
+
+    #[test]
+    fn i105_discriminant_hint_decodes_valid_literals_only() {
+        let custom_account = custom_i105_from_seed(0x70, 42);
+        assert_eq!(i105_discriminant_hint(&custom_account), Some(42));
+
+        let noncanonical = custom_account.replacen("n42", "n00042", 1);
+        assert_eq!(i105_discriminant_hint(&noncanonical), None);
+
+        let mut chars = custom_account.chars().collect::<Vec<_>>();
+        let last = chars.len().saturating_sub(1);
+        chars[last] = if chars[last] == '1' { '2' } else { '1' };
+        let tampered = chars.into_iter().collect::<String>();
+        assert_eq!(i105_discriminant_hint(&tampered), None);
+        assert_eq!(i105_discriminant_hint("n"), None);
+        assert_eq!(i105_discriminant_hint("nabc"), None);
+        assert_eq!(i105_discriminant_hint("n65536payload"), None);
     }
 
     #[test]
@@ -6639,6 +6860,38 @@ mod tests {
         assert_eq!(
             parse_account_id(&taira_account).expect("Taira account parses"),
             sample_account(0x71)
+        );
+    }
+
+    #[test]
+    fn parse_account_id_accepts_numeric_custom_i105_literals_without_global_discriminant() {
+        let custom_account = custom_i105_from_seed(0x72, 42);
+        assert!(
+            custom_account.starts_with("n42"),
+            "custom I105 account must use the numeric sentinel"
+        );
+        assert_eq!(
+            parse_account_id(&custom_account).expect("custom account parses"),
+            sample_account(0x72)
+        );
+    }
+
+    #[test]
+    fn parse_account_id_rejects_noncanonical_and_tampered_numeric_custom_i105_literals() {
+        let custom_account = custom_i105_from_seed(0x73, 42);
+        let noncanonical = custom_account.replacen("n42", "n00042", 1);
+        assert!(
+            parse_account_id(&noncanonical).is_err(),
+            "noncanonical numeric sentinel must be rejected"
+        );
+
+        let mut chars = custom_account.chars().collect::<Vec<_>>();
+        let last = chars.len().saturating_sub(1);
+        chars[last] = if chars[last] == '1' { '2' } else { '1' };
+        let tampered = chars.into_iter().collect::<String>();
+        assert!(
+            parse_account_id(&tampered).is_err(),
+            "payload/checksum tampering must be rejected"
         );
     }
 
@@ -17987,9 +18240,7 @@ struct PyAssetId {
 impl PyAssetId {
     #[new]
     fn new(value: &str) -> PyResult<Self> {
-        let inner = value
-            .parse()
-            .map_err(|err| PyValueError::new_err(format!("invalid asset id `{value}`: {err}")))?;
+        let inner = parse_asset_id(value)?;
         Ok(Self { inner })
     }
 
@@ -18134,6 +18385,30 @@ impl Instruction {
                 ))
             })?;
         Ok(Instruction::new(InstructionBox::from(instruction)))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (sponsor, policy_name = "default"))]
+    fn upsert_fee_sponsor_policy(
+        _cls: &Bound<'_, PyType>,
+        sponsor: &str,
+        policy_name: &str,
+    ) -> PyResult<Self> {
+        let sponsor: AccountId = parse_account_id(sponsor).map_err(|err| {
+            PyValueError::new_err(format!("invalid fee sponsor account `{sponsor}`: {err}"))
+        })?;
+        ensure_ed25519_account(&sponsor)?;
+        let policy_name: Name = policy_name.parse().map_err(|err| {
+            PyValueError::new_err(format!("invalid fee sponsor policy `{policy_name}`: {err}"))
+        })?;
+        let policy = FeeSponsorPolicy {
+            id: FeeSponsorPolicyId::new(sponsor, policy_name),
+            enabled: true,
+            max_fee: None,
+            rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
+        };
+        let instruction = iroha_data_model::isi::nexus::UpsertFeeSponsorPolicy { policy };
+        Ok(Instruction::new(instruction.into()))
     }
 
     #[classmethod]
@@ -18601,9 +18876,7 @@ impl Instruction {
         asset_id: &str,
         quantity: &str,
     ) -> PyResult<Self> {
-        let asset_id: AssetId = asset_id.parse().map_err(|err| {
-            PyValueError::new_err(format!("invalid asset id `{asset_id}`: {err}"))
-        })?;
+        let asset_id = parse_asset_id(asset_id)?;
         let quantity = parse_numeric(quantity)?;
         let instruction = Mint::asset_numeric(quantity, asset_id);
         Ok(Instruction::new(instruction.into()))
@@ -18615,9 +18888,7 @@ impl Instruction {
         asset_id: &str,
         quantity: &str,
     ) -> PyResult<Self> {
-        let asset_id: AssetId = asset_id.parse().map_err(|err| {
-            PyValueError::new_err(format!("invalid asset id `{asset_id}`: {err}"))
-        })?;
+        let asset_id = parse_asset_id(asset_id)?;
         let quantity = parse_numeric(quantity)?;
         let instruction = Burn::asset_numeric(quantity, asset_id);
         Ok(Instruction::new(instruction.into()))
@@ -18630,9 +18901,7 @@ impl Instruction {
         quantity: &str,
         destination: &str,
     ) -> PyResult<Self> {
-        let asset_id: AssetId = asset_id.parse().map_err(|err| {
-            PyValueError::new_err(format!("invalid asset id `{asset_id}`: {err}"))
-        })?;
+        let asset_id = parse_asset_id(asset_id)?;
         let destination: AccountId = parse_account_id(destination)?;
         ensure_ed25519_account(&destination)?;
         let quantity = parse_numeric(quantity)?;
@@ -23385,7 +23654,15 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
+        zk_ace_verifying_key_registration_payload_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         zk_ace_build_transfer_authorization_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        zk_ace_authorized_transfer_digest_check_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

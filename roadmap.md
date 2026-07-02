@@ -13,6 +13,12 @@ The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. SCCP
 will not support Sub&#115;trate/Pol&#107;adot networks for now; do not track those
 networks as remaining launch work for this release.
 
+SCCP source-template hash denial is now a required production-corridor
+evidence gate: the shared active-lane denylist pytest is part of the
+evidence-scripts phase, and both release-readiness and strict release-bundle
+transcript inventories require that test before certification evidence can
+pass.
+
 ## Release and Stabilization
 
 **Status:** active.
@@ -42,6 +48,8 @@ networks as remaining launch work for this release.
   helper/syscall/opcode/circuit verifier paths reject all-zero public-key
   material before backend parsing, IVM ECDSA circuit verification rejects
   all-zero public-key and signature buffers before k256 parsing,
+  ML-DSA aggregate wrapper coverage now pins valid inputs plus tampered,
+  all-zero-signature, all-zero-public-key, and mismatched-length rejection,
   ML-DSA public-key recovery from a typed secret rejects all-zero secret-key
   material before unsafe unpacking,
   BLS/GOST/secp256k1/SM2/hybrid/blinding raw imports now reject inert all-zero
@@ -79,6 +87,8 @@ networks as remaining launch work for this release.
 					  Connect FFI `_with_alg` encoders and native/Java detached verification helpers
 					  reuse that Ed25519 admission path before frame/envelope encoding or signature
 					  verification,
+					  SoraFS stream-token verification now rejects small-order verifier keys before
+					  Dalek strict verification,
 					  SoraFS CLI manifest signature verification rejects
 					  noncanonical/small-order signature `R` and public-key encodings before
 			  Dalek verification, CAR manifest-stub and chunker vector-exporter
@@ -86,8 +96,10 @@ networks as remaining launch work for this release.
 			  council signatures, SoraFS proof-token minting parses its nonzero
   scratch signature through the strict `R` helper before attaching the real
   Ed25519 token signature, proof-token binary decode routes frame
-  signatures through the strict `R` parser, and proof-token raw-byte
-  verification routes public keys through central Ed25519 admission, Torii
+  signatures through the strict `R` parser, direct proof-token signature
+  verification re-parses stored signatures through the strict `R` parser
+  before Dalek strict verification, and proof-token raw-byte verification
+  routes public keys through central Ed25519 admission, Torii
   proof-token verify requests route supplied `verifying_key_hex` through the
   same central Ed25519 admission path, SoraFS CAR proof-token verifier raw-byte
   construction routes supplied Ed25519 keys through that admission path,
@@ -325,8 +337,9 @@ networks as remaining launch work for this release.
   decode explorer `encoded` instruction fields only from exact non-empty
   lowercase even-length hex text, rejecting whitespace, `0x` prefixes,
   uppercase, odd-length, or non-hex payloads instead of normalizing them;
-  Swift native/compatibility and Kotlin/JVM payment-token output-commitment
-  lookup helpers must reject whitespace, `0x` prefixes, uppercase hex, and
+  Swift native and retired JSON payment-token output-commitment lookup helpers
+  plus Kotlin/JVM payment-token output-commitment lookup helpers must reject
+  whitespace, `0x` prefixes, uppercase hex, and
   non-32-byte commitment text instead of normalizing it before matching claims;
   mobile QR stream tests must describe the rejected `iroha:qr-old:` prefix as a
   retired versioned prefix, and mobile route/scheme comments and diagnostics
@@ -379,6 +392,7 @@ networks as remaining launch work for this release.
 	  `--negative-control-mobile-retired-qr-prefix-wording` plus
 	  `--negative-control-mobile-wallet-note-retired-state-migration` plus
 	  `--negative-control-swift-wallet-note-json-amount-exactness` plus
+	  `--negative-control-csharp-wallet-note-json-exactness` plus
 	  `--negative-control-mobile-wallet-note-commitment-hex-exactness` plus
 	  `--negative-control-mobile-offline-note-wallet-input-cap` plus
   `--negative-control-mobile-offline-note-wallet-positive-amounts` plus
@@ -421,9 +435,11 @@ networks as remaining launch work for this release.
 	  normalization drift, Android Java
 	  issued-claim asset-id/amount drift, Swift wallet-note direct asset/amount
 	  drift, Swift or Android Java wallet-note amount JSON normalization drift,
+	  C# wallet-note amount or commitment-hex normalization drift,
 	  Swift/Kotlin/JVM/Java Android wallet load/receive amount preservation
 	  drift, retired wallet-note state
-  migrations, retired QR prefix wording drift, substring platform matching,
+  migrations across Swift, Kotlin/JVM, Java Android, or C#, retired QR prefix
+  wording drift, substring platform matching,
   fake registration certificates, old Swift canonical-auth test naming,
   nonpositive spend-selection input coercion, mobile Offline Note wallet
   input-cap relaxation, nonpositive Offline Note load/receive/payment amount
@@ -465,7 +481,7 @@ networks as remaining launch work for this release.
   retired Torii profile, request-alias, vector-alias, and stale doc wording
   paths cannot return.
 
-- Keep classic Torii Offline middleware attestation and fixture generation on
+- Keep Torii Offline middleware attestation and fixture generation on
   the same first-release contract: request-side `device_binding`
   assertion-key aliases `app_attest_public_key_base64` and `device_public_key`
   must reject, and `offline_vectors` must reject noncanonical fixture platform
@@ -657,8 +673,8 @@ networks as remaining launch work for this release.
   explicit override, not a production path controlled by a default-off runtime
   switch. Offline Kagemusha docs now keep retired-mode wording on explicit
   rejection guarantees rather than active first-release paths, including the
-  unavailable runtime bearer-audit dispatch path, pre-existing Halo2
-  proof-envelope scope, and zero-hash Offline recursive proof-admission
+  unavailable runtime bearer-audit dispatch path, current semantic Halo2
+  proof-envelope parser scope, and zero-hash Offline recursive proof-admission
   wildcard rejection; the policy guard rejects stale legacy/fallback wording,
   and the SDK README parity guard rejects stale legacy/source-alias
   wording plus old classic note/proof-generation wording around retired Offline
@@ -755,6 +771,20 @@ networks as remaining launch work for this release.
   old-path wording.
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- CUDA acceleration release readiness now has focused Norito helper, IVM CUDA
+  grouped-test, scheduler GPU fallback/adversarial, FASTPQ fused Poseidon
+  parity/negative, strict workspace warnings-as-errors clippy, workspace build,
+  and workspace test no-run coverage on the local CUDA toolchain. Remaining
+  release work is to keep those gates in CI and extend the hardware matrix to
+  the production GPU/driver profiles before relying on CUDA in validator fleets.
+- DA/NPoS integration release readiness now includes the 2026-07-02 follow-up
+  for full-suite failures around large-payload DA quorum timing, staged
+  permissioned-to-NPoS cutover, quorum-aware NPoS liveness, PRF collector
+  endpoint rotation, and VRF progress drivers. The full serialized
+  `consensus_and_da` corridor is currently green locally at 366 passed, 0
+  failed, and 9 ignored. Keep this corridor in the release validation rotation,
+  and reserve the ignored multi-hour localnet soaks for scheduled/manual
+  hardware windows.
 - The C# SDK package release corridor now has a reusable isolated
   package-consumer guard that installs the packed NuGet artifact, rejects
   project-reference fallback, and runs managed API smoke checks. The C# PR
@@ -794,6 +824,11 @@ networks as remaining launch work for this release.
   emergency-override, verified-record hydration, and merge-candidate work must
   preserve that exact committee binding so stale, reordered, or forged relay
   committee metadata cannot influence cross-lane finality evidence.
+- Nexus lane lifecycle now applies the same emergency-override trust-root
+  cleanup boundary as full config swaps: manual lifecycle updates prune
+  overrides for reset lanes and lanes absent from the updated catalog, and
+  newly created lane ids discard pre-staged overrides as stale prior-incarnation
+  state before the lane can accept fresh emergency authority.
 - Autoscale scale-in cleanup now has same-block adversarial coverage proving
   emergency validator overrides, public-lane economic rows, public validator
   terminalization, and AXT replay ledger rows staged earlier in the block for
@@ -1735,8 +1770,8 @@ networks as remaining launch work for this release.
   workflow now scans README/source/portal markdown plus a negative control that
   reintroduces the removed alias in each doc surface.
   SDK READMEs and the offline Kagemusha design doc now describe
-  `lineage_verifier_record` as the current single-record field rather than a
-  legacy compatibility path; the README and offline-doc negative controls
+  `lineage_verifier_record` as the current single-record field rather than an
+  alternate decode route; the README and offline-doc negative controls
   reintroduce the stale wording and require the guard to reject it.
   The Ubuntu/Windows C# SDK matrix must keep the matching exact C#
   request/helper-path diagnostics for init raw lineage-key mismatches, append lineage-key
@@ -2036,9 +2071,9 @@ networks as remaining launch work for this release.
   platform-specific native library name, fails if the freshly built artifact is
   missing, prints the selected native bridge path, and prepends that directory
   to the macOS, Linux, and Windows loader paths before invoking `dotnet test`.
-  C# Torii identifier resolve parsing now also accepts the nested
-  `payload`/`attestation` receipt envelope while rejecting mixed legacy/nested
-  envelopes, missing nested objects, malformed signed/proof attestation
+  C# Torii identifier resolve parsing now requires the current nested
+  `payload`/`attestation` receipt envelope while rejecting retired flat receipt
+  fields, missing nested objects, malformed signed/proof attestation
   combinations, invalid proof base64, and non-exact receipt execution fields
   before callers consume receipt data. The C# Kagemusha recursive-redeem
   transaction-builder metadata overloads now also pin exact managed diagnostic
@@ -2786,7 +2821,8 @@ networks as remaining launch work for this release.
     commitment-origin, chain-id nesting, secret/nonce length, derivation-hash,
     and audit-output mismatch negatives before wallet code trusts public inputs.
   - C# now exposes a managed Offline Note payment-token model/codec surface for
-    the legacy `OfflineNotePaymentTokenEnvelope` Norito/text handoff. The C#
+    the current first-release `OfflineNotePaymentTokenEnvelope` Norito/text
+    handoff. The C#
     model keeps audit bundles as opaque Norito bytes while decoding their
     structure enough to reject token-id/audit mismatches, malformed audit
     schemas/layouts including forged packed-layout headers, empty or mismatched
@@ -2803,7 +2839,8 @@ networks as remaining launch work for this release.
     canonical I105 recipient account ids before matching audit outputs, so
     alias-style or padded account labels cannot be queried as recipient ids.
   - C# now exposes a managed Offline Note receive-request model/codec surface
-    for the legacy `OfflineNoteReceiveRequestEnvelope` Norito/text handoff.
+    for the current first-release `OfflineNoteReceiveRequestEnvelope`
+    Norito/text handoff.
     Focused .NET tests pin exact metadata, canonical I105 account ids,
     asset-definition/asset/account binding, canonical amount text,
     noncanonical dataspace scope suffix rejection, embedded key-certificate
@@ -2814,7 +2851,8 @@ networks as remaining launch work for this release.
     padded, malformed, or noncanonical base64url text before wallet code trusts
     a receive request.
   - C# now exposes a managed Offline Note receipt ACK model/codec surface for
-    the legacy `OfflineNoteReceiptAckEnvelope` Norito/text handoff. Focused
+    the current first-release `OfflineNoteReceiptAckEnvelope` Norito/text
+    handoff. Focused
     .NET tests mirror Swift/Kotlin/Android exactness negatives for
     `chain_id`, `payment_request_id`, `recipient_account_id`, 32-byte
     `token_id`, positive `accepted_at_ms`, wrong schema/exact-layout/checksum,
@@ -2834,8 +2872,8 @@ networks as remaining launch work for this release.
     base64, duplicate root and nested persistence JSON properties, malformed
     hex, uppercase persisted commitment hex, noncanonical amount text, signed,
     zero-padded, or overflowing numeric-string counters, zero `created_at_ms`,
-    unknown or unsupported state values, backward timestamp pairs, origin, and
-    note-secret boundaries.
+    retired or case-normalized state spellings, unknown or unsupported state
+    values, backward timestamp pairs, origin, and note-secret boundaries.
   - The Windows C# pass includes identifier receipt attestation
     selector exactness: Torii JSON receipt parsing now rejects padded,
     internal-whitespace, control-character, or mixed-case attestation `kind`
@@ -2852,26 +2890,22 @@ networks as remaining launch work for this release.
     signed/proof field mixing before callers can observe a partially trusted
     receipt. If C# canonical attestation builders are added later, mirror the
     same proof checks there too.
-  - C# Torii identifier-resolve JSON parsing now rejects padded response
-    internal-whitespace, or control-character response `signature`,
-    `signature_payload_hex`,
-    exposed `payload.opening.signature`, and signed-attestation `signature`
-    fields, plus uppercase `0X` prefix aliases on those hex fields, before
-    callers can decode or verify receipt bytes. The focused .NET 8 Torii tests
-    cover these source-level negatives, and raw
-    `ToriiIdentifierResolveResponse` deserialization now also rejects
-    odd-length, non-hex, and uppercase-`0X` legacy signature,
-    `signature_payload_hex`, nested opening signature, and signed-attestation
-    signature fields, and now applies the same policy-id, account/payload field,
-    timestamp, opening-signature, and signed/proof attestation exactness checks
-    to raw legacy `signature_payload` objects. If C# canonical
-    payload/attestation builders or verifier inputs are added later, mirror the
-    same padded/internal-whitespace, malformed-hex, and `0X` opening-signature
-    and signed-attestation signature vectors there too.
+  - C# Torii identifier-resolve JSON parsing now requires the current nested
+    `payload`/`attestation` envelope, rejects retired flat response fields such
+    as `signature` and `signature_payload_hex`, and rejects padded,
+    internal-whitespace, control-character, odd-length, non-hex, or uppercase
+    `0X` aliases on nested `payload.opening.signature` and
+    `attestation.signature` before callers can decode or verify receipt bytes.
+    The focused .NET 8 Torii tests cover these source-level negatives, and raw
+    `ToriiIdentifierResolveResponse` deserialization applies the same
+    policy-id, account/payload field, timestamp, opening-signature, and
+    signed/proof attestation exactness checks to the current nested envelope. If
+    C# canonical payload/attestation builders or verifier inputs are added
+    later, mirror the same padded/internal-whitespace, malformed-hex, and `0X`
+    opening-signature and signed-attestation signature vectors there too.
   - The Windows C# pass includes identifier receipt policy-id
     exactness: `ResolveIdentifierAsync` now rejects non-exact request
-    `policy_id`, top-level response `policy_id`, and
-    `signature_payload.policy_id` / `signature_payload.payload.policy_id`
+    `policy_id` and nested response `payload.policy_id`
     values with padded, internal-whitespace, control-character, or malformed `kind#rule`
     components before HTTP dispatch or receipt verification. It also rejects
     blank, padded, internal-whitespace, NBSP-containing, or control-character
@@ -2881,32 +2915,32 @@ networks as remaining launch work for this release.
   - The Windows C# pass includes identifier receipt program-id
     exactness: Torii JSON receipt parsing now rejects padded,
     internal-whitespace, or control-character
-    `signature_payload.payload.execution.program_id` and
-    `signature_payload.payload.opening.payload.program_id` values before receipt
+    `payload.execution.program_id` and
+    `payload.opening.payload.program_id` values before receipt
     verification. If a C# canonical receipt payload builder is added later,
     mirror the same program-id checks there too.
   - The Windows C# pass includes identifier receipt account-id
     exactness: Torii JSON receipt parsing now rejects padded,
     internal-whitespace, or control-character
-    `signature_payload.payload.account_id` values before receipt verification.
+    `payload.account_id` values before receipt verification.
     If a C# canonical receipt payload builder is added later, mirror the same
     account-id checks there too.
   - The Windows C# pass includes identifier receipt hash-field
     exactness: Torii JSON receipt parsing now rejects padded,
     internal-whitespace, or control-character
-    `signature_payload.payload.opaque_id`,
-    `signature_payload.payload.receipt_hash`,
-    `signature_payload.payload.uaid`, execution digest fields, and opening
+    `payload.opaque_id`,
+    `payload.receipt_hash`,
+    `payload.uaid`, execution digest fields, and opening
     payload digest fields before receipt verification. If a C# canonical
     receipt payload builder is added later, mirror the same digest-field checks
     there too.
   - The Windows C# pass includes identifier receipt timestamp
     exactness: Torii JSON receipt parsing now rejects padded,
     internal-whitespace, or leading-zero numeric-string
-    receipt times for `signature_payload.payload.execution.executed_at_ms`,
-    `signature_payload.payload.execution.expires_at_ms`,
-    `signature_payload.payload.opening.payload.opened_at_ms`, and
-    `signature_payload.payload.opening.payload.expires_at_ms`, and rejects
+    receipt times for `payload.execution.executed_at_ms`,
+    `payload.execution.expires_at_ms`,
+    `payload.opening.payload.opened_at_ms`, and
+    `payload.opening.payload.expires_at_ms`, and rejects
     non-positive receipt times before receipt verification. Raw
     `ToriiIdentifierResolveResponse` deserialization now also validates nested
     opening payload timestamps instead of relying on later client response
@@ -3273,13 +3307,21 @@ networks as remaining launch work for this release.
 - Current Kagemusha live production readiness is narrowed to evidence
   collection: the current best rollup accepts the checked
   `artifacts/kagemusha/kagemusha-localnet-lifecycle-evidence.json` 4-peer
-  production-localnet lifecycle evidence, but the previous current-key Pixel 6
-  multid2d `target/` Android slot is no longer present on disk. Final release
-  remains blocked on a completed Reserved-lineage proof evidence packet,
-  completed ABI-7 recursive compact key evidence, and physical Android
+  production-localnet lifecycle evidence, and the checked
+  `artifacts/android/device_lab/google-pixel-6-6a-physical-1781260116917`
+  Android slot still validates structurally. That slot is not release-admissible
+  without the matching trusted signer public key and still covers only a single
+  standard family/transport set. Final release remains blocked on a completed
+  Reserved-lineage proof evidence packet, completed ABI-7 recursive compact key
+  evidence, durable trusted-signer public key material, and physical Android
   standard-matrix plus offline D2D transport evidence for every required
   standard family. Keep further lineage and compact retries deferred while live
-  cargo/rustc or compact keygen jobs are still consuming the host.
+  cargo/rustc or compact keygen jobs are still consuming the host, and run any
+  retry through the staged runners' shared heavy-job lock plus
+  process-tree/process-group RSS guard so a runaway proof/keygen child,
+  descendant, or residual same-group worker cannot silently consume the
+  workstation. New staged retries must also fail closed while legacy Kagemusha
+  heavy jobs are already live outside the guard.
 - Kagemusha JavaScript SDK validation must keep the focused Node 20 runner
   aligned with the parity inventory by executing the Kagemusha recursive spend,
   account-address exactness, Offline Cash issuer-key configuration snapshot,
@@ -4002,9 +4044,9 @@ networks as remaining launch work for this release.
   and write-side malformed policy-id or negative-total rejection before callers
   trust identifier policy listings.
   The focused .NET 8 C# Torii tests include source-level Torii identifier-resolve
-  signature exactness negatives covered by `ToriiClientTests`, including padded
-  response `signature`, `signature_payload_hex`, exposed
-  `payload.opening.signature`, and signed-attestation `signature` fields. If C#
+  signature exactness negatives covered by `ToriiClientTests`, including retired
+  flat response `signature`/`signature_payload_hex` rejection plus padded nested
+  `payload.opening.signature` and signed-attestation `signature` fields. If C#
   identifier receipt verifier inputs are added later, mirror the same padded
   signed-attestation `signature` negative vectors there too.
   Python crypto algorithm labels must remain exact at the public SDK
@@ -4098,11 +4140,21 @@ networks as remaining launch work for this release.
   wrapper now runs the serial-scoped build/install, instrumentation export, raw
   pull, challenge-bound verifier-report render, signed multi-transport
   assembly, and per-slot validation without managing or stopping other
-  processes. It preflights `--private-key` and `--public-key` as existing,
+  processes. It strips inherited `ANDROID_SERIAL` before ADB preflights and
+  sets that environment key only from the explicit or auto-resolved capture
+  serial, so stale operator-shell serial settings cannot redirect capture
+  commands. It preflights `--private-key` and `--public-key` as existing,
   non-empty, non-symlinked, non-hardlinked regular files before any ADB
-  visibility check, build, instrumentation, or raw-slot pull, and the signer
-  helper must reject private/public key paths with surrounding whitespace before
-  slot metadata reads or OpenSSL lookup. The signing helper must also reject
+  visibility check, build, instrumentation, or raw-slot pull, using the same
+  64 KiB signing-key cap as the verifier/signing helper. The signer helper must
+  reject private/public key paths with surrounding whitespace and oversized
+  private keys before slot metadata reads or OpenSSL lookup, and trusted
+  public-key loading must cap opened key bytes before private-key marker scans.
+  Signer and verifier OpenSSL
+  subprocesses also strip inherited OpenSSL config/module/engine/debug and
+  dynamic-loader injection environment variables before launch so
+  operator-shell overrides cannot alter production key parsing, signing, or
+  verification. The signing helper must also reject
   explicit signed-evidence output paths whose raw string or individual path
   components carry surrounding whitespace before slot metadata reads or JSON
   output parent handling. It now rejects
@@ -4424,7 +4476,11 @@ networks as remaining launch work for this release.
   parent descriptor and report rollback unlink or cleanup-sync failures. Both
   staged runners now also
   force their staged root/artifact directories to `0700` and staged
-  child-log/report/marker files to `0600`. The lineage and compact-key
+  child-log/report/marker files to `0600`, and they strip
+  `IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN` from the child environment
+  before launching proof/keygen commands, including direct launches without
+  repo-local binary path injection, so parent-shell runtime-keygen bypasses
+  cannot be inherited invisibly. The lineage and compact-key
   staged runners and finalizers also reject surrounding-whitespace components,
   parent-segment aliases, and backslashes in explicit staged path flags before
   ancestor validation or metadata reads, and finalizers reject unsafe
@@ -4455,7 +4511,9 @@ networks as remaining launch work for this release.
   lifecycle readiness summaries redact secret-looking or control-character
   identity values before emitting `localnet_run_id`, `chain_id`, `target`, or
   `peer_ids`. Android signed-evidence freshness blockers consume the sanitized
-  slot reports, so stale/future diagnostics also redact unsafe slot identifiers.
+  slot reports, so stale/future diagnostics also redact unsafe slot identifiers,
+  and freshness-invalid signed reports are excluded from standard device-family
+  and D2D transport matrix coverage.
   Direct Android signed-evidence summary validation rejects malformed path,
   digest, and identity fields without emitting unsafe claimed values.
   Localnet lifecycle artifact hashes are normalized across `sha256:`,
@@ -4463,7 +4521,12 @@ networks as remaining launch work for this release.
   single-character placeholder, duplicate, or suffix-bearing digests fail
   closed in both direct readiness validation and helper-generated evidence.
   Release-bundle summary and manifest verification now rejects control-character
-  strings anywhere inside those JSON roots, matching the existing global
+  strings anywhere inside those JSON roots, and the release-bundle manifest
+  `generated_at_utc` must not predate the bound readiness summary, lineage,
+  compact, localnet, or Android signed-evidence timestamps while still allowing
+  stable top-level timestamp refreshes. The manifest also keeps the
+  readiness-summary section required, object-shaped, and pinned to canonical,
+  non-future UTC `generated_at_utc` text. This matches the existing global
   secret-material gate.
   The lineage finalizer also requires the staged
   elapsed-seconds sidecar to be the runner's exact six-fractional-digit
@@ -4614,8 +4677,9 @@ networks as remaining launch work for this release.
   exclusion regressions and workflow-routed negative controls, so refreshed
   release manifests cannot exclude signed Android evidence timestamps.
   `--verify-existing` still allows ordinary top-level release-manifest timestamp
-  refresh, but future-dated summary/manifest timestamps fail closed before
-  stable manifest drift comparison. The release bundle gate now also requires
+  refresh, but missing, non-object, noncanonical, or future-dated
+  readiness-summary sections fail closed before stable manifest drift
+  comparison. The release bundle gate now also requires
   Android readiness `slots` entries to be accepted, safe, unique, sorted, and
   inventory-matched to the signed-evidence map before any Android release
   artifacts are copied into the bundle. Slot-level Kagemusha details must carry
@@ -6514,7 +6578,9 @@ networks as remaining launch work for this release.
   snapshot-age/ingest-lag threshold facts before writing. The SFM-3 rollout
   checker also rejects duplicate provider proof sibling hashes in externally
   supplied evidence, so reviewed Merkle proof paths stay schema-closed outside
-  the local canary builder.
+  the local canary builder, and event-watch evidence must carry a positive
+  polling `limit`, exact `count`/`events[]` length agreement, and
+  `count <= limit` before readiness can report ready.
   Remaining SFM-3 rollout work is deploying the ingest/publisher service and
   capturing live run evidence that passes this gate, not the scoring, proof,
   local Torii API, cache validators, SSE/WebSocket push, SDK convenience
@@ -6646,7 +6712,10 @@ networks as remaining launch work for this release.
   bind back to a valid proof-generation `proof_summary_digest_hex` in the same
   evidence bundle, requires governance approval `policy_digest_hex` to match a
   valid proof-generation `policy_digest_hex`, publishes valid PDP policy
-  digests as `valid_policy_digests`, with binding failures marked on the
+  digests as `valid_policy_digests`, requires governance approval
+  `provider_roster_digest_hex` to match a valid proof-generation
+  `provider_roster_digest_hex`, publishes valid governed provider-roster
+  digests as `valid_provider_roster_digests`, with binding failures marked on the
   offending artifact through the shared scalar binding error recorder before
   required-kind summary validity is reported. The PDP collection planner now emits the
   checker-backed `evidence_contract` map for the selected required kinds during
@@ -6656,9 +6725,11 @@ networks as remaining launch work for this release.
   execution.
   `scripts/build_sorafs_pdp_canary.py` now builds payload-free checked-in
   canary artifacts for each SF-13 gate kind, requires complete PDP route and
-  metric coverage where applicable, enforces proof-summary digest bindings plus
-  proof-generation/governance policy-digest input, provider/challenge/proof
-  count, and latency thresholds before writing, validates every generated
+  metric coverage where applicable, binds provider-transport `route_count` to
+  the unique canonical route-name inventory so duplicate route rows cannot
+  inflate readiness, enforces proof-summary digest bindings plus
+  proof-generation/governance policy-digest and provider-roster digest input,
+  provider/challenge/proof count, and latency thresholds before writing, validates every generated
   artifact through the PDP rollout checker, and ships provider-transport and
   proof-generation response-file examples. PDP
   remains fail-closed in embedded Torii proof streaming until
@@ -6758,7 +6829,10 @@ networks as remaining launch work for this release.
   downstream `release_manifest_digest_hex` references as
   `valid_release_manifest_reference_digests`, requires the aggregate
   production-readiness gate to tether those reference digests to recognized
-  artifact fingerprints, and requires
+  artifact fingerprints, now also publishes archive-index, signed release-key
+  fingerprint, package-index, smoke-output, header, and FFI-contract anchors,
+  and requires the aggregate production-readiness gate to tether each one to
+  its owning release evidence kind before reporting ready, and requires
   governance approval `policy_digest_hex` to bind back to that signed-manifest
   policy before SF-11 promotion can report ready; the
   matching collection planner accepts reviewed
@@ -6776,12 +6850,15 @@ networks as remaining launch work for this release.
   downstream bindings, cookbook smoke, FFI/header contract, and governance
   approval artifacts, with signed-manifest and governance policy-digest inputs
   plus response-file examples for release-archive and signed-manifest
-  generation. The SF-11 plan
-  now also publishes the operator,
-  metrics, and binding-generation guides for packaging, telemetry extraction,
-  C FFI header synchronization, selector parity, and downstream package
-  evidence handoff. Remaining SF-11
-  work is per-target published archives, signed release manifests, downstream
+	  generation. The SF-11 plan
+	  now also publishes the operator,
+	  metrics, and binding-generation guides for packaging, telemetry extraction,
+	  C FFI header synchronization, selector parity, and downstream package
+	  evidence handoff. The release evidence gate now also rejects duplicate
+	  release-target or downstream-package entries and requires `target_count` and
+	  `package_count` to match the unique canonical inventory lengths before
+	  publication evidence can pass. Remaining SF-11
+	  work is per-target published archives, signed release manifests, downstream
   SDK package publication, and live operator smoke evidence that passes this
   gate, rather than local admission renewal/revocation, signing, governance
   publisher verification, reference cookbook, manifest/CAR replay coverage, or
@@ -6813,7 +6890,9 @@ networks as remaining launch work for this release.
   scheduler panels plus alert fixtures. The SF-9 rollout evidence gate now
   validates payload-free randomness, scheduler runtime, validator replay,
   reporting/archive handoff, exact SQL/Parquet archive-backend selection,
-  exact manual-trigger retired route-state,
+  exact manual-trigger retired route-state, scheduler-runtime and
+  reporting/archive `route_count` binding to the unique canonical
+  `routes[].name` inventories with duplicate route rejection,
   observability, and
   governance approval evidence, and requires scheduler/replay/reporting/
   observability/governance artifacts to bind back to a valid randomness
@@ -6870,9 +6949,11 @@ networks as remaining launch work for this release.
   multi-provider-probe, receipt-validation, proof-stream,
   reputation-integration, observability, and governance-approval canary
   artifacts through the same checker before rollout review, requiring complete
-  tier, route, and metric coverage plus receipt-summary, PQ key-roster, and
-  reputation-weight policy digest bindings, governance policy-digest metadata,
-  and deadline threshold facts before writing. The SF-14 gate summary now also
+  tier, route, and metric coverage, binding proof-stream `route_count` to the
+  unique canonical route-name inventory so duplicate route rows cannot inflate
+  readiness, plus receipt-summary, PQ key-roster, and reputation-weight policy
+  digest bindings, governance policy-digest metadata, and deadline threshold
+  facts before writing. The SF-14 gate summary now also
   publishes governance approval `policy_digest_hex` values as
   `valid_policy_digests` so aggregate production readiness can tether PoTR
   promotion policy metadata to recognized governance artifacts.
@@ -6918,7 +6999,9 @@ networks as remaining launch work for this release.
   staging evidence back to the signed local conformance digest, requires
   telemetry and governance artifacts to reference the staged load report,
   requires governance approval `policy_digest_hex` to match a valid
-  staging-load `policy_digest_hex`,
+  staging-load `policy_digest_hex`, requires local conformance `scenario_count`
+  to match the unique canonical scenario inventory, rejects duplicate scenario
+  entries before required-kind validity is reported,
   rejects raw reports/response bodies/fixture payloads/runtime secrets, and
   keeps HTTP/3 load evidence explicitly scoped as deferred until a committed
   gateway transport exists. `scripts/run_sorafs_gateway_load_rollout_evidence.py`
@@ -7178,7 +7261,9 @@ networks as remaining launch work for this release.
   recorded through the shared scalar binding error recorder and runner tuple
   binding failures recorded through the shared string-tuple binding error
   recorder so artifact invalidation cannot drift from other rollout gates,
-  and emits `sorafs.moderation.ai_prescreen.rollout_evidence_gate.v1`
+  binds operator-workflow `route_count` and `passed_route_count` to the unique
+  canonical `routes[].name` inventory so duplicate route rows cannot inflate
+  readiness, and emits `sorafs.moderation.ai_prescreen.rollout_evidence_gate.v1`
   summaries. `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` now provides
   the matching collection planner/runner, composing the shipped runner,
   committee, operator workflow, notification transport, executor, and
@@ -7203,7 +7288,14 @@ networks as remaining launch work for this release.
   valid commit/reveal executor artifacts publish their top-level
   `execution_summary_digest_hex` values as `valid_executor_summary_digests`;
   the final SoraFS aggregate gate accepts both metadata fields only when they
-  match recognized artifact fingerprints. The
+  match recognized artifact fingerprints. Commit/reveal executor artifacts also
+  bind `artifact_count` and `passed_artifact_count` to the unique canonical
+  `artifacts[].name` inventory, so duplicate executor bundle artifact rows
+  cannot inflate readiness. Governance DAG artifacts also bind
+  `producer_count` to the unique canonical `producers[].name` inventory, and
+  end-to-end workflow artifacts bind `step_count` and `passed_step_count` to
+  the unique canonical `steps[].name` inventory, so duplicate producer or
+  workflow-step rows cannot inflate readiness. The
   rollout-gate static contract now also keeps
   unshipped moderation portal commands such as `sorafs moderation jury-accept`
   and `sorafs moderation open-case` warning-only in SoraFS docs until the
@@ -7268,6 +7360,9 @@ networks as remaining launch work for this release.
   match a valid feed-promotion `policy_digest_hex`, and bundle/policy
   mismatches mark the offending artifact invalid through the shared scalar
   binding error recorder before required-kind validity is reported. The
+  enforcement-probe artifact also binds `route_count` and `passed_route_count`
+  to the unique canonical `routes[].name` inventory and rejects duplicate route
+  entries before promotion can report ready. The
   matching collection planner accepts
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness,
 	  latency, gateway-count, denylist-entry, and honey-probe thresholds, and emits
@@ -7418,7 +7513,14 @@ networks as remaining launch work for this release.
   missing source-event or publish-due aggregate coverage, missing explorer
   snapshot/UI/proof-token index route coverage, or carrying raw
   payload, request/response body, bearer-token, signed-transaction,
-  proof-token frame, private-key, or private digest-key fields. The gate also
+  proof-token frame, private-key, or private digest-key fields, and binds
+  publication and explorer `route_count` to the unique canonical
+  `routes[].name` inventories so duplicate route rows cannot inflate readiness,
+  while keeping probe-based `probe_count` values equal to the `probes[]`
+  inventory length and requiring source-entry, source-event, publish-due, and
+  proof-token issuance sub-counts to match the corresponding `probes[]` role
+  inventory.
+  The gate also
   requires publication evidence to bind back to a valid source-entry
   `source_batch_digest_hex`, and requires privacy aggregate, proof-token
   issuance, and explorer evidence to bind back to a source-bound publication
@@ -7574,9 +7676,13 @@ networks as remaining launch work for this release.
   contract-surface artifacts to carry `policy_digest_hex`, publishes valid
   contract-surface policies as `valid_policy_digests`, requires governance
   approval `policy_digest_hex` to match one of those valid policy digests, and
-  marks contract-digest and policy-digest mismatches on the offending artifact
-  through the shared scalar binding error recorder before required-kind summary
-  validity is reported. The
+  binds API gateway `route_count` to the unique canonical `routes[].name`
+  inventory plus reconciliation `source_count` to the unique canonical
+  `sources[].name` inventory so duplicate route or source rows cannot inflate
+  readiness, and marks
+  contract-digest and policy-digest mismatches on the offending artifact through
+  the shared scalar binding error recorder before required-kind summary validity
+  is reported. The
   matching collection planner accepts reviewed
   staged evidence paths, supports `@ARGFILE`, forwards
   age, route-latency, stream-lag, matcher-lag, and reconciliation-peer
@@ -7646,7 +7752,9 @@ networks as remaining launch work for this release.
   `pop_snapshot_digest_hex` values as `valid_pop_snapshot_digests`, requires the
   aggregate production-readiness gate to tether both new metadata surfaces to
   recognized artifact fingerprints, requires governance approval
-  `policy_digest_hex` to match one of those valid verifier policies, and blocks promotion when governance still
+  `policy_digest_hex` to match one of those valid verifier policies, binds
+  enrollment-portal `route_count` to the unique canonical `routes[].name`
+  inventory so duplicate route rows cannot inflate readiness, and blocks promotion when governance still
   points at the local
   transcript-digest-only proof foundation instead of a production
   privacy-preserving proof backend; the production
@@ -7748,7 +7856,10 @@ networks as remaining launch work for this release.
   valid pricing-config `policy_digest_hex`, publishes valid staged pricing
   policies as `valid_policy_digests`, records config- and policy-digest
   mismatches on the offending artifact through the shared scalar binding error
-  recorder before required-kind summary validity is reported, and requires at
+  recorder before required-kind summary validity is reported, binds quote-API,
+  deposit-lifecycle, and settlement-execution `route_count` to the unique
+  canonical `routes[].name` inventories so duplicate route rows cannot inflate
+  readiness, and requires at
   least four peers before promotion can report `ready`. The matching collection
   planner accepts
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness,
@@ -7807,7 +7918,10 @@ networks as remaining launch work for this release.
   `policy_digest_hex`, valid e2e panel policy digests are published as
   `valid_policy_digests`, and governance approval `policy_digest_hex` must
   match one of those valid panel policy digests before the gate can report
-  ready. The moderation-panel gate also requires reviewed
+  ready. Appeal-intake, operator-workflow, commit/reveal, and
+  decision-publication artifacts also bind `route_count` to the unique
+  canonical `routes[].name` inventory so duplicate route rows cannot inflate
+  readiness. The moderation-panel gate also requires reviewed
   `deployment_id`/`environment` context on every artifact and blocks mixed
   reviewed deployment contexts across the same rollout bundle. The matching
   collection planner now validates the schema-closed collection-plan envelope
@@ -7842,7 +7956,11 @@ networks as remaining launch work for this release.
   requires every positive viewer-control claim explicitly, forces raw
   evidence/session-token/signed-URL/watermark-secret/body flags to `false`, and
   writes the artifact atomically for staged review. The rollout-gate static
-  contract now pins the SFM-4b3 browser viewer,
+  contract now publishes `valid_evidence_viewer_digest_sets` from valid
+  `evidence_viewer` artifacts and makes the final aggregate production
+  readiness gate tether those digest sets to recognized artifact fingerprints
+  before reporting ready. The rollout-gate static contract now pins the
+  SFM-4b3 browser viewer,
   streaming backend, watermark engine, WebAuthn/session flow, access logger,
   and transparency exporter as unshipped service work, and rejects matching
   evidence-viewer routes or operator subcommands until those services exist.
@@ -7876,14 +7994,14 @@ networks as remaining launch work for this release.
   payloads through `validate_hedging_payload_bytes`, and `sorafs-validate
   hedging`/`billing` provides local operator validation for those artifacts.
   The source bridge surface now exposes the same validator through
-  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 12
+  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 13
   `connect_norito_sorafs_reference_validate_hedging_json`, and Kotlin/JVM,
   Java Android, and Swift SDK wrappers. The SFM-5 rollout evidence gate now
-	  validates feed-collector, reference-price, billing-cycle,
-	  statement-publication, reconciliation, metrics/alert, native-bridge-release,
-	  and governance-approval artifacts, rejects payload-bearing evidence including
-	  common camel-case or hyphenated secret-key spellings, requires reviewed
-	  `deployment_id`/`environment` context on every artifact, requires each staged
+  validates feed-collector, reference-price, billing-cycle,
+  statement-publication, reconciliation, metrics/alert, native-bridge-release,
+  and governance-approval artifacts, rejects payload-bearing evidence including
+  common camel-case or hyphenated secret-key spellings, requires reviewed
+  `deployment_id`/`environment` context on every artifact, requires each staged
   billing cycle to carry payload-free line-item, statement-bundle,
   reconciliation, and per-statement digest roots, requires the per-statement
   digest count to match the signed statement count, requires every staged
@@ -7896,7 +8014,12 @@ networks as remaining launch work for this release.
   `valid_policy_digests`, requires governance approval `policy_digest_hex` to
   match one of those valid cycle policies, marks reference-price, cycle-tuple,
   and policy-digest binding failures on the offending artifact through shared
-  binding error recorders before required-kind summary validity is reported, and
+  binding error recorders before required-kind summary validity is reported,
+  binds statement-publication `route_count` to the unique canonical
+  `routes[].name` inventory plus reconciliation `source_count` to the unique
+  canonical `sources[].name` inventory, and native-bridge release
+  `artifact_count` to the unique canonical `artifacts[].id` inventory, so
+  duplicate route, source, or artifact rows cannot inflate readiness, and
   requires two distinct successful staged billing cycles before
   promotion can report `ready`. The checker and matching rollout
   collection planner now
@@ -8019,7 +8142,10 @@ networks as remaining launch work for this release.
   `policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple, and
   provider-bake artifacts must prove the config-backed scheduler canary ran,
   advanced defaulting providers, synced gateway compliance, and preserved
-  orderbook rejection, and reserve-movement artifacts must prove live chain
+  orderbook rejection, lifecycle and signed-route `route_count` fields must
+  bind to the unique canonical `routes[].name` inventories so duplicate route
+  rows cannot inflate readiness, and reserve-movement artifacts must prove live
+  chain
   submission coverage, submitted transaction-hash readback, automatic finality
   polling, confirmed-status polling, timeout rejection, submitted, confirmed,
   and rejected custody evidence plus confirmed-balance readback and
@@ -8108,8 +8234,11 @@ networks as remaining launch work for this release.
   `scripts/build_sorafs_governance_dag_canary.py` helper builds payload-free
   canaries for all SF-12 evidence kinds from reviewed deployment facts, requires
   explicit proof claims plus complete payload-kind, dashboard-route, and metric
-  coverage where applicable, forces raw block/head/CAR/checkpoint/response flags
-  to `false`, validates each generated artifact through the SF-12 checker, and
+  coverage where applicable, binds ingest `source_count` to the unique canonical
+  payload-kind inventory and dashboard `route_count` to the unique canonical
+  route-name inventory so duplicate payload-kind or route rows cannot inflate
+  readiness, forces raw block/head/CAR/checkpoint/response flags to `false`,
+  validates each generated artifact through the SF-12 checker, and
   writes atomically without following output symlinks. The
 	  rollout-gate static contract pins the SF-12 plan's IPFS/IPNS, live-head,
   public-checkpoint, runtime mirror-service, and runtime/IPFS dashboard work as
@@ -8152,8 +8281,11 @@ networks as remaining launch work for this release.
   `valid_policy_digests`, requires governance approval `policy_digest_hex` to
   match a valid governance handoff policy digest, and records roster,
   failure-bundle, handoff-digest, or policy-digest mismatches on the offending
-  artifact through the shared scalar binding error recorder before
-  required-kind summary validity is reported. The
+  artifact through the shared scalar binding error recorder, binds signed
+  auditor API, worker-lifecycle, and event-stream `route_count` to the unique
+  canonical `routes[].name` inventories so duplicate route rows cannot inflate
+  readiness, and reports those failures before required-kind summary validity is
+  reported. The
   matching collection planner accepts reviewed staged evidence
   paths, supports `@ARGFILE`, forwards age, route-latency, event-lag,
   repair-latency, and auditor-count thresholds, and emits a dry-run-visible
@@ -8199,13 +8331,16 @@ networks as remaining launch work for this release.
 	  canonical strings, non-negative integers, booleans, objects, and lists with
 	  expected non-empty container shapes, bound to the lane-specific contract that
 	  emits them, exact lowercase-hex binding-list metadata shapes validated before
-	  aggregate promotion, exact lowercase-hex and positive-integer scalar list
+	  aggregate promotion and tuple binding-list metadata tethered to explicit
+	  owning required artifact kinds before fingerprint matching, exact
+	  lowercase-hex and positive-integer scalar list
 	  metadata shapes validated before aggregate promotion, governance
 	  public-head identifiers validated as lowercase hex list metadata before
 	  aggregate promotion, exact object-list metadata shapes validated before
 	  aggregate promotion, object-list detail rows including ids, counts, timing
 	  fields, and digests tethered to the owning required-row artifact
-	  fingerprints before aggregate promotion, aggregate artifact totals derived
+	  fingerprints through an explicit per-gate owner-kind map before aggregate
+	  promotion, aggregate artifact totals derived
 	  from observed required-row artifact object rows instead of untrusted
 	  claimed row counters, malformed non-object list entries, or missing/empty
 	  artifact containers before release-review output, recognized-artifact
@@ -8273,11 +8408,14 @@ networks as remaining launch work for this release.
   `--iroha-bin`, and `--sorafs-cli-bin` are also rejected before dry-run plan
   rendering when they contain secret-looking option names, values, paths, URLs,
   or control characters.
-  Required-row artifact entries must carry canonical unique archive-relative
-  paths without absolute, empty, current, parent, or platform-specific path
-  segments, lowercase SHA-256 digests, and canonical artifact schema/status
-  labels when present, reject extra artifact-row fields outside the
-  schema-closed payload-free artifact contract, and the required top-level
+  Required rows and their artifact entries must carry schema labels that match
+  the owning checker evidence schemas. Artifact entries must also carry
+  canonical unique archive-relative paths without absolute, empty, current,
+  parent, or platform-specific path segments and lowercase SHA-256 digests,
+  reject explicit artifact `status` labels outside successful states such as
+  `passed` or `verified`, reject extra artifact-row
+  fields outside the schema-closed payload-free artifact contract, and the
+  required top-level
   `recognized_artifacts` inventory must be fully valid, kind-bound to that
   lane's full required-kind contract, matched per kind to the required-row
   artifact counts and `(kind, path, sha256)` identities plus required artifact
@@ -8291,14 +8429,17 @@ networks as remaining launch work for this release.
   rollout target, and deployment-bearing top-level lane metadata such as
   `deployment_context`, `valid_billing_cycles`, `valid_e2e_runs`,
   `valid_multi_peer_runs`, and `valid_provider_bakes` must now match the
-  artifact-derived deployment context before aggregate promotion. Scalar and
-  tuple `valid_*` metadata such as digest lists, snapshot bindings, runner
-  bindings, policy/matrix/ledger bindings, and roster/tally bindings must also
-  be backed by recognized artifact fingerprints, so a lane summary cannot
+  artifact-derived deployment context before aggregate promotion. Scalar hex,
+  string-list, positive-integer list, digest-list, and tuple binding metadata
+  such as reputation snapshot IDs/roots, provider IDs/counts, snapshot
+  bindings, runner bindings, policy/matrix/ledger bindings, and roster/tally
+  bindings must also be backed by recognized artifact fingerprints from their
+  declared owner artifact kinds, so a lane summary cannot
   claim payload-free release-review anchors that are absent from its artifacts.
   Object-list detail metadata for billing cycles, E2E runs, multi-peer runs,
   and provider bakes must match the corresponding required artifact row
-  cardinality, with provider-bake detail rows also carrying lowercase
+  cardinality and declare the same owner kind used for fingerprint tethering,
+  with provider-bake detail rows also carrying lowercase
   policy/matrix/ledger digests, so release review cannot promote missing,
   extra, or digestless detail rows while the artifact inventory stays ready.
   Aggregate lane rows are also
@@ -18113,10 +18254,10 @@ digest-bound pending-XSD source probe summaries for reviewed
 	  names; QR/NFC/Nearby app payloads use only the
 	  `wallet-offline-bearer-cash-*` prefixes; and shared fixtures publish
 	  `offline_bearer_cash_v1` policy defaults for custody hops, lineage steps,
-	  QR/stream payload limits, and Android one-use-key pool sizing. Torii no
-	  longer publishes the legacy offline transfer/revocation HTTP compatibility
-	  routes or the v1 redeem/audit issuer-unavailable stubs, and the versioned
-	  Offline V2 route surface now exposes readiness, key refill, note issue, note
+  QR/stream payload limits, and Android one-use-key pool sizing. Torii no
+  longer publishes retired offline transfer/revocation HTTP routes or the v1
+  redeem/audit issuer-unavailable stubs, and the versioned Offline V2 route
+  surface now exposes readiness, key refill, note issue, note
 	  redeem, and audit handlers under `/v1/offline/v2/*`. Governance council
 	  persist/replace/derive-vrf mutation helpers are no longer advertised in
 	  default Torii builds unless `gov_vrf` is compiled, avoiding mounted
@@ -18216,6 +18357,11 @@ digest-bound pending-XSD source probe summaries for reviewed
   developer-only label policy before
   syscall proof verification or broad backend allowlist matching, and Torii
   prover-worker backend mismatches now stop before verifier-registry lookup.
+  CLI and Connect bridge proof-attachment JSON now require explicit lowercase
+  `envelope_hash_hex` binding, canonical 32-byte lowercase commitment/hash
+  fields, and shared `ProofAttachment` structural validation before unshield
+  transaction construction, so empty proofs, zero commitments, and forged
+  envelope hashes fail before submission.
   The core preverify cache and guardrail dispatch wrappers also reject those
   developer-only labels before dedup insertion or verifier dispatch.
   Torii-generated IVM proof
@@ -18245,8 +18391,8 @@ digest-bound pending-XSD source probe summaries for reviewed
   commitments separate even when the raw Halo2 payloads are structurally
   parseable across related circuits, and the Halo2 IPA verifier rejects a
   verifier-key envelope whose `CID1` names a different circuit than the proof
-  envelope. It leaves legacy bearer-audit forcing available only as an explicit
-  migration fallback.
+  envelope. Runtime bearer-audit forcing is not part of first-release
+  production admission.
   Offline recursive prover entry points, proving-key derivation, and chain-side
   verifier resolution now also pin inline verifier keys to the canonical
   `offline-note-recursive` semantic circuit key, rejecting self-consistent
@@ -18283,8 +18429,8 @@ digest-bound pending-XSD source probe summaries for reviewed
   non-empty envelope auxiliary bytes, zero verifier-key hashes, and Halo2 IPA
   confidential-transfer-v2 circuit-id aliases before transcript material is
   derived at the core verifier helper. The public data-model API enforces the
-  shared auxiliary-byte and verifier-key hash rule, so SDKs and future recursive
-  circuits share the same canonical target format. The public Kagemusha
+  shared auxiliary-byte and verifier-key hash rule, so SDKs and recursive
+  verifier circuits share the same canonical target format. The public Kagemusha
   transcript helpers also reject
   unsupported, trusted-setup, and developer-only backend labels before hashing
   per-hop verifier-key material or folding verifier-key ids. The
@@ -18336,7 +18482,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   `KagemushaPoseidonAggregationTranscriptStatement` with a canonical builder
   and digest helper, plus host-side projection helpers that recompute every
   folded public-input digest column from a full aggregation statement. This
-  gives SDKs and future recursive circuits the same canonicalized target layout
+  gives SDKs and recursive verifier circuits the same canonicalized target layout
   and catches transcript/public-input mismatches before proof generation. The
   high-level compact-token
   prover uses that checked path before
@@ -18446,7 +18592,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   accumulation projection records `Q`, folded `g/h`, challenge squares, final
   folded generators, and the final expected term. A combined native verifier
   witness now validates those transcript, reduction, accumulation, and final
-  scalar projections together for future recursive-verifier witnesses, all
+  scalar projections together for recursive-verifier witnesses, all
   without adding a trusted setup. A field-friendly transcript-binding projection
   now maps the SHA3-validated transcript header, complete round projections,
   challenge/inverse pairs, and final transcript state into Pasta/Fp scalars and
@@ -19061,9 +19207,9 @@ digest-bound pending-XSD source probe summaries for reviewed
   digest, and expose an inner `OpenVerifyEnvelope` whose backend tag, lineage
   circuit id, schema, empty auxiliary metadata, non-zero verifier-key hash, and
   public instance columns match that reserved profile. Those instance columns
-  must now come from a strict ZK1 no-trusted-setup inner proof envelope; legacy
-  Halo2 proof-envelope wrappers remain accepted only for semantic v1
-  preverification and are rejected under the reserved lineage id.
+  must now come from a strict ZK1 no-trusted-setup inner proof envelope. The
+  generic Halo2 proof-envelope parser is scoped to current semantic v1
+  preverification and is rejected under the reserved lineage id.
   Record-backed preverification
   also requires the inline verifier-key envelope to be a strict
   no-trusted-setup Halo2 IPA ZK1 key container: exactly one matching lineage
@@ -19292,14 +19438,13 @@ digest-bound pending-XSD source probe summaries for reviewed
   SDK surfaces now expose the ABI-6 recursive aggregation proof-bundle prover,
   which accepts record-backed bundle bytes plus proof-derived Pallas
   open-envelope archive bytes and returns an admission-neutral
-  `KagemushaRecursiveAggregationProofBundle` for future mode-2 work.
+  `KagemushaRecursiveAggregationProofBundle` for mode-2 package wiring.
   Swift, Kotlin/JVM, and Java Android Offline Note proof binding now also
   rejects substituted recursive verifier ids or proof backend labels before
   accepting wallet-side validation, keeping mobile checks aligned with the
   chain's `halo2/ipa:offline-note-recursive` trust anchor. Draft wallet and
   redeem-planner bundles now carry the explicit unsupported
-  `offline-note/draft-placeholder` backend until a real proof provider replaces
-  them.
+  `offline-note/draft-placeholder` backend as non-production fixtures.
   Offline note key certificates now fail closed when an exposed hardware
   usage-count limit is anything other than exactly `1`, so a certificate cannot
   claim one-use semantics while carrying a multi-use or zero-use platform
@@ -19311,10 +19456,10 @@ digest-bound pending-XSD source probe summaries for reviewed
   certificate models. Torii topup issuance also derives the wallet JSON
   certificate and `IssueOfflineNote` chain certificate from the same signed
   object, so the wallet's offline trust anchor is the exact certificate payload
-  recorded by the online-to-offline transaction. Legacy Offline audit metadata now mirrors the Kagemusha
-  nullifier/commitment separation rule by rejecting any byte-identical overlap
-  between consumed input nullifiers and new output commitments before recursive
-  proof decoding.
+  recorded by the online-to-offline transaction. Offline audit metadata now
+  mirrors the Kagemusha nullifier/commitment separation rule by rejecting any
+  byte-identical overlap between consumed input nullifiers and new output
+  commitments before recursive proof decoding.
   Chain-side Kagemusha transfer admission also rejects any byte-identical
   overlap between consumed input nullifiers and newly created output commitments
   before proof decoding, keeping ledger admission aligned with the proof
@@ -19325,10 +19470,10 @@ digest-bound pending-XSD source probe summaries for reviewed
   Current release evidence covers physical iOS App Attest/HCE/CardSession
   availability and Android StrongBox/KeyMint one-use-key validation. The open
   physical gap is the end-to-end cross-platform NFC/HCE payment
-  exchange with both devices unlocked and ready; recursive aggregation of the
-  private per-hop proofs into the compact folded-token mode-2 proof remains
-  follow-up work for a later version, while spend-again-offline cash uses the
-  recursive spend bundle and ABI-6 append path now. Native Pasta/Fp scalar
+  exchange with both devices unlocked and ready. The compact folded-token
+  mode-2 path uses the current recursive aggregation evidence/proof binding,
+  while spend-again-offline cash uses the recursive spend bundle and ABI-6
+  append path now. Native Pasta/Fp scalar
   decomposition, fixed-window scalar decomposition, fixed-window Vesta point
   selection, table derivation, and scalar-multiplication composition, and
   fixed-window multi-term MSM plus bounded native-scalar MSM, fixed-window IPA
@@ -19520,6 +19665,13 @@ operator-provided rollout bundles.
 - Lane relay admission now reports missing dataspace catalog entries as
   `unknown_dataspace` instead of folding them into validator-roster failures,
   keeping operator diagnostics and telemetry aligned with routing/catalog drift.
+  Emergency override registration coverage now also pins the current commit
+  topology boundary: registered peers with live consensus keys but absent from
+  the transaction's current commit topology are rejected before any override row
+  is stored, and stale stored overrides cannot fill runtime relay committees
+  with peers that have since fallen out of the current topology or whose
+  consensus keys have expired by the relay height, and removed world peers
+  remain ineligible even if stale keys or topology entries survive.
 - Autoscale-managed elastic lane relay admission now uses the live commit
   topology as the authority source only when no explicit lane manifest binding
   exists. Explicit manifest bindings keep precedence, stale explicit manifests
@@ -19720,20 +19872,33 @@ operator-provided rollout bundles.
   `active_lanes` and `autoscale_capacity_lanes` values must also match current
   default-route autoscale capacity before staging, preventing stale capacity
   evidence from being logged with a valid add/retire plan. The pending
-  transition height, rederived plan shape, and capacity metadata are now
-  revalidated again at block commit before autoscale storage geometry is
-  published, so tampered staged metadata cannot durable-publish a valid catalog
-  delta.
+  transition height, rederived plan shape, capacity metadata, exact
+  previous-catalog lifecycle replay, derived lane config, and scale-out
+  creation height are now revalidated again at block commit before autoscale
+  storage geometry is published, so tampered staged metadata cannot
+  durable-publish a valid catalog delta. Direct queue admission and restart
+  queue-plan journal replay now also pin forged future-created autoscale route
+  plans against the live height-aware route before they can enter the pending
+  queue or local routing ledger. State-backed queue route resolution now also
+  checks every resolved coordinator and Native AMX participant leg against the
+  active-height Nexus predicate, so stale state-free route hints cannot target
+  future-created or otherwise inactive autoscale lanes during admission, gossip
+  routing, proposal refresh, pending reroute, journal replay, or requeue, while
+  preserving the legacy dynamic-dataspace fallback only for the unreserved
+  default public lane.
   Lane relay authority applies the same activation-height boundary before
   accepting manifest-bound or commit-topology-derived validator sets for
   autoscale elastic lanes, so relays for not-yet-created lanes cannot be
   accepted or cached, and corrupted manual lanes inside the reserved autoscale
   elastic id range are denied relay authority as well; record-level relay
   admission now checks lane activity before stale emergency overrides can fill a
-  committee. The active-lane authority boundary now also requires the
-  caller-supplied dataspace to match the lane catalog and remain present in the
-  dataspace catalog, so forged dataspace context or removed dataspace bindings
-  cannot keep a lane authoritative. Manifest validator fallback reads now also
+  committee, and block-local autoscale lifecycle cleanup applies the same
+  reset-or-inactive-lane pruning before automatic scale-out/scale-in commits can
+  preserve stale emergency override rows. The active-lane authority boundary
+  now also requires the caller-supplied dataspace to match the lane catalog and
+  remain present in the dataspace catalog, so forged dataspace context or
+  removed dataspace bindings cannot keep a lane authoritative. Manifest
+  validator fallback reads now also
   hide explicit peer bindings whose consensus keys are pending, future-active,
   disabled, or expired while keeping the raw manifest installed to suppress
   unsafe topology fallback. Manifest, commit-topology, and stake-derived
@@ -19930,9 +20095,13 @@ operator-provided rollout bundles.
   keeps Native AMX participant metadata. Gas-capped proposal assembly now
   defers an oversized first candidate when a later scanned transaction still
   fits the remaining gas and IVM budgets, so one gas-heavy lane cannot suppress
-  fitting cross-lane work under multilane lookahead. Proposal lookahead now
-  gates on policy-reachable active lanes at the candidate block height rather
-  than raw catalog overrides, so unrouted same-dataspace sidecars and
+  fitting cross-lane work under multilane lookahead. Pending queue
+  reconfiguration now keeps queued default-route transactions and local
+  routing-ledger hints on the active default route until an autoscale elastic
+  lane's creation height is committed. Proposal lookahead now gates on
+  policy-reachable active lanes at the candidate block height rather than raw
+  catalog overrides, so autoscale-owned default anchors, off-default
+  autoscale-owned rule targets, unrouted same-dataspace sidecars, and
   future-created autoscale lanes cannot cause scan-budget overfetch while the
   committed routing surface is still effectively single-lane.
 - Commit event production now consumes the full routing plan before any legacy
@@ -25799,8 +25968,8 @@ or ABI behavior.
   parameters now reject Galois, rotation, and bootstrap refresh material
   entirely because first-release identifier programs consume only the
   relinearization key.
-- Keep signed and proof-attestation identifier receipt compatibility
-  fixture-backed instead of local-only. The current shared fixture pins
+- Keep signed and proof-attestation identifier receipt coverage fixture-backed
+  instead of local-only. The current shared fixture pins
   canonical payload bytes, Iroha prehash, resolver signature, signed/proof
   attestation bytes, and adversarial receipt/policy mutations across
   the Rust data model, Torii runtime claim-receipt signing path, JavaScript,

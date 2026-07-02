@@ -67,6 +67,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     require_zero_count,
 )
 from sorafs_required_kinds import (  # noqa: E402
@@ -466,6 +467,23 @@ def validate_route_records(
             )
 
 
+def validate_route_inventory(
+    payload: dict[str, Any],
+    required_routes: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    require_count_equal(payload, "route_count", "passed_route_count", errors)
+    require_string_coverage(payload, "routes", "name", required_routes, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+
+
 def validate_pricing_config(
     payload: dict[str, Any],
     errors: list[str],
@@ -511,8 +529,7 @@ def validate_quote_api(
         max_age_secs=options.max_canary_age_secs,
     )
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_QUOTE_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_QUOTE_ROUTES, errors)
     require_count_equal(payload, "quote_count", "passed_quote_count", errors)
     require_string_coverage(payload, "classes", "", REQUIRED_APPEAL_CLASSES, errors)
     require_string_coverage(payload, "urgencies", "", REQUIRED_URGENCIES, errors)
@@ -548,8 +565,7 @@ def validate_deposit_lifecycle(
         max_age_secs=options.max_canary_age_secs,
     )
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_DEPOSIT_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_DEPOSIT_ROUTES, errors)
     require_positive_int(payload, "deposit_probe_count", errors)
     require_positive_int(payload, "confirmed_deposit_count", errors)
     require_bool_true(payload, "payer_auth_enforced", errors)
@@ -590,8 +606,7 @@ def validate_settlement_execution(
         max_age_secs=options.max_canary_age_secs,
     )
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_SETTLEMENT_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_SETTLEMENT_ROUTES, errors)
     require_positive_int(payload, "settlement_probe_count", errors)
     require_positive_int(payload, "instruction_step_count", errors)
     require_string_coverage(payload, "outcomes", "", REQUIRED_OUTCOMES, errors)

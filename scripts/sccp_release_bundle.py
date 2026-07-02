@@ -8200,18 +8200,12 @@ def _strict_verifier_summary_errors(summary: Any) -> list[str]:
         errors.append(f"{label} errors must not be empty when verified is false")
 
     manifest_sha256 = summary.get("manifest_sha256")
-    if summary.get("verified") is True and not _is_canonical_sha256_text(
+    if summary.get("verified") is True and not _is_nonzero_canonical_sha256_text(
         manifest_sha256
     ):
         # Source-inventory markers:
         # strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string
         # strict verifier summary manifest_sha256 must be a non-zero canonical SHA-256 hex string
-        errors.append(
-            "strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string"
-        )
-    elif summary.get("verified") is True and not _is_nonzero_canonical_sha256_text(
-        manifest_sha256
-    ):
         errors.append(
             "strict verifier summary manifest_sha256 must be a non-zero canonical SHA-256 hex string"
         )
@@ -8326,6 +8320,7 @@ def _build_preflight_report(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog="__main__.py",
         description=(
             "Build a self-contained SCCP release-note attachment bundle with "
             "strict readiness reports, all-lanes summary JSON, copied evidence "

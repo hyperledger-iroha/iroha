@@ -485,7 +485,7 @@ impl SingularQueryJson {
                 payload.insert("escrow_id".to_owned(), Value::String(escrow_id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
-            Self::FindTriggerById { id } => {
+            Self::FindTriggerById { id } | Self::FindFeeSponsorPolicyById { id } => {
                 let mut payload = Map::new();
                 payload.insert("id".to_owned(), Value::String(id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
@@ -516,11 +516,6 @@ impl SingularQueryJson {
             Self::FindDomainById { domain_id } => {
                 let mut payload = Map::new();
                 payload.insert("domain_id".to_owned(), Value::String(domain_id.clone()));
-                map.insert("payload".to_owned(), Value::Object(payload));
-            }
-            Self::FindFeeSponsorPolicyById { id } => {
-                let mut payload = Map::new();
-                payload.insert("id".to_owned(), Value::String(id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
             _ => {}

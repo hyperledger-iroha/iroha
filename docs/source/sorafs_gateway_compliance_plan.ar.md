@@ -4,9 +4,11 @@ direction: rtl
 source: docs/source/sorafs_gateway_compliance_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: bc25807c7aad464e3e1e156bb6094e9e41097e37ad1a5cbd18e9c718e4a34d68
-source_last_modified: "2026-06-25T17:24:16+00:00"
-translation_last_reviewed: 2026-06-25
+source_hash: 87d3d990d2565b7407f575fc69a5d591a58fcd014c64c90c700359e62a551d13
+source_last_modified: "2026-07-01T20:43:11.223106+00:00"
+translation_last_reviewed: 2026-07-02
+title: Gateway Compliance, Moderation & Transparency
+summary: SFM-4 implementation status for gateway denylist enforcement, GAR policy, proof tokens, honey-audit evidence, and remaining compliance services.
 ---
 
 # Gateway Compliance, Moderation & Transparency
@@ -63,6 +65,17 @@ gateway compliance can be marked ready.
   artifacts must match that promoted policy digest before promotion. Bundle and
   policy mismatches are recorded on the offending artifact in the JSON summary
   before required-kind validity is reported.
+  Enforcement-probe artifacts also bind `route_count` and `passed_route_count`
+  to the unique canonical `routes[].name` inventory and reject duplicate route
+  entries before promotion can report ready.
+- `scripts/build_sorafs_gateway_compliance_canary.py` is a payload-free
+  controller-runtime and moderation-toggle canary builder. It turns reviewed
+  deployment facts into checked JSON artifacts, fixes `config_source` to
+  `iroha_config`, requires every positive controller or moderation-toggle claim
+  through explicit `--verified-claim` inputs, forces raw-feed, toggle-payload,
+  and response-body inclusion flags to `false`, validates the generated payload
+  through the SFM-4 rollout gate contract before writing, and writes the canary
+  atomically without following output symlinks.
 - `ci/check_sorafs_gateway_denylist.sh` guards the denylist bundle tooling.
 
 ## Operator Commands
@@ -122,15 +135,36 @@ python3 scripts/run_sorafs_gateway_compliance_rollout_evidence.py \
   --dry-run
 ```
 
+Build reviewed payload-free controller-runtime and moderation-toggle canaries:
+
+```sh
+python3 scripts/build_sorafs_gateway_compliance_canary.py \
+  @scripts/examples/sorafs_gateway_compliance_controller_canary.args.example
+python3 scripts/build_sorafs_gateway_compliance_canary.py \
+  @scripts/examples/sorafs_gateway_compliance_moderation_toggle_canary.args.example
+```
+
 Rollout evidence must remain payload-free. The gate rejects raw denylist feeds,
-probe response bodies, GAR receipts, appeal payloads, signed transactions,
-tokens, private keys, and response bodies; operators should provide only
-digests, counts, stable labels, booleans, and reviewed artifact paths. Every
-downstream reload/probe/audit/appeal/transparency/observability/governance
-artifact must bind back to the promoted denylist bundle with
-`bundle_digest_hex`. If that binding does not match a valid feed-promotion
-artifact, the gate marks the downstream artifact invalid in the emitted summary
-instead of only blocking the top-level status.
+probe response bodies, GAR receipts, appeal payloads, moderation-toggle
+payloads, signed transactions, tokens, private keys, and response bodies;
+operators should provide only digests, counts, stable labels, booleans, and
+reviewed artifact paths. Every downstream controller/toggle/reload/probe/audit/
+appeal/transparency/observability/governance artifact must bind back to the
+promoted denylist bundle with
+`bundle_digest_hex`; governance approval artifacts must also bind to the
+promoted feed policy with `policy_digest_hex`. If those bindings do not match a
+valid feed-promotion artifact, the gate marks the downstream artifact invalid
+in the emitted summary instead of only blocking the top-level status. Use the runner's dry-run
+`evidence_contract` output to review the exact payload fields before collecting
+or promoting staged gateway compliance evidence; the runner validates the
+schema-closed collection plan, required kinds, thresholds, external evidence
+map, evidence contract, and command steps before dry-run output or verifier
+execution. The shared runner plan guard also rejects non-canonical nested
+required-kind, threshold, external-evidence, evidence-contract, and command-step
+shapes before any live gateway-compliance contact. Use the canary builder for
+reviewed controller-runtime and moderation-toggle deployment evidence so count
+equality, `iroha_config` binding, payload-free inclusion flags, and checker
+prevalidation stay consistent with the promotion gate. The payload-free controller-runtime and moderation-toggle canary builder does not replace the missing deployed controller daemon or toggle service; it only standardizes reviewed promotion evidence once those boundaries produce deployment facts.
 
 ## Enforcement Semantics
 
@@ -149,13 +183,21 @@ parsing response strings.
 
 ## Remaining Production Gates
 
-- Ship a central compliance controller that fetches external feeds, normalizes
-  updates, signs them, distributes them to gateways, and tracks acknowledgements.
+- Ship the always-on compliance controller daemon that fetches external feeds,
+  normalizes updates, signs them, distributes them to gateways, and tracks
+  acknowledgements. The rollout gate now requires controller-runtime evidence
+  for this boundary, but the daemon itself still needs production deployment.
 - Persist denylist/catalog state and update history through the configured
   production storage path instead of relying only on local bundle ingestion.
 - Implement moderation toggle APIs, approval workflows, expiry handling, and
-  operator audit trails.
+  operator audit trails. The rollout gate now requires moderation-toggle
+  evidence for `iroha_config` binding, approved-toggle count equality, operator
+  role enforcement, approval workflow, expiry, cache invalidation, audit trail,
+  rollback, and payload-free reporting, but the service itself still needs
+  production deployment.
 - Connect appeal outcomes to gateway policy overrides and cache invalidation.
+  The existing appeal-override canary remains required for promotion evidence,
+  but the full workflow is still production work.
 - Wire deployed GAR receipts, proof-token indexes, and moderation events through
   the shipped local SFM-4c transparency source-entry and publication paths, then
   capture deployed publication evidence.
@@ -169,6 +211,7 @@ Focused local checks for the shipped surface are:
 ```sh
 ci/check_sorafs_gateway_denylist.sh
 python3 -m pytest -q \
+  scripts/tests/build_sorafs_gateway_compliance_canary_test.py \
   scripts/tests/check_sorafs_gateway_compliance_rollout_evidence_test.py \
   scripts/tests/run_sorafs_gateway_compliance_rollout_evidence_test.py
 cargo test -p iroha_torii sorafs::gateway

@@ -826,6 +826,12 @@ export const SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1: "submit_sccp_messag
 export const SCCP_ZERO_HASH_V1: string;
 export const SCCP_TON_CONTRACT_PROOF_BACKEND_V1: "ton-contract-v1";
 export const SCCP_TON_MESSAGE_BODY_BOC_V1: string;
+export const SCCP_TON_SUBMIT_CHUNK_OP_V1: number;
+export const SCCP_TON_SUBMIT_CHUNK_FINALIZE_OP_V1: number;
+export const SCCP_TON_CHUNKED_MESSAGE_SCHEMA_VERSION_V1: 1;
+export const SCCP_TON_CHUNKED_MESSAGE_DEFAULT_CHUNK_BYTES_V1: number;
+export const SCCP_TON_CHUNKED_MESSAGE_MAX_CHUNK_BYTES_V1: number;
+export const SCCP_TON_WALLET_PAYLOAD_SAFE_BYTES_V1: number;
 export const SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1: string;
 export const SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-ton-shard-state-light-client-v1";
 export const SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-ton-masterchain-config-v1";
@@ -977,6 +983,37 @@ export interface TairaXorBscToTairaTransferPayloadInput {
   nonce: string | number | bigint;
 }
 
+export interface TairaXorTonToTairaTransferPayloadInput {
+  routeId?: string;
+  route_id?: string;
+  assetKey?: string;
+  asset_key?: string;
+  assetId?: string;
+  asset_id?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  tonSender?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  ton_sender?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  sender?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  senderAddress?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  sender_address?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+  nonce: string | number | bigint;
+}
+
 export interface TairaXorTronToTairaSettlementFragment {
   entrypoint?: "finalize_inbound";
   route?: "taira_tron_xor";
@@ -993,6 +1030,18 @@ export interface TairaXorBscToTairaSettlementFragment {
   entrypoint?: "finalize_inbound";
   route?: "taira_bsc_xor";
   route_id?: "taira_bsc_xor";
+  payload?: never;
+  payload_json?: never;
+  payloadJson?: never;
+  payload_bytes?: never;
+  payloadBytes?: never;
+  [key: string]: unknown;
+}
+
+export interface TairaXorTonToTairaSettlementFragment {
+  entrypoint?: "finalize_inbound";
+  route?: "taira_ton_xor";
+  route_id?: "taira_ton_xor";
   payload?: never;
   payload_json?: never;
   payloadJson?: never;
@@ -1065,6 +1114,36 @@ export interface TairaXorBscToTairaSourceProofPackageInput {
   evm_bridge_address?: string | BinaryLike | number[];
   settlementDefaults?: TairaXorBscToTairaSettlementFragment;
   settlement_defaults?: TairaXorBscToTairaSettlementFragment;
+}
+
+export interface TairaXorTonToTairaSourceProofPackageInput {
+  proofPackage?: Record<string, unknown>;
+  proof_package?: Record<string, unknown>;
+  txId?: string;
+  txID?: string;
+  transactionHash?: string;
+  transaction_hash?: string;
+  transactionId?: string;
+  transaction_id?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  tonSender?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  ton_sender?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  sender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+  settlementDefaults?: TairaXorTonToTairaSettlementFragment;
+  settlement_defaults?: TairaXorTonToTairaSettlementFragment;
 }
 
 export interface BscPlaceholderSourceChainProofEnvelopeInput {
@@ -1167,6 +1246,39 @@ export interface BscPlaceholderSourceChainProofEnvelopeResult {
   readonly syntheticRootMarker: boolean;
 }
 
+export interface TonTestnetPlaceholderSourceChainProofEnvelopeInput {
+  messageId?: string;
+  message_id?: string;
+  payloadHash?: string;
+  payload_hash?: string;
+  commitmentRoot?: string;
+  commitment_root?: string;
+  txId?: string;
+  txID?: string;
+  transactionHash?: string;
+  transaction_hash?: string;
+  transactionId?: string;
+  transaction_id?: string;
+  finalityHeight?: string | number | bigint;
+  finality_height?: string | number | bigint;
+  finalityBlockHash?: string;
+  finality_block_hash?: string;
+  blockHash?: string;
+  block_hash?: string;
+}
+
+export interface TonTestnetPlaceholderSourceChainProofEnvelopeResult {
+  readonly sourceProofHex: string;
+  readonly sourceProofBytes: Uint8Array;
+  readonly sourceEventDigest: string;
+  readonly sourceEventLeafHash: string;
+  readonly receiptOrMessageRoot: string;
+  readonly finalityHeight: string;
+  readonly finalityBlockHash: string;
+  readonly finalizedHeaderHash: string;
+  readonly txId: string;
+}
+
 export interface TairaXorTronToTairaBoundSourceProofPackage {
   readonly messageBundle: Record<string, unknown>;
   readonly settlement: Readonly<
@@ -1188,6 +1300,21 @@ export interface TairaXorBscToTairaBoundSourceProofPackage {
     Record<string, unknown> & {
       entrypoint: "finalize_inbound";
       route: "taira_bsc_xor";
+    }
+  >;
+  readonly sourceEventDigest: string;
+  readonly txId: string;
+  readonly messageId: string;
+  readonly commitmentRoot: string;
+  readonly amount: string;
+}
+
+export interface TairaXorTonToTairaBoundSourceProofPackage {
+  readonly messageBundle: Record<string, unknown>;
+  readonly settlement: Readonly<
+    Record<string, unknown> & {
+      entrypoint: "finalize_inbound";
+      route: "taira_ton_xor";
     }
   >;
   readonly sourceEventDigest: string;
@@ -4378,6 +4505,53 @@ export interface TonSccpMessageBodyBytesInput {
   destination_binding_hash?: string;
 }
 
+export interface TonSccpChunkedMessageBodyInput {
+  messageBodyBocBytes?: BinaryLike;
+  message_body_boc_bytes?: BinaryLike;
+  messageBodyBocHex?: string;
+  message_body_boc_hex?: string;
+  messageId?: string;
+  message_id?: string;
+  queryId?: string | number | bigint;
+  query_id?: string | number | bigint;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  chunkSize?: number;
+  chunk_size?: number;
+}
+
+export interface TonSccpChunkedUploadMessage {
+  readonly index: number;
+  readonly offset: number;
+  readonly length: number;
+  readonly chunkHash: string;
+  readonly payloadBocHex: string;
+  readonly payloadBocBytes: Uint8Array;
+}
+
+export interface TonSccpChunkedFinalizeMessage {
+  readonly payloadBocHex: string;
+  readonly payloadBocBytes: Uint8Array;
+}
+
+export interface TonSccpChunkedMessageBodyPlan {
+  readonly version: 1;
+  readonly protocol: "ton_sccp_chunked_message_body_boc_v1";
+  readonly opChunk: number;
+  readonly opFinalize: number;
+  readonly messageId: string;
+  readonly queryId: string;
+  readonly totalBytes: number;
+  readonly chunkSize: number;
+  readonly chunkCount: number;
+  readonly bodyHash: string;
+  readonly chunkRoot: string;
+  readonly uploadMessages: ReadonlyArray<TonSccpChunkedUploadMessage>;
+  readonly finalizeMessage: TonSccpChunkedFinalizeMessage;
+}
+
 export type TonSccpMessageBodyInput = TonSccpMessageBodyInputBase &
   (
     | {
@@ -7315,6 +7489,9 @@ export function buildSccpTonMessageBodyBoc(
 export function buildSccpTonMessageBodyBocFromBytes(
   input: TonSccpMessageBodyBytesInput,
 ): Uint8Array;
+export function buildSccpTonChunkedMessageBodyBocsFromBytes(
+  input: TonSccpChunkedMessageBodyInput,
+): TonSccpChunkedMessageBodyPlan;
 export function tonConfigValidatorSetPayloadFromProofBoc(
   input: BinaryLike,
 ): Uint8Array | null;
@@ -7431,6 +7608,9 @@ export function buildBscSourceChainProofEnvelope(
 export function buildBscPlaceholderSourceChainProofEnvelope(
   input: BscPlaceholderSourceChainProofEnvelopeInput,
 ): BscPlaceholderSourceChainProofEnvelopeResult;
+export function buildTonTestnetPlaceholderSourceChainProofEnvelope(
+  input: TonTestnetPlaceholderSourceChainProofEnvelopeInput,
+): TonTestnetPlaceholderSourceChainProofEnvelopeResult;
 export function canonicalEthSyncCommitteePayloadBytes(
   input: EthSyncCommitteePayloadInput,
 ): Uint8Array;
@@ -8217,6 +8397,9 @@ export function buildTairaXorTronToTairaTransferPayload(
 export function buildTairaXorBscToTairaTransferPayload(
   input: TairaXorBscToTairaTransferPayloadInput,
 ): Readonly<SccpTransferPayload>;
+export function buildTairaXorTonToTairaTransferPayload(
+  input: TairaXorTonToTairaTransferPayloadInput,
+): Readonly<SccpTransferPayload>;
 export function buildTairaXorSccpRecordDescriptor(
   input: TairaXorSccpRecordDescriptorInput,
 ): Readonly<TairaXorSccpRecordDescriptor>;
@@ -8275,6 +8458,13 @@ export function tairaXorBscToTairaTransferMessageId(
   input: TairaXorBscToTairaTransferPayloadInput,
   options?: { prefix?: boolean },
 ): string;
+export function tairaXorTonToTairaCanonicalTransferPayloadBytes(
+  input: TairaXorTonToTairaTransferPayloadInput,
+): Uint8Array;
+export function tairaXorTonToTairaTransferMessageId(
+  input: TairaXorTonToTairaTransferPayloadInput,
+  options?: { prefix?: boolean },
+): string;
 export function tairaXorTronToTairaCanonicalTransferPayloadBytes(
   input: TairaXorTronToTairaTransferPayloadInput,
 ): Uint8Array;
@@ -8321,6 +8511,9 @@ export function bindTairaXorTronToTairaSourceProofPackage(
 export function bindTairaXorBscToTairaSourceProofPackage(
   input: TairaXorBscToTairaSourceProofPackageInput,
 ): Readonly<TairaXorBscToTairaBoundSourceProofPackage>;
+export function bindTairaXorTonToTairaSourceProofPackage(
+  input: TairaXorTonToTairaSourceProofPackageInput,
+): Readonly<TairaXorTonToTairaBoundSourceProofPackage>;
 export function normalizeSccpSourceVerifierMaterial(
   input: SccpSourceVerifierMaterialInput,
 ): SccpSourceVerifierMaterial;

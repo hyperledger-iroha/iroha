@@ -44,8 +44,9 @@ const STAKE_DOMAIN_ID: &str = "ivm.universal";
 const WAIT_HEIGHT: u64 = EPOCH_LEN + FINALITY_MARGIN;
 const COLLECTOR_RETRY: Duration = Duration::from_secs(60);
 const COLLECTOR_POLL: Duration = Duration::from_millis(100);
-const HEIGHT_ADVANCE_RETRY: Duration = Duration::from_secs(120);
+const HEIGHT_ADVANCE_RETRY: Duration = Duration::from_secs(600);
 const HEIGHT_ADVANCE_POLL: Duration = Duration::from_millis(200);
+const HEIGHT_ADVANCE_RESUBMIT_EVERY_ATTEMPTS: u64 = 4;
 const STAKE_ASSET_NAME: &str = "NPOS Stake";
 const NEXUS_FEE_ASSET_NAME: &str = "Nexus Fee";
 
@@ -62,6 +63,18 @@ fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
         0..=2 => 0,
         _ => u64::try_from(peer_count.saturating_sub(2)).expect("peer count should fit into u64"),
     }
+}
+
+fn commit_quorum_size(peer_count: usize) -> usize {
+    let tolerated_faults = peer_count.saturating_sub(1) / 3;
+    peer_count.saturating_sub(tolerated_faults)
+}
+
+fn count_heights_at_or_above(heights: &[u64], target_height: u64) -> usize {
+    heights
+        .iter()
+        .filter(|height| **height >= target_height)
+        .count()
 }
 
 fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
@@ -211,6 +224,30 @@ fn min_connected_peers_for_submit_keeps_quorum_margin() {
     assert_eq!(min_connected_peers_for_submit(2), 0);
     assert_eq!(min_connected_peers_for_submit(3), 1);
     assert_eq!(min_connected_peers_for_submit(4), 2);
+}
+
+#[test]
+fn commit_quorum_size_matches_byzantine_fault_tolerance() {
+    assert_eq!(commit_quorum_size(0), 0);
+    assert_eq!(commit_quorum_size(1), 1);
+    assert_eq!(commit_quorum_size(4), 3);
+    assert_eq!(commit_quorum_size(7), 5);
+}
+
+#[test]
+fn count_heights_at_or_above_counts_only_reached_peers() {
+    assert_eq!(count_heights_at_or_above(&[2, 8, 9, 3], 8), 2);
+    assert_eq!(count_heights_at_or_above(&[], 1), 0);
+}
+
+#[test]
+fn should_submit_height_progress_tick_retries_on_new_height_or_interval() {
+    assert!(should_submit_height_progress_tick(None, 0, 0, 4));
+    assert!(!should_submit_height_progress_tick(Some(4), 4, 0, 4));
+    assert!(!should_submit_height_progress_tick(Some(4), 4, 1, 4));
+    assert!(should_submit_height_progress_tick(Some(3), 4, 1, 4));
+    assert!(should_submit_height_progress_tick(Some(4), 4, 4, 4));
+    assert!(!should_submit_height_progress_tick(Some(4), 4, 4, 0));
 }
 
 #[test]
@@ -374,54 +411,122 @@ async fn advance_to_height(
     let deadline = Instant::now() + HEIGHT_ADVANCE_RETRY;
     let mut tick = 0_u64;
     let mut last_height = 0;
+    let mut last_submitted_height = None;
+    let quorum = commit_quorum_size(network.peers().len()).max(1);
+    let mut last_observed = Vec::new();
     wait_for_submit_connectivity(network, Duration::from_secs(30)).await?;
 
     while Instant::now() <= deadline {
-        let status = client.get_status()?;
-        last_height = last_height.max(status.blocks);
-        if status.blocks >= target_height {
+        let heights = collect_network_heights(network, &mut last_observed).await;
+        last_height = last_height.max(heights.iter().copied().max().unwrap_or_default());
+        if count_heights_at_or_above(&heights, target_height) >= quorum {
             return Ok(());
         }
 
-        submit_progress_log(network, client, format!("{log_prefix} {tick}")).await?;
+        if should_submit_height_progress_tick(
+            last_submitted_height,
+            last_height,
+            tick,
+            HEIGHT_ADVANCE_RESUBMIT_EVERY_ATTEMPTS,
+        ) {
+            submit_progress_log(network, client, format!("{log_prefix} {tick}")).await?;
+            last_submitted_height = Some(last_height);
+        }
         tick = tick.saturating_add(1);
 
         let remaining = deadline.saturating_duration_since(Instant::now());
         let probe_timeout = remaining.min(Duration::from_secs(15));
-        let target_next_height = status.blocks.saturating_add(1).min(target_height);
-        match wait_for_client_height(client, target_next_height, probe_timeout).await {
-            Ok(height) => last_height = last_height.max(height),
+        let target_next_height = last_height.saturating_add(1).min(target_height);
+        match wait_for_network_height_quorum(network, target_next_height, quorum, probe_timeout)
+            .await
+        {
+            Ok(heights) => {
+                last_height = last_height.max(heights.iter().copied().max().unwrap_or_default());
+            }
             Err(_) => sleep(HEIGHT_ADVANCE_POLL).await,
         }
     }
 
     eyre::bail!(
-        "client height did not reach {target_height} for {log_prefix}; last observed height={last_height}"
+        "network height did not reach quorum {quorum} at {target_height} for {log_prefix}; \
+         last observed height={last_height}; last observed peers={last_observed:?}"
     );
 }
 
-async fn wait_for_client_height(
-    client: &Client,
+async fn wait_for_network_height_quorum(
+    network: &sandbox::SerializedNetwork,
     target_height: u64,
+    quorum: usize,
     timeout: Duration,
-) -> eyre::Result<u64> {
+) -> eyre::Result<Vec<u64>> {
     let deadline = Instant::now() + timeout;
-    let mut last_height = 0;
+    let mut last_observed = Vec::new();
 
     loop {
-        let status = client.get_status()?;
-        last_height = last_height.max(status.blocks);
-        if status.blocks >= target_height {
-            return Ok(status.blocks);
+        let heights = collect_network_heights(network, &mut last_observed).await;
+        if count_heights_at_or_above(&heights, target_height) >= quorum {
+            return Ok(heights);
         }
         if Instant::now() >= deadline {
             eyre::bail!(
-                "client height did not reach {target_height} within {:?}; last observed height={last_height}",
+                "network height did not reach quorum {quorum} at {target_height} within {:?}; \
+                 last observed peers={last_observed:?}",
                 timeout
             );
         }
         sleep(HEIGHT_ADVANCE_POLL).await;
     }
+}
+
+async fn collect_network_heights(
+    network: &sandbox::SerializedNetwork,
+    last_observed: &mut Vec<String>,
+) -> Vec<u64> {
+    last_observed.clear();
+    let mut heights = Vec::new();
+    for peer in network.peers() {
+        match peer.status().await {
+            Ok(status) => {
+                heights.push(status.blocks);
+                last_observed.push(format!(
+                    "{}:{} queue={} queued={} inflight={}",
+                    peer.mnemonic(),
+                    status.blocks,
+                    status.queue_size,
+                    status.queue_queued,
+                    status.queue_inflight
+                ));
+            }
+            Err(err) => last_observed.push(format!("{}:{err}", peer.mnemonic())),
+        }
+    }
+    heights
+}
+
+fn client_observing_height(
+    network: &sandbox::SerializedNetwork,
+    target_height: u64,
+    fallback: &Client,
+) -> Client {
+    network
+        .peers()
+        .iter()
+        .find_map(|peer| {
+            let storage_reached = peer
+                .best_effort_block_height()
+                .is_some_and(|height| height.total >= target_height);
+            if storage_reached
+                || peer
+                    .client()
+                    .get_status()
+                    .is_ok_and(|status| status.blocks >= target_height)
+            {
+                Some(peer.client())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| fallback.clone())
 }
 
 async fn wait_for_submit_connectivity(
@@ -488,6 +593,18 @@ async fn submit_progress_log(
         "progress log was not accepted by any candidate peer; errors={errors:?}"
     );
     Ok(())
+}
+
+fn should_submit_height_progress_tick(
+    last_submitted_height: Option<u64>,
+    current_height: u64,
+    attempt: u64,
+    resubmit_every_attempts: u64,
+) -> bool {
+    last_submitted_height != Some(current_height)
+        || (resubmit_every_attempts > 0
+            && attempt > 0
+            && attempt.is_multiple_of(resubmit_every_attempts))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -591,6 +708,11 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
 
     advance_to_height(&network, &client, WAIT_HEIGHT, "stake activation tick").await?;
 
+    let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client);
+    let collectors_url = activation_client
+        .torii_url
+        .join("v1/sumeragi/collectors")
+        .wrap_err("compose collectors URL")?;
     let expected_peer = eligible_peer.id().to_string();
     wait_for_single_collector(&collectors_url, &expected_peer).await?;
 
@@ -766,7 +888,8 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     )
     .await?;
 
-    let collectors_url = client
+    let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client);
+    let collectors_url = activation_client
         .torii_url
         .join("v1/sumeragi/collectors")
         .wrap_err("compose collectors URL")?;

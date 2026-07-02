@@ -165,36 +165,58 @@ pub struct RecordedSccpMessage {
     pub commitment: SccpHubCommitmentV1,
 }
 
-fn decode_verified_sccp_payload(payload_bytes: &[u8]) -> Option<SccpPayloadV1> {
-    if let Some(payload) = iroha_sccp::decode_canonical_sccp_payload_bytes(payload_bytes) {
-        return iroha_sccp::verify_sccp_payload_structure(&payload).then_some(payload);
-    }
-    let payload = SccpPayloadV1::Transfer(iroha_sccp::decode_canonical_transfer_payload_bytes(
-        payload_bytes,
-    )?);
-    iroha_sccp::verify_sccp_payload_structure(&payload).then_some(payload)
+/// Canonically validated outbound SCCP record data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ValidatedRecordedSccpMessage {
+    /// Canonically decoded SCCP payload recorded by the instruction.
+    pub payload: SccpPayloadV1,
+    /// Lane-independent outbound replay key derived from the payload.
+    pub key: SccpOutboundMessageKey,
+    /// Canonical SCCP hub commitment for the payload.
+    pub commitment: SccpHubCommitmentV1,
 }
 
-fn decode_ascii_hex_sccp_payload_bytes(payload_bytes: &[u8]) -> Option<Vec<u8>> {
-    let raw = std::str::from_utf8(payload_bytes).ok()?;
-    let hex = raw.strip_prefix("0x").unwrap_or(raw);
-    if hex.is_empty()
-        || hex.len() % 2 != 0
-        || !hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return None;
-    }
-    hex::decode(hex).ok()
+/// Failure while validating a recorded outbound SCCP message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RecordedSccpMessageValidationError {
+    /// Payload bytes are not exact canonical SCCP variant framing.
+    InvalidPayload,
+    /// Outbound records may only originate from SORA.
+    NonSoraSource {
+        /// Source domain found in the payload.
+        source_domain: u32,
+    },
+    /// Payload route fields are not bound to the deterministic outbound route.
+    RouteBinding {
+        /// Route binding validation error.
+        error: SccpOutboundRouteValidationError,
+    },
 }
 
 pub(crate) fn decode_recorded_sccp_payload_bytes(payload_bytes: &[u8]) -> Option<SccpPayloadV1> {
-    if let Some(payload) = decode_verified_sccp_payload(payload_bytes) {
-        return Some(payload);
+    let payload = iroha_sccp::decode_canonical_sccp_payload_bytes(payload_bytes)?;
+    if iroha_sccp::canonical_sccp_payload_bytes(&payload).as_slice() != payload_bytes {
+        return None;
     }
-    let decoded = decode_ascii_hex_sccp_payload_bytes(payload_bytes)?;
-    decode_verified_sccp_payload(&decoded)
+    iroha_sccp::verify_sccp_payload_structure(&payload).then_some(payload)
+}
+
+pub(crate) fn validate_recorded_sccp_message_payload_bytes(
+    payload_bytes: &[u8],
+) -> Result<ValidatedRecordedSccpMessage, RecordedSccpMessageValidationError> {
+    let payload = decode_recorded_sccp_payload_bytes(payload_bytes)
+        .ok_or(RecordedSccpMessageValidationError::InvalidPayload)?;
+    let source_domain = iroha_sccp::sccp_message_source_domain(&payload);
+    if source_domain != iroha_sccp::SCCP_DOMAIN_SORA {
+        return Err(RecordedSccpMessageValidationError::NonSoraSource { source_domain });
+    }
+    validate_sora_outbound_sccp_payload_route(&payload)
+        .map_err(|error| RecordedSccpMessageValidationError::RouteBinding { error })?;
+    Ok(ValidatedRecordedSccpMessage {
+        key: sccp_outbound_message_key(&payload),
+        commitment: iroha_sccp::hub_commitment_from_sccp_payload(&payload),
+        payload,
+    })
 }
 
 pub(crate) fn sccp_outbound_message_key(payload: &SccpPayloadV1) -> SccpOutboundMessageKey {
@@ -213,9 +235,13 @@ fn recorded_sccp_message_instruction(
         .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
 }
 
-fn decode_recorded_sccp_message(instruction: &InstructionBox) -> Option<SccpPayloadV1> {
-    let record = recorded_sccp_message_instruction(instruction)?;
-    decode_recorded_sccp_payload_bytes(&record.payload_bytes)
+fn validate_recorded_sccp_message_instruction(
+    instruction: &InstructionBox,
+) -> Result<Option<ValidatedRecordedSccpMessage>, RecordedSccpMessageValidationError> {
+    let Some(record) = recorded_sccp_message_instruction(instruction) else {
+        return Ok(None);
+    };
+    validate_recorded_sccp_message_payload_bytes(&record.payload_bytes).map(Some)
 }
 
 fn signed_transaction_from_sccp_entrypoint(
@@ -523,16 +549,10 @@ fn collect_sccp_messages_from_executable<F>(
     F: Fn(&SccpOutboundMessageKey) -> bool,
 {
     let mut push_instruction = |instruction_index: usize, instruction: &InstructionBox| {
-        let Some(payload) = decode_recorded_sccp_message(instruction) else {
+        let Ok(Some(validated)) = validate_recorded_sccp_message_instruction(instruction) else {
             return;
         };
-        if iroha_sccp::sccp_message_source_domain(&payload) != iroha_sccp::SCCP_DOMAIN_SORA {
-            return;
-        }
-        if validate_sora_outbound_sccp_payload_route(&payload).is_err() {
-            return;
-        }
-        let key = sccp_outbound_message_key(&payload);
+        let key = validated.key.clone();
         if is_already_recorded(&key) {
             return;
         }
@@ -545,8 +565,8 @@ fn collect_sccp_messages_from_executable<F>(
         out.push(RecordedSccpMessage {
             tx_index,
             instruction_index,
-            commitment: iroha_sccp::hub_commitment_from_sccp_payload(&payload),
-            payload,
+            commitment: validated.commitment,
+            payload: validated.payload,
         });
     };
 
@@ -769,28 +789,29 @@ fn invalid_sccp_record_instruction_in_executable(
                 .enumerate()
                 .find_map(|(instruction_index, instruction)| {
                     let record = recorded_sccp_message_instruction(instruction)?;
-                    let Some(payload) = decode_recorded_sccp_payload_bytes(&record.payload_bytes)
-                    else {
-                        return Some(SccpRecordInstructionValidationError::InvalidPayload {
-                            tx_index,
-                            instruction_index,
-                        });
-                    };
-                    let source_domain = iroha_sccp::sccp_message_source_domain(&payload);
-                    if source_domain != iroha_sccp::SCCP_DOMAIN_SORA {
-                        return Some(SccpRecordInstructionValidationError::NonSoraSource {
+                    match validate_recorded_sccp_message_payload_bytes(&record.payload_bytes) {
+                        Ok(_) => None,
+                        Err(RecordedSccpMessageValidationError::InvalidPayload) => {
+                            Some(SccpRecordInstructionValidationError::InvalidPayload {
+                                tx_index,
+                                instruction_index,
+                            })
+                        }
+                        Err(RecordedSccpMessageValidationError::NonSoraSource {
+                            source_domain,
+                        }) => Some(SccpRecordInstructionValidationError::NonSoraSource {
                             tx_index,
                             instruction_index,
                             source_domain,
-                        });
+                        }),
+                        Err(RecordedSccpMessageValidationError::RouteBinding { error }) => {
+                            Some(SccpRecordInstructionValidationError::RouteBinding {
+                                tx_index,
+                                instruction_index,
+                                error,
+                            })
+                        }
                     }
-                    validate_sora_outbound_sccp_payload_route(&payload)
-                        .err()
-                        .map(|error| SccpRecordInstructionValidationError::RouteBinding {
-                            tx_index,
-                            instruction_index,
-                            error,
-                        })
                 })
         }
         Executable::ContractCall(_) | Executable::Ivm(_) => None,
@@ -2580,16 +2601,16 @@ mod tests {
     }
 
     #[test]
-    fn collect_sccp_messages_from_accepted_transactions_deduplicates_binary_and_hex_aliases() {
+    fn collect_sccp_messages_from_accepted_transactions_ignores_hex_aliases() {
         let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
             8,
             b"0x0000000000000000000000000000000000000224",
         ));
         let hex_alias = format!("0x{}", hex::encode(&payload)).into_bytes();
 
-        for (first, second) in [
-            (payload.clone(), hex_alias.clone()),
-            (hex_alias.clone(), payload.clone()),
+        for (first, second, expected_tx_index) in [
+            (payload.clone(), hex_alias.clone(), 0),
+            (hex_alias.clone(), payload.clone(), 1),
         ] {
             let first = accepted_transaction_with_sccp_payload(first);
             let second = accepted_transaction_with_sccp_payload(second);
@@ -2597,7 +2618,7 @@ mod tests {
             let messages = collect_sccp_messages_from_accepted_transactions(&[first, second]);
 
             assert_eq!(messages.len(), 1);
-            assert_eq!(messages[0].tx_index, 0);
+            assert_eq!(messages[0].tx_index, expected_tx_index);
             assert_eq!(messages[0].instruction_index, 0);
             assert_eq!(
                 messages[0].payload,
@@ -2772,7 +2793,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_sccp_messages_from_block_deduplicates_binary_and_hex_duplicate_outbound_keys() {
+    fn collect_sccp_messages_from_block_ignores_hex_aliases() {
         let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
             11,
             b"0x0000000000000000000000000000000000000445",
@@ -2792,7 +2813,7 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].tx_index, 0);
-        assert_eq!(messages[0].instruction_index, 0);
+        assert_eq!(messages[0].instruction_index, 1);
         assert_eq!(
             messages[0].payload,
             iroha_sccp::decode_canonical_sccp_payload_bytes(&payload).expect("payload decodes")
@@ -2826,7 +2847,7 @@ mod tests {
     }
 
     #[test]
-    fn local_sccp_finality_records_reject_binary_and_hex_duplicate_outbound_keys() {
+    fn local_sccp_finality_records_reject_hex_alias_payload() {
         let payload = sample_transfer_payload(13, b"0x0000000000000000000000000000000000000447");
         let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload);
         let encoded_payload = format!("0x{}", hex::encode(&payload_bytes)).into_bytes();
@@ -2844,10 +2865,14 @@ mod tests {
             sccp_commitment_root_from_messages(&messages).expect("deduped commitment root");
 
         let err = validate_local_sccp_records_against_commitment_root(&block, deduped_root)
-            .expect_err("SCCP finality local record validation must reject encoded replay aliases");
+            .expect_err(
+                "SCCP finality local record validation must reject encoded payload aliases",
+            );
 
-        assert!(err.contains("duplicate outbound message"));
-        assert!(err.contains(&hex::encode(sccp_outbound_message_key(&payload).message_id)));
+        assert!(err.contains("invalid outbound SCCP record"));
+        assert!(err.contains("tx_index=0"));
+        assert!(err.contains("instruction_index=0"));
+        assert!(err.contains("payload is invalid"));
     }
 
     #[test]
@@ -2919,6 +2944,60 @@ mod tests {
 
         let err = validate_sccp_commitment_root_for_signed_block(&block)
             .expect_err("successful invalid SCCP record payload must reject");
+
+        assert_eq!(
+            err,
+            SccpCommittedBlockValidationError::InvalidRecordInstruction(
+                SccpRecordInstructionValidationError::InvalidPayload {
+                    tx_index: 0,
+                    instruction_index: 0,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn validate_sccp_commitment_root_for_signed_block_rejects_hex_alias_payload() {
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            15,
+            b"0x0000000000000000000000000000000000000449",
+        ));
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                format!("0x{}", hex::encode(&payload)).into_bytes(),
+            )),
+        ]));
+        let block = signed_block_with_transactions(vec![tx], 9);
+
+        let err = validate_sccp_commitment_root_for_signed_block(&block)
+            .expect_err("successful hex-aliased SCCP record payload must reject");
+
+        assert_eq!(
+            err,
+            SccpCommittedBlockValidationError::InvalidRecordInstruction(
+                SccpRecordInstructionValidationError::InvalidPayload {
+                    tx_index: 0,
+                    instruction_index: 0,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn validate_sccp_commitment_root_for_signed_block_rejects_bare_transfer_payload() {
+        let payload = sample_transfer_payload(20, b"0x0000000000000000000000000000000000000453");
+        let SccpPayloadV1::Transfer(transfer) = payload else {
+            unreachable!("sample payload is a transfer");
+        };
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_transfer_payload_bytes(&transfer),
+            )),
+        ]));
+        let block = signed_block_with_transactions(vec![tx], 9);
+
+        let err = validate_sccp_commitment_root_for_signed_block(&block)
+            .expect_err("successful bare transfer SCCP record payload must reject");
 
         assert_eq!(
             err,

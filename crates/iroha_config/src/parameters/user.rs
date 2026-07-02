@@ -248,6 +248,12 @@ use crate::{
     snapshot::Mode as SnapshotMode,
 };
 
+type DataSpaceCatalogBuild = (
+    DataSpaceCatalog,
+    BTreeMap<DataSpaceId, String>,
+    BTreeMap<DataSpaceId, Name>,
+);
+
 /// P2P relay role configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RelayMode {
@@ -6456,8 +6462,21 @@ impl SccpRouteManifest {
 mod sccp_route_manifest_user_config_tests {
     use super::{SccpRouteBrowserProverManifestRef, SccpRouteManifest};
 
+    type SccpRouteManifestFixture = fn() -> SccpRouteManifest;
+
     const SOURCE_BRIDGE: &str = "0x3333333333333333333333333333333333333333";
     const VERIFIER: &str = "0x4444444444444444444444444444444444444444";
+
+    fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+        panic.downcast_ref::<String>().map_or_else(
+            || {
+                panic
+                    .downcast_ref::<&str>()
+                    .map_or("unknown panic", |message| *message)
+            },
+            String::as_str,
+        )
+    }
 
     fn browser_prover_ref(role: &str, seed: &str) -> SccpRouteBrowserProverManifestRef {
         let (manifest_seed, route_seed, proof_seed) = match seed {
@@ -7288,13 +7307,7 @@ mod sccp_route_manifest_user_config_tests {
                 let _ = manifest.parse();
             })
             .expect_err("deployment evidence hash role replay must be rejected");
-            let message = if let Some(message) = panic.downcast_ref::<String>() {
-                message.as_str()
-            } else if let Some(message) = panic.downcast_ref::<&str>() {
-                message
-            } else {
-                "unknown panic"
-            };
+            let message = panic_message(panic.as_ref());
             assert!(
                 message.contains(&format!(
                     "deployment_evidence_sha256 must not equal {label}"
@@ -7306,7 +7319,7 @@ mod sccp_route_manifest_user_config_tests {
 
     #[test]
     fn production_routes_reject_reused_post_deploy_hash_roles() {
-        let cases: [(&str, fn() -> SccpRouteManifest); 3] = [
+        let cases: [(&str, SccpRouteManifestFixture); 3] = [
             ("BSC", production_ready_route_manifest),
             ("TON", production_ready_ton_route_manifest),
             ("TRON", production_ready_tron_route_manifest),
@@ -7320,13 +7333,7 @@ mod sccp_route_manifest_user_config_tests {
                 let _ = manifest.parse();
             })
             .expect_err("route canary evidence hash replay must be rejected");
-            let message = if let Some(message) = panic.downcast_ref::<String>() {
-                message.as_str()
-            } else if let Some(message) = panic.downcast_ref::<&str>() {
-                message
-            } else {
-                "unknown panic"
-            };
+            let message = panic_message(panic.as_ref());
             assert!(
                 message.contains(
                     "post_deploy_route_canary_evidence_hash must not equal \
@@ -7344,13 +7351,7 @@ mod sccp_route_manifest_user_config_tests {
                 let _ = manifest.parse();
             })
             .expect_err("route canary transaction id replay must be rejected");
-            let message = if let Some(message) = panic.downcast_ref::<String>() {
-                message.as_str()
-            } else if let Some(message) = panic.downcast_ref::<&str>() {
-                message
-            } else {
-                "unknown panic"
-            };
+            let message = panic_message(panic.as_ref());
             assert!(
                 message.contains(
                     "post_deploy_route_canary_transaction_id must not equal \
@@ -7434,13 +7435,7 @@ mod sccp_route_manifest_user_config_tests {
                 let _ = manifest.parse();
             })
             .expect_err("browser prover hash role replay must be rejected");
-            let message = if let Some(message) = panic.downcast_ref::<String>() {
-                message.as_str()
-            } else if let Some(message) = panic.downcast_ref::<&str>() {
-                message
-            } else {
-                "unknown panic"
-            };
+            let message = panic_message(panic.as_ref());
             assert!(
                 message.contains(&format!("{label} must not equal {previous_label}")),
                 "unexpected panic for {label}: {message}"
@@ -18499,11 +18494,7 @@ impl Nexus {
     fn build_dataspace_catalog(
         descriptors: Vec<DataSpaceDescriptor>,
         emitter: &mut Emitter<ParseError>,
-    ) -> Option<(
-        DataSpaceCatalog,
-        BTreeMap<DataSpaceId, String>,
-        BTreeMap<DataSpaceId, Name>,
-    )> {
+    ) -> Option<DataSpaceCatalogBuild> {
         let mut dataspace_entries = Vec::new();
         let mut dataspace_fee_sponsors = BTreeMap::new();
         let mut dataspace_fee_sponsor_policies = BTreeMap::new();

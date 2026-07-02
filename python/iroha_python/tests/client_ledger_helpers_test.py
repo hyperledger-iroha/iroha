@@ -1821,7 +1821,6 @@ def test_permission_grant_accepts_configured_chain_discriminant_account_ids() ->
     )
     captured: dict[str, object] = {}
     account = account_address(0x45, 0x0171)
-    native_account = account_address(0x45)
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
         captured["draft"] = draft
@@ -1841,7 +1840,7 @@ def test_permission_grant_accepts_configured_chain_discriminant_account_ids() ->
     ) == {"hash": "permission-taira"}
 
     draft = captured["draft"]
-    assert draft.config.authority == native_account
+    assert draft.config.authority == account
     assert len(draft) == 1
     assert captured["kwargs"]["private_key_hex"] == "11" * 32
 
@@ -1856,7 +1855,6 @@ def test_transfer_helper_accepts_configured_chain_discriminant_account_ids() -> 
     captured: dict[str, object] = {}
     source = account_address(0x46, 0x0171)
     destination = account_address(0x47, 0x0171)
-    native_source = account_address(0x46)
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
@@ -1877,7 +1875,7 @@ def test_transfer_helper_accepts_configured_chain_discriminant_account_ids() -> 
     ) == {"hash": "transfer-taira"}
 
     draft = captured["draft"]
-    assert draft.config.authority == native_source
+    assert draft.config.authority == source
     assert len(draft) == 1
     assert captured["kwargs"]["private_key_hex"] == "22" * 32
 
@@ -1892,7 +1890,6 @@ def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
     captured: dict[str, object] = {}
     source = account_address(0x48, 0x0171)
     destination = account_address(0x49, 0x0171)
-    native_source = account_address(0x48)
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
     scope = "dataspace:6647857470246403404"
 
@@ -1914,9 +1911,77 @@ def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
     ) == {"hash": "transfer-taira-scoped"}
 
     draft = captured["draft"]
-    assert draft.config.authority == native_source
+    assert draft.config.authority == source
     assert len(draft) == 1
     assert captured["kwargs"]["private_key_hex"] == "23" * 32
+
+
+def test_zk_ace_transfer_helper_preserves_configured_chain_discriminant_account_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = ToriiClient(
+        "http://torii.example",
+        session=FakeSession([]),
+        max_retries=0,
+        chain_discriminant=0x0171,
+    )
+    captured: dict[str, object] = {}
+    source = account_address(0x50, 0x0171)
+    destination = account_address(0x51, 0x0171)
+    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
+
+    def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
+        captured["draft"] = draft
+        captured["kwargs"] = kwargs
+        return {
+            "hash": "zk-ace-transfer-taira",
+            "status": {"kind": "Committed"},
+        }
+
+    def fake_zk_ace_authorized_transfer(
+        draft: TransactionDraft,
+        **kwargs: object,
+    ) -> TransactionDraft:
+        captured["zk_ace_kwargs"] = kwargs
+        return draft
+
+    client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        TransactionDraft,
+        "zk_ace_authorized_transfer",
+        fake_zk_ace_authorized_transfer,
+    )
+
+    assert client.zk_ace_authorized_transfer_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="24" * 32,
+        from_account_id=source,
+        to_account_id=destination,
+        asset_definition_id=asset_definition_id,
+        amount="123",
+        identity_commitment="11" * 32,
+        tx_digest="22" * 32,
+        domain_tag="iroha:zk-ace:pq-authorization:v0",
+        action_class="transparent_asset_transfer",
+        replay_nullifier="33" * 32,
+        policy_hash="44" * 32,
+        proof={
+            "backend": "stark/fri/sha256-goldilocks",
+            "proof_b64": base64.b64encode(b"proof").decode("ascii"),
+            "verifying_key_ref": "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+        },
+        wait=False,
+    ) == {
+        "hash": "zk-ace-transfer-taira",
+        "status": {"kind": "Committed"},
+    }
+
+    draft = captured["draft"]
+    assert draft.config.authority == source
+    assert captured["zk_ace_kwargs"]["from_account_id"] == source
+    assert captured["zk_ace_kwargs"]["to_account_id"] == destination
+    assert captured["kwargs"]["private_key_hex"] == "24" * 32
 
 
 def test_zk_instruction_helpers_serialize_full_surface() -> None:

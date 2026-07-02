@@ -27977,7 +27977,7 @@ async fn handler_sccp_capabilities(
         crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/capabilities");
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(routing::handle_v1_sccp_capabilities(accept)
+    Ok(routing::handle_v1_sccp_capabilities(&app.state, accept)
         .await?
         .into_response())
 }
@@ -53140,6 +53140,7 @@ pub(crate) mod tests_runtime_handlers {
             tron_network: "nile".to_owned(),
             chain: "tron-nile".to_owned(),
             chain_id_hex: "0xcd8690dc".to_owned(),
+            ton_finalize_message_value_nano: None,
             explorer_url: None,
             explorer_host: None,
             counterparty_account_codec: None,
@@ -53154,7 +53155,6 @@ pub(crate) mod tests_runtime_handlers {
             taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
             sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
             tron_verifier_address: "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ".to_owned(),
-            ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", "11".repeat(32)),
             verifier_key_hash: format!("0x{}", "22".repeat(32)),
             proof_artifact_hash: None,
@@ -53751,7 +53751,8 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn sccp_capabilities_endpoint_roundtrips_json_and_norito() {
-        let json_response = routing::handle_v1_sccp_capabilities(None)
+        let app = mk_app_state_for_tests();
+        let json_response = routing::handle_v1_sccp_capabilities(app.state.as_ref(), None)
             .await
             .expect("json response");
         assert_eq!(
@@ -53803,9 +53804,10 @@ pub(crate) mod tests_runtime_handlers {
             iroha_sccp::SccpDestinationVerifierPlanV1::TonContractNativeRecursive
         );
 
-        let norito_response = routing::handle_v1_sccp_capabilities(Some(HeaderValue::from_static(
-            crate::utils::NORITO_MIME_TYPE,
-        )))
+        let norito_response = routing::handle_v1_sccp_capabilities(
+            app.state.as_ref(),
+            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
+        )
         .await
         .expect("norito response");
         assert_eq!(

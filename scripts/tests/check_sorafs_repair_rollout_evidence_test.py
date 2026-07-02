@@ -336,6 +336,56 @@ def test_auditor_api_requires_roster_digest_binding(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_route_count_must_match_unique_routes_for_route_artifacts(
+    tmp_path: Path,
+) -> None:
+    route_artifacts = (
+        ("auditor_api", "auditor-api.json", auditor_api),
+        ("worker_lifecycle", "worker-lifecycle.json", worker_lifecycle),
+        ("event_streams", "event-streams.json", event_streams),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["route_count"] += 1
+        payload["passed_route_count"] = payload["route_count"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_routes_must_not_duplicate_for_route_artifacts(tmp_path: Path) -> None:
+    route_artifacts = (
+        ("auditor_api", "auditor-api.json", auditor_api),
+        ("worker_lifecycle", "worker-lifecycle.json", worker_lifecycle),
+        ("event_streams", "event-streams.json", event_streams),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["routes"].append(dict(payload["routes"][0]))
+        payload["route_count"] = len(payload["routes"])
+        payload["passed_route_count"] = len(payload["routes"])
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "routes must not contain duplicate values" in artifact["errors"]
+        assert "route_count must match unique routes count" in artifact["errors"]
+
+
 def test_worker_lifecycle_roster_digest_must_match_roster(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = worker_lifecycle()

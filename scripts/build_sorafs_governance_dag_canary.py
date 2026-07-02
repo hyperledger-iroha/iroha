@@ -330,13 +330,19 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
         errors=errors,
     )
     if args.kind == "ingest_service":
-        required_positive(args.source_count, option="--source-count", errors=errors)
+        source_count = required_positive(
+            args.source_count,
+            option="--source-count",
+            errors=errors,
+        )
         args.payload_kinds = validate_name_set(
             split_csv_values(args.payload_kind),
             allowed=REQUIRED_PAYLOAD_KINDS,
             option="--payload-kind",
             errors=errors,
         )
+        if source_count and source_count != len(args.payload_kinds):
+            errors.append("--source-count must match unique --payload-kind count")
     elif args.kind == "publisher_service":
         required_positive(args.pin_lag_seconds, option="--pin-lag-seconds", errors=errors)
         required_positive(args.head_age_seconds, option="--head-age-seconds", errors=errors)

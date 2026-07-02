@@ -37,7 +37,14 @@ that priced the staged cycle. Statement-publication, reconciliation,
 metrics/alert, and governance-approval evidence must also carry the same
 `statement_bundle_digest_hex`/`reconciliation_digest_hex` tuple as a valid
 staged billing cycle in the same rollout bundle, and governance approval
-`policy_digest_hex` must match a valid billing-cycle policy digest. This
+`policy_digest_hex` must match a valid billing-cycle policy digest.
+Statement-publication artifacts also bind `route_count` to the unique canonical
+`routes[].name` inventory and reject duplicate route entries before promotion
+can report ready. Reconciliation artifacts also bind `source_count` to the
+unique canonical `sources[].name` inventory and reject duplicate source entries
+before promotion can report ready. Native-bridge release artifacts also bind
+`artifact_count` to the unique canonical `artifacts[].id` inventory and reject
+duplicate artifact entries before promotion can report ready. This
 prevents promotion packets from mixing statement publication, reconciliation,
 dashboard, approval, or policy artifacts from different billing runs.
 Reference-price, cycle-tuple, and policy-digest binding failures are recorded

@@ -4,9 +4,10 @@ direction: rtl
 source: docs/source/sorafs_appeal_pricing_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4a167a5ec7510ce82dc5c933b4875bf9eb537b2b8777d95db539772604890e99
+source_hash: 352e9d40aba79033a85ee965665b78ce1227972e8f709743e75808ae084a679d
 source_last_modified: "2026-06-25T17:34:55+00:00"
 translation_last_reviewed: 2026-06-25
+source_mtime: 2026-07-01T20:03:26.366820+00:00
 ---
 
 # Moderation Appeal Pricing Engine
@@ -49,10 +50,16 @@ fail-closed SFM-4b2 rollout evidence gate for deployed appeal finance promotion
 packets, including cross-artifact `config_digest_hex` binding from quote,
 deposit, settlement, submitter, worker, Governance DAG, dashboard,
 reconciliation, and governance approval evidence back to a valid pricing-config
-artifact in the same bundle. Config-digest mismatches are recorded on the
-offending artifact in the JSON summary before required-kind validity is
-reported. The checker also exports its required top-level payload fields as
-`EVIDENCE_REQUIRED_FIELDS`, and
+artifact in the same bundle. Pricing-config artifacts also carry
+`policy_digest_hex`, valid pricing policy digests are published as
+`valid_policy_digests`, and governance approval evidence must bind its
+`policy_digest_hex` to one of those valid pricing-config policy digests.
+Config- and policy-digest mismatches are recorded on the offending artifact in
+the JSON summary before required-kind validity is reported. Quote API, deposit
+lifecycle, and settlement execution artifacts also bind `route_count` to the
+unique canonical `routes[].name` inventory and reject duplicate route entries
+before promotion can report ready. The checker also
+exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and
 `scripts/run_sorafs_appeal_finance_rollout_evidence.py` provides the matching
 reviewed evidence collection planner/runner with a dry-run
 `evidence_contract` map for the selected required kinds.
@@ -437,6 +444,31 @@ python3 scripts/run_sorafs_appeal_finance_rollout_evidence.py \
   --dry-run
 ```
 
+When operators have reviewed the deployed production facts, use
+`scripts/build_sorafs_appeal_finance_canary.py` as the payload-free SFM-4b2 appeal finance canary builder
+for the individual evidence artifacts consumed by the gate. The builder covers
+every current evidence kind, requires explicit `--verified-claim` input for
+positive safety claims, complete quote, deposit, settlement, class, urgency,
+outcome, reconciliation-status, payload-kind, and metric coverage where
+applicable, shared `config_digest_hex` binding, and threshold-bounded
+route/settlement facts. Pricing-config and governance-approval canaries both
+require reviewed `--policy-digest-hex` input so the gate can prove governance
+approval was issued for the staged pricing policy. It forces raw instructions,
+signed transactions, response bodies, private signer material, deposit
+confirmations, raw reports/rollups/receipts, and raw ledger payload inclusion
+flags to `false`, prevalidates the generated artifact with
+`check_sorafs_appeal_finance_rollout_evidence.py`, and writes the JSON
+atomically without following output symlinks. Example argfiles are checked in
+for the pricing-config anchor and multi-peer reconciliation evidence:
+
+```sh
+python3 scripts/build_sorafs_appeal_finance_canary.py \
+  @scripts/examples/sorafs_appeal_finance_pricing_config_canary.args.example
+
+python3 scripts/build_sorafs_appeal_finance_canary.py \
+  @scripts/examples/sorafs_appeal_finance_multi_peer_reconciliation_canary.args.example
+```
+
 The checker recognizes `sorafs.appeal_finance.*` SFM-4b2 rollout schemas for
 pricing config, quote APIs, deposit lifecycle, settlement execution, settlement
 submitter, moderation worker, Governance DAG publication, dashboard metrics,
@@ -448,9 +480,16 @@ settlement lag stay under configured thresholds, hosted dashboard evidence is
 fresh, quote/deposit/settlement/submitter/worker/Governance DAG/dashboard/
 reconciliation/governance artifacts carry a `config_digest_hex` matching a
 valid pricing-config artifact in the same bundle, config-bound mismatches are
-attached to the offending artifact in the emitted summary, the multi-peer
-reconciliation run covers at least four peers, and the governance approval is
-bound to `iroha_config`.
+attached to the offending artifact in the emitted summary, pricing-config
+artifacts publish valid staged `policy_digest_hex` values, governance approval
+evidence carries a matching `policy_digest_hex`, the multi-peer reconciliation
+run covers at least four peers, and the governance approval is bound to
+`iroha_config`. The collection planner includes the checker-backed
+`evidence_contract` map in `--dry-run` output so operators can review the exact
+SFM-4b2 artifact contract before promoting staged evidence. The shared runner
+plan guard rejects non-canonical nested required-kind, threshold,
+external-evidence, evidence-contract, and command-step shapes before dry-run
+output or verifier execution.
 
 ## Remaining Production Gates
 
@@ -480,4 +519,7 @@ The rollout evidence scripts have focused Python coverage in:
 - `scripts/tests/check_sorafs_appeal_finance_rollout_evidence_test.py`
 - `scripts/tests/run_sorafs_appeal_finance_rollout_evidence_test.py`
 
-The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
+The runner validates the schema-closed collection-plan envelope before printing
+dry-run JSON or executing the verifier. The shared runner plan guard rejects
+non-canonical nested required-kind, threshold, external-evidence,
+evidence-contract, and command-step shapes.

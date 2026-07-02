@@ -12,7 +12,6 @@ default = ["cuda-kernel"]
 cuda-kernel = []
 
 [dependencies]
-gpuzstd_metal = { path = "../gpuzstd_metal", default-features = false }
 zstd.workspace = true
 
 [build-dependencies]

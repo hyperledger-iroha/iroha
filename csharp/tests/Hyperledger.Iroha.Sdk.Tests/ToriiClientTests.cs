@@ -11807,24 +11807,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""
-                    {
-                      "policy_id": "phone#retail",
-                      "opaque_id": "opaque-1",
-                      "receipt_hash": "receipt-1",
-                      "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                      "account_id": "sorauﾛ1Nmerchant",
-                      "resolved_at_ms": 1710000000000,
-                      "expires_at_ms": 1710003600000,
-                      "backend": "bfv-programmed-sha3-256-v1",
-                      "signature": "ABCD",
-                      "signature_payload_hex": "DEADBEEF",
-                      "signature_payload": {
-                        "policy_id": "phone#retail",
-                        "account_id": "sorauﾛ1Nmerchant"
-                      }
-                    }
-                    """),
+                Content = new StringContent(IdentifierResolveEnvelopeJson(
+                    IdentifierResolvePayloadJson(),
+                    """{"kind":"signed","signature":"ABCD"}""")),
             };
         });
 
@@ -11840,7 +11825,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Equal("sorauﾛ1Nmerchant", resolved.AccountId);
         Assert.Equal("bfv-programmed-sha3-256-v1", resolved.Backend);
         Assert.NotNull(resolved.SignaturePayload);
-        Assert.Equal("phone#retail", resolved.SignaturePayload!["policy_id"]!.GetValue<string>());
+        Assert.Equal("phone#retail", resolved.SignaturePayload!["payload"]!["policy_id"]!.GetValue<string>());
     }
 
     [Fact]
@@ -12019,24 +12004,40 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.Null(handler.LastRequest);
     }
 
+    [Fact]
+    public async Task ResolveIdentifierAsyncRejectsRetiredFlatReceiptEnvelope()
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(RetiredIdentifierResolveResponseJson(
+                "ABCD",
+                "DEADBEEF",
+                """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""")),
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
+            new ToriiIdentifierResolveRequest
+            {
+                PolicyId = "phone#retail",
+                Input = "+15551234567",
+            }, cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains("identifier resolve response.policy_id", error.Message);
+        Assert.Contains("current payload/attestation envelope", error.Message);
+    }
+
     [Theory]
-    [InlineData(" ABCD", "DEADBEEF", """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature")]
-    [InlineData("ABCD", " DEADBEEF", """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload_hex")]
-    [InlineData("ABCD", "DEADBEEF", """{"opening":{"signature":" ABCD"}}""", "identifier resolve response.signature_payload.opening.signature")]
-    [InlineData("ABCD", "DEADBEEF", """{"payload":{"opening":{"signature":"ABCD "}}}""", "identifier resolve response.signature_payload.payload.opening.signature")]
-    [InlineData("ABCD", "DEADBEEF", """{"attestation":{"signature":" ABCD"}}""", "identifier resolve response.signature_payload.attestation.signature")]
+    [InlineData("""{"payload":{"opening":{"signature":" ABCD"}}}""", "identifier resolve response.payload.opening.signature")]
+    [InlineData("""{"payload":{"opening":{"signature":"ABCD "}}}""", "identifier resolve response.payload.opening.signature")]
+    [InlineData("""{"attestation":{"kind":"signed","signature":" ABCD"}}""", "identifier resolve response.attestation.signature")]
     public async Task ResolveIdentifierAsyncRejectsPaddedSignatureReceiptFields(
-        string signature,
-        string signaturePayloadHex,
-        string signaturePayloadJson,
+        string patchJson,
         string expectedField)
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(IdentifierResolveResponseJson(
-                signature,
-                signaturePayloadHex,
-                signaturePayloadJson)),
+            Content = new StringContent(IdentifierResolveEnvelopeJsonWithPatch(patchJson)),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -12052,30 +12053,20 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData("AB CD", "DEADBEEF", """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature", "whitespace")]
-    [InlineData("AB\u00A0CD", "DEADBEEF", """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature", "whitespace")]
-    [InlineData("ABCD\u0001", "DEADBEEF", """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature", "control characters")]
-    [InlineData("0XABCD", "DEADBEEF", """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature", "exact hex string")]
-    [InlineData("ABCD", "DE AD BEEF", """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload_hex", "whitespace")]
-    [InlineData("ABCD", "DEADBEEF\u0001", """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload_hex", "control characters")]
-    [InlineData("ABCD", "0XDEADBEEF", """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload_hex", "exact hex string")]
-    [InlineData("ABCD", "DEADBEEF", """{"opening":{"signature":"AB CD"}}""", "identifier resolve response.signature_payload.opening.signature", "whitespace")]
-    [InlineData("ABCD", "DEADBEEF", """{"opening":{"signature":"0XABCD"}}""", "identifier resolve response.signature_payload.opening.signature", "exact hex string")]
-    [InlineData("ABCD", "DEADBEEF", """{"attestation":{"signature":"ABCD\u0001"}}""", "identifier resolve response.signature_payload.attestation.signature", "control characters")]
-    [InlineData("ABCD", "DEADBEEF", """{"attestation":{"signature":"0XABCD"}}""", "identifier resolve response.signature_payload.attestation.signature", "exact hex string")]
+    [InlineData("""{"attestation":{"kind":"signed","signature":"AB CD"}}""", "identifier resolve response.attestation.signature", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"signed","signature":"AB\u00A0CD"}}""", "identifier resolve response.attestation.signature", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"signed","signature":"ABCD\u0001"}}""", "identifier resolve response.attestation.signature", "control characters")]
+    [InlineData("""{"attestation":{"kind":"signed","signature":"0XABCD"}}""", "identifier resolve response.attestation.signature", "exact hex string")]
+    [InlineData("""{"payload":{"opening":{"signature":"AB CD"}}}""", "identifier resolve response.payload.opening.signature", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"signature":"0XABCD"}}}""", "identifier resolve response.payload.opening.signature", "exact hex string")]
     public async Task ResolveIdentifierAsyncRejectsNonExactHexReceiptFields(
-        string signature,
-        string signaturePayloadHex,
-        string signaturePayloadJson,
+        string patchJson,
         string expectedField,
         string expectedReason)
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(IdentifierResolveResponseJson(
-                signature,
-                signaturePayloadHex,
-                signaturePayloadJson)),
+            Content = new StringContent(IdentifierResolveEnvelopeJsonWithPatch(patchJson)),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -12091,26 +12082,24 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData(" phone#retail", "identifier resolve response.policy_id", "whitespace")]
-    [InlineData("phone#retail ", "identifier resolve response.policy_id", "whitespace")]
-    [InlineData("phone# retail", "identifier resolve response.policy_id.rule", "whitespace")]
-    [InlineData("phone#ret ail", "identifier resolve response.policy_id.rule", "whitespace")]
-    [InlineData("ph\u00A0one#retail", "identifier resolve response.policy_id.kind", "whitespace")]
-    [InlineData("phone", "identifier resolve response.policy_id", "kind#rule")]
-    [InlineData("phone#retail#extra", "identifier resolve response.policy_id", "kind#rule")]
-    [InlineData("phone#retail\u0001", "identifier resolve response.policy_id", "control")]
-    public async Task ResolveIdentifierAsyncRejectsNonExactTopLevelPolicyId(
+    [InlineData(" phone#retail", "identifier resolve response.payload.policy_id", "whitespace")]
+    [InlineData("phone#retail ", "identifier resolve response.payload.policy_id", "whitespace")]
+    [InlineData("phone# retail", "identifier resolve response.payload.policy_id", "whitespace")]
+    [InlineData("phone#ret ail", "identifier resolve response.payload.policy_id", "whitespace")]
+    [InlineData("ph\u00A0one#retail", "identifier resolve response.payload.policy_id", "whitespace")]
+    [InlineData("phone", "identifier resolve response.payload.policy_id", "kind#rule")]
+    [InlineData("phone#retail#extra", "identifier resolve response.payload.policy_id", "kind#rule")]
+    [InlineData("phone#retail\u0001", "identifier resolve response.payload.policy_id", "control")]
+    public async Task ResolveIdentifierAsyncRejectsNonExactNestedPayloadPolicyId(
         string policyId,
         string expectedField,
         string expectedReason)
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(IdentifierResolveResponseJson(
-                "ABCD",
-                "DEADBEEF",
-                """{"policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}""",
-                policyId)),
+            Content = new StringContent(IdentifierResolveEnvelopeJson(
+                IdentifierResolvePayloadJson(policyId: policyId),
+                """{"kind":"signed","signature":"ABCD"}""")),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -12126,31 +12115,22 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData("""{"policy_id":" phone#retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload.policy_id", "whitespace")]
-    [InlineData("""{"policy_id":"phone#retail ","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload.policy_id", "whitespace")]
-    [InlineData("""{"policy_id":"phone# retail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload.policy_id.rule", "whitespace")]
-    [InlineData("""{"policy_id":"phone#ret ail","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload.policy_id.rule", "whitespace")]
-    [InlineData("""{"policy_id":"phone","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload.policy_id", "kind#rule")]
-    [InlineData("""{"policy_id":"phone#retail#extra","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload.policy_id", "kind#rule")]
-    [InlineData("""{"policy_id":"phone#retail\u0001","account_id":"sorauﾛ1Nmerchant"}""", "identifier resolve response.signature_payload.policy_id", "control")]
-    [InlineData("""{"payload":{"policy_id":" phone#retail"}}""", "identifier resolve response.signature_payload.payload.policy_id", "whitespace")]
-    [InlineData("""{"payload":{"policy_id":"phone#retail "}}""", "identifier resolve response.signature_payload.payload.policy_id", "whitespace")]
-    [InlineData("""{"payload":{"policy_id":"phone# retail"}}""", "identifier resolve response.signature_payload.payload.policy_id.rule", "whitespace")]
-    [InlineData("""{"payload":{"policy_id":"ph\u00A0one#retail"}}""", "identifier resolve response.signature_payload.payload.policy_id.kind", "whitespace")]
-    [InlineData("""{"payload":{"policy_id":"phone"}}""", "identifier resolve response.signature_payload.payload.policy_id", "kind#rule")]
-    [InlineData("""{"payload":{"policy_id":"phone#retail#extra"}}""", "identifier resolve response.signature_payload.payload.policy_id", "kind#rule")]
-    [InlineData("""{"payload":{"policy_id":"phone#retail\u0001"}}""", "identifier resolve response.signature_payload.payload.policy_id", "control")]
-    public async Task ResolveIdentifierAsyncRejectsNonExactSignaturePayloadPolicyIds(
-        string signaturePayloadJson,
+    [InlineData("""{"payload":{"policy_id":" phone#retail"}}""", "identifier resolve response.payload.policy_id", "whitespace")]
+    [InlineData("""{"payload":{"policy_id":"phone#retail "}}""", "identifier resolve response.payload.policy_id", "whitespace")]
+    [InlineData("""{"payload":{"policy_id":"phone# retail"}}""", "identifier resolve response.payload.policy_id", "whitespace")]
+    [InlineData("""{"payload":{"policy_id":"phone#ret ail"}}""", "identifier resolve response.payload.policy_id", "whitespace")]
+    [InlineData("""{"payload":{"policy_id":"ph\u00A0one#retail"}}""", "identifier resolve response.payload.policy_id", "whitespace")]
+    [InlineData("""{"payload":{"policy_id":"phone"}}""", "identifier resolve response.payload.policy_id", "kind#rule")]
+    [InlineData("""{"payload":{"policy_id":"phone#retail#extra"}}""", "identifier resolve response.payload.policy_id", "kind#rule")]
+    [InlineData("""{"payload":{"policy_id":"phone#retail\u0001"}}""", "identifier resolve response.payload.policy_id", "control")]
+    public async Task ResolveIdentifierAsyncRejectsNonExactNestedPayloadPolicyIds(
+        string patchJson,
         string expectedField,
         string expectedReason)
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(IdentifierResolveResponseJson(
-                "ABCD",
-                "DEADBEEF",
-                signaturePayloadJson)),
+            Content = new StringContent(IdentifierResolveEnvelopeJsonWithPatch(patchJson)),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -12170,19 +12150,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(IdentifierResolveResponseJson(
-                "ABCD",
-                "DEADBEEF",
-                """
-                {
-                  "policy_id": "phone#retail",
-                  "attestation": {
-                    "kind": "proof",
-                    "proof_backend": "halo2/ipa",
-                    "proof_b64": "AQID"
-                  }
-                }
-                """)),
+            Content = new StringContent(IdentifierResolveEnvelopeJson(
+                IdentifierResolvePayloadJson(),
+                """{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AQID"}""")),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -12196,29 +12166,26 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData("""{"attestation":{"kind":" signed","signature":"ABCD"}}""", "identifier resolve response.signature_payload.attestation.kind", "whitespace")]
-    [InlineData("""{"attestation":{"kind":"signed ","signature":"ABCD"}}""", "identifier resolve response.signature_payload.attestation.kind", "whitespace")]
-    [InlineData("""{"attestation":{"kind":"sig ned","signature":"ABCD"}}""", "identifier resolve response.signature_payload.attestation.kind", "whitespace")]
-    [InlineData("""{"attestation":{"kind":"Signed","signature":"ABCD"}}""", "identifier resolve response.signature_payload.attestation.kind", "signed or proof")]
-    [InlineData("""{"attestation":{"kind":"signed","signature":"ABCD","proof_b64":"AQID"}}""", "identifier resolve response.signature_payload.attestation signed attestations", "proof fields")]
-    [InlineData("""{"attestation":{"proof_b64":"AQID"}}""", "identifier resolve response.signature_payload.attestation.kind", "required")]
-    [InlineData("""{"attestation":{"kind":"proof","proof_backend":" halo2/ipa","proof_b64":"AQID"}}""", "identifier resolve response.signature_payload.attestation.proof_backend", "whitespace")]
-    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ ipa","proof_b64":"AQID"}}""", "identifier resolve response.signature_payload.attestation.proof_backend", "whitespace")]
-    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":" AQID"}}""", "identifier resolve response.signature_payload.attestation.proof_b64", "whitespace")]
-    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AQID "}}""", "identifier resolve response.signature_payload.attestation.proof_b64", "whitespace")]
-    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"@@@"}}""", "identifier resolve response.signature_payload.attestation.proof_b64", "valid base64")]
-    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AR=="}}""", "identifier resolve response.signature_payload.attestation.proof_b64", "canonical base64")]
+    [InlineData("""{"attestation":{"kind":" signed","signature":"ABCD"}}""", "identifier resolve response.attestation.kind", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"signed ","signature":"ABCD"}}""", "identifier resolve response.attestation.kind", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"sig ned","signature":"ABCD"}}""", "identifier resolve response.attestation.kind", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"Signed","signature":"ABCD"}}""", "identifier resolve response.attestation.kind", "signed or proof")]
+    [InlineData("""{"attestation":{"kind":"signed","signature":"ABCD","proof_b64":"AQID"}}""", "identifier resolve response.attestation signed attestations", "proof fields")]
+    [InlineData("""{"attestation":{"proof_b64":"AQID"}}""", "identifier resolve response.attestation.kind", "required")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":" halo2/ipa","proof_b64":"AQID"}}""", "identifier resolve response.attestation.proof_backend", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ ipa","proof_b64":"AQID"}}""", "identifier resolve response.attestation.proof_backend", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":" AQID"}}""", "identifier resolve response.attestation.proof_b64", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AQID "}}""", "identifier resolve response.attestation.proof_b64", "whitespace")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"@@@"}}""", "identifier resolve response.attestation.proof_b64", "valid base64")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"AR=="}}""", "identifier resolve response.attestation.proof_b64", "canonical base64")]
     public async Task ResolveIdentifierAsyncRejectsNonExactAttestationSelectors(
-        string signaturePayloadJson,
+        string patchJson,
         string expectedField,
         string expectedReason)
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(IdentifierResolveResponseJson(
-                "ABCD",
-                "DEADBEEF",
-                signaturePayloadJson)),
+            Content = new StringContent(IdentifierResolveEnvelopeJsonWithPatch(patchJson)),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -12238,47 +12205,44 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(IdentifierResolveResponseJson(
-                "ABCD",
-                "DEADBEEF",
+            Content = new StringContent(IdentifierResolveEnvelopeJson(
                 """
                 {
-                  "payload": {
-                    "policy_id": "phone#retail",
-                    "account_id": "sorauﾛ1Nmerchant",
-                    "opaque_id": "opaque-1",
-                    "receipt_hash": "receipt-1",
-                    "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                    "execution": {
+                  "policy_id": "phone#retail",
+                  "account_id": "sorauﾛ1Nmerchant",
+                  "opaque_id": "opaque-1",
+                  "receipt_hash": "receipt-1",
+                  "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                  "execution": {
+                    "program_id": "identifier_lookup_retail",
+                    "program_digest": "program-digest",
+                    "backend": "hkdf-sha3-512-prf-v1",
+                    "verification_mode": "signed",
+                    "input_ciphertext_hash": "input-hash",
+                    "output_ciphertext_hash": "output-hash",
+                    "parameter_digest": "parameter-digest",
+                    "evaluation_key_digest": "evaluation-key-digest",
+                    "output_hash": "output-open-hash",
+                    "associated_data_hash": "associated-data-hash",
+                    "executed_at_ms": 1710000000000,
+                    "expires_at_ms": "1710003600000"
+                  },
+                  "opening": {
+                    "payload": {
                       "program_id": "identifier_lookup_retail",
-                      "program_digest": "program-digest",
-                      "backend": "hkdf-sha3-512-prf-v1",
-                      "verification_mode": "signed",
                       "input_ciphertext_hash": "input-hash",
                       "output_ciphertext_hash": "output-hash",
                       "parameter_digest": "parameter-digest",
                       "evaluation_key_digest": "evaluation-key-digest",
-                      "output_hash": "output-open-hash",
-                      "associated_data_hash": "associated-data-hash",
-                      "executed_at_ms": 1710000000000,
+                      "opened_output_hash": "opened-output-hash",
+                      "opened_at_ms": 1710000000000,
                       "expires_at_ms": "1710003600000"
                     },
-                    "opening": {
-                      "payload": {
-                        "program_id": "identifier_lookup_retail",
-                        "input_ciphertext_hash": "input-hash",
-                        "output_ciphertext_hash": "output-hash",
-                        "parameter_digest": "parameter-digest",
-                        "evaluation_key_digest": "evaluation-key-digest",
-                        "opened_output_hash": "opened-output-hash",
-                        "opened_at_ms": 1710000000000,
-                        "expires_at_ms": "1710003600000"
-                      },
-                      "signature": "ABCD"
-                    }
+                    "signature": "ABCD"
                   }
                 }
-                """)),
+                """,
+                """{"kind":"signed","signature":"ABCD"}""")),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -12294,52 +12258,49 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Theory]
-    [InlineData("""{"payload":{"account_id":" sorauﾛ1Nmerchant"}}""", "identifier resolve response.signature_payload.payload.account_id", "whitespace")]
-    [InlineData("""{"payload":{"account_id":"sorauﾛ1Nmer chant"}}""", "identifier resolve response.signature_payload.payload.account_id", "whitespace")]
-    [InlineData("""{"payload":{"account_id":"sorauﾛ1Nmerchant\u0001"}}""", "identifier resolve response.signature_payload.payload.account_id", "control")]
-    [InlineData("""{"payload":{"opaque_id":" opaque-1"}}""", "identifier resolve response.signature_payload.payload.opaque_id", "whitespace")]
-    [InlineData("""{"payload":{"receipt_hash":"receipt-1 "}}""", "identifier resolve response.signature_payload.payload.receipt_hash", "whitespace")]
-    [InlineData("""{"payload":{"uaid":" uaid:0123456789abcdef"}}""", "identifier resolve response.signature_payload.payload.uaid", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"program_id":" identifier_lookup_retail"}}}""", "identifier resolve response.signature_payload.payload.execution.program_id", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"program_id":"identifier_lookup retail"}}}""", "identifier resolve response.signature_payload.payload.execution.program_id", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"program_digest":"program-digest "}}}""", "identifier resolve response.signature_payload.payload.execution.program_digest", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"backend":" hkdf-sha3-512-prf-v1"}}}""", "identifier resolve response.signature_payload.payload.execution.backend", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"verification_mode":"signed "}}}""", "identifier resolve response.signature_payload.payload.execution.verification_mode", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"input_ciphertext_hash":" input-hash"}}}""", "identifier resolve response.signature_payload.payload.execution.input_ciphertext_hash", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"output_ciphertext_hash":"output-hash "}}}""", "identifier resolve response.signature_payload.payload.execution.output_ciphertext_hash", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"parameter_digest":" parameter-digest"}}}""", "identifier resolve response.signature_payload.payload.execution.parameter_digest", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"evaluation_key_digest":"evaluation-key-digest "}}}""", "identifier resolve response.signature_payload.payload.execution.evaluation_key_digest", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"output_hash":" output-open-hash"}}}""", "identifier resolve response.signature_payload.payload.execution.output_hash", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"associated_data_hash":"associated-data-hash "}}}""", "identifier resolve response.signature_payload.payload.execution.associated_data_hash", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"executed_at_ms":" 1710000000000"}}}""", "identifier resolve response.signature_payload.payload.execution.executed_at_ms", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"executed_at_ms":"1710000 000000"}}}""", "identifier resolve response.signature_payload.payload.execution.executed_at_ms", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"executed_at_ms":"01710000000000"}}}""", "identifier resolve response.signature_payload.payload.execution.executed_at_ms", "canonical unsigned decimal")]
-    [InlineData("""{"payload":{"execution":{"executed_at_ms":0}}}""", "identifier resolve response.signature_payload.payload.execution.executed_at_ms", "positive")]
-    [InlineData("""{"payload":{"execution":{"expires_at_ms":-1}}}""", "identifier resolve response.signature_payload.payload.execution.expires_at_ms", "non-negative")]
-    [InlineData("""{"payload":{"execution":{"expires_at_ms":0}}}""", "identifier resolve response.signature_payload.payload.execution.expires_at_ms", "positive")]
-    [InlineData("""{"payload":{"opening":{"payload":{"program_id":"identifier_lookup_retail "}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.program_id", "whitespace")]
-    [InlineData("""{"payload":{"opening":{"payload":{"program_id":"identifier_lookup\u00A0retail"}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.program_id", "whitespace")]
-    [InlineData("""{"payload":{"opening":{"payload":{"input_ciphertext_hash":" input-hash"}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.input_ciphertext_hash", "whitespace")]
-    [InlineData("""{"payload":{"opening":{"payload":{"output_ciphertext_hash":"output-hash "}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.output_ciphertext_hash", "whitespace")]
-    [InlineData("""{"payload":{"opening":{"payload":{"parameter_digest":" parameter-digest"}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.parameter_digest", "whitespace")]
-    [InlineData("""{"payload":{"opening":{"payload":{"evaluation_key_digest":"evaluation-key-digest "}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.evaluation_key_digest", "whitespace")]
-    [InlineData("""{"payload":{"opening":{"payload":{"opened_output_hash":" opened-output-hash"}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.opened_output_hash", "whitespace")]
-    [InlineData("""{"payload":{"opening":{"payload":{"opened_at_ms":"1710000000000 "}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.opened_at_ms", "whitespace")]
-    [InlineData("""{"payload":{"opening":{"payload":{"opened_at_ms":"01710000000000"}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.opened_at_ms", "canonical unsigned decimal")]
-    [InlineData("""{"payload":{"opening":{"payload":{"opened_at_ms":0}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.opened_at_ms", "positive")]
-    [InlineData("""{"payload":{"opening":{"payload":{"expires_at_ms":"-1"}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.expires_at_ms", "non-negative")]
-    [InlineData("""{"payload":{"opening":{"payload":{"expires_at_ms":0}}}}""", "identifier resolve response.signature_payload.payload.opening.payload.expires_at_ms", "positive")]
+    [InlineData("""{"payload":{"account_id":" sorauﾛ1Nmerchant"}}""", "identifier resolve response.payload.account_id", "whitespace")]
+    [InlineData("""{"payload":{"account_id":"sorauﾛ1Nmer chant"}}""", "identifier resolve response.payload.account_id", "whitespace")]
+    [InlineData("""{"payload":{"account_id":"sorauﾛ1Nmerchant\u0001"}}""", "identifier resolve response.payload.account_id", "control")]
+    [InlineData("""{"payload":{"opaque_id":" opaque-1"}}""", "identifier resolve response.payload.opaque_id", "whitespace")]
+    [InlineData("""{"payload":{"receipt_hash":"receipt-1 "}}""", "identifier resolve response.payload.receipt_hash", "whitespace")]
+    [InlineData("""{"payload":{"uaid":" uaid:0123456789abcdef"}}""", "identifier resolve response.payload.uaid", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"program_id":" identifier_lookup_retail"}}}""", "identifier resolve response.payload.execution.program_id", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"program_id":"identifier_lookup retail"}}}""", "identifier resolve response.payload.execution.program_id", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"program_digest":"program-digest "}}}""", "identifier resolve response.payload.execution.program_digest", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"backend":" hkdf-sha3-512-prf-v1"}}}""", "identifier resolve response.payload.execution.backend", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"verification_mode":"signed "}}}""", "identifier resolve response.payload.execution.verification_mode", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"input_ciphertext_hash":" input-hash"}}}""", "identifier resolve response.payload.execution.input_ciphertext_hash", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"output_ciphertext_hash":"output-hash "}}}""", "identifier resolve response.payload.execution.output_ciphertext_hash", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"parameter_digest":" parameter-digest"}}}""", "identifier resolve response.payload.execution.parameter_digest", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"evaluation_key_digest":"evaluation-key-digest "}}}""", "identifier resolve response.payload.execution.evaluation_key_digest", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"output_hash":" output-open-hash"}}}""", "identifier resolve response.payload.execution.output_hash", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"associated_data_hash":"associated-data-hash "}}}""", "identifier resolve response.payload.execution.associated_data_hash", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"executed_at_ms":" 1710000000000"}}}""", "identifier resolve response.payload.execution.executed_at_ms", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"executed_at_ms":"1710000 000000"}}}""", "identifier resolve response.payload.execution.executed_at_ms", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"executed_at_ms":"01710000000000"}}}""", "identifier resolve response.payload.execution.executed_at_ms", "canonical unsigned decimal")]
+    [InlineData("""{"payload":{"execution":{"executed_at_ms":0}}}""", "identifier resolve response.payload.execution.executed_at_ms", "positive")]
+    [InlineData("""{"payload":{"execution":{"expires_at_ms":-1}}}""", "identifier resolve response.payload.execution.expires_at_ms", "non-negative")]
+    [InlineData("""{"payload":{"execution":{"expires_at_ms":0}}}""", "identifier resolve response.payload.execution.expires_at_ms", "positive")]
+    [InlineData("""{"payload":{"opening":{"payload":{"program_id":"identifier_lookup_retail "}}}}""", "identifier resolve response.payload.opening.payload.program_id", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"program_id":"identifier_lookup\u00A0retail"}}}}""", "identifier resolve response.payload.opening.payload.program_id", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"input_ciphertext_hash":" input-hash"}}}}""", "identifier resolve response.payload.opening.payload.input_ciphertext_hash", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"output_ciphertext_hash":"output-hash "}}}}""", "identifier resolve response.payload.opening.payload.output_ciphertext_hash", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"parameter_digest":" parameter-digest"}}}}""", "identifier resolve response.payload.opening.payload.parameter_digest", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"evaluation_key_digest":"evaluation-key-digest "}}}}""", "identifier resolve response.payload.opening.payload.evaluation_key_digest", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"opened_output_hash":" opened-output-hash"}}}}""", "identifier resolve response.payload.opening.payload.opened_output_hash", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"opened_at_ms":"1710000000000 "}}}}""", "identifier resolve response.payload.opening.payload.opened_at_ms", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"opened_at_ms":"01710000000000"}}}}""", "identifier resolve response.payload.opening.payload.opened_at_ms", "canonical unsigned decimal")]
+    [InlineData("""{"payload":{"opening":{"payload":{"opened_at_ms":0}}}}""", "identifier resolve response.payload.opening.payload.opened_at_ms", "positive")]
+    [InlineData("""{"payload":{"opening":{"payload":{"expires_at_ms":"-1"}}}}""", "identifier resolve response.payload.opening.payload.expires_at_ms", "non-negative")]
+    [InlineData("""{"payload":{"opening":{"payload":{"expires_at_ms":0}}}}""", "identifier resolve response.payload.opening.payload.expires_at_ms", "positive")]
     public async Task ResolveIdentifierAsyncRejectsNonExactNestedReceiptPayloadFields(
-        string signaturePayloadJson,
+        string patchJson,
         string expectedField,
         string expectedReason)
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
-            Content = new StringContent(IdentifierResolveResponseJson(
-                "ABCD",
-                "DEADBEEF",
-                signaturePayloadJson)),
+            Content = new StringContent(IdentifierResolveEnvelopeJsonWithPatch(patchJson)),
         });
 
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
@@ -31711,7 +31672,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
-    private static string IdentifierResolveResponseJson(
+    private static string RetiredIdentifierResolveResponseJson(
         string signature,
         string signaturePayloadHex,
         string signaturePayloadJson,
@@ -31734,6 +31695,16 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             """;
     }
 
+    private static string IdentifierResolveEnvelopeJsonWithPatch(string patchJson)
+    {
+        var envelope = JsonNode.Parse(IdentifierResolveEnvelopeJson(
+            IdentifierResolvePayloadJson(),
+            """{"kind":"signed","signature":"ABCD"}"""))!.AsObject();
+        var patch = JsonNode.Parse(patchJson)!.AsObject();
+        MergeObjectPatch(envelope, patch);
+        return envelope.ToJsonString();
+    }
+
     private static string IdentifierResolveEnvelopeJson(string payloadJson, string attestationJson)
     {
         return $$"""
@@ -31742,6 +31713,27 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
               "attestation": {{attestationJson}}
             }
             """;
+    }
+
+    private static void MergeObjectPatch(JsonObject target, JsonObject patch)
+    {
+        foreach (var property in patch)
+        {
+            if (property.Key == "attestation")
+            {
+                target[property.Key] = property.Value?.DeepClone();
+                continue;
+            }
+
+            if (property.Value is JsonObject patchObject
+                && target[property.Key] is JsonObject targetObject)
+            {
+                MergeObjectPatch(targetObject, patchObject);
+                continue;
+            }
+
+            target[property.Key] = property.Value?.DeepClone();
+        }
     }
 
     private static string IdentifierResolvePayloadJson(
@@ -31829,8 +31821,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 "signature_payload_hex": "DEADBEEF"
               }
               """,
-            "must not mix",
-            "legacy",
+            "signature_payload_hex",
+            "current payload/attestation envelope",
         };
     }
 

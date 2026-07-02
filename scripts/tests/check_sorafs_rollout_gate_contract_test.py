@@ -4891,6 +4891,9 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     assert 'record_kind = "<unknown>"' in reputation
     assert "missing provider/proof evidence for required provider" in reputation
     assert "missing provider/proof evidence for `{provider_id}`" not in reputation
+    assert '"limit",' in reputation
+    assert 'limit = require_positive_int(payload, "limit", errors)' in reputation
+    assert 'errors.append("count must be <= limit")' in reputation
     assert 'f"{path}: schema' not in reputation
     assert 'f"{path}: cannot infer evidence kind"' not in reputation
     assert "json.JSONDecodeError" not in reputation
@@ -4905,6 +4908,8 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     assert "unknown_schema not in" in reputation_test
     assert "test_unknown_explicit_evidence_kind_does_not_echo_kind" in reputation_test
     assert "test_unsupported_loaded_evidence_kind_is_sanitized" in reputation_test
+    assert "test_events_must_carry_positive_limit" in reputation_test
+    assert "test_events_count_must_not_exceed_limit" in reputation_test
     assert "provider-b-private-key-placeholder" in reputation_test
     assert missing == []
     assert local_load_error_recorders == []
@@ -8749,6 +8754,7 @@ def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "prints a dry-run command plan with the checker-backed `evidence_contract` map for the selected required kinds",
         "The checker exports those required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS` for downstream automation.",
+        "Enrollment-portal artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -8760,6 +8766,20 @@ def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+    checker = read(SCRIPTS_DIR / "check_sorafs_pop_credentials_rollout_evidence.py")
+    checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_pop_credentials_rollout_evidence_test.py"
+    )
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"routes\",\n"
+        "        \"route_count\","
+    ) in checker
+    assert "field=\"name\"" in checker
+    assert "allow_scalar_items=False" in checker
+    assert "test_enrollment_portal_route_count_must_match_unique_routes" in checker_test
+    assert "test_enrollment_portal_routes_must_not_duplicate" in checker_test
 
 
 def test_pop_credentials_canary_builder_is_checked_in() -> None:
@@ -8975,6 +8995,10 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
         "its dry-run JSON includes the checker-backed `evidence_contract` map with the schema and required payload fields for every SFM-4a evidence kind, and the runner validates the schema-closed collection plan, external evidence map, evidence contract, and command steps before dry-run output or live canaries.",
         "It also rejects duplicate or unsupported `--source-entry` kinds before dry-run output or live canaries.",
         "cross-artifact runner/workflow binding failures are reflected on the offending artifacts in the emitted summary.",
+        "Operator workflow artifacts also bind `route_count` and `passed_route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
+        "Commit/reveal executor artifacts also bind `artifact_count` and `passed_artifact_count` to the unique canonical `artifacts[].name` inventory and reject duplicate artifact entries before promotion can report ready.",
+        "Governance DAG artifacts also bind `producer_count` to the unique canonical `producers[].name` inventory and reject duplicate producer entries before promotion can report ready.",
+        "End-to-end workflow artifacts also bind `step_count` and `passed_step_count` to the unique canonical `steps[].name` inventory and reject duplicate workflow-step entries before promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -8985,6 +9009,24 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+    checker = read(SCRIPTS_DIR / "check_sorafs_ai_prescreen_rollout_evidence.py")
+    checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_ai_prescreen_rollout_evidence_test.py"
+    )
+    assert "require_string_inventory_count_match(" in checker
+    assert '        "artifact_count",' in checker
+    assert "field=\"name\"" in checker
+    assert "allow_scalar_items=False" in checker
+    assert '        "passed_route_count",' in checker
+    assert "test_operator_route_count_must_match_unique_routes" in checker_test
+    assert "test_operator_passed_route_count_must_match_route_count" in checker_test
+    assert "test_operator_routes_must_not_duplicate" in checker_test
+    assert "test_executor_artifact_count_must_match_unique_artifacts" in checker_test
+    assert "test_executor_artifacts_must_not_duplicate" in checker_test
+    assert "test_governance_producer_count_must_match_unique_producers" in checker_test
+    assert "test_governance_producers_must_not_duplicate" in checker_test
+    assert "test_e2e_step_count_must_match_unique_steps" in checker_test
+    assert "test_e2e_steps_must_not_duplicate" in checker_test
 
 
 def test_ai_prescreen_canary_builder_is_checked_in() -> None:
@@ -8999,7 +9041,9 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_TRANSPARENCY_SOURCE_KINDS" in builder
     assert "REQUIRED_GOVERNANCE_PRODUCERS" in builder
     assert "REQUIRED_E2E_STEPS" in builder
+    assert '"passed_route_count": len(routes)' in builder
     assert "test_generated_canaries_pass_full_ai_prescreen_gate" in builder_tests
+    assert "test_operator_workflow_canary_records_passed_route_count" in builder_tests
     assert "scripts/build_sorafs_ai_prescreen_canary.py" in plan
     assert "scripts/build_sorafs_ai_prescreen_canary.py" in roadmap
     assert (
@@ -9096,6 +9140,7 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
         "runner dry-run emits the checker-backed `evidence_contract` map listing each selected evidence kind's schema and required payload fields.",
         "Every recognized rollout artifact must also carry reviewed `deployment_id` and `environment` context",
         "blocks mixed reviewed deployment contexts across the same rollout bundle.",
+        "Appeal-intake, operator-workflow, commit/reveal, and decision-publication artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -9107,6 +9152,21 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+    checker = read(SCRIPTS_DIR / "check_sorafs_moderation_panel_rollout_evidence.py")
+    checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_moderation_panel_rollout_evidence_test.py"
+    )
+    assert "def validate_route_inventory(" in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"routes\",\n"
+        "        \"route_count\","
+    ) in checker
+    assert "field=\"name\"" in checker
+    assert "allow_scalar_items=False" in checker
+    assert "test_route_count_must_match_unique_routes_for_route_artifacts" in checker_test
+    assert "test_routes_must_not_duplicate_for_route_artifacts" in checker_test
 
 
 def test_moderation_panel_canary_builder_is_checked_in() -> None:
@@ -9225,6 +9285,7 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "allowing dry-run collection plans and downstream automation to inspect the exact SFM-3 evidence contract before live collection.",
+        "Event-watch evidence must carry a positive `limit`, keep `count` equal to the `events[]` length, and reject `count` values above that limit before transport evidence can report ready.",
         "Its `--dry-run` output includes the checker-backed `evidence_contract` map for publish/latest, provider, events, verify, metrics, transport, and consumption artifacts, and the runner validates the schema-closed collection plan, external evidence map, evidence contract, and command steps before dry-run output or live collection.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -9440,6 +9501,7 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "planner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
         "binding with per-artifact summary invalidation and dry-run export of the checker-backed evidence contract.",
+        "Scheduler-runtime and reporting/archive artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -9450,6 +9512,20 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+    checker = read(SCRIPTS_DIR / "check_sorafs_por_rollout_evidence.py")
+    checker_test = read(SCRIPTS_DIR / "tests" / "check_sorafs_por_rollout_evidence_test.py")
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"routes\",\n"
+        "        \"route_count\","
+    ) in checker
+    assert "field=\"name\"" in checker
+    assert "allow_scalar_items=False" in checker
+    assert "test_scheduler_runtime_route_count_must_match_unique_routes" in checker_test
+    assert "test_scheduler_runtime_routes_must_not_duplicate" in checker_test
+    assert "test_reporting_archive_route_count_must_match_unique_routes" in checker_test
+    assert "test_reporting_archive_routes_must_not_duplicate" in checker_test
 
 
 def test_por_canary_builder_is_checked_in() -> None:
@@ -9567,6 +9643,7 @@ def test_potr_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "planner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
+        "proof-stream `route_count` binding to the unique canonical `routes[].name` inventory, duplicate route rejection",
         "The collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before contacting live PoTR services.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -9578,6 +9655,18 @@ def test_potr_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+    checker = read(SCRIPTS_DIR / "check_sorafs_potr_rollout_evidence.py")
+    checker_test = read(SCRIPTS_DIR / "tests" / "check_sorafs_potr_rollout_evidence_test.py")
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"routes\",\n"
+        "        \"route_count\","
+    ) in checker
+    assert "field=\"name\"" in checker
+    assert "allow_scalar_items=False" in checker
+    assert "test_proof_stream_route_count_must_match_unique_routes" in checker_test
+    assert "test_proof_stream_routes_must_not_duplicate" in checker_test
 
 
 def test_potr_canary_builder_is_checked_in() -> None:
@@ -9674,6 +9763,8 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "planner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
+        "Signed auditor API, worker lifecycle, and event stream artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
+        "Signed auditor API, worker lifecycle, and event stream artifacts must also keep `route_count` equal to the unique canonical `routes[].name` inventory and reject duplicate route entries.",
         "Its collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before touching live repair services.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -9685,6 +9776,21 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+    checker = read(SCRIPTS_DIR / "check_sorafs_repair_rollout_evidence.py")
+    checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_repair_rollout_evidence_test.py"
+    )
+    assert "def validate_route_inventory(" in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"routes\",\n"
+        "        \"route_count\","
+    ) in checker
+    assert "field=\"name\"" in checker
+    assert "allow_scalar_items=False" in checker
+    assert "test_route_count_must_match_unique_routes_for_route_artifacts" in checker_test
+    assert "test_routes_must_not_duplicate_for_route_artifacts" in checker_test
 
 
 def test_repair_canary_builder_is_checked_in() -> None:
@@ -9774,7 +9880,11 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "Narrowed `--require-kind` release runs also reject evidence supplied for excluded kinds before the plan is rendered or the verifier starts.",
         "The shared runner plan guard also rejects non-canonical nested required-kind, threshold, external-evidence, evidence-contract, and command-step shapes before dry-run output or verifier execution.",
         "The checker recognizes `sorafs.reference_sdk.*` SF-11 release schemas for release archives, signed manifests, downstream bindings, cookbook smoke, FFI/header contract, and governance approval.",
+        "duplicate release-target entries",
+        "`target_count` values that do not match the unique target list",
         "missing JavaScript/Python/Kotlin/JVM/Java Android/Swift package publication evidence",
+        "duplicate downstream-package entries",
+        "`package_count` values that do not match the unique package list",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
         "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, and Swift wrappers",
         "Archive live operator smoke evidence for the published `sorafs-validate` archives and cookbook replay before declaring SF-11 fully released",
@@ -9782,6 +9892,29 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
     assert missing == []
+    checker = read(SCRIPTS_DIR / "check_sorafs_reference_sdk_release_evidence.py")
+    checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_reference_sdk_release_evidence_test.py"
+    )
+    validation_helper = read(EVIDENCE_VALIDATION_HELPER)
+    validation_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    assert "def require_string_inventory_count_match" in validation_helper
+    assert (
+        "require_string_inventory_count_match(payload, \"targets\", \"target_count\", errors)"
+        in checker
+    )
+    assert (
+        "require_string_inventory_count_match(payload, \"packages\", \"package_count\", errors)"
+        in checker
+    )
+    assert "must not contain duplicate values" in validation_helper
+    assert "must match unique {array_name} count" in validation_helper
+    assert "test_require_string_inventory_count_match_rejects_duplicate_scalars" in validation_test
+    assert "test_require_string_inventory_count_match_supports_object_rows" in validation_test
+    assert "test_release_archive_target_count_must_match_unique_targets" in checker_test
+    assert "test_release_archive_targets_must_not_duplicate" in checker_test
+    assert "test_downstream_package_count_must_match_unique_packages" in checker_test
+    assert "test_downstream_packages_must_not_duplicate" in checker_test
 
 
 def test_reference_sdk_docs_do_not_reopen_implemented_guides() -> None:
@@ -9940,6 +10073,16 @@ def test_pdp_provider_protocol_work_stays_open_in_docs() -> None:
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
     assert missing == []
+    checker = read(SCRIPTS_DIR / "check_sorafs_gateway_load_rollout_evidence.py")
+    checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_gateway_load_rollout_evidence_test.py"
+    )
+    assert (
+        "require_string_inventory_count_match(payload, \"scenarios\", \"scenario_count\", errors)"
+        in checker
+    )
+    assert "test_local_conformance_scenario_count_must_match_unique_scenarios" in checker_test
+    assert "test_local_conformance_scenarios_must_not_duplicate" in checker_test
 
 
 def test_pdp_docs_keep_rollout_contract_markers() -> None:
@@ -9947,6 +10090,7 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
         "The PDP rollout evidence gate requires payload-free provider-transport, proof-generation, validator-replay, governance/repair, observability, and governance-approval artifacts before reporting `ready`",
         "`policy_digest_hex` and `provider_roster_digest_hex`, valid PDP policy and provider-roster digests are published as `valid_policy_digests` and `valid_provider_roster_digests`",
         "governance approval evidence must bind its `policy_digest_hex` and `provider_roster_digest_hex` to the matching valid proof-generation digests.",
+        "Provider-transport artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
         "Proof-summary mismatches are recorded on the offending artifact in the JSON summary before required-kind validity is reported.",
         "Policy and provider-roster mismatches are recorded on the offending governance approval artifact through the same summary path.",
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
@@ -9962,6 +10106,18 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+    checker = read(SCRIPTS_DIR / "check_sorafs_pdp_rollout_evidence.py")
+    checker_test = read(SCRIPTS_DIR / "tests" / "check_sorafs_pdp_rollout_evidence_test.py")
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"routes\",\n"
+        "        \"route_count\","
+    ) in checker
+    assert "field=\"name\"" in checker
+    assert "allow_scalar_items=False" in checker
+    assert "test_provider_transport_route_count_must_match_unique_routes" in checker_test
+    assert "test_provider_transport_routes_must_not_duplicate" in checker_test
 
 
 def test_pdp_canary_builder_is_checked_in() -> None:
@@ -10069,6 +10225,8 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "the runner dry-run emits the checker-backed `evidence_contract` map for selected SF-12 evidence kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
         "Mirror datastore, checkpoint recovery, dashboard, observability, IPFS/IPNS end-to-end, and governance approval artifacts must carry the same `public_head_cid_hex` as a valid publisher-service artifact",
+        "Ingest-service artifacts also bind `source_count` to the unique canonical `payload_kinds` inventory and reject duplicate payload-kind entries before promotion can report ready",
+        "Dashboard API artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready",
         "collection planner with dry-run evidence-contract export and schema-closed plan validation",
     )
     missing_current: dict[str, list[str]] = {}
@@ -10080,6 +10238,28 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+    checker = read(SCRIPTS_DIR / "check_sorafs_governance_dag_rollout_evidence.py")
+    checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_governance_dag_rollout_evidence_test.py"
+    )
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"payload_kinds\",\n"
+        "        \"source_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"routes\",\n"
+        "        \"route_count\","
+    ) in checker
+    assert "field=\"name\"" in checker
+    assert "allow_scalar_items=False" in checker
+    assert "test_ingest_source_count_must_match_unique_payload_kinds" in checker_test
+    assert "test_ingest_payload_kinds_must_not_duplicate" in checker_test
+    assert "test_dashboard_route_count_must_match_unique_routes" in checker_test
+    assert "test_dashboard_routes_must_not_duplicate" in checker_test
 
 
 def test_governance_dag_canary_builder_is_checked_in() -> None:
@@ -10101,6 +10281,7 @@ def test_governance_dag_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_PAYLOAD_KINDS" in builder
     assert "REQUIRED_DASHBOARD_ROUTES" in builder
     assert "REQUIRED_METRICS" in builder
+    assert "--source-count must match unique --payload-kind count" in builder
     assert "validate_evidence_payload(payload, validation_options(args))" in builder
     assert "write_payload_atomic" in builder
     assert "must not be a symlink" in builder
@@ -10109,6 +10290,7 @@ def test_governance_dag_canary_builder_is_checked_in() -> None:
     assert "raw_checkpoint_included" in builder
     assert "response_bodies_included" in builder
     assert "test_generated_canaries_pass_full_governance_dag_gate" in builder_test
+    assert "test_ingest_source_count_must_match_payload_kinds_before_write" in builder_test
     assert "test_missing_dashboard_route_coverage_fails_closed" in builder_test
     assert "test_output_symlink_is_rejected" in builder_test
     assert "--kind publisher_service" in publisher_example
@@ -10187,6 +10369,8 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "the runner dry-run emits the checker-backed `evidence_contract` map for selected SFM-2 evidence kinds.",
         "Matcher, settlement, API gateway, event stream, SDK release, observability, reconciliation, and governance approval artifacts must carry a `contract_digest_hex` that matches a valid contract-surface artifact",
+        "API gateway artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
+        "Reconciliation artifacts also bind `source_count` to the unique canonical `sources[].name` inventory and reject duplicate source entries before promotion can report ready.",
         "collection planner with dry-run evidence-contract export",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
@@ -10199,6 +10383,28 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+    checker = read(SCRIPTS_DIR / "check_sorafs_orderbook_rollout_evidence.py")
+    checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_orderbook_rollout_evidence_test.py"
+    )
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"routes\",\n"
+        "        \"route_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"sources\",\n"
+        "        \"source_count\","
+    ) in checker
+    assert "field=\"name\"" in checker
+    assert "allow_scalar_items=False" in checker
+    assert "test_api_gateway_route_count_must_match_unique_routes" in checker_test
+    assert "test_api_gateway_routes_must_not_duplicate" in checker_test
+    assert "test_reconciliation_source_count_must_match_unique_sources" in checker_test
+    assert "test_reconciliation_sources_must_not_duplicate" in checker_test
 
 
 def test_orderbook_canary_builder_is_checked_in() -> None:
@@ -10303,6 +10509,9 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "the collection planner dry-run JSON includes the checker-backed `evidence_contract` map for selected required kinds",
         "Production promotion remains blocked unless the summary status is `ready`, including at least two distinct staged billing cycles whose reference-decision ids match a valid reference-price artifact in the same evidence bundle.",
+        "Statement-publication artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
+        "Reconciliation artifacts also bind `source_count` to the unique canonical `sources[].name` inventory and reject duplicate source entries before promotion can report ready.",
+        "Native-bridge release artifacts also bind `artifact_count` to the unique canonical `artifacts[].id` inventory and reject duplicate artifact entries before promotion can report ready.",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -10314,6 +10523,34 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+    checker = read(SCRIPTS_DIR / "check_sorafs_hedging_rollout_evidence.py")
+    checker_test = read(SCRIPTS_DIR / "tests" / "check_sorafs_hedging_rollout_evidence_test.py")
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"routes\",\n"
+        "        \"route_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"sources\",\n"
+        "        \"source_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"artifacts\",\n"
+        "        \"artifact_count\","
+    ) in checker
+    assert "field=\"name\"" in checker
+    assert "allow_scalar_items=False" in checker
+    assert "test_statement_publication_route_count_must_match_unique_routes" in checker_test
+    assert "test_statement_publication_routes_must_not_duplicate" in checker_test
+    assert "test_reconciliation_source_count_must_match_unique_sources" in checker_test
+    assert "test_reconciliation_sources_must_not_duplicate" in checker_test
+    assert "test_native_bridge_artifact_count_must_match_unique_artifacts" in checker_test
+    assert "test_native_bridge_artifacts_must_not_duplicate" in checker_test
 
 
 def test_hedging_canary_builder_is_checked_in() -> None:
@@ -10614,6 +10851,7 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
         "its moderation settlement worker replays and subscribes to local tallied ballot events",
         "The checker also exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "`evidence_contract` map for the selected required kinds",
+        "Quote API, deposit lifecycle, and settlement execution artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     stale: dict[str, list[str]] = {}
@@ -10630,6 +10868,21 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
 
     assert stale == {}
     assert missing_current == {}
+    checker = read(SCRIPTS_DIR / "check_sorafs_appeal_finance_rollout_evidence.py")
+    checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_appeal_finance_rollout_evidence_test.py"
+    )
+    assert "def validate_route_inventory(" in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"routes\",\n"
+        "        \"route_count\","
+    ) in checker
+    assert "field=\"name\"" in checker
+    assert "allow_scalar_items=False" in checker
+    assert "test_route_count_must_match_unique_routes_for_route_artifacts" in checker_test
+    assert "test_routes_must_not_duplicate_for_route_artifacts" in checker_test
 
 
 def test_appeal_finance_canary_builder_is_checked_in() -> None:
@@ -10745,6 +10998,9 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "so dry-run collection plans and downstream automation can inspect the exact evidence contract before live collection.",
+        "binds publication and explorer `route_count` to the unique canonical `routes[].name` inventories with duplicate route rejection",
+        "keeps probe-based `probe_count` values equal to the `probes[]` inventory length",
+        "requires source-entry, source-event, publish-due, and proof-token issuance sub-counts to match the corresponding `probes[]` role inventory",
         "`--dry-run` emits the command plan plus the checker-backed `evidence_contract` field map without contacting live services.",
         "It also rejects duplicate or unsupported `--source-entry` kinds before rendering the plan or contacting live services.",
         "transparency rollout collection runner reject non-lowercase, wrong-length, or otherwise malformed `--cycle-id` values before rendering dry-run command plans or contacting deployed cycle-detail routes.",
@@ -10758,6 +11014,29 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+    checker = read(SCRIPTS_DIR / "check_sorafs_transparency_rollout_evidence.py")
+    checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_transparency_rollout_evidence_test.py"
+    )
+    assert "def validate_route_inventory(" in checker
+    assert "def count_probe_records_with_value(" in checker
+    assert "require_count_length_match(" in checker
+    assert "require_count_value_equal(" in checker
+    assert "require_sum_equal(" in checker
+    assert '        "probe_count",' in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"routes\",\n"
+        "        \"route_count\","
+    ) in checker
+    assert "field=\"name\"" in checker
+    assert "allow_scalar_items=False" in checker
+    assert "test_route_count_must_match_unique_routes_for_route_artifacts" in checker_test
+    assert "test_routes_must_not_duplicate_for_route_artifacts" in checker_test
+    assert "test_probe_count_must_match_probe_inventory_for_probe_artifacts" in checker_test
+    assert "test_specific_probe_counts_must_match_probe_roles" in checker_test
+    assert "test_privacy_aggregate_probe_role_counts_must_sum_to_probe_count" in checker_test
 
 
 def test_transparency_canary_builder_is_checked_in() -> None:
@@ -10916,6 +11195,7 @@ def test_gateway_compliance_docs_keep_rollout_contract_markers() -> None:
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "including a checker-backed `evidence_contract` map with the schema and required payload fields for each selected evidence kind.",
         "Controller, moderation-toggle, reload, enforcement, honey-audit, appeal, transparency, observability, and governance artifacts must carry the same `bundle_digest_hex` as a valid feed-promotion artifact",
+        "Enforcement-probe artifacts also bind `route_count` and `passed_route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -10926,6 +11206,16 @@ def test_gateway_compliance_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+
+    checker = read(SCRIPTS_DIR / "check_sorafs_gateway_compliance_rollout_evidence.py")
+    checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_gateway_compliance_rollout_evidence_test.py"
+    )
+    assert "require_string_inventory_count_match" in checker
+    assert '        "route_count",' in checker
+    assert '        "passed_route_count",' in checker
+    assert "test_enforcement_route_count_must_match_unique_routes" in checker_test
+    assert "test_enforcement_routes_must_not_duplicate" in checker_test
 
 
 def test_gateway_compliance_canary_builder_is_checked_in() -> None:
@@ -11121,17 +11411,19 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         "reject extra top-level lane-summary fields outside the schema-closed payload-free lane summary contract",
         "validate allowed top-level lane metadata as payload-free canonical strings, non-negative integers, booleans, objects, and lists with expected container shapes",
         "validate exact lowercase-hex binding-list metadata shapes before aggregate promotion",
+        "require every fingerprint-backed top-level scalar hex, string-list, positive-integer list, and tuple binding-list metadata field to declare its owning required artifact kind or kinds before aggregate fingerprint matching",
         "validate exact lowercase-hex and positive-integer scalar list metadata shapes before aggregate promotion",
         "validate governance public-head identifiers as lowercase hex list metadata before aggregate promotion",
         "validate exact object-list metadata shapes before aggregate promotion",
+        "require every object-list metadata field to declare its owning required artifact kind before its detail rows can be matched to recognized artifact fingerprints",
         "reject exact duplicate object-list metadata entries while preserving artifact order",
         "validate exact object metadata shapes before aggregate promotion",
         "require set-derived lane metadata lists to be duplicate-free and sorted in canonical order",
         "bind those metadata fields to the lane-specific contract that emits them",
-        "canonical required-row schema labels when present",
+        "required-row and artifact schema labels to match the owning checker evidence schemas",
         "reject extra required-row fields outside the schema-closed payload-free required-row contract",
         "canonical unique archive-relative paths without absolute, empty, current, parent, or platform-specific path segments",
-        "canonical artifact schema/status labels when present",
+        "reject explicit artifact `status` labels outside successful states such as `passed` or `verified`",
         "reject extra artifact-row fields outside the schema-closed payload-free artifact contract",
         "per-lane rollout/release checkers to normalize artifact row paths through the shared archive-label helper before summary rendering",
         "deriving labels relative to evidence directories or safe explicit basenames",
@@ -11173,6 +11465,9 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert missing == []
     assert 'SUMMARY_SCHEMA = "sorafs.production_readiness.aggregate_gate.v1"' in checker
     assert "DEFAULT_REQUIRED_GATES" in checker
+    assert "GATE_REQUIRED_KIND_SCHEMAS" in checker
+    assert "schema must match required evidence schema" in checker
+    assert "schema gate contract is not configured" in checker
     assert "visit_sensitive_fields(" in checker
     assert "test_sensitive_summary_key_diagnostic_is_sanitized" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
@@ -11203,6 +11498,11 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "test_sensitive_threshold_key_is_not_carried_into_summary" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
+    assert "SUCCESS_ARTIFACT_STATUSES" in checker
+    assert "must be a successful status" in checker
+    assert "test_required_and_recognized_artifact_status_must_be_successful" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "PAYLOAD_FREE_SUMMARY_METADATA_FIELDS" in checker
     assert "PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS" in checker
     assert "PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS" in checker
@@ -11219,6 +11519,10 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     )
     assert "validate_payload_free_summary_metadata_fingerprint_tethers" in checker
     assert "must match recognized artifact fingerprints" in checker
+    assert "PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS" in checker
+    assert "PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS" in checker
+    assert "PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS" in checker
+    assert "PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS" in checker
     assert "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS" in checker
     assert "validate_payload_free_object_list_metadata_counts" in checker
     assert "length must match `{kind_name}` required artifact count" in checker
@@ -11526,7 +11830,7 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "runtime-only-deployment" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
-    assert ".schema must be canonical when present" in checker
+    assert ".schema must be canonical" in checker
     assert "PAYLOAD_FREE_REQUIRED_ROW_FIELDS" in checker
     assert "require_payload_free_required_row_fields" in checker
     assert "is not allowed in payload-free required row" in checker
@@ -11567,7 +11871,7 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "test_explicit_lane_summary_path_uses_safe_basename" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
-    assert ".schema must be canonical when present" in checker
+    assert ".schema must be canonical" in checker
     assert 'require_optional_artifact_label(artifact, "status", path, errors)' in checker
     assert "PAYLOAD_FREE_ARTIFACT_FIELDS" in checker
     assert "require_payload_free_artifact_fields" in checker
@@ -11891,6 +12195,7 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "the collection planner dry-run JSON includes the checker-backed `evidence_contract` map for selected required kinds",
         "provider-bake artifacts prove the config-backed reserve lifecycle scheduler canary ran recently enough before bake completion",
+        "lifecycle-service and signed-route artifacts bind `route_count` to the unique canonical `routes[].name` inventories and reject duplicate route entries before promotion can report ready",
         "reserve-movement artifacts prove live chain submission coverage, submitted transaction-hash readback, automatic finality polling",
         "governance approval artifacts prove source-entry publication, downstream compliance application, consumer coverage",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
@@ -11904,6 +12209,21 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
+    checker = read(SCRIPTS_DIR / "check_sorafs_reserve_rent_rollout_evidence.py")
+    checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_reserve_rent_rollout_evidence_test.py"
+    )
+    assert "def validate_route_inventory(" in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"routes\",\n"
+        "        \"route_count\","
+    ) in checker
+    assert "field=\"name\"" in checker
+    assert "allow_scalar_items=False" in checker
+    assert "test_route_count_must_match_unique_routes_for_route_artifacts" in checker_test
+    assert "test_routes_must_not_duplicate_for_route_artifacts" in checker_test
 
 
 def test_reserve_rent_canary_builder_is_checked_in() -> None:

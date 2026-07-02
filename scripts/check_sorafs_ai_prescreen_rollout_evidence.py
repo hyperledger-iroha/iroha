@@ -66,6 +66,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     validate_bound_evidence_digest_references,
     validate_bound_evidence_tuple_references,
 )
@@ -264,6 +265,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "payload_bytes_included",
         "private_payloads_included",
         "route_count",
+        "passed_route_count",
         "routes",
     ),
     "notification_transport": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -406,8 +408,17 @@ def validate_routes(
     if not route_records:
         return
     route_count = require_positive_int(payload, "route_count", errors)
+    require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_count_length_match(
         route_count, route_records, "route_count", "routes", errors
+    )
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
     )
     for index, record in route_records:
         name = require_string(record, "name", errors)
@@ -516,6 +527,14 @@ def validate_commit_reveal_executor(payload: dict[str, Any], errors: list[str]) 
             "artifacts",
             errors,
         )
+        require_string_inventory_count_match(
+            payload,
+            "artifacts",
+            "artifact_count",
+            errors,
+            field="name",
+            allow_scalar_items=False,
+        )
         for _index, record in artifact_records:
             require_string(record, "name", errors)
             require_string(record, "kind", errors)
@@ -597,6 +616,23 @@ def validate_governance_dag(payload: dict[str, Any], errors: list[str]) -> None:
         errors,
     )
     require_positive_int(payload, "edge_count", errors)
+    producer_records = require_object_array(payload, "producers", errors)
+    if producer_records:
+        require_count_length_match(
+            producer_count,
+            producer_records,
+            "producer_count",
+            "producers",
+            errors,
+        )
+        require_string_inventory_count_match(
+            payload,
+            "producers",
+            "producer_count",
+            errors,
+            field="name",
+            allow_scalar_items=False,
+        )
     require_string_coverage(
         payload,
         "producers",
@@ -618,10 +654,26 @@ def validate_end_to_end_workflow(payload: dict[str, Any], errors: list[str]) -> 
     require_bool_true(payload, "transparency_publication_passed", errors)
     require_bool_true(payload, "role_gate_checks_passed", errors)
     require_bool_true(payload, "encrypted_object_api_checks_passed", errors)
-    require_count_equal(payload, "step_count", "passed_step_count", errors)
+    step_count = require_count_equal(payload, "step_count", "passed_step_count", errors)
+    step_records = require_object_array(payload, "steps", errors)
+    if step_records:
+        require_count_length_match(
+            step_count,
+            step_records,
+            "step_count",
+            "steps",
+            errors,
+        )
+        require_string_inventory_count_match(
+            payload,
+            "steps",
+            "step_count",
+            errors,
+            field="name",
+            allow_scalar_items=False,
+        )
     require_string_coverage(payload, "steps", "name", REQUIRED_E2E_STEPS, errors)
-    for index, step in enumerate(payload.get("steps", [])):
-        record = require_object(step, f"steps[{index}]", errors)
+    for index, record in step_records:
         require_string(record, "name", errors)
         require_bool_true(record, "passed", errors, path=f"steps[{index}].passed")
     require_false(payload, "payload_bytes_included", errors)

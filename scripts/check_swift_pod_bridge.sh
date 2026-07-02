@@ -51,9 +51,8 @@ LINT_ARGS=(
   "--configuration=Debug"
   "--private"
   "--use-libraries"
-  "--platforms=ios,osx"
+  "--platforms=ios"
   "--no-clean"
-  "--no-repo-update"
   "--verbose"
 )
 

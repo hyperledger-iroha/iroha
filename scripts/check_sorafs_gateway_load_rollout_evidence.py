@@ -58,6 +58,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     required_evidence_kind_names,
     validate_bound_evidence_digest_references,
     validate_standard_evidence_payload,
@@ -281,6 +282,7 @@ def validate_local_conformance(payload: dict[str, Any], errors: list[str]) -> No
     require_minimum_int(payload, "load_profile_streams", DEFAULT_MIN_STREAMS, errors)
     require_positive_int(payload, "load_profile_window_seconds", errors)
     require_string_coverage(payload, "scenarios", "", REQUIRED_SCENARIOS, errors)
+    require_string_inventory_count_match(payload, "scenarios", "scenario_count", errors)
     require_false(payload, "raw_report_included", errors)
     require_false(payload, "private_keys_included", errors)
 

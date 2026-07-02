@@ -16853,6 +16853,7 @@ bash scripts/formal/sumeragi_apalache.sh missing-request-clear-fast
 bash scripts/formal/sumeragi_apalache.sh missing-block-clear-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-budget-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-fast
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-defer-warning-fast
 bash scripts/formal/sumeragi_apalache.sh non-rbc-payload-budget-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-batch-fast
@@ -17583,6 +17584,7 @@ bash scripts/formal/sumeragi_tlc.sh missing-block-clear-fast
 bash scripts/formal/sumeragi_tlc.sh proposal-budget-fast
 bash scripts/formal/sumeragi_tlc.sh non-rbc-payload-budget-fast
 bash scripts/formal/sumeragi_tlc.sh proposal-backpressure-fast
+bash scripts/formal/sumeragi_tlc.sh proposal-sccp-root-fast
 bash scripts/formal/sumeragi_tlc.sh proposal-defer-warning-fast
 bash scripts/formal/sumeragi_tlc.sh proposal-batch-fast
 bash scripts/formal/sumeragi_tlc.sh lane-interleave-fast
@@ -17866,6 +17868,7 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `missing-block-clear-fast` | 1 | CI missing-block clear reason helper correctness-envelope check |
 | `proposal-budget-fast` | 1 | CI proposal budget/cap helper correctness-envelope check |
 | `proposal-backpressure-fast` | 1 | CI proposal backpressure correctness-envelope check |
+| `proposal-sccp-root-fast` | 1 | CI proposal SCCP commitment-root correctness-envelope check |
 | `proposal-defer-warning-fast` | 1 | CI proposal-defer warning throttle correctness-envelope check |
 | `non-rbc-payload-budget-fast` | 1 | CI non-RBC payload frame budget helper correctness-envelope check |
 | `proposal-batch-fast` | 1 | CI direct proposal batch trim/canonicalization correctness-envelope check |
@@ -19902,6 +19905,14 @@ can still run after the pacemaker deadline, while active pending blocks, RBC
 backlog, and relay pressure are hard stops that suppress pacing-only
 classification and block queued proposal work. Its TLC cross-check
 independently exhausts the same nineteen expected-failure configs as Apalache.
+`proposal-sccp-root-fast` and `proposal-sccp-root-bug-*` cross-check proposal
+SCCP commitment-root construction: candidate SCCP records are considered only
+for enabled Nexus routes active at the proposal height and absent from the
+existing outbound-message index, ordered preflight filters unsigned, failed, or
+state-dependent noncommittable candidates before the final root is derived,
+and the execution-derived probe root must reach a stable fixed point before a
+proposal can be signed. Its TLC cross-check independently exhausts the same
+nine expected-failure configs as Apalache.
 `proposal-defer-warning-fast` and `proposal-defer-warning-bug-*` cross-check
 proposal-defer warning throttling: first observations insert and emit,
 within-cooldown repeats are suppressed with a strict `< cooldown` check,
@@ -25054,6 +25065,15 @@ bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-bug-allows-queue-
 bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-bug-allows-queue-allows-hard-with-pacing
 bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-bug-allows-queue-ignores-queue-pacing
 bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-bug-allows-queue-ignores-consensus-pacing
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-ignore-nexus-disabled
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-ignore-inactive-route
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-ignore-recorded-filter
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-include-unsigned-candidate
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-include-preflight-reject
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-skip-ordered-preflight
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-skip-stable-root-check
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-root-from-raw-candidates
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-root-omits-committable
 bash scripts/formal/sumeragi_apalache.sh proposal-defer-warning-bug-first-suppressed
 bash scripts/formal/sumeragi_apalache.sh proposal-defer-warning-bug-within-cooldown-logs
 bash scripts/formal/sumeragi_apalache.sh proposal-defer-warning-bug-cooldown-boundary-suppressed

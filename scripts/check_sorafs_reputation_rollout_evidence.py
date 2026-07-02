@@ -144,6 +144,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "events": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "since",
+        "limit",
         "next_since",
         "count",
         "events",
@@ -401,11 +402,18 @@ def validate_common_rollout_context(
 def finalize_reputation_required_rows(required: dict[str, dict[str, Any]]) -> None:
     """Publish the common required-row fields consumed by aggregate readiness."""
 
-    for row in required.values():
+    for kind_name, row in required.items():
+        kind = KIND_BY_NAME.get(kind_name)
+        if kind is not None:
+            row["schema"] = kind.schema
         artifacts = row.get("artifacts")
         artifact_count = len(artifacts) if isinstance(artifacts, list) else 0
         row["present"] = artifact_count > 0
         row["artifact_count"] = artifact_count
+        if kind is not None and isinstance(artifacts, list):
+            for artifact in artifacts:
+                if isinstance(artifact, dict):
+                    artifact.update({"schema": kind.schema})
 
 
 def validate_publish_or_latest(
@@ -462,8 +470,17 @@ def validate_provider(evidence: LoadedEvidence, errors: list[str]) -> tuple[str,
 def validate_events(evidence: LoadedEvidence, errors: list[str]) -> tuple[str, str, int]:
     payload = evidence.payload
     count = require_positive_int(payload, "count", errors)
+    limit = require_positive_int(payload, "limit", errors)
     require_advancing_int_pair(payload, "since", "next_since", errors)
     event_records = require_object_array(payload, "events", errors)
+    if (
+        isinstance(count, int)
+        and not isinstance(count, bool)
+        and isinstance(limit, int)
+        and not isinstance(limit, bool)
+        and count > limit
+    ):
+        errors.append("count must be <= limit")
     if not event_records:
         return "", "", count
     event = event_records[-1][1]
@@ -674,6 +691,9 @@ def validate_evidence_set(
             fingerprint_fields=FINGERPRINT_FIELDS,
             fingerprint_values=fingerprint_values,
         )
+        kind = KIND_BY_NAME.get(record_kind)
+        if kind is not None:
+            record["schema"] = kind.schema
         record_snapshot_bound_evidence_artifact(
             kind_name=record_kind,
             artifact=record,

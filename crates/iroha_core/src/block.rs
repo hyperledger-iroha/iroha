@@ -110,6 +110,15 @@ use norito::json::Value as JsonValue;
 use rust_decimal::Decimal;
 use sha2::Digest as _;
 
+const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+
+fn is_public_taira_chain_id(chain_id: &ChainId) -> bool {
+    matches!(
+        chain_id.as_str(),
+        PUBLIC_TAIRA_CHAIN_ID | "iroha3-taira" | "taira"
+    )
+}
+
 fn taira_legacy_replay_confidential_digest(
     expected: Option<ConfidentialFeatureDigest>,
     actual: Option<ConfidentialFeatureDigest>,
@@ -3467,6 +3476,12 @@ pub(crate) mod valid {
 
     type Error = (Box<SignedBlock>, Box<BlockValidationError>);
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum SccpRootValidation {
+        Enforce,
+        Defer,
+    }
+
     #[cfg(test)]
     fn collect_ready_soracloud_mailbox_messages(
         state_transaction: &StateTransaction<'_, '_>,
@@ -5450,6 +5465,33 @@ pub(crate) mod valid {
             })
         }
 
+        pub(crate) fn sccp_commitment_root_after_execution(
+            mut block: SignedBlock,
+            state_block: &mut StateBlock<'_>,
+        ) -> Result<Option<[u8; 32]>, BlockValidationError> {
+            assert!(
+                block.header().is_genesis() || signed_block_entrypoints_are_canonical(&block),
+                "SCCP root probe block payload is not in canonical transaction entrypoint order"
+            );
+            let exec_witness_guard = (!state_block.replay_compatibility)
+                .then(crate::sumeragi::witness::exec_witness_guard);
+            Self::validate_and_record_transactions_with_prepared(
+                &mut block,
+                state_block,
+                None,
+                false,
+                None,
+                SccpRootValidation::Defer,
+            )?;
+            let _ = crate::sumeragi::witness::drain_exec_witness();
+            drop(exec_witness_guard);
+            let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
+            let root = crate::bridge::sccp_commitment_root_from_messages(&messages);
+            block.set_sccp_commitment_root(root);
+            Self::validate_sccp_commitment_root(&block)?;
+            Ok(root)
+        }
+
         #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
         fn validate_keep_voting_block_inner<'state>(
             mut block: SignedBlock,
@@ -5642,6 +5684,7 @@ pub(crate) mod valid {
                 timings.as_deref_mut(),
                 true,
                 Some(&prepared_txs),
+                SccpRootValidation::Enforce,
             ) {
                 drop(state_block);
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
@@ -5899,13 +5942,26 @@ pub(crate) mod valid {
             };
             let actual_digest = block.header().confidential_features();
             if actual_digest != expected_digest {
-                if allow_missing_legacy_context
-                    && taira_legacy_replay_confidential_digest(expected_digest, actual_digest)
+                let is_legacy_taira_digest =
+                    taira_legacy_replay_confidential_digest(expected_digest, actual_digest);
+                let is_public_taira_genesis =
+                    block.header().is_genesis() && is_public_taira_chain_id(chain_id);
+                if is_legacy_taira_digest
+                    && (allow_missing_legacy_context || is_public_taira_genesis)
                 {
-                    iroha_logger::debug!(
-                        block_height,
-                        "accepting legacy Taira confidential feature digest during replay"
-                    );
+                    if is_public_taira_genesis && !allow_missing_legacy_context {
+                        iroha_logger::warn!(
+                            block_height,
+                            chain_id = chain_id.as_str(),
+                            "accepting public Taira genesis with legacy confidential feature digest"
+                        );
+                    } else {
+                        iroha_logger::debug!(
+                            block_height,
+                            chain_id = chain_id.as_str(),
+                            "accepting legacy Taira confidential feature digest during replay"
+                        );
+                    }
                 } else {
                     return Err(BlockValidationError::ConfidentialFeaturesMismatch {
                         expected: expected_digest,
@@ -7438,6 +7494,7 @@ pub(crate) mod valid {
             state_block: &mut StateBlock<'_>,
             mut timings: Option<&mut ValidationTimings>,
             entrypoints: Vec<TransactionEntrypoint>,
+            sccp_root_validation: SccpRootValidation,
         ) -> Result<(), BlockValidationError> {
             let to_ms = |duration: Duration| -> u64 {
                 u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
@@ -7620,7 +7677,9 @@ pub(crate) mod valid {
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             block.set_trigger_completions(trigger_completions);
-            Self::validate_sccp_commitment_root(block)?;
+            if sccp_root_validation == SccpRootValidation::Enforce {
+                Self::validate_sccp_commitment_root(block)?;
+            }
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), start) {
                 let elapsed = to_ms(start.elapsed());
                 timings.execution_tx_apply_ms = elapsed;
@@ -7693,6 +7752,7 @@ pub(crate) mod valid {
                 timings,
                 skip_stateless_checks,
                 None,
+                SccpRootValidation::Enforce,
             )?;
             Self::finalize_committed_fragment_count(
                 block,
@@ -7734,6 +7794,7 @@ pub(crate) mod valid {
             timings: Option<&mut ValidationTimings>,
             skip_stateless_checks: bool,
             prepared_txs: Option<&[PreparedBlockTransaction]>,
+            sccp_root_validation: SccpRootValidation,
         ) -> Result<(), BlockValidationError> {
             use rayon::prelude::*;
 
@@ -7770,6 +7831,7 @@ pub(crate) mod valid {
                     state_block,
                     timings,
                     entrypoints,
+                    sccp_root_validation,
                 )?;
                 return Ok(());
             }
@@ -11712,7 +11774,9 @@ pub(crate) mod valid {
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             block.set_trigger_completions(trigger_completions);
-            Self::validate_sccp_commitment_root(block)?;
+            if sccp_root_validation == SccpRootValidation::Enforce {
+                Self::validate_sccp_commitment_root(block)?;
+            }
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), set_results_start) {
                 timings.execution_tx_finalize_set_results_ms = to_ms(start.elapsed());
             }
@@ -21379,6 +21443,18 @@ mod tests {
             Some(expected),
             None
         ));
+    }
+
+    #[test]
+    fn public_taira_chain_id_guard_accepts_only_taira_ids() {
+        assert!(is_public_taira_chain_id(&ChainId::from(
+            "809574f5-fee7-5e69-bfcf-52451e42d50f"
+        )));
+        assert!(is_public_taira_chain_id(&ChainId::from("iroha3-taira")));
+        assert!(is_public_taira_chain_id(&ChainId::from("taira")));
+        assert!(!is_public_taira_chain_id(&ChainId::from(
+            "00000000-0000-0000-0000-000000000000"
+        )));
     }
 
     fn native_amx_test_catalog(

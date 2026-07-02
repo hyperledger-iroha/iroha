@@ -1459,6 +1459,7 @@ phase_evidence_scripts() {
     pytests/scripts/check_sccp_production_corridor_test.py
     pytests/scripts/sccp_release_bundle_test.py
     pytests/scripts/sccp_release_readiness_report_test.py
+    pytests/scripts/sccp_source_template_hashes_test.py
     pytests/scripts/sccp_all_lanes_evidence_test.py
     pytests/scripts/sccp_eth_source_bridge_evidence_test.py
     pytests/scripts/sccp_bsc_source_bridge_evidence_test.py

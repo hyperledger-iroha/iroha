@@ -47,6 +47,9 @@ impl StreamTokenV1 {
 
     /// Verify the token signature using the supplied verifying key.
     pub fn verify(&self, verifier: &VerifyingKey) -> Result<(), StreamTokenError> {
+        if verifier.is_weak() {
+            return Err(StreamTokenError::InvalidSignatureFormat);
+        }
         let signature_bytes: [u8; ed25519_dalek::SIGNATURE_LENGTH] = self
             .signature
             .as_slice()
@@ -156,5 +159,19 @@ mod tests {
                 "{label} signature R produced unexpected error: {err}"
             );
         }
+    }
+
+    #[test]
+    fn verify_rejects_small_order_verifier_key_before_backend() {
+        let signing = SigningKey::from_bytes(&[0x42; 32]);
+        let weak_verifier = VerifyingKey::from_bytes(&SMALL_ORDER_R)
+            .expect("small-order Ed25519 verifier key has parseable encoding");
+        let token = StreamTokenV1::sign(sample_body(), &signing).expect("sign");
+
+        let err = token
+            .verify(&weak_verifier)
+            .expect_err("small-order verifier key must fail before backend verification");
+
+        assert!(matches!(err, StreamTokenError::InvalidSignatureFormat));
     }
 }

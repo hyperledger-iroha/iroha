@@ -1134,6 +1134,7 @@ SOURCE_PATHS = (
     "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestCredentials.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Http/CanonicalRequestHeaders.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs",
@@ -1145,6 +1146,7 @@ SOURCE_PATHS = (
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/CanonicalRequestTests.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiIdentifierReceiptTests.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
@@ -2749,6 +2751,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Swift Offline Note wallet-note JSON amount exactness negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-wallet-note-json-amount-exactness",
+    ),
+    (
+        "C# Offline Note wallet-note JSON exactness negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-wallet-note-json-exactness",
     ),
     (
         "Mobile wallet-note commitment hex exactness negative control",
@@ -4471,7 +4477,7 @@ def check_c_bridge(texts, errors):
     require_regex(
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
-        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*12\s*;",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*13\s*;",
         "C native bridge ABI version",
         errors,
     )
@@ -6729,6 +6735,14 @@ def check_recursive_compact_surface(texts, errors):
         ),
         "C# append output and previous-material preflight",
         errors,
+    )
+    require_regex(
+        texts,
+        csharp,
+        r"var previousSummary = ReadBundleSummaryPayload\(previousBundlePayload, flags\);(?:(?!var suppliedLineageKeyMaterial =)[\s\S])*?CanSelectAppendOutputCircuitId\((?:(?!var suppliedLineageKeyMaterial =)[\s\S])*?\"outputProofCircuitId is not valid for the previous bundle\"(?:(?!var suppliedLineageKeyMaterial =)[\s\S])*?var suppliedLineageKeyMaterial =",
+        "C# append output and previous-material preflight",
+        errors,
+        flags=re.S,
     )
     require_regex(
         texts,
@@ -14260,6 +14274,8 @@ def check_mobile_wallet_note_state_strictness(texts, errors):
         "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/sdk/"
         "offline/wallet/AndroidOfflineNoteSecureStoreInstrumentedTest.java"
     )
+    csharp_source = "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs"
+    csharp_test = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs"
     retired_state_pattern = r"spendPending|SPEND_PENDING|changePending|CHANGE_PENDING"
     for relative, label in (
         (swift_source, "Swift Offline Note wallet-note state decoder retired aliases"),
@@ -14268,6 +14284,7 @@ def check_mobile_wallet_note_state_strictness(texts, errors):
             kotlin_android_source,
             "Kotlin Android Offline Note wallet-note state decoder retired aliases",
         ),
+        (csharp_source, "C# Offline Note wallet-note state decoder retired aliases"),
     ):
         require_not_regex(texts, relative, retired_state_pattern, label, errors)
     require_contains(
@@ -14322,6 +14339,21 @@ def check_mobile_wallet_note_state_strictness(texts, errors):
     )
     require_contains(
         texts,
+        csharp_source,
+        (
+            '"spendable" => OfflineNoteWalletNoteState.Spendable',
+            '"receivePending" => OfflineNoteWalletNoteState.ReceivePending',
+            '"spent" => OfflineNoteWalletNoteState.Spent',
+            '"redeemPending" => OfflineNoteWalletNoteState.RedeemPending',
+            '"redeemed" => OfflineNoteWalletNoteState.Redeemed',
+            '"cancelled" => OfflineNoteWalletNoteState.Cancelled',
+            '_ => throw InvalidField("state")',
+        ),
+        "C# Offline Note wallet-note state decoder strict source",
+        errors,
+    )
+    require_contains(
+        texts,
         swift_test,
         (
             '["spendPending", "SPEND_PENDING", "changePending", "CHANGE_PENDING"]',
@@ -14363,7 +14395,28 @@ def check_mobile_wallet_note_state_strictness(texts, errors):
         "Kotlin Android Offline Note wallet-note retired state rejection tests",
         errors,
     )
-    for relative in ("IrohaSwift/README.md", "java/iroha_android/README.md", "kotlin/README.md"):
+    require_contains(
+        texts,
+        csharp_test,
+        (
+            "JsonCodecRejectsRetiredOrCaseNormalizedStateNames",
+            '[InlineData("SPENDABLE")]',
+            '[InlineData("RECEIVE_PENDING")]',
+            '[InlineData("spendPending")]',
+            '[InlineData("SPEND_PENDING")]',
+            '[InlineData("changePending")]',
+            '[InlineData("CHANGE_PENDING")]',
+            "AssertRejects(encoded);",
+        ),
+        "C# Offline Note wallet-note retired state rejection tests",
+        errors,
+    )
+    for relative in (
+        "IrohaSwift/README.md",
+        "java/iroha_android/README.md",
+        "kotlin/README.md",
+        "csharp/README.md",
+    ):
         require_contains(
             texts,
             relative,
@@ -14375,6 +14428,11 @@ def check_mobile_wallet_note_state_strictness(texts, errors):
             f"{relative} Offline Note wallet-note retired state README wording",
             errors,
         )
+    for relative in (
+        "IrohaSwift/README.md",
+        "java/iroha_android/README.md",
+        "kotlin/README.md",
+    ):
         require_not_regex(
             texts,
             relative,
@@ -14383,6 +14441,13 @@ def check_mobile_wallet_note_state_strictness(texts, errors):
             errors,
             re.S,
         )
+    require_not_regex(
+        texts,
+        "csharp/README.md",
+        r"wallet-note state names are migrated to current states",
+        "csharp/README.md Offline Note wallet-note retired state README migration wording",
+        errors,
+    )
 
 
 def check_swift_wallet_note_json_amount_exactness(texts, errors):
@@ -14444,6 +14509,77 @@ def check_swift_wallet_note_json_amount_exactness(texts, errors):
             'XCTAssertThrowsError(try copy(assetId: "\\(note.assetId)#dataspace:01"))',
         ),
         "Swift Offline Note wallet-note JSON amount exactness tests",
+        errors,
+    )
+
+
+def check_csharp_wallet_note_json_exactness(texts, errors):
+    source = "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs"
+    test = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs"
+    readme = "csharp/README.md"
+    require_contains(
+        texts,
+        source,
+        (
+            "Amount = RequireCanonicalAmount(amount);",
+            "private static string RequireCanonicalAmount(string amount)",
+            "var canonical = OfflineNoteCanonicalPayloadCodec.ParseCanonicalNumeric(exact);",
+            "if (!string.Equals(canonical, exact, StringComparison.Ordinal))",
+            'throw new ArgumentException("amount must be canonical numeric text.", nameof(amount));',
+            'ReadStrictHex(root, "note_commitment_hex")',
+            "private static byte[] ReadStrictHex(JsonObject root, string field)",
+            'value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)',
+            "(value.Length & 1) != 0",
+            "!IsLowerHex(value)",
+            "return Convert.FromHexString(value);",
+            "this.noteCommitment = CopyRequiredFixedBytes(",
+            "HashLength,",
+            '"note_commitment_hex"',
+        ),
+        "C# Offline Note wallet-note JSON exactness source",
+        errors,
+    )
+    require_contains(
+        texts,
+        test,
+        (
+            "WalletNoteAmountRejectsNonCanonicalNumericText",
+            '[InlineData("not-number")]',
+            '[InlineData("+1000")]',
+            '[InlineData("001000")]',
+            '[InlineData("1000.")]',
+            '[InlineData(".1000")]',
+            '[InlineData("-0")]',
+            '[InlineData("1.00000000000000000000000000000")]',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", "0x" + Convert.ToHexString(Fixed32(0x7b))));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", " " + LowerHex(Fixed32(0x7b))));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", ""));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7b))[..63]));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7b))[..63] + "g"));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Bytes(0x7d, 31))));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Bytes(0x7e, 33))));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", Convert.ToHexString(Fixed32(0x20))));',
+            'AssertRejects(JsonWith(encoded, "amount", "not-number"));',
+            'AssertRejects(JsonWith(encoded, "amount", "+1000"));',
+            'AssertRejects(JsonWith(encoded, "amount", "001000"));',
+            'AssertRejects(JsonWith(encoded, "amount", "1000."));',
+            'AssertRejects(JsonWith(encoded, "amount", ".1000"));',
+            'AssertRejects(JsonWith(encoded, "amount", "-0"));',
+            'AssertRejects(JsonWith(encoded, "amount", "1.00000000000000000000000000000"));',
+        ),
+        "C# Offline Note wallet-note JSON exactness tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        readme,
+        (
+            "canonical numeric `amount`",
+            "malformed hex payloads, non-32-byte note",
+            "uppercase or prefixed",
+            "`note_commitment_hex`, noncanonical amount text",
+        ),
+        "csharp/README.md Offline Note wallet-note JSON exactness wording",
         errors,
     )
 
@@ -30421,8 +30557,9 @@ def check_csharp(texts, errors):
             "ToriiIdentifierPolicySummaryJsonConverter",
             "ToriiIdentifierResolveResponseJsonConverter",
             "policy.policy_id",
-            "identifier receipt.account_id",
-            "identifier receipt.signature_payload_hex",
+            "identifier receipt.payload.account_id",
+            "identifier receipt.attestation.signature",
+            "current payload/attestation envelope",
         ),
         "C# Torii identifier receipt JSON exactness",
         errors,
@@ -30459,9 +30596,10 @@ def check_csharp(texts, errors):
         (
             "ResolveIdentifierAsyncRejectsPaddedPolicyIdBeforePost",
             "IdentifierResolveResponseRejectsPaddedReceiptFields",
+            "IdentifierResolveResponseRejectsRetiredFlatReceiptFields",
             "IdentifierResolveResponseRejectsNegativeReceiptTimes",
             "IdentifierPolicySummaryRejectsPaddedProofMetadata",
-            "\"signature_payload_hex\"",
+            "current payload/attestation envelope",
             "\"resolver_public_key\"",
             "\"surrounding whitespace\"",
             "\"non-negative\"",
@@ -31641,6 +31779,18 @@ def check_sdk_readme_previous_proof_boundary(texts, errors):
             f"{relative} still describes redeem lineage verifier-record README boundary as legacy single",
             errors,
         )
+        require(
+            "legacy `lineage_verifier_record`" not in text
+            and "legacy\n`lineage_verifier_record`" not in text
+            and "single-record path remains supported" not in text,
+            f"{relative} still describes redeem lineage verifier-record README boundary as legacy single-record compatibility",
+            errors,
+        )
+        require(
+            "Newer redeem request archives" not in text,
+            f"{relative} still describes redeem lineage verifier-record README boundary as older/newer compatibility",
+            errors,
+        )
 
 
 def public_kagemusha_readiness_doc_paths():
@@ -32098,6 +32248,8 @@ def check_sdk_readme_retired_offline_note_first_release_wording(texts, errors):
         "docs/source/offline_kagemusha.md": (
             "retired data model",
             "retired proof generators and transaction builders fail closed",
+            "Android proof key ids must match the exact lowercase SHA-256 digest",
+            "offline readiness parsers keep absent optional booleans defaulting to `false`",
         ),
         "IrohaSwift/README.md": (
             "Retired Offline Note issuance, audit, redeem, and defund transaction paths are retired",
@@ -32108,6 +32260,7 @@ def check_sdk_readme_retired_offline_note_first_release_wording(texts, errors):
             "The retired `buildRedeemOfflineNote`, `buildAuditOfflineNote`, `buildIssueOfflineNote`, and `buildDefundOfflineNote` methods now throw before signing",
             "`OfflineNoteWallet` remains available for historical fixture records",
             "closed for retired note issue, audit, redeem, and defund paths",
+            "unknown fields inside pairing-challenge objects",
         ),
         "kotlin/README.md": (
             "Retired note issue and `IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions are fail-closed historical APIs",
@@ -32121,16 +32274,27 @@ def check_sdk_readme_retired_offline_note_first_release_wording(texts, errors):
             "transaction submitter surfaces fail closed for retired note issue, audit, redeem, and defund paths",
             "Offline V2 key-refill body-auth requests carry auth in the JSON body instead",
             "Retired Offline Note issue, redeem, audit, and defund submission paths are retired",
+            "unknown fields inside pairing-challenge objects",
+        ),
+        "csharp/README.md": (
+            "`OfflineNoteReceiptAckEnvelope` handoff payload with exact compact layout-flag validation",
+        ),
+        "javascript/iroha_js/README.md": (
+            "Retired Offline Note issuance, redemption, and audit transaction paths are retired",
+            "single-argument selectors are not shipped",
         ),
         "python/iroha_python/README.md": (
             "Retired Offline Note issuance, redemption, and audit transaction paths are retired",
             "Kagemusha readiness fields advertise the active offline payment implementation",
+            "single-argument selectors are not shipped",
         ),
     }
     forbidden = {
         "docs/source/offline_kagemusha.md": (
             "legacy data model",
             "classic proof generators and transaction builders fail closed",
+            "Android legacy proof key ids",
+            "absent legacy optional booleans",
         ),
         "IrohaSwift/README.md": (
             "body-signed key refill for compatibility",
@@ -32142,6 +32306,7 @@ def check_sdk_readme_retired_offline_note_first_release_wording(texts, errors):
             "The legacy `buildRedeemOfflineNote`",
             "for source compatibility",
             "historical model and fixture compatibility",
+            "legacy pairing-challenge objects",
         ),
         "kotlin/README.md": (
             "Legacy note issue",
@@ -32160,9 +32325,18 @@ def check_sdk_readme_retired_offline_note_first_release_wording(texts, errors):
             "classic proof generation",
             "remain for source compatibility",
             "for source compatibility",
+            "legacy pairing-challenge objects",
+        ),
+        "csharp/README.md": (
+            "legacy `OfflineNoteReceiptAckEnvelope`",
+        ),
+        "javascript/iroha_js/README.md": (
+            "Classic Offline Note issuance",
+            "single-argument compatibility selectors",
         ),
         "python/iroha_python/README.md": (
             "Classic Offline Note issuance",
+            "single-argument compatibility selectors",
         ),
     }
     for relative, needles in required.items():
@@ -32297,6 +32471,16 @@ def check_offline_doc_redeem_lineage_record_selection(texts, errors):
     require(
         "legacy `lineage_verifier_record` single-record" not in roadmap,
         "roadmap still describes redeem lineage-record selection as legacy single-record",
+        errors,
+    )
+    require(
+        "current single-record field rather than an alternate decode route" in roadmap,
+        "roadmap missing current redeem lineage-record single-record wording",
+        errors,
+    )
+    require(
+        "legacy compatibility path" not in roadmap,
+        "roadmap still describes redeem lineage-record selection as compatibility wording",
         errors,
     )
 
@@ -33735,6 +33919,7 @@ def run_checks(texts):
     check_mobile_classic_offline_note_fixture_labels(texts, errors)
     check_mobile_wallet_note_state_strictness(texts, errors)
     check_swift_wallet_note_json_amount_exactness(texts, errors)
+    check_csharp_wallet_note_json_exactness(texts, errors)
     check_mobile_offline_note_draft_proof_replacement(texts, errors)
     check_mobile_offline_note_wallet_input_cap(texts, errors)
     check_mobile_offline_note_wallet_positive_amounts(texts, errors)
@@ -42939,8 +43124,13 @@ if mode == "--negative-control-mobile-wallet-note-retired-state-migration":
         "kotlin/offline-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/"
         "AndroidOfflineNoteSecureStore.kt"
     )
+    csharp_source = "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs"
     readme_strict = (
         "wallet-note state names are rejected; first-release records must use current\n"
+        "state names."
+    )
+    java_readme_strict = (
+        "wallet-note state names are rejected; first-release records must use current "
         "state names."
     )
     mutations = (
@@ -43009,6 +43199,18 @@ if mode == "--negative-control-mobile-wallet-note-retired-state-migration":
             ),
         ),
         (
+            csharp_source,
+            """            "spent" => OfflineNoteWalletNoteState.Spent,
+            "redeemPending" => OfflineNoteWalletNoteState.RedeemPending,""",
+            """            "spent" or "SPENT" or "spendPending" or "SPEND_PENDING" => OfflineNoteWalletNoteState.Spent,
+            "redeemPending" => OfflineNoteWalletNoteState.RedeemPending,
+            "changePending" or "CHANGE_PENDING" => OfflineNoteWalletNoteState.Spendable,""",
+            (
+                "C# Offline Note wallet-note state decoder retired aliases "
+                "contains forbidden pattern spendPending|SPEND_PENDING|changePending|CHANGE_PENDING"
+            ),
+        ),
+        (
             "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift",
             '["spendPending", "SPEND_PENDING", "changePending", "CHANGE_PENDING"]',
             '["SPENDABLE"]',
@@ -43036,6 +43238,13 @@ if mode == "--negative-control-mobile-wallet-note-retired-state-migration":
             ),
         ),
         (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs",
+            "JsonCodecRejectsRetiredOrCaseNormalizedStateNames",
+            "JsonCodecDecodesRetiredStateAliases",
+            "C# Offline Note wallet-note retired state rejection tests missing "
+            "JsonCodecRejectsRetiredOrCaseNormalizedStateNames",
+        ),
+        (
             "IrohaSwift/README.md",
             readme_strict,
             "wallet-note state names are migrated to current states.",
@@ -43046,7 +43255,7 @@ if mode == "--negative-control-mobile-wallet-note-retired-state-migration":
         ),
         (
             "java/iroha_android/README.md",
-            readme_strict,
+            java_readme_strict,
             "wallet-note state names are migrated to current states.",
             (
                 "java/iroha_android/README.md Offline Note wallet-note retired state README wording "
@@ -43059,6 +43268,15 @@ if mode == "--negative-control-mobile-wallet-note-retired-state-migration":
             "wallet-note state names are migrated to current states.",
             (
                 "kotlin/README.md Offline Note wallet-note retired state README wording "
+                "missing wallet-note state names are rejected; first-release records must use current"
+            ),
+        ),
+        (
+            "csharp/README.md",
+            java_readme_strict,
+            "wallet-note state names are migrated to current states.",
+            (
+                "csharp/README.md Offline Note wallet-note retired state README wording "
                 "missing wallet-note state names are rejected; first-release records must use current"
             ),
         ),
@@ -43167,6 +43385,156 @@ if mode == "--negative-control-swift-wallet-note-json-amount-exactness":
             "negative control failed: Swift wallet-note JSON amount exactness drift was not detected"
         )
     print("negative control rejected Swift wallet-note JSON amount exactness drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
+if mode == "--negative-control-csharp-wallet-note-json-exactness":
+    mutated = dict(texts)
+    source = "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs"
+    test = "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs"
+    readme = "csharp/README.md"
+    mutations = (
+        (
+            source,
+            "Amount = RequireCanonicalAmount(amount);",
+            "Amount = amount;",
+            "C# Offline Note wallet-note JSON exactness source missing Amount = RequireCanonicalAmount(amount);",
+        ),
+        (
+            source,
+            "var canonical = OfflineNoteCanonicalPayloadCodec.ParseCanonicalNumeric(exact);",
+            "var canonical = exact;",
+            (
+                "C# Offline Note wallet-note JSON exactness source missing "
+                "var canonical = OfflineNoteCanonicalPayloadCodec.ParseCanonicalNumeric(exact);"
+            ),
+        ),
+        (
+            source,
+            '|| value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)',
+            "|| false",
+            (
+                "C# Offline Note wallet-note JSON exactness source missing "
+                'value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)'
+            ),
+        ),
+        (
+            source,
+            "|| !IsLowerHex(value)",
+            "|| false",
+            "C# Offline Note wallet-note JSON exactness source missing !IsLowerHex(value)",
+        ),
+        (
+            test,
+            "WalletNoteAmountRejectsNonCanonicalNumericText",
+            "WalletNoteAcceptsNonCanonicalNumericText",
+            (
+                "C# Offline Note wallet-note JSON exactness tests missing "
+                "WalletNoteAmountRejectsNonCanonicalNumericText"
+            ),
+        ),
+        (
+            test,
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", "0x" + Convert.ToHexString(Fixed32(0x7b))));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", Convert.ToHexString(Fixed32(0x7b)).ToLowerInvariant()));',
+            (
+                "C# Offline Note wallet-note JSON exactness tests missing "
+                'AssertRejects(JsonWith(encoded, "note_commitment_hex", "0x" + Convert.ToHexString(Fixed32(0x7b))));'
+            ),
+        ),
+        (
+            test,
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", " " + LowerHex(Fixed32(0x7b))));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7b))));',
+            (
+                "C# Offline Note wallet-note JSON exactness tests missing "
+                'AssertRejects(JsonWith(encoded, "note_commitment_hex", " " + LowerHex(Fixed32(0x7b))));'
+            ),
+        ),
+        (
+            test,
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", ""));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7c))));',
+            (
+                "C# Offline Note wallet-note JSON exactness tests missing "
+                'AssertRejects(JsonWith(encoded, "note_commitment_hex", ""));'
+            ),
+        ),
+        (
+            test,
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7b))[..63]));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7b))));',
+            (
+                "C# Offline Note wallet-note JSON exactness tests missing "
+                'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7b))[..63]));'
+            ),
+        ),
+        (
+            test,
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7b))[..63] + "g"));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7b))));',
+            (
+                "C# Offline Note wallet-note JSON exactness tests missing "
+                'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7b))[..63] + "g"));'
+            ),
+        ),
+        (
+            test,
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Bytes(0x7d, 31))));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7d))));',
+            (
+                "C# Offline Note wallet-note JSON exactness tests missing "
+                'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Bytes(0x7d, 31))));'
+            ),
+        ),
+        (
+            test,
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Bytes(0x7e, 33))));',
+            'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7e))));',
+            (
+                "C# Offline Note wallet-note JSON exactness tests missing "
+                'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Bytes(0x7e, 33))));'
+            ),
+        ),
+        (
+            test,
+            'AssertRejects(JsonWith(encoded, "amount", "+1000"));',
+            'AssertRejects(JsonWith(encoded, "amount", "1000"));',
+            (
+                "C# Offline Note wallet-note JSON exactness tests missing "
+                'AssertRejects(JsonWith(encoded, "amount", "+1000"));'
+            ),
+        ),
+        (
+            readme,
+            "`note_commitment_hex`, noncanonical amount text",
+            "`note_commitment_hex`, normalized amount text",
+            (
+                "csharp/README.md Offline Note wallet-note JSON exactness wording "
+                "missing `note_commitment_hex`, noncanonical amount text"
+            ),
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected_label in mutations:
+        current = mutated[target]
+        updated = current.replace(old, new, 1)
+        if updated == current:
+            raise SystemExit(
+                "negative control failed: unable to mutate C# wallet-note JSON exactness in "
+                + target
+            )
+        mutated[target] = updated
+        detected_messages.extend(
+            detect_negative_control(
+                mutated,
+                (expected_label,),
+                "C# wallet-note JSON exactness drift",
+            )
+        )
+        mutated[target] = current
+    print("negative control rejected C# wallet-note JSON exactness drift")
     for detected_message in detected_messages:
         print(detected_message)
     raise SystemExit(0)
@@ -52754,8 +53122,8 @@ if mode == "--negative-control-csharp-pallas-open-envelope-preflight":
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
-            "private static byte[] ReadRequiredPallasMetadataOption(",
-            "private static byte[] ReadOptionalPallasMetadataOption(",
+            "private static void ReadRequiredPallasMetadataOption(",
+            "private static void ReadOptionalPallasMetadataOption(",
             "C# Pallas open-envelope semantic preflight",
         ),
         (
@@ -54146,6 +54514,10 @@ if mode == "--negative-control-sdk-readme-boundary":
             "must pass it through Norito unchanged and must not\nconstruct, rewrite, or mutate it.",
             "may rewrite the previous proof archive before native dispatch.",
         ),
+        "csharp/README.md": (
+            "must pass it through Norito unchanged and must not\nconstruct, rewrite, or mutate it.",
+            "may rewrite the previous proof archive before native dispatch.",
+        ),
     }
     mutations = []
     for target, (old, new) in replacements.items():
@@ -54158,18 +54530,19 @@ if mode == "--negative-control-sdk-readme-boundary":
                 f"SDK README boundary in {target}",
             )
         )
-        mutations.append(
-            (
-                target,
-                "multi-profile",
-                "single-profile",
+        if target != "csharp/README.md":
+            mutations.append(
                 (
-                    f"{target} missing redeem lineage verifier-record README boundary: "
-                    "multi-profile record-backed lineage witnesses"
-                ),
-                f"SDK README plural lineage-record boundary in {target}",
+                    target,
+                    "multi-profile",
+                    "single-profile",
+                    (
+                        f"{target} missing redeem lineage verifier-record README boundary: "
+                        "multi-profile record-backed lineage witnesses"
+                    ),
+                    f"SDK README plural lineage-record boundary in {target}",
+                )
             )
-        )
         mutations.append(
             (
                 target,
@@ -54179,6 +54552,15 @@ if mode == "--negative-control-sdk-readme-boundary":
                 f"SDK README first-release lineage-record wording in {target}",
             )
         )
+    mutations.append(
+        (
+            "csharp/README.md",
+            "Redeem request\narchives may carry additional `lineage_verifier_records`",
+            "Newer redeem request\narchives may carry additional `lineage_verifier_records`",
+            "csharp/README.md still describes redeem lineage verifier-record README boundary as older/newer compatibility",
+            "C# SDK README first-release lineage-record compatibility wording",
+        )
+    )
 
     detected_messages = []
     for target, old, new, expected_label, failure_label in mutations:
@@ -54735,7 +55117,8 @@ if mode == "--negative-control-offline-doc-redeem-lineage-selection":
     mutated[target] = updated
     roadmap_original = read("roadmap.md")
     roadmap_updated = roadmap_original.replace(
-        "single-record `lineage_verifier_record` path",
+        "current single-record field rather than an\n"
+        "  alternate decode route",
         "legacy `lineage_verifier_record` single-record path",
         1,
     )
@@ -54768,6 +55151,7 @@ if mode == "--negative-control-offline-doc-redeem-lineage-selection":
             "JVM/Android record refs also copy verifier-record archive bytes on construction and accessor reads",
             "offline Kagemusha docs still describe redeem lineage-record selection as legacy single",
             "roadmap still describes redeem lineage-record selection as legacy single-record",
+            "roadmap missing current redeem lineage-record single-record wording",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -57012,17 +57396,20 @@ if mode == "--negative-control-csharp-record-backed-archive-exact-diagnostics":
         "            \"Pallas open-envelopes archive must be a valid Norito archive.\","
     )
     mutated = dict(texts)
-    updated = mutated[target].replace(old, new, 1)
-    if updated == mutated[target]:
+    current = mutated[target]
+    first = current.find(old)
+    second = current.find(old, first + len(old)) if first != -1 else -1
+    if second == -1:
         raise SystemExit(
             "negative control failed: unable to mutate C# record-backed archive exact diagnostic guard"
         )
+    updated = current[:second] + new + current[second + len(old) :]
     mutated[target] = updated
     try:
         run_checks(mutated)
     except ParityError as error:
         message = str(error)
-        label = "C# recursive spend input Norito guard tests"
+        label = "C# recursive compact prover malformed archive exact diagnostics"
         if label not in message:
             raise SystemExit(
                 "negative control failed: C# record-backed archive exact diagnostic drift was rejected for the wrong reason"
@@ -63820,6 +64207,15 @@ if mode == "--negative-control-sdk-append-output-selection-preflight":
                 r"\"outputProofCircuitId is not valid for the previous bundle\"\);"
                 r"(?:(?!final boolean suppliedLineageKeyMaterial =)[\s\S])*?final boolean suppliedLineageKeyMaterial ="
             )
+        elif target == "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs":
+            marker = (
+                r"pattern var previousSummary = ReadBundleSummaryPayload\(previousBundlePayload, flags\);"
+                r"(?:(?!var suppliedLineageKeyMaterial =)[\s\S])*?"
+                r"CanSelectAppendOutputCircuitId\("
+                r"(?:(?!var suppliedLineageKeyMaterial =)[\s\S])*?"
+                r"\"outputProofCircuitId is not valid for the previous bundle\""
+                r"(?:(?!var suppliedLineageKeyMaterial =)[\s\S])*?var suppliedLineageKeyMaterial ="
+            )
         else:
             marker = old.splitlines()[0]
             if target == "python/iroha_python/tests/kagemusha_test.py":
@@ -65079,6 +65475,18 @@ if mode == "--negative-control-sdk-readme-retired-offline-note-wording":
             "docs/source/offline_kagemusha.md contains stale retired Offline Note compatibility wording: classic proof generators and transaction builders fail closed",
         ),
         (
+            "docs/source/offline_kagemusha.md",
+            "Android proof key ids",
+            "Android legacy proof key ids",
+            "docs/source/offline_kagemusha.md contains stale retired Offline Note compatibility wording: Android legacy proof key ids",
+        ),
+        (
+            "docs/source/offline_kagemusha.md",
+            "absent\noptional booleans",
+            "absent legacy optional booleans",
+            "docs/source/offline_kagemusha.md contains stale retired Offline Note compatibility wording: absent legacy optional booleans",
+        ),
+        (
             "IrohaSwift/README.md",
             "Retired note issue",
             "Classic note issue",
@@ -65095,6 +65503,12 @@ if mode == "--negative-control-sdk-readme-retired-offline-note-wording":
             "historical fixture models",
             "models for fixture compatibility",
             "IrohaSwift/README.md contains stale retired Offline Note compatibility wording: models for fixture compatibility",
+        ),
+        (
+            "IrohaSwift/README.md",
+            "pairing-challenge objects",
+            "legacy pairing-challenge objects",
+            "IrohaSwift/README.md contains stale retired Offline Note compatibility wording: legacy pairing-challenge objects",
         ),
         (
             "kotlin/README.md",
@@ -65139,10 +65553,40 @@ if mode == "--negative-control-sdk-readme-retired-offline-note-wording":
             "java/iroha_android/README.md contains stale retired Offline Note compatibility wording: classic proof generation",
         ),
         (
+            "java/iroha_android/README.md",
+            "pairing-challenge objects",
+            "legacy pairing-challenge objects",
+            "java/iroha_android/README.md contains stale retired Offline Note compatibility wording: legacy pairing-challenge objects",
+        ),
+        (
+            "csharp/README.md",
+            "`OfflineNoteReceiptAckEnvelope` handoff payload",
+            "legacy `OfflineNoteReceiptAckEnvelope` handoff payload",
+            "csharp/README.md contains stale retired Offline Note compatibility wording: legacy `OfflineNoteReceiptAckEnvelope`",
+        ),
+        (
+            "javascript/iroha_js/README.md",
+            "Retired\nOffline Note issuance",
+            "Classic Offline Note issuance",
+            "javascript/iroha_js/README.md contains stale retired Offline Note compatibility wording: Classic Offline Note issuance",
+        ),
+        (
+            "javascript/iroha_js/README.md",
+            "single-argument\nselectors are not shipped",
+            "single-argument compatibility selectors are not shipped",
+            "javascript/iroha_js/README.md contains stale retired Offline Note compatibility wording: single-argument compatibility selectors",
+        ),
+        (
             "python/iroha_python/README.md",
             "Retired Offline Note issuance",
             "Classic Offline Note issuance",
             "python/iroha_python/README.md contains stale retired Offline Note compatibility wording: Classic Offline Note issuance",
+        ),
+        (
+            "python/iroha_python/README.md",
+            "single-argument\nselectors are not shipped",
+            "single-argument compatibility selectors are not shipped",
+            "python/iroha_python/README.md contains stale retired Offline Note compatibility wording: single-argument compatibility selectors",
         ),
     )
     detected_messages = []
@@ -70644,11 +71088,11 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     target = "crates/connect_norito_bridge/src/lib.rs"
     original = mutated[target]
     updated = original.replace(
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;",
         "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;",
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;",
         1,
     )
-    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;" in updated:
+    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;" in updated:
         raise SystemExit("negative control failed: unable to mutate native C bridge ABI version")
     mutated[target] = updated
     try:
@@ -70656,7 +71100,7 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*12\s*;",
+            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*13\s*;",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:

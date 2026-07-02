@@ -57,6 +57,9 @@ gateway compliance can be marked ready.
   artifacts must match that promoted policy digest before promotion. Bundle and
   policy mismatches are recorded on the offending artifact in the JSON summary
   before required-kind validity is reported.
+  Enforcement-probe artifacts also bind `route_count` and `passed_route_count`
+  to the unique canonical `routes[].name` inventory and reject duplicate route
+  entries before promotion can report ready.
 - `scripts/build_sorafs_gateway_compliance_canary.py` is a payload-free
   controller-runtime and moderation-toggle canary builder. It turns reviewed
   deployment facts into checked JSON artifacts, fixes `config_source` to

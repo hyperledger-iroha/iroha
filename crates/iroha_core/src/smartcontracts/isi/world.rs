@@ -8606,6 +8606,11 @@ pub mod isi {
                 "SCCP BSC mainnet lane launch policy",
                 "BSC mainnet",
             )),
+            iroha_sccp::SccpLaunchModeV1::TonMainnetLane => Some((
+                iroha_sccp::SCCP_DOMAIN_TON,
+                "SCCP TON mainnet lane launch policy",
+                "TON mainnet",
+            )),
         }
     }
 
@@ -8836,6 +8841,7 @@ pub mod isi {
         source_domain: u32,
         target_domain: u32,
         message_id: [u8; 32],
+        payload_hash: [u8; 32],
     }
 
     struct ValidatedBridgeProof {
@@ -8850,6 +8856,7 @@ pub mod isi {
             source_domain: iroha_sccp::sccp_message_source_domain(&artifact.bundle.payload),
             target_domain: iroha_sccp::sccp_message_target_domain(&artifact.bundle.payload),
             message_id: artifact.bundle.commitment.message_id,
+            payload_hash: artifact.bundle.commitment.payload_hash,
         }
     }
 
@@ -9865,16 +9872,6 @@ pub mod isi {
         Ok(())
     }
 
-    fn ensure_sccp_outbound_payload_route_is_bound(
-        payload: &iroha_sccp::SccpPayloadV1,
-    ) -> Result<(), Error> {
-        crate::bridge::validate_sora_outbound_sccp_payload_route(payload).map_err(|error| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                format!("SORA-origin SCCP outbound payload {error}"),
-            ))
-        })
-    }
-
     impl Execute for bridge::RecordSccpMessage {
         fn execute(
             self,
@@ -9887,31 +9884,35 @@ pub mod isi {
                 ));
             }
             ensure_sccp_outbound_lane_is_active(state_transaction)?;
-            let Some(payload) =
-                crate::bridge::decode_recorded_sccp_payload_bytes(&self.payload_bytes)
-            else {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "SCCP payload bytes could not be decoded".into(),
-                    ),
-                ));
+            let validated = match crate::bridge::validate_recorded_sccp_message_payload_bytes(
+                &self.payload_bytes,
+            ) {
+                Ok(validated) => validated,
+                Err(crate::bridge::RecordedSccpMessageValidationError::InvalidPayload) => {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "SCCP payload bytes could not be decoded".into(),
+                        ),
+                    ));
+                }
+                Err(crate::bridge::RecordedSccpMessageValidationError::NonSoraSource {
+                    ..
+                }) => {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "SCCP message recording only accepts SORA-origin payloads; submit non-SORA source messages with a verified source-chain proof envelope".into(),
+                        ),
+                    ));
+                }
+                Err(crate::bridge::RecordedSccpMessageValidationError::RouteBinding { error }) => {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "SORA-origin SCCP outbound payload {error}"
+                        )),
+                    ));
+                }
             };
-            if !iroha_sccp::verify_sccp_payload_structure(&payload) {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "SCCP payload bytes failed structural verification".into(),
-                    ),
-                ));
-            }
-            if iroha_sccp::sccp_message_source_domain(&payload) != iroha_sccp::SCCP_DOMAIN_SORA {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "SCCP message recording only accepts SORA-origin payloads; submit non-SORA source messages with a verified source-chain proof envelope".into(),
-                    ),
-                ));
-            }
-            ensure_sccp_outbound_payload_route_is_bound(&payload)?;
-            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let key = validated.key;
             if state_transaction
                 .world
                 .sccp_outbound_messages
@@ -9924,11 +9925,10 @@ pub mod isi {
                     ),
                 ));
             }
-            let canonical_payload = iroha_sccp::canonical_sccp_payload_bytes(&payload);
             state_transaction.world.sccp_outbound_messages.insert(
                 key,
                 iroha_data_model::bridge::SccpOutboundMessageRecord {
-                    payload_hash: iroha_sccp::payload_hash(&canonical_payload),
+                    payload_hash: validated.commitment.payload_hash,
                     recorded_at_height: state_transaction._curr_block.height.get(),
                 },
             );
@@ -12174,6 +12174,10 @@ pub mod isi {
                     .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
                 {
                     Some(dataspace)
+                } else if let Some(dataspace) =
+                    asset_definition_declared_home_dataspace_id(state_transaction, &asset_definition)
+                {
+                    Some(dataspace)
                 } else {
                     crate::smartcontracts::isi::asset::isi::unique_account_dataspace_hint(
                         state_transaction,
@@ -12193,6 +12197,46 @@ pub mod isi {
         state_transaction
             .world
             .resolve_asset_id_for_current_scope(&asset_id)
+    }
+
+    fn asset_definition_declared_home_dataspace_id(
+        state_transaction: &StateTransaction<'_, '_>,
+        asset_definition: &iroha_data_model::asset::AssetDefinition,
+    ) -> Option<DataSpaceId> {
+        let dataspace_alias = state_transaction
+            .world
+            .asset_definition_alias_bindings
+            .get(asset_definition.id())
+            .map(|binding| binding.alias.dataspace_segment().to_owned())
+            .or_else(|| {
+                asset_definition
+                    .alias()
+                    .as_ref()
+                    .map(|alias| alias.dataspace_segment().to_owned())
+            })
+            .or_else(|| {
+                asset_definition
+                    .id()
+                    .try_domain()
+                    .map(|domain| domain.dataspace().as_ref().to_owned())
+            })?;
+
+        if dataspace_alias.eq_ignore_ascii_case("universal") {
+            return None;
+        }
+
+        state_transaction
+            .nexus
+            .dataspace_catalog
+            .by_alias(&dataspace_alias)
+            .or_else(|| {
+                state_transaction
+                    .world
+                    .dataspace_catalog
+                    .by_alias(&dataspace_alias)
+            })
+            .map(|entry| entry.id)
+            .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
     }
 
     impl Execute for zk::Shield {
@@ -19260,7 +19304,7 @@ pub mod isi {
         }
 
         #[test]
-        fn record_sccp_message_rejects_hex_alias_replay_after_commit_on_different_lane() {
+        fn record_sccp_message_rejects_hex_alias_payload_after_commit_on_different_lane() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -19309,9 +19353,9 @@ pub mod isi {
 
             let err = hex_alias_instruction
                 .execute(&ALICE_ID, &mut replay_stx)
-                .expect_err("hex alias replay on another lane must be rejected");
+                .expect_err("hex alias payload on another lane must be rejected");
             assert!(
-                format!("{err:?}").contains("already been recorded"),
+                format!("{err:?}").contains("could not be decoded"),
                 "unexpected error: {err:?}"
             );
             let record = state
@@ -21419,6 +21463,127 @@ pub mod isi {
 
         #[cfg(feature = "zk-stark")]
         #[test]
+        fn zk_ace_authorized_transfer_uses_definition_home_dataspace_on_universal_route() {
+            let fixture = zk_ace_transfer_fixture();
+            let home_dataspace = DataSpaceId::new(8);
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: home_dataspace,
+                    alias: "paynet".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+            stx.world.dataspace_catalog = dataspace_catalog;
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            {
+                let definition = stx
+                    .world
+                    .asset_definition_mut(&fixture.asset_def_id)
+                    .expect("asset definition exists");
+                definition.balance_scope_policy = AssetBalancePolicy::DataspaceRestricted;
+            }
+            stx.world
+                .bind_asset_definition_alias(
+                    &fixture.asset_def_id,
+                    "zkace#paynet".parse().expect("asset alias"),
+                    None,
+                    None,
+                    0,
+                )
+                .expect("bind asset definition alias");
+            let home_source_asset = AssetId::with_scope(
+                fixture.asset_def_id.clone(),
+                ALICE_ID.clone(),
+                AssetBalanceScope::Dataspace(home_dataspace),
+            );
+            let (home_source_asset_id, home_source_asset_value) =
+                Asset::new(home_source_asset.clone(), Numeric::new(100, 0)).into_key_value();
+            stx.world
+                .assets
+                .insert(home_source_asset_id.clone(), home_source_asset_value);
+            stx.world.track_asset_holder(&home_source_asset_id);
+
+            let vk_commitment = install_zk_ace_verifier(
+                &mut stx,
+                &fixture.vk_id,
+                ConfidentialStatus::Active,
+                ZK_ACE_TEST_MAX_PROOF_BYTES,
+            );
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register ZK-ACE identity commitment");
+
+            let amount = 7;
+            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                &fixture.witness,
+                fixture.policy_hash,
+                fixture.vk_id.clone(),
+                vk_commitment,
+            );
+            let transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                tx_digest,
+                stx.chain_id.clone(),
+                replay_nullifier,
+                fixture.policy_hash,
+                proof,
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x72);
+            transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect("ZK-ACE transfer should debit the definition home dataspace");
+
+            assert_eq!(
+                numeric_balance(&stx, &home_source_asset),
+                Numeric::new(93, 0)
+            );
+            let receiver_asset = AssetId::with_scope(
+                fixture.asset_def_id.clone(),
+                fixture.receiver.clone(),
+                AssetBalanceScope::Dataspace(home_dataspace),
+            );
+            assert_eq!(numeric_balance(&stx, &receiver_asset), Numeric::new(7, 0));
+            let global_source_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
+            assert_eq!(
+                numeric_balance(&stx, &global_source_asset),
+                Numeric::new(100, 0)
+            );
+            let global_receiver_asset =
+                AssetId::new(fixture.asset_def_id.clone(), fixture.receiver.clone());
+            assert!(
+                stx.world.assets.get(&global_receiver_asset).is_none(),
+                "definition-home transfer must not create a global receiver bucket"
+            );
+        }
+
+        #[cfg(feature = "zk-stark")]
+        #[test]
         fn zk_ace_identity_allowlist_is_canonical_and_enforced() {
             let fixture = zk_ace_transfer_fixture();
             let block = new_dummy_block();
@@ -22623,6 +22788,58 @@ pub mod isi {
             assert!(
                 stx.world.assets.get(&universal_asset_id).is_none(),
                 "universal route must not debit a universal bucket when the account has one private dataspace binding"
+            );
+            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
+        }
+
+        #[test]
+        fn shield_restricted_asset_uses_definition_home_dataspace_on_universal_route() {
+            let home_dataspace = DataSpaceId::new(8);
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                None,
+                &[],
+                &[(AssetBalanceScope::Dataspace(home_dataspace), 10)],
+            );
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: home_dataspace,
+                    alias: "paynet".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+            stx.world.dataspace_catalog = dataspace_catalog;
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world
+                .bind_asset_definition_alias(
+                    &asset_def_id,
+                    "ticket#paynet".parse().expect("asset alias"),
+                    None,
+                    None,
+                    0,
+                )
+                .expect("bind asset definition alias");
+
+            shield_amount(&mut stx, &asset_def_id, 3)
+                .expect("universal route should use the asset definition home dataspace");
+
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(7, 0));
+            let universal_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
+            );
+            assert!(
+                stx.world.assets.get(&universal_asset_id).is_none(),
+                "definition-home routing must not fall back to a universal bucket"
             );
             assert_eq!(commitment_count(&stx, &asset_def_id), 1);
         }
@@ -25850,6 +26067,27 @@ pub mod isi {
         }
 
         #[test]
+        fn sccp_message_proof_replay_key_binds_payload_hash() {
+            let artifact = sccp_message_artifact_for_receipt_test(
+                sccp_transfer_payload_for_receipt_test(95),
+                45,
+            );
+            let key = sccp_message_key_from_artifact(&artifact);
+            assert_eq!(key.payload_hash, artifact.bundle.commitment.payload_hash);
+
+            let mut alternate_hash_artifact = artifact.clone();
+            alternate_hash_artifact.bundle.commitment.payload_hash[0] ^= 0xA5;
+            alternate_hash_artifact.public_inputs.payload_hash =
+                alternate_hash_artifact.bundle.commitment.payload_hash;
+
+            assert_ne!(
+                key,
+                sccp_message_key_from_artifact(&alternate_hash_artifact),
+                "SCCP inbound replay identity must bind the proof-derived payload hash"
+            );
+        }
+
+        #[test]
         fn sccp_message_proof_range_overlap_allows_distinct_message_ids() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -26285,6 +26523,54 @@ pub mod isi {
             assert!(
                 msg.contains("does not have a live consensus key"),
                 "unexpected error message: {msg}"
+            );
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_rejects_peer_outside_commit_topology() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_universal_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+
+            let topology_peer = seed_live_peer(
+                &mut stx,
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            );
+            let outside_peer = seed_live_peer(
+                &mut stx,
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            );
+            *stx.commit_topology.get_mut() = vec![topology_peer];
+
+            let err = SetLaneRelayEmergencyValidators {
+                lane_id: LaneId::new(0),
+                peers: vec![outside_peer],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("peer outside current commit topology should be rejected");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("is not in the current commit topology"),
+                "unexpected error message: {msg}"
+            );
+            assert!(
+                stx.world
+                    .lane_relay_emergency_validators
+                    .get(&LaneId::new(0))
+                    .is_none(),
+                "topology-mismatched emergency override must not be stored"
             );
         }
 

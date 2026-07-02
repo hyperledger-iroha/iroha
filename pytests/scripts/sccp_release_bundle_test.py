@@ -4562,6 +4562,20 @@ def test_release_bundle_evidence_phase_requires_retired_network_surface_scan() -
         ]
 
 
+def test_release_bundle_evidence_phase_requires_source_template_hash_guard() -> None:
+    """Release evidence must prove the shared source-template denylist ran."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    template_guard = "pytests/scripts/sccp_source_template_hashes_test.py"
+
+    assert template_guard in corridor_evidence_script_tests()
+    for module in (report, verifier):
+        assert template_guard in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+            "evidence-scripts"
+        ]
+
+
 def test_release_bundle_evidence_phase_accepts_pytest_runner_command_shape() -> None:
     """Report and verifier parsers must accept the production pytest command."""
 

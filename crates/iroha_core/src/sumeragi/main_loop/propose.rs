@@ -4,7 +4,9 @@ use super::proposals::block_payload_bytes;
 use super::*;
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
-use crate::state::{StateBlock, StateReadOnly, WorldReadOnly};
+use crate::state::WorldReadOnly;
+#[cfg(test)]
+use crate::state::{StateBlock, StateReadOnly};
 use core::num::{NonZeroU64, NonZeroUsize};
 use iroha_data_model::block::BlockExecutionContextBundle;
 use iroha_data_model::consensus::{
@@ -499,7 +501,6 @@ fn refresh_proposal_routing_from_state(
     Ok(changed)
 }
 
-#[cfg(test)]
 fn collect_sccp_messages_for_active_proposal_routes<F>(
     tx_batch: &[AcceptedTransaction<'static>],
     routing_batch: &[RoutingDecision],
@@ -538,6 +539,8 @@ fn proposal_route_is_active(
         .is_some_and(|dataspace_id| dataspace_id == route.dataspace_id)
 }
 
+#[cfg(test)]
+#[cfg(test)]
 fn collect_sccp_messages_for_committable_proposal_routes(
     tx_batch: &[AcceptedTransaction<'static>],
     routing_batch: &[RoutingDecision],
@@ -603,6 +606,8 @@ fn collect_sccp_messages_for_committable_proposal_routes(
     ))
 }
 
+#[cfg(test)]
+#[cfg(test)]
 fn collect_sccp_messages_after_ordered_preflight<F>(
     tx_batch: &[AcceptedTransaction<'static>],
     routing_batch: &[RoutingDecision],
@@ -649,6 +654,8 @@ where
     committable_messages
 }
 
+#[cfg(test)]
+#[cfg(test)]
 fn signed_transaction_for_proposal_preflight<'a>(
     transaction: &'a AcceptedTransaction<'_>,
 ) -> Option<&'a SignedTransaction> {
@@ -663,6 +670,8 @@ fn signed_transaction_for_proposal_preflight<'a>(
     }
 }
 
+#[cfg(test)]
+#[cfg(test)]
 fn preflight_proposal_transaction(
     state_block: &mut StateBlock<'_>,
     tx: &SignedTransaction,
@@ -735,6 +744,25 @@ fn preflight_proposal_transaction(
     }
     state_tx.apply();
     Ok(())
+}
+
+fn proposal_sccp_commitment_root_after_execution(
+    state: &crate::state::State,
+    builder: &crate::block::BlockBuilder<crate::block::Chained>,
+    sccp_root: Option<[u8; 32]>,
+    private_key: &iroha_crypto::PrivateKey,
+    local_validator_index: u32,
+) -> Result<Option<[u8; 32]>> {
+    let probe_block: SignedBlock = builder
+        .clone()
+        .with_sccp_commitment_root(sccp_root)
+        .try_sign_with_index(private_key, u64::from(local_validator_index))
+        .map_err(|err| eyre!("failed to sign SCCP root probe block: {err}"))?
+        .unpack(|_| {})
+        .into();
+    let mut state_block = state.block(probe_block.header());
+    crate::block::ValidBlock::sccp_commitment_root_after_execution(probe_block, &mut state_block)
+        .map_err(|err| eyre!("failed to derive SCCP commitment root after execution: {err}"))
 }
 
 const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_millis(1);
@@ -2264,7 +2292,7 @@ impl Actor {
         };
         let frontier_commit_qc_blocks_yield = frontier_commit_qc_observed && !recovery_exhausted;
         let competing_quorum_blocks_yield =
-            competing_quorum_locked && !new_view_qc_supersedes_owner;
+            competing_quorum_locked && !new_view_qc_supersedes_owner && owner_age < yield_age;
         if owner_qc_observed
             || frontier_commit_qc_blocks_yield
             || local_vote_consensus_locked
@@ -3928,21 +3956,49 @@ impl Actor {
                         BlockExecutionContextBundle::new(execution_context),
                     ));
                 }
+                builder = builder.with_confidential_features(conf_features);
+                let proposal_may_record_sccp_messages = {
+                    let world_view = self.state.world_view();
+                    !collect_sccp_messages_for_active_proposal_routes(
+                        &tx_batch,
+                        &routing_batch,
+                        &nexus,
+                        proposal_height,
+                        |key| world_view.sccp_outbound_messages().get(key).is_some(),
+                    )?
+                    .is_empty()
+                };
+                let sccp_commitment_root = if proposal_may_record_sccp_messages {
+                    let private_key = self.common_config.key_pair.private_key();
+                    let initial_root = proposal_sccp_commitment_root_after_execution(
+                        self.state.as_ref(),
+                        &builder,
+                        None,
+                        private_key,
+                        local_validator_index,
+                    )?;
+                    let stable_root = proposal_sccp_commitment_root_after_execution(
+                        self.state.as_ref(),
+                        &builder,
+                        initial_root,
+                        private_key,
+                        local_validator_index,
+                    )?;
+                    if stable_root != initial_root {
+                        return Err(eyre!(
+                            "unstable SCCP commitment root after proposal execution: initial={:?} stable={:?}",
+                            initial_root,
+                            stable_root
+                        ));
+                    }
+                    stable_root
+                } else {
+                    None
+                };
+                builder = builder.with_sccp_commitment_root(sccp_commitment_root);
                 last_sidecar_ms = sidecar_started_at.elapsed().as_millis();
 
                 let block_build_started_at = Instant::now();
-                builder = builder.with_confidential_features(conf_features);
-                let sccp_messages = collect_sccp_messages_for_committable_proposal_routes(
-                    &tx_batch,
-                    &routing_batch,
-                    &nexus,
-                    proposal_height,
-                    self.state.as_ref(),
-                    builder.header(),
-                )?;
-                builder = builder.with_sccp_commitment_root(
-                    crate::bridge::sccp_commitment_root_from_messages(&sccp_messages),
-                );
                 let new_block = builder
                     .try_sign_with_index(
                         self.common_config.key_pair.private_key(),
@@ -4938,6 +4994,7 @@ impl Actor {
         } else {
             payload_cooldown
         };
+        cooldown = cooldown.max(CACHED_PROPOSAL_REBROADCAST_COOLDOWN_FLOOR);
         if self.relay_backpressure_active(now, payload_cooldown)
             && (!frontier_recovery_cached || prior_body_rebroadcast)
         {

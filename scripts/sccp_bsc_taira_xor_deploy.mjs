@@ -161,6 +161,8 @@ export const DEPLOYMENT_EVIDENCE_SCHEMA =
   "iroha-sccp-bsc-taira-xor-deployment-evidence/v1";
 export const ROUTE_MANIFEST_SCHEMA =
   "iroha-sccp-taira-xor-route-manifest-draft/v1";
+export const TON_ROUTE_MANIFEST_SCHEMA =
+  "iroha-sccp-taira-ton-xor-route-manifest-draft/v1";
 export const OFFLINE_FULL_TOML_EVIDENCE_SCHEMA =
   "iroha-sccp-bsc-taira-xor-offline-full-toml-evidence/v1";
 export const PRODUCTION_REQUIREMENTS_SCHEMA =
@@ -12514,7 +12516,8 @@ function normalizeBscRouteNativeEvmProverBundle({
 
 function normalizeRouteManifestForConfig(manifest) {
   const record = routeConfigRequiredRecord(manifest, "route manifest");
-  if (readFirstString(record, "schema") !== ROUTE_MANIFEST_SCHEMA) {
+  const schema = readFirstString(record, "schema");
+  if (schema !== ROUTE_MANIFEST_SCHEMA && schema !== TON_ROUTE_MANIFEST_SCHEMA) {
     throw new Error(`route manifest schema must be ${ROUTE_MANIFEST_SCHEMA}.`);
   }
   const reason = unsafeSecretReason(record, "route manifest");

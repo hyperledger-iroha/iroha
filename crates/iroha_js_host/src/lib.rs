@@ -584,18 +584,19 @@ pub fn account_address_parse_encoded(
 ) -> napi::Result<JsAccountAddressParse> {
     let address =
         AccountAddress::parse_encoded(&input, expected_prefix).map_err(account_address_err)?;
+    let network_prefix = match expected_prefix {
+        Some(prefix) => prefix,
+        None => AccountAddress::i105_discriminant(&input).map_err(account_address_err)?,
+    };
     let canonical_hex = address.canonical_hex().map_err(account_address_err)?;
     let hex_body = canonical_hex
         .strip_prefix("0x")
         .unwrap_or(canonical_hex.as_str());
     let canonical =
         hex::decode(hex_body).map_err(|err| napi::Error::from_reason(err.to_string()))?;
-    let network_prefix = Some(
-        expected_prefix.unwrap_or_else(iroha_data_model::account::address::chain_discriminant),
-    );
     Ok(JsAccountAddressParse {
         canonical_bytes: Buffer::from(canonical),
-        network_prefix,
+        network_prefix: Some(network_prefix),
     })
 }
 
@@ -620,13 +621,12 @@ pub fn account_address_render(
 
 fn parse_account_id(input: &str, label: &str) -> napi::Result<AccountId> {
     let raw = input.trim();
-    let parsed = match i105_discriminant_hint(raw) {
-        Some(discriminant) => AccountAddress::parse_encoded(raw, Some(discriminant))
-            .and_then(|address| address.to_account_id())
-            .map_err(|err| err.to_string()),
-        None => AccountId::parse_encoded(raw)
+    let parsed = match AccountAddress::parse_encoded(raw, None) {
+        Ok(address) => address.to_account_id().map_err(|err| err.to_string()),
+        Err(AccountAddressError::UnsupportedAddressFormat) => AccountId::parse_encoded(raw)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .map_err(|err| err.to_string()),
+        Err(err) => Err(err.to_string()),
     };
     parsed.map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid {label}: {err}"))
@@ -634,17 +634,7 @@ fn parse_account_id(input: &str, label: &str) -> napi::Result<AccountId> {
 }
 
 fn i105_discriminant_hint(input: &str) -> Option<u16> {
-    let raw = input.trim();
-    if raw.starts_with("sora") {
-        return Some(753);
-    }
-    if raw.starts_with("test") {
-        return Some(369);
-    }
-    if raw.starts_with("dev") {
-        return Some(0);
-    }
-    raw.strip_prefix('n')?.parse::<u16>().ok()
+    AccountAddress::i105_discriminant(input).ok()
 }
 
 fn scoped_chain_discriminant_for_literal(input: &str) -> Option<ChainDiscriminantGuard> {
@@ -7337,9 +7327,10 @@ pub fn sorafs_sign_orderbook_payload(
     Ok(Buffer::from(signed))
 }
 
-/// Build and sign a canonical SoraFS orderbook order request from fields.
+/// Build and sign a canonical `SoraFS` orderbook order request from fields.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+#[allow(clippy::too_many_arguments)] // N-API field-level constructor surface
 pub fn sorafs_build_signed_orderbook_order_request(
     order_id: Uint8Array,
     side: String,
@@ -7379,7 +7370,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
         .map_err(norito_to_napi)
 }
 
-/// Build and sign a canonical SoraFS orderbook cancellation from fields.
+/// Build and sign a canonical `SoraFS` orderbook cancellation from fields.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
 pub fn sorafs_build_signed_orderbook_order_cancel(
@@ -7400,9 +7391,10 @@ pub fn sorafs_build_signed_orderbook_order_cancel(
         .map_err(norito_to_napi)
 }
 
-/// Build and sign a canonical SoraFS settlement receipt from fields.
+/// Build and sign a canonical `SoraFS` settlement receipt from fields.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+#[allow(clippy::too_many_arguments)] // N-API field-level constructor surface
 pub fn sorafs_build_signed_orderbook_settlement_receipt(
     receipt_id: Uint8Array,
     channel_id: Uint8Array,
@@ -22095,6 +22087,7 @@ mod tests {
             lineage_witness: None,
             change_output: None,
             lineage_verifier_record: None,
+            lineage_verifier_records: Vec::new(),
             block_height: None,
             lineage_verifier_records: Vec::new(),
         }
@@ -25335,6 +25328,93 @@ mod tests {
             .expect("parse Taira I105 account id");
 
         assert_eq!(parsed, authority);
+    }
+
+    #[test]
+    fn i105_discriminant_hint_decodes_valid_literals_only() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("account address")
+            .to_i105_for_discriminant(42)
+            .expect("custom i105");
+
+        assert_eq!(i105_discriminant_hint(&authority_i105), Some(42));
+        assert_eq!(
+            i105_discriminant_hint(&authority_i105.replacen("n42", "n00042", 1)),
+            None
+        );
+
+        let mut chars = authority_i105.chars().collect::<Vec<_>>();
+        let last = chars.len().saturating_sub(1);
+        chars[last] = if chars[last] == '1' { '2' } else { '1' };
+        let tampered = chars.into_iter().collect::<String>();
+        assert_eq!(i105_discriminant_hint(&tampered), None);
+        assert_eq!(i105_discriminant_hint("n"), None);
+        assert_eq!(i105_discriminant_hint("nabc"), None);
+        assert_eq!(i105_discriminant_hint("n65536payload"), None);
+    }
+
+    #[test]
+    fn account_address_parse_encoded_reports_embedded_numeric_prefix() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("account address")
+            .to_i105_for_discriminant(42)
+            .expect("custom i105");
+
+        let inferred = account_address_parse_encoded(authority_i105.clone(), None)
+            .expect("parse custom I105 address");
+        assert_eq!(inferred.network_prefix, Some(42));
+
+        let explicit =
+            account_address_parse_encoded(authority_i105, Some(42)).expect("parse explicit I105");
+        assert_eq!(explicit.network_prefix, Some(42));
+    }
+
+    #[test]
+    fn parse_account_id_accepts_numeric_custom_i105_literals() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("account address")
+            .to_i105_for_discriminant(42)
+            .expect("custom i105");
+        assert!(
+            authority_i105.starts_with("n42"),
+            "custom I105 account must use the numeric sentinel"
+        );
+
+        let parsed = parse_account_id(&authority_i105, "authority account id")
+            .expect("parse custom I105 account id");
+
+        assert_eq!(parsed, authority);
+    }
+
+    #[test]
+    fn parse_account_id_rejects_noncanonical_and_tampered_numeric_custom_i105_literals() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("account address")
+            .to_i105_for_discriminant(42)
+            .expect("custom i105");
+
+        let noncanonical = authority_i105.replacen("n42", "n00042", 1);
+        assert!(
+            parse_account_id(&noncanonical, "authority account id").is_err(),
+            "noncanonical numeric sentinel must be rejected"
+        );
+
+        let mut chars = authority_i105.chars().collect::<Vec<_>>();
+        let last = chars.len().saturating_sub(1);
+        chars[last] = if chars[last] == '1' { '2' } else { '1' };
+        let tampered = chars.into_iter().collect::<String>();
+        assert!(
+            parse_account_id(&tampered, "authority account id").is_err(),
+            "payload/checksum tampering must be rejected"
+        );
     }
 
     #[test]

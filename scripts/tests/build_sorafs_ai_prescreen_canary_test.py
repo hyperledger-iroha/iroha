@@ -203,6 +203,16 @@ def test_missing_operator_route_coverage_fails_closed(
     assert not canary_path(tmp_path, "operator_workflow").exists()
 
 
+def test_operator_workflow_canary_records_passed_route_count(tmp_path: Path) -> None:
+    assert MODULE.main(args_for("operator_workflow", tmp_path)) == 0
+
+    payload = json.loads(
+        canary_path(tmp_path, "operator_workflow").read_text("utf-8")
+    )
+    assert payload["route_count"] == len(MODULE.REQUIRED_OPERATOR_ROUTES)
+    assert payload["passed_route_count"] == payload["route_count"]
+
+
 def test_committee_result_count_must_cover_quorum(
     tmp_path: Path,
     capsys,

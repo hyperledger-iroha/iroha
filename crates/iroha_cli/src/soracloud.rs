@@ -25,7 +25,7 @@ use iroha::{
         Encode,
         account::AccountId,
         asset::AssetDefinitionId,
-        isi::{InstructionBox, OpaqueInstruction, decode_instruction_from_pair},
+        isi::{InstructionBox, decode_instruction_from_pair},
         metadata::Metadata,
         name::Name,
         prelude::ExposedPrivateKey,
@@ -1777,15 +1777,12 @@ impl AppDeployArgs {
                     .map(|path| resolve_manifest_path(&manifest_dir, path))
                     .as_deref(),
             )?;
-            let (request_bundle, signature_mode) =
-                prepare_endpoint_compatible_bundle(bundle, &torii_url)?;
             let request = signed_bundle_request(
-                request_bundle,
+                bundle,
                 initial_service_configs,
                 initial_service_secrets,
                 Some(authority),
                 key_pair,
-                signature_mode,
             )?;
             app_infra_bundles.push(request.bundle.clone());
             signed_service_requests.push(request);
@@ -9129,165 +9126,6 @@ impl Drop for SoracloudTempDir {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BundleSignatureMode {
-    Canonical,
-    TairaLegacyInrou,
-}
-
-type BundleMaterialsSignatureTuple = (
-    SoraDeploymentBundleV1,
-    BTreeMap<String, Json>,
-    BTreeMap<String, SecretEnvelopeV1>,
-);
-
-#[derive(Clone, Copy)]
-struct TairaLegacyInrouManifestRef<'a> {
-    manifest: &'a SoraInrouManifestV1,
-}
-
-impl<'a> TairaLegacyInrouManifestRef<'a> {
-    const fn new(manifest: &'a SoraInrouManifestV1) -> Self {
-        Self { manifest }
-    }
-
-    fn legacy_guest_image(self) -> &'a iroha_data_model::soracloud::SoraInrouGuestImageV1 {
-        self.manifest
-            .guest_images
-            .get(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664)
-            .or_else(|| {
-                self.manifest
-                    .guest_images
-                    .get(&iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64)
-            })
-            .or_else(|| self.manifest.guest_images.values().next())
-            .expect("validated Inrou manifests must contain at least one guest image")
-    }
-}
-
-impl norito::core::NoritoSerialize for TairaLegacyInrouManifestRef<'_> {
-    fn schema_hash() -> [u8; 16]
-    where
-        Self: Sized,
-    {
-        norito::core::type_name_schema_hash::<SoraInrouManifestV1>()
-    }
-
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
-        let _guard = enter_default_norito_encode_flags();
-        let legacy_image = self.legacy_guest_image();
-        serialize_tuple_field(&mut writer, &self.manifest.schema_version)?;
-        serialize_tuple_field(&mut writer, &self.manifest.guest_os)?;
-        serialize_tuple_field(&mut writer, &legacy_image.kernel_image_path)?;
-        serialize_tuple_field(&mut writer, &legacy_image.rootfs_image_path)?;
-        serialize_tuple_field(&mut writer, &legacy_image.initrd_image_path)?;
-        serialize_tuple_field(&mut writer, &self.manifest.bootstrap_user_data_path)?;
-        serialize_tuple_field(&mut writer, &self.manifest.ssh_authorized_keys)?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy)]
-struct TairaLegacyContainerManifestRef<'a> {
-    manifest: &'a SoraContainerManifestV1,
-}
-
-impl<'a> TairaLegacyContainerManifestRef<'a> {
-    const fn new(manifest: &'a SoraContainerManifestV1) -> Self {
-        Self { manifest }
-    }
-}
-
-impl norito::core::NoritoSerialize for TairaLegacyContainerManifestRef<'_> {
-    fn schema_hash() -> [u8; 16]
-    where
-        Self: Sized,
-    {
-        norito::core::type_name_schema_hash::<SoraContainerManifestV1>()
-    }
-
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
-        let _guard = enter_default_norito_encode_flags();
-        let legacy_inrou = self
-            .manifest
-            .inrou
-            .as_ref()
-            .map(TairaLegacyInrouManifestRef::new);
-        serialize_tuple_field(&mut writer, &self.manifest.schema_version)?;
-        serialize_tuple_field(&mut writer, &self.manifest.runtime)?;
-        serialize_tuple_field(&mut writer, &self.manifest.bundle_hash)?;
-        serialize_tuple_field(&mut writer, &self.manifest.bundle_path)?;
-        serialize_tuple_field(&mut writer, &self.manifest.entrypoint)?;
-        serialize_tuple_field(&mut writer, &self.manifest.args)?;
-        serialize_tuple_field(&mut writer, &self.manifest.env)?;
-        serialize_tuple_field(&mut writer, &legacy_inrou)?;
-        serialize_tuple_field(&mut writer, &self.manifest.required_config_names)?;
-        serialize_tuple_field(&mut writer, &self.manifest.required_secret_names)?;
-        serialize_tuple_field(&mut writer, &self.manifest.config_exports)?;
-        serialize_tuple_field(&mut writer, &self.manifest.capabilities)?;
-        serialize_tuple_field(&mut writer, &self.manifest.resources)?;
-        serialize_tuple_field(&mut writer, &self.manifest.lifecycle)?;
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy)]
-struct TairaLegacyDeploymentBundleRef<'a> {
-    bundle: &'a SoraDeploymentBundleV1,
-}
-
-impl<'a> TairaLegacyDeploymentBundleRef<'a> {
-    const fn new(bundle: &'a SoraDeploymentBundleV1) -> Self {
-        Self { bundle }
-    }
-}
-
-impl norito::core::NoritoSerialize for TairaLegacyDeploymentBundleRef<'_> {
-    fn schema_hash() -> [u8; 16]
-    where
-        Self: Sized,
-    {
-        norito::core::type_name_schema_hash::<SoraDeploymentBundleV1>()
-    }
-
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
-        let _guard = enter_default_norito_encode_flags();
-        serialize_tuple_field(&mut writer, &self.bundle.schema_version)?;
-        serialize_tuple_field(
-            &mut writer,
-            &TairaLegacyContainerManifestRef::new(&self.bundle.container),
-        )?;
-        serialize_tuple_field(&mut writer, &self.bundle.service)?;
-        Ok(())
-    }
-}
-
-struct TairaLegacyBundleMaterialsPayloadRef<'a> {
-    bundle: &'a SoraDeploymentBundleV1,
-    initial_service_configs: &'a BTreeMap<String, Json>,
-    initial_service_secrets: &'a BTreeMap<String, SecretEnvelopeV1>,
-}
-
-impl norito::core::NoritoSerialize for TairaLegacyBundleMaterialsPayloadRef<'_> {
-    fn schema_hash() -> [u8; 16]
-    where
-        Self: Sized,
-    {
-        norito::core::type_name_schema_hash::<BundleMaterialsSignatureTuple>()
-    }
-
-    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
-        let _guard = enter_default_norito_encode_flags();
-        serialize_tuple_field(
-            &mut writer,
-            &TairaLegacyDeploymentBundleRef::new(self.bundle),
-        )?;
-        serialize_tuple_field(&mut writer, self.initial_service_configs)?;
-        serialize_tuple_field(&mut writer, self.initial_service_secrets)?;
-        Ok(())
-    }
-}
-
 #[derive(Clone, Debug)]
 struct OwnedStorageFileEntry {
     path: Vec<String>,
@@ -9305,14 +9143,12 @@ fn run_service_bundle_mutation(
     authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<norito::json::Value> {
-    let (request_bundle, signature_mode) = prepare_endpoint_compatible_bundle(bundle, torii_url)?;
     let request = signed_bundle_request(
-        request_bundle,
+        bundle,
         initial_service_configs,
         initial_service_secrets,
         Some(authority),
         key_pair,
-        signature_mode,
     )?;
     run_signed_service_bundle_mutation(mode, &request, torii_url, api_token, timeout_secs)
 }
@@ -9329,26 +9165,8 @@ fn run_signed_service_bundle_mutation(
         MutationMode::Deploy => "v1/soracloud/deploy",
         MutationMode::Upgrade => "v1/soracloud/upgrade",
     };
-    let request_value = if soracloud_endpoint_requires_legacy_inrou_json(torii_url) {
-        let mut value = json::to_value(&request)
-            .wrap_err("failed to encode soracloud mutation request payload")?;
-        apply_legacy_inrou_bundle_request_compat(&mut value)?;
-        Some(value)
-    } else {
-        None
-    };
-    let (_, payload) = match request_value.as_ref() {
-        Some(value) => {
-            post_torii_soracloud_mutation(torii_url, endpoint_path, value, api_token, timeout_secs)
-        }
-        None => post_torii_soracloud_mutation(
-            torii_url,
-            endpoint_path,
-            &request,
-            api_token,
-            timeout_secs,
-        ),
-    }?;
+    let (_, payload) =
+        post_torii_soracloud_mutation(torii_url, endpoint_path, request, api_token, timeout_secs)?;
     let (_, status_payload) =
         fetch_torii_soracloud_status(torii_url, Some(&service_name), api_token, timeout_secs)?;
     build_service_mutation_output(
@@ -9395,178 +9213,6 @@ fn should_fallback_app_infra_to_service_level(error: &Report) -> bool {
             || detail.contains("405")
             || detail.contains("not found")
             || detail.contains("unknown"))
-}
-
-fn prepare_endpoint_compatible_bundle(
-    bundle: SoraDeploymentBundleV1,
-    torii_url: &str,
-) -> Result<(SoraDeploymentBundleV1, BundleSignatureMode)> {
-    if !soracloud_endpoint_requires_legacy_inrou_json(torii_url) {
-        return Ok((bundle, BundleSignatureMode::Canonical));
-    }
-    if bundle.container.runtime != SoraContainerRuntimeV1::Inrou || bundle.container.inrou.is_none()
-    {
-        return Ok((bundle, BundleSignatureMode::Canonical));
-    }
-    let legacy_container_hash = compute_taira_legacy_container_manifest_hash(&bundle.container)?;
-    let mut compatible_bundle = bundle;
-    compatible_bundle.service.container.manifest_hash = legacy_container_hash;
-    Ok((compatible_bundle, BundleSignatureMode::TairaLegacyInrou))
-}
-
-fn soracloud_endpoint_requires_legacy_inrou_json(torii_url: &str) -> bool {
-    let legacy_opt_in = std::env::var("IROHA_SORACLOUD_TAIRA_LEGACY_INROU_JSON")
-        .map(|value| {
-            let value = value.trim();
-            value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("yes")
-        })
-        .unwrap_or(false);
-    legacy_opt_in
-        && reqwest::Url::parse(torii_url)
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_owned))
-            .is_some_and(|host| host.eq_ignore_ascii_case("taira.sora.org"))
-}
-
-fn apply_legacy_inrou_bundle_request_compat(value: &mut norito::json::Value) -> Result<()> {
-    fn rewrite_legacy_inrou_object(inrou: &mut norito::json::Map) {
-        let legacy_overlay = inrou
-            .get("guest_images")
-            .and_then(norito::json::Value::as_object)
-            .and_then(|guest_images| {
-                guest_images
-                    .get("x86_64")
-                    .or_else(|| guest_images.get("aarch64"))
-            })
-            .and_then(norito::json::Value::as_object)
-            .map(|legacy_image| {
-                (
-                    legacy_image.get("kernel_image_path").cloned(),
-                    legacy_image.get("rootfs_image_path").cloned(),
-                    legacy_image.get("initrd_image_path").cloned(),
-                )
-            });
-
-        if let Some((kernel_image_path, rootfs_image_path, initrd_image_path)) = legacy_overlay {
-            if let Some(kernel_image_path) = kernel_image_path {
-                inrou.insert("kernel_image_path".to_owned(), kernel_image_path);
-            }
-            if let Some(rootfs_image_path) = rootfs_image_path {
-                inrou.insert("rootfs_image_path".to_owned(), rootfs_image_path);
-            }
-            if let Some(initrd_image_path) = initrd_image_path {
-                inrou.insert("initrd_image_path".to_owned(), initrd_image_path);
-            }
-        }
-
-        inrou.remove("guest_images");
-
-        inrou.retain(|key, _| {
-            matches!(
-                key.as_str(),
-                "schema_version"
-                    | "guest_os"
-                    | "kernel_image_path"
-                    | "rootfs_image_path"
-                    | "initrd_image_path"
-                    | "bootstrap_user_data_path"
-                    | "ssh_authorized_keys"
-            )
-        });
-    }
-
-    let Some(root) = value.as_object_mut() else {
-        return Ok(());
-    };
-    let Some(bundle) = root
-        .get_mut("bundle")
-        .and_then(norito::json::Value::as_object_mut)
-    else {
-        return Ok(());
-    };
-    let Some(container) = bundle
-        .get_mut("container")
-        .and_then(norito::json::Value::as_object_mut)
-    else {
-        return Ok(());
-    };
-    let Some(inrou) = container
-        .get_mut("inrou")
-        .and_then(norito::json::Value::as_object_mut)
-    else {
-        return Ok(());
-    };
-    rewrite_legacy_inrou_object(inrou);
-
-    Ok(())
-}
-
-fn compute_taira_legacy_container_manifest_hash(
-    container: &SoraContainerManifestV1,
-) -> Result<Hash> {
-    let mut legacy_value = json::to_value(container)
-        .wrap_err("failed to encode container manifest for Taira compat")?;
-    if let Some(inrou) = legacy_value
-        .as_object_mut()
-        .and_then(|container| container.get_mut("inrou"))
-        .and_then(norito::json::Value::as_object_mut)
-    {
-        let legacy_overlay = inrou
-            .get("guest_images")
-            .and_then(norito::json::Value::as_object)
-            .and_then(|guest_images| {
-                guest_images
-                    .get("x86_64")
-                    .or_else(|| guest_images.get("aarch64"))
-            })
-            .and_then(norito::json::Value::as_object)
-            .map(|legacy_image| {
-                (
-                    legacy_image.get("kernel_image_path").cloned(),
-                    legacy_image.get("rootfs_image_path").cloned(),
-                    legacy_image.get("initrd_image_path").cloned(),
-                )
-            });
-        if let Some((kernel_image_path, rootfs_image_path, initrd_image_path)) = legacy_overlay {
-            if let Some(kernel_image_path) = kernel_image_path {
-                inrou.insert("kernel_image_path".to_owned(), kernel_image_path);
-            }
-            if let Some(rootfs_image_path) = rootfs_image_path {
-                inrou.insert("rootfs_image_path".to_owned(), rootfs_image_path);
-            }
-            if let Some(initrd_image_path) = initrd_image_path {
-                inrou.insert("initrd_image_path".to_owned(), initrd_image_path);
-            }
-        }
-        inrou.remove("guest_images");
-        inrou.retain(|key, _| {
-            matches!(
-                key.as_str(),
-                "schema_version"
-                    | "guest_os"
-                    | "kernel_image_path"
-                    | "rootfs_image_path"
-                    | "initrd_image_path"
-                    | "bootstrap_user_data_path"
-                    | "ssh_authorized_keys"
-            )
-        });
-    }
-    let compat_container: SoraContainerManifestV1 = json::from_value(legacy_value)
-        .wrap_err("failed to decode Taira-compatible legacy container manifest")?;
-    Ok(Hash::new(Encode::encode(&compat_container)))
-}
-
-fn encode_taira_legacy_bundle_with_materials_provenance_payload(
-    bundle: &SoraDeploymentBundleV1,
-    initial_service_configs: &BTreeMap<String, Json>,
-    initial_service_secrets: &BTreeMap<String, SecretEnvelopeV1>,
-) -> Result<Vec<u8>, norito::Error> {
-    norito::to_bytes(&TairaLegacyBundleMaterialsPayloadRef {
-        bundle,
-        initial_service_configs,
-        initial_service_secrets,
-    })
 }
 
 fn build_app_static_site_binding_value(
@@ -10960,22 +10606,12 @@ fn signed_bundle_request(
     initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
-    signature_mode: BundleSignatureMode,
 ) -> Result<SignedBundleRequest> {
-    let payload = match signature_mode {
-        BundleSignatureMode::Canonical => encode_bundle_with_materials_provenance_payload(
-            &bundle,
-            &initial_service_configs,
-            &initial_service_secrets,
-        ),
-        BundleSignatureMode::TairaLegacyInrou => {
-            encode_taira_legacy_bundle_with_materials_provenance_payload(
-                &bundle,
-                &initial_service_configs,
-                &initial_service_secrets,
-            )
-        }
-    }
+    let payload = encode_bundle_with_materials_provenance_payload(
+        &bundle,
+        &initial_service_configs,
+        &initial_service_secrets,
+    )
     .wrap_err("failed to encode deployment bundle payload for signing")?;
     let signature = sign_soracloud_payload(key_pair, &payload)?;
     Ok(SignedBundleRequest {
@@ -13089,10 +12725,7 @@ fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
     ])
 }
 
-fn decode_soracloud_tx_instructions(
-    payload: &json::Value,
-    allow_raw_wire_fallback: bool,
-) -> Result<Vec<InstructionBox>> {
+fn decode_soracloud_tx_instructions(payload: &json::Value) -> Result<Vec<InstructionBox>> {
     let instructions = payload
         .get("tx_instructions")
         .and_then(json::Value::as_array)
@@ -13109,21 +12742,8 @@ fn decode_soracloud_tx_instructions(
             .ok_or_else(|| eyre!("Soracloud tx instruction is missing `payload_hex`"))?;
         let payload_bytes = hex::decode(payload_hex)
             .wrap_err("failed to decode Soracloud tx instruction hex payload")?;
-        let instruction = match decode_instruction_from_pair(wire_id, &payload_bytes) {
-            Ok(instruction) => instruction,
-            Err(error) if allow_raw_wire_fallback => InstructionBox::from(
-                OpaqueInstruction::from_framed(wire_id, &payload_bytes).wrap_err_with(|| {
-                    format!(
-                        "failed to decode Soracloud instruction skeleton and preserve raw wire payload: {error}"
-                    )
-                })?,
-            ),
-            Err(error) => {
-                return Err(eyre!(
-                    "failed to decode Soracloud instruction skeleton: {error}"
-                ));
-            }
-        };
+        let instruction = decode_instruction_from_pair(wire_id, &payload_bytes)
+            .wrap_err("failed to decode Soracloud instruction skeleton")?;
         decoded.push(instruction);
     }
     Ok(decoded)
@@ -13235,10 +12855,7 @@ where
     }
     let mut payload: norito::json::Value =
         json::from_slice(&body).wrap_err("failed to decode Torii mutation JSON payload")?;
-    let instructions = decode_soracloud_tx_instructions(
-        &payload,
-        soracloud_endpoint_requires_legacy_inrou_json(torii_url),
-    )?;
+    let instructions = decode_soracloud_tx_instructions(&payload)?;
     let submitted_tx_hash =
         submit_soracloud_draft_transaction(torii_url, timeout_secs, instructions)?;
     if let Some(root) = payload.as_object_mut() {
@@ -13513,39 +13130,6 @@ fn build_message_ack_output(
     );
     merge_submission_metadata(&mut output, &mutation_payload)?;
     Ok(output)
-}
-
-fn serialize_tuple_field<W, T>(writer: &mut W, value: &T) -> Result<(), norito::Error>
-where
-    W: std::io::Write,
-    T: norito::core::NoritoSerialize + ?Sized,
-{
-    let mut payload = Vec::new();
-    value.serialize(&mut payload)?;
-    let len = u64::try_from(payload.len()).map_err(|_| norito::Error::LengthMismatch)?;
-    norito::core::write_len(writer, len)?;
-    writer.write_all(&payload)?;
-    Ok(())
-}
-
-fn enter_default_norito_encode_flags() -> norito::core::DecodeFlagsGuard {
-    let current = norito::core::get_decode_flags();
-    let defaults = norito::core::default_encode_flags();
-    let dynamic_mask = norito::core::header_flags::PACKED_SEQ;
-    let static_defaults = defaults & !dynamic_mask;
-    let merged = if current == 0 {
-        defaults
-    } else {
-        let current_dynamic = current & dynamic_mask;
-        let current_static = current & !dynamic_mask;
-        let effective_static = if current_static == 0 {
-            static_defaults
-        } else {
-            current_static | static_defaults
-        };
-        current_dynamic | effective_static
-    };
-    norito::core::DecodeFlagsGuard::enter_with_hint(merged, merged)
 }
 
 fn find_agent_autonomy_run_id(
@@ -21357,8 +20941,7 @@ mod tests {
         ))
         .expect("build draft response");
 
-        let decoded =
-            decode_soracloud_tx_instructions(&response, false).expect("decode framed instructions");
+        let decoded = decode_soracloud_tx_instructions(&response).expect("decode framed instructions");
         let decoded_instruction = decoded.first().expect("single instruction");
 
         assert_eq!(decoded.len(), 1);
@@ -21370,9 +20953,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_soracloud_tx_instructions_can_preserve_raw_wire_payloads() {
-        use iroha::data_model::isi::Instruction;
-
+    fn decode_soracloud_tx_instructions_rejects_raw_wire_payloads() {
         let wire_id = "soracloud::UpgradeSoracloudService";
         let framed = norito::core::frame_bare_with_header_flags::<
             iroha::data_model::isi::soracloud::UpgradeSoracloudService,
@@ -21384,14 +20965,12 @@ mod tests {
         ))
         .expect("build draft response");
 
-        let decoded = decode_soracloud_tx_instructions(&response, true).expect("decode raw draft");
-        let decoded_instruction = decoded.first().expect("single instruction");
+        let error = decode_soracloud_tx_instructions(&response).expect_err("raw draft rejected");
 
-        assert_eq!(decoded.len(), 1);
-        assert_eq!(Instruction::id(&**decoded_instruction), wire_id);
-        assert_eq!(
-            norito::to_bytes(decoded_instruction).expect("encode preserved"),
-            norito::to_bytes(&(wire_id.to_owned(), framed)).expect("encode expected raw pair"),
+        assert!(
+            error
+                .to_string()
+                .contains("failed to decode Soracloud instruction skeleton")
         );
     }
 
@@ -24047,7 +23626,6 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             BTreeMap::new(),
             Some(&authority),
             &key_pair,
-            BundleSignatureMode::Canonical,
         )
         .expect("signed request");
         let payload = iroha_data_model::soracloud::encode_bundle_with_materials_provenance_payload(
@@ -24066,7 +23644,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
     }
 
     #[test]
-    fn prepare_endpoint_compatible_bundle_keeps_canonical_signature_by_default() {
+    fn signed_inrou_bundle_request_uses_canonical_guest_images_signature() {
         let mut container = fixture_container();
         container.runtime = SoraContainerRuntimeV1::Inrou;
         container.inrou = Some(SoraInrouManifestV1 {
@@ -24105,20 +23683,14 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             service,
         };
 
-        let (compatible_bundle, signature_mode) =
-            prepare_endpoint_compatible_bundle(bundle, "https://taira.sora.org")
-                .expect("compat bundle");
-        assert_eq!(signature_mode, BundleSignatureMode::Canonical);
-
         let key_pair = soracloud_fixture_key_pair(0x23);
         let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_bundle_request(
-            compatible_bundle,
+            bundle,
             BTreeMap::new(),
             BTreeMap::new(),
             Some(&authority),
             &key_pair,
-            signature_mode,
         )
         .expect("signed request");
         let payload = encode_bundle_with_materials_provenance_payload(

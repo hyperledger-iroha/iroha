@@ -27,6 +27,15 @@ beep = true
 address = "addr:0.0.0.0:1337#BF18"
 public_address = "addr:taira-validator-1.sora.org:1337#D426"
 max_frame_bytes_tx_gossip = 1048576
+p2p_queue_cap_high = 65536
+p2p_queue_cap_low = 32768
+p2p_post_queue_cap = 65536
+p2p_outbound_frame_queue_max_high_frames = 65536
+p2p_outbound_frame_queue_max_low_frames = 32768
+p2p_subscriber_queue_cap = 65536
+deferred_send_max_per_peer = 8192
+deferred_send_max_bytes_per_peer = 268435456
+disconnect_on_post_overflow = false
 
 [torii]
 address = "addr:0.0.0.0:18080#2F16"
@@ -176,6 +185,9 @@ sccp_source_verifier_materials = []
 [zk.halo2]
 enabled = true
 
+[zk.stark]
+enabled = true
+
 [pipeline.ivm_proved]
 enabled = true
 skip_replay = true
@@ -199,7 +211,7 @@ volatility_class = "stable"
 use_stake_snapshot_roster = true
 
 [genesis]
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+public_key = "ed0120CEF83A365F125EF1CB8F040290A4C5D23561A24CC4C6782AC07506C77003AF00"
 
 [streaming]
 identity_public_key = "REPLACE_WITH_STREAMING_IDENTITY_PUBLIC_KEY"

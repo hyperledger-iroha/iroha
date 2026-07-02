@@ -7340,49 +7340,177 @@ fn sccp_codec_capabilities() -> Result<Vec<SccpCodecCapabilityDto>> {
     .collect()
 }
 
-fn sccp_counterparty_capabilities() -> Result<Vec<SccpCounterpartyCapabilityDto>> {
+fn sccp_configured_counterparty_capability(
+    zk_config: &iroha_config::parameters::actual::Zk,
+    domain: u32,
+) -> Result<SccpCounterpartyCapabilityDto> {
+    let manifest = iroha_sccp::sccp_proof_manifest_for_domain(domain).ok_or_else(|| {
+        conversion_error(format!(
+            "unsupported SCCP domain for manifest discovery: {domain}"
+        ))
+    })?;
+    let mut production_ready = iroha_sccp::sccp_manifest_is_production_ready(&manifest);
+    let mut disabled_reason = manifest.disabled_reason;
+    let mut destination_rollout = manifest.destination_rollout;
+    let mut production_readiness = iroha_sccp::sccp_lane_production_readiness_for_domain(domain)
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "unsupported SCCP domain for production readiness: {domain}"
+            ))
+        })?;
+
+    let configured = (|| -> Result<Option<iroha_sccp::SccpLaneProductionReadinessV1>> {
+        let Some(material) = sccp_configured_source_verifier_material_for_domain(zk_config, domain)?
+        else {
+            return Ok(None);
+        };
+        let Some(deployment) =
+            sccp_configured_source_adapter_deployment_for_domain(zk_config, domain, &material)?
+        else {
+            return Ok(None);
+        };
+        let Some(rollout) = sccp_configured_destination_rollout_for_domain(zk_config, domain)?
+        else {
+            return Ok(None);
+        };
+        let Some(allowlist) = sccp_configured_route_allowlist_for_domain(zk_config, domain)? else {
+            return Ok(None);
+        };
+        destination_rollout = rollout.clone();
+        Ok(
+            iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                domain,
+                &material,
+                &deployment,
+                &rollout,
+                &allowlist,
+            ),
+        )
+    })();
+
+    match configured {
+        Ok(Some(readiness)) => {
+            production_ready = readiness.production_ready;
+            if production_ready {
+                if let Err(error) = sccp_configured_launch_ready_for_domain(zk_config, domain) {
+                    production_ready = false;
+                    disabled_reason = Some(error.to_string());
+                } else {
+                    disabled_reason = None;
+                }
+            } else if disabled_reason.is_none() && !readiness.blockers.is_empty() {
+                disabled_reason = Some(readiness.blockers.join("; "));
+            }
+            production_readiness = readiness;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            production_ready = false;
+            disabled_reason = Some(format!(
+                "configured SCCP lane material for domain {domain} is invalid: {error}"
+            ));
+        }
+    }
+
+    if let Some(route) = sccp_configured_route_manifest_for_domain(zk_config, domain)? {
+        if !route.production_ready {
+            production_ready = false;
+            let reason = route.disabled_reason.clone().unwrap_or_else(|| {
+                format!(
+                    "configured SCCP route manifest `{}` for domain {domain} is not production-ready",
+                    route.route_id
+                )
+            });
+            disabled_reason = Some(reason.clone());
+            production_readiness.production_ready = false;
+            production_readiness.routes_allowlisted = false;
+            production_readiness.route_allowlist.routes_allowlisted = false;
+            if !production_readiness.blockers.iter().any(|blocker| blocker == &reason) {
+                production_readiness.blockers.push(reason);
+            }
+        }
+    }
+
+    Ok(SccpCounterpartyCapabilityDto {
+        domain,
+        chain: manifest.chain,
+        verifier_backend: manifest.verifier_backend,
+        message_backend: manifest.message_backend,
+        registry_backend: manifest.registry_backend,
+        counterparty_account_codec: manifest.counterparty_account_codec,
+        counterparty_account_codec_key: manifest.counterparty_account_codec_key,
+        destination_rollout,
+        production_ready,
+        disabled_reason,
+        production_readiness,
+    })
+}
+
+fn sccp_configured_route_manifest_for_domain<'a>(
+    zk_config: &'a iroha_config::parameters::actual::Zk,
+    domain: u32,
+) -> Result<Option<&'a iroha_config::parameters::actual::SccpRouteManifest>> {
+    let mut matches = zk_config
+        .sccp_route_manifests
+        .iter()
+        .filter(|manifest| manifest.counterparty_domain == domain);
+    let Some(configured) = matches.next() else {
+        return Ok(None);
+    };
+    if matches.next().is_some() {
+        return Err(sccp_bad_request(format!(
+            "SCCP route manifest for domain {domain} is duplicated"
+        )));
+    }
+    Ok(Some(configured))
+}
+
+fn sccp_configured_route_manifest_ready_for_domain(
+    zk_config: &iroha_config::parameters::actual::Zk,
+    domain: u32,
+) -> Result<()> {
+    let Some(route) = sccp_configured_route_manifest_for_domain(zk_config, domain)? else {
+        return Ok(());
+    };
+    if route.production_ready {
+        return Ok(());
+    }
+    let reason = route.disabled_reason.clone().unwrap_or_else(|| {
+        format!(
+            "configured SCCP route manifest `{}` for domain {domain} is not production-ready",
+            route.route_id
+        )
+    });
+    Err(sccp_bad_request(reason))
+}
+
+fn sccp_counterparty_capabilities(
+    zk_config: &iroha_config::parameters::actual::Zk,
+) -> Result<Vec<SccpCounterpartyCapabilityDto>> {
     iroha_sccp::SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1
         .into_iter()
-        .map(|domain| {
-            let manifest = iroha_sccp::sccp_proof_manifest_for_domain(domain).ok_or_else(|| {
-                conversion_error(format!(
-                    "unsupported SCCP domain for manifest discovery: {domain}"
-                ))
-            })?;
-            let production_ready = iroha_sccp::sccp_manifest_is_production_ready(&manifest);
-            Ok(SccpCounterpartyCapabilityDto {
-                domain,
-                chain: manifest.chain,
-                verifier_backend: manifest.verifier_backend,
-                message_backend: manifest.message_backend,
-                registry_backend: manifest.registry_backend,
-                counterparty_account_codec: manifest.counterparty_account_codec,
-                counterparty_account_codec_key: manifest.counterparty_account_codec_key,
-                destination_rollout: manifest.destination_rollout,
-                production_ready,
-                disabled_reason: manifest.disabled_reason,
-                production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(domain)
-                    .ok_or_else(|| {
-                        conversion_error(format!(
-                            "unsupported SCCP domain for production readiness: {domain}"
-                        ))
-                    })?,
-            })
-        })
+        .map(|domain| sccp_configured_counterparty_capability(zk_config, domain))
         .collect()
 }
 
-fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
+fn sccp_capabilities_snapshot(state: &CoreState) -> Result<SccpCapabilitiesDto> {
+    let zk_config = state.zk_snapshot();
     let production_policy = iroha_sccp::sccp_production_policy_v1();
     let launch_ready = match production_policy.launch_mode {
         iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => {
-            iroha_sccp::sccp_all_lanes_launch_ready_v1()
+            sccp_configured_all_lanes_launch_ready(&zk_config).is_ok()
         }
         iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => {
-            iroha_sccp::sccp_lane_production_ready_for_domain(iroha_sccp::SCCP_DOMAIN_ETH)
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_ETH)
+                .is_ok()
         }
         iroha_sccp::SccpLaunchModeV1::BscMainnetLane => {
-            iroha_sccp::sccp_lane_production_ready_for_domain(iroha_sccp::SCCP_DOMAIN_BSC)
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_BSC)
+                .is_ok()
+        }
+        iroha_sccp::SccpLaunchModeV1::TonMainnetLane => {
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_TON)
+                .is_ok()
         }
     };
     Ok(SccpCapabilitiesDto {
@@ -7408,7 +7536,7 @@ fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
         launch_ready,
         message_payload_kinds: iroha_sccp::sccp_message_payload_kind_keys_v1(),
         codecs: sccp_codec_capabilities()?,
-        counterparties: sccp_counterparty_capabilities()?,
+        counterparties: sccp_counterparty_capabilities(&zk_config)?,
     })
 }
 
@@ -8657,6 +8785,7 @@ fn sccp_configured_all_lanes_launch_ready(
                 "SCCP all-lanes launch policy requires configured production material for domain {domain}"
             ))
         })?;
+        sccp_configured_route_manifest_ready_for_domain(zk_config, domain)?;
 
         source_record_hashes
             .entry(iroha_sccp::sccp_source_verifier_material_hash(
@@ -8729,6 +8858,11 @@ fn sccp_configured_launch_ready_for_domain(
                 "SCCP BSC mainnet lane launch policy",
                 "BSC mainnet",
             ),
+            iroha_sccp::SccpLaunchModeV1::TonMainnetLane => (
+                iroha_sccp::SCCP_DOMAIN_TON,
+                "SCCP TON mainnet lane launch policy",
+                "TON mainnet",
+            ),
         };
     if domain != launch_domain {
         if sccp_configured_source_lane_for_domain(zk_config, domain)?.is_none() {
@@ -8781,6 +8915,7 @@ fn sccp_configured_launch_ready_for_domain(
             )));
         }
     }
+    sccp_configured_route_manifest_ready_for_domain(zk_config, domain)?;
 
     Ok(())
 }
@@ -13017,7 +13152,12 @@ mod sccp_message_backend_tests {
 
     #[test]
     fn sccp_capabilities_snapshot_lists_remote_domains_and_codecs() {
-        let snapshot = sccp_capabilities_snapshot().expect("capabilities");
+        let state = CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        let snapshot = sccp_capabilities_snapshot(&state).expect("capabilities");
         assert_eq!(snapshot.local_domain, iroha_sccp::SCCP_DOMAIN_SORA);
         assert_eq!(snapshot.local_chain, "sora");
         assert_eq!(
@@ -13132,6 +13272,53 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
+    fn sccp_capabilities_snapshot_respects_disabled_route_manifest() {
+        let mut state = CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        let mut zk = test_configured_sccp_zk_config_for_domains([iroha_sccp::SCCP_DOMAIN_TON]);
+        let disabled_reason = "TON source proof module is not production-ready".to_owned();
+        let mut route = sample_sccp_route_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON);
+        route.route_id = "taira_ton_xor".to_owned();
+        route.asset_key = "xor".to_owned();
+        route.chain = "ton-testnet".to_owned();
+        route.counterparty_domain = iroha_sccp::SCCP_DOMAIN_TON;
+        route.production_ready = false;
+        route.disabled_reason = Some(disabled_reason.clone());
+        zk.sccp_route_manifests.push(route);
+        state.set_zk(zk);
+
+        let snapshot = sccp_capabilities_snapshot(&state).expect("capabilities");
+
+        assert!(
+            !snapshot.launch_ready,
+            "a disabled configured route manifest must keep the launch gate closed"
+        );
+        let ton = snapshot
+            .counterparties
+            .iter()
+            .find(|entry| entry.domain == iroha_sccp::SCCP_DOMAIN_TON)
+            .expect("TON counterparty");
+        assert!(!ton.production_ready);
+        assert_eq!(ton.disabled_reason.as_deref(), Some(disabled_reason.as_str()));
+        assert!(!ton.production_readiness.production_ready);
+        assert!(!ton.production_readiness.routes_allowlisted);
+        assert!(
+            ton.production_readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker == &disabled_reason),
+            "disabled route reason should be surfaced as a capability blocker"
+        );
+        let err =
+            sccp_configured_launch_ready_for_domain(&state.zk_snapshot(), iroha_sccp::SCCP_DOMAIN_TON)
+                .expect_err("disabled route manifest must fail launch readiness");
+        assert!(conversion_message(&err).is_some_and(|message| message == disabled_reason));
+    }
+
+    #[test]
     fn sccp_proof_manifest_snapshot_matches_counterparty_backends() {
         let state = CoreState::new_for_testing(
             iroha_core::state::World::default(),
@@ -13211,6 +13398,7 @@ mod sccp_message_backend_tests {
             tron_network: chain.clone(),
             chain,
             chain_id_hex: "0x61".to_owned(),
+            ton_finalize_message_value_nano: None,
             explorer_url: is_bsc.then(|| "https://testnet.bscscan.com".to_owned()),
             explorer_host: is_bsc.then(|| "testnet.bscscan.com".to_owned()),
             counterparty_account_codec: is_bsc.then_some(iroha_sccp::SCCP_CODEC_EVM_HEX),
@@ -13225,7 +13413,6 @@ mod sccp_message_backend_tests {
             sccp_tron_source_bridge_address: "0x3333333333333333333333333333333333333333"
                 .to_owned(),
             tron_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
-            ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", "45".repeat(32)),
             verifier_key_hash: format!("0x{}", "46".repeat(32)),
             proof_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
@@ -14599,9 +14786,10 @@ pub async fn handle_v1_sccp_message_proof_job(
 /// GET /v1/sccp/capabilities — relay-operator SCCP capability discovery for proof backends, codecs, and routes.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_capabilities(
+    state: &CoreState,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let snapshot = sccp_capabilities_snapshot()?;
+    let snapshot = sccp_capabilities_snapshot(state)?;
     sccp_bundle_response(&snapshot, accept.as_ref())
 }
 

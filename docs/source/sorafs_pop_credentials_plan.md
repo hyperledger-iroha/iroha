@@ -43,7 +43,9 @@ root/revocation sync tuple as `valid_juror_sync_bindings`, and valid
 moderation-integration artifacts publish `pop_snapshot_digest_hex` values as
 `valid_pop_snapshot_digests`; the aggregate production-readiness gate accepts
 both only as payload-free metadata tethered to recognized artifact
-fingerprints.
+fingerprints. Enrollment-portal artifacts also bind `route_count` to the unique
+canonical `routes[].name` inventory and reject duplicate route entries before
+promotion can report ready.
 `scripts/run_sorafs_pop_credentials_rollout_evidence.py` provides the matching
 collection planner/runner for reviewed staged evidence. It accepts explicit
 payload-free canary artifacts, supports shell-style `@ARGFILE` inputs, forwards
@@ -115,7 +117,9 @@ backend.
   binding failures on the offending artifacts in the summary. It supports
   verifier-service policy digest anchors, emits them as `valid_policy_digests`,
   and requires governance approval `policy_digest_hex` to match one of those
-  valid verifier policies. It supports
+  valid verifier policies. Enrollment-portal artifacts also bind `route_count`
+  to the unique canonical `routes[].name` inventory and reject duplicate route
+  entries before promotion can report ready. It supports
   shell-style `@ARGFILE` inputs so reviewed operator evidence paths can be
   replayed without
   storing runtime secrets in the repo.

@@ -43,7 +43,12 @@ def base(schema: str) -> dict:
     }
 
 
-def release_archive(*, target_count: int = 4, missing_target: bool = False) -> dict:
+def release_archive(
+    *,
+    target_count: int | None = None,
+    missing_target: bool = False,
+    duplicate_target: bool = False,
+) -> dict:
     targets = [
         "x86_64-apple-darwin",
         "aarch64-apple-darwin",
@@ -52,6 +57,8 @@ def release_archive(*, target_count: int = 4, missing_target: bool = False) -> d
     ]
     if missing_target:
         targets.pop()
+    if duplicate_target:
+        targets.append(targets[0])
     payload = base("sorafs.reference_sdk.release_archive_canary.v1")
     payload.update(
         {
@@ -60,7 +67,7 @@ def release_archive(*, target_count: int = 4, missing_target: bool = False) -> d
             "archive_checksums_published": True,
             "binary_checksums_published": True,
             "dist_gitkeep_only_tracked": True,
-            "target_count": target_count,
+            "target_count": len(targets) if target_count is None else target_count,
             "targets": targets,
             "archive_index_digest_hex": DIGEST,
             "release_manifest_digest_hex": DIGEST,
@@ -90,15 +97,22 @@ def signed_manifest(*, private_key_absent: bool = True) -> dict:
     return payload
 
 
-def downstream_bindings(*, package_count: int = 5, missing_package: bool = False) -> dict:
+def downstream_bindings(
+    *,
+    package_count: int | None = None,
+    missing_package: bool = False,
+    duplicate_package: bool = False,
+) -> dict:
     packages = ["javascript", "python", "kotlin_jvm", "java_android", "swift"]
     if missing_package:
         packages.pop()
+    if duplicate_package:
+        packages.append(packages[0])
     payload = base("sorafs.reference_sdk.downstream_bindings_canary.v1")
     payload.update(
         {
             "packages": packages,
-            "package_count": package_count,
+            "package_count": len(packages) if package_count is None else package_count,
             "sdk_exports_verified": True,
             "validation_outcome_contract_verified": True,
             "version_alignment_verified": True,
@@ -188,8 +202,14 @@ def test_complete_release_evidence_passes(tmp_path: Path) -> None:
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["schema"] == "sorafs.reference_sdk.release_evidence_gate.v1"
     assert payload["status"] == "ready"
+    assert payload["valid_archive_index_digests"] == [DIGEST]
+    assert payload["valid_ffi_contract_digests"] == [DIGEST]
+    assert payload["valid_header_digests"] == [DIGEST]
+    assert payload["valid_package_index_digests"] == [DIGEST]
     assert payload["valid_release_manifest_digests"] == [DIGEST]
     assert payload["valid_release_manifest_reference_digests"] == [DIGEST]
+    assert payload["valid_release_key_fingerprints"] == [DIGEST]
+    assert payload["valid_smoke_output_digests"] == [DIGEST]
     assert payload["valid_policy_digests"] == [DIGEST]
     assert payload["required"]["release_archive"]["valid"] is True
 
@@ -242,6 +262,34 @@ def test_release_archive_requires_minimum_target_count(tmp_path: Path) -> None:
     write_json(tmp_path / "release-archive.json", release_archive(target_count=3))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_release_archive_target_count_must_match_unique_targets(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "release-archive.json", release_archive(target_count=5))
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["release_archive"]["artifacts"][0]
+    assert "target_count must match unique targets count" in artifact["errors"]
+
+
+def test_release_archive_targets_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "release-archive.json",
+        release_archive(duplicate_target=True),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["release_archive"]["artifacts"][0]
+    assert "targets must not contain duplicate values" in artifact["errors"]
+    assert "target_count must match unique targets count" in artifact["errors"]
 
 
 def test_signed_manifest_rejects_private_key_presence(tmp_path: Path) -> None:
@@ -308,6 +356,37 @@ def test_downstream_bindings_require_minimum_package_count(tmp_path: Path) -> No
     write_json(tmp_path / "downstream-bindings.json", downstream_bindings(package_count=4))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_downstream_package_count_must_match_unique_packages(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "downstream-bindings.json",
+        downstream_bindings(package_count=6),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["downstream_bindings"]["artifacts"][0]
+    assert "package_count must match unique packages count" in artifact["errors"]
+
+
+def test_downstream_packages_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "downstream-bindings.json",
+        downstream_bindings(duplicate_package=True),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["downstream_bindings"]["artifacts"][0]
+    assert "packages must not contain duplicate values" in artifact["errors"]
+    assert "package_count must match unique packages count" in artifact["errors"]
 
 
 def test_downstream_bindings_require_release_manifest_binding(tmp_path: Path) -> None:

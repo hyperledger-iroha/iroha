@@ -6792,6 +6792,18 @@ def test_release_readiness_evidence_phase_requires_retired_network_surface_scan(
     ]
 
 
+def test_release_readiness_evidence_phase_requires_source_template_hash_guard() -> None:
+    """Readiness reports must prove the shared source-template denylist ran."""
+
+    report = load_report_module()
+    template_guard = "pytests/scripts/sccp_source_template_hashes_test.py"
+
+    assert template_guard in corridor_evidence_script_tests()
+    assert template_guard in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+        "evidence-scripts"
+    ]
+
+
 def test_release_readiness_verifier_reports_removed_retired_network_pipeline_doc_guard(
     tmp_path: Path,
 ) -> None:

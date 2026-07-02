@@ -345,6 +345,40 @@ def test_sensitive_key_spelling_variants_fail(tmp_path: Path) -> None:
     assert "transport.response-body" not in errors
 
 
+def test_statement_publication_route_count_must_match_unique_routes(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = statement_publication()
+    payload["route_count"] += 1
+    payload["passed_route_count"] = payload["route_count"]
+    write_json(tmp_path / "statement-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["statement_publication"]["artifacts"][0]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_statement_publication_routes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = statement_publication()
+    payload["routes"].append(dict(payload["routes"][0]))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "statement-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["statement_publication"]["artifacts"][0]
+    assert "routes must not contain duplicate values" in artifact["errors"]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
 def test_governed_hedge_execution_can_pass(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = governance_approval()
@@ -600,6 +634,36 @@ def test_reconciliation_reconciled_line_item_count_must_match(tmp_path: Path) ->
     )
 
 
+def test_reconciliation_source_count_must_match_unique_sources(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["source_count"] += 1
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["reconciliation"]["artifacts"][0]
+    assert "source_count must match unique sources count" in artifact["errors"]
+
+
+def test_reconciliation_sources_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["sources"].append(dict(payload["sources"][0]))
+    payload["source_count"] = len(payload["sources"])
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["reconciliation"]["artifacts"][0]
+    assert "sources must not contain duplicate values" in artifact["errors"]
+    assert "source_count must match unique sources count" in artifact["errors"]
+
+
 def test_metrics_critical_alert_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "metrics-alerts.json", metrics_alerts(critical=True))
@@ -612,6 +676,39 @@ def test_native_bridge_abi_below_twelve_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "native-bridge-release.json", native_bridge_release(abi=11))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_native_bridge_artifact_count_must_match_unique_artifacts(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = native_bridge_release()
+    payload["artifact_count"] += 1
+    write_json(tmp_path / "native-bridge-release.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["native_bridge_release"]["artifacts"][0]
+    assert "artifact_count must equal artifacts length" in artifact["errors"]
+    assert "artifact_count must match unique artifacts count" in artifact["errors"]
+
+
+def test_native_bridge_artifacts_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = native_bridge_release()
+    payload["artifacts"].append(dict(payload["artifacts"][0]))
+    payload["artifact_count"] = len(payload["artifacts"])
+    write_json(tmp_path / "native-bridge-release.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["native_bridge_release"]["artifacts"][0]
+    assert "artifacts must not contain duplicate values" in artifact["errors"]
+    assert "artifact_count must match unique artifacts count" in artifact["errors"]
 
 
 def test_invalid_duplicate_artifact_fails_even_with_valid_artifact(tmp_path: Path) -> None:

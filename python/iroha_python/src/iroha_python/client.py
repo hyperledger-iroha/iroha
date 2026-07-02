@@ -9246,7 +9246,7 @@ class ToriiClient(_BaseToriiClient):
                 )
             except AccountAddressError:
                 continue
-            return address.to_i105(DEFAULT_I105_DISCRIMINANT)
+            return address.to_i105(self._chain_discriminant)
         return literal
 
     def _native_transaction_asset_id(self, value: Any, context: str) -> str:

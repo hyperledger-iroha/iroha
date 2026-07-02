@@ -217,6 +217,9 @@ and every tally-bound artifact shares a valid roster-bound commit/reveal
 `case_digest_hex`/`roster_hash_hex`/`tally_digest_hex` tuple. Sortition rosters
 that fail appeal-intake binding and commit/reveal runs that fail roster binding
 do not anchor downstream rollout evidence.
+Appeal-intake, operator-workflow, commit/reveal, and decision-publication
+artifacts also bind `route_count` to the unique canonical `routes[].name`
+inventory and reject duplicate route entries before promotion can report ready.
 The gate also requires end-to-end panel evidence to carry `policy_digest_hex`,
 publishes those values as `valid_policy_digests`, and requires governance
 approval `policy_digest_hex` to match one of those valid panel policy digests.

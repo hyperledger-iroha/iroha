@@ -2269,6 +2269,10 @@ pub struct SumeragiV1StatusWire {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "first-release consensus status wire exposes independent telemetry flags without compatibility aliases"
+)]
 pub struct SumeragiStatusWire {
     /// Canonical first-release consensus state.
     #[norito(default)]

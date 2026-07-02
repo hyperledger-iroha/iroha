@@ -766,6 +766,26 @@ def test_sccp_production_corridor_evidence_phase_runs_retired_network_scan() -> 
     assert "pytests/scripts/sccp_retired_network_surface_test.py" in completed.stdout
 
 
+def test_sccp_production_corridor_evidence_phase_runs_source_template_hash_guard() -> None:
+    """The evidence phase must certify the shared SCCP source-template denylist."""
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--dry-run",
+            "--phase",
+            "evidence-scripts",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert "pytests/scripts/sccp_source_template_hashes_test.py" in completed.stdout
+
+
 def test_sccp_production_corridor_test_paths_are_release_inventory_tracked() -> None:
     """Path-based corridor test commands must be present in release evidence."""
 

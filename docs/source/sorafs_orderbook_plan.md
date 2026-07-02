@@ -462,7 +462,11 @@ reconciliation, and governance approval artifacts carry a
 `contract_digest_hex` that matches a valid contract-surface artifact in the
 same rollout bundle. Governance approval must also carry a `policy_digest_hex`
 that matches a valid contract-surface policy digest from the same rollout
-bundle. The collection planner's
+bundle. API gateway artifacts also bind `route_count` to the unique canonical
+`routes[].name` inventory and reject duplicate route entries before promotion
+can report ready. Reconciliation artifacts also bind `source_count` to the
+unique canonical `sources[].name` inventory and reject duplicate source entries
+before promotion can report ready. The collection planner's
 dry-run JSON also includes the checker-backed `evidence_contract` map so operators can inspect
 the exact required fields for each requested evidence kind before collecting or
 submitting live orderbook artifacts. Use the payload-free SFM-2 orderbook

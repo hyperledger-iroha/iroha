@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_gateway_load_tests.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fcce5c73da9dbdb30bb81268d8b101e0f306da1e8291dcb71206967b47136e35
-source_last_modified: "2025-12-29T18:16:36.146382+00:00"
+source_hash: 51edf7204d81a6e2863b70aded641a6abae0e34ab0780da184547657bca316f2
+source_last_modified: "2026-07-01T19:22:39.288142+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS Gateway Load Testing Plan
 summary: Deterministic load harness and follow-up tasks for the SF-5a trustless delivery profile.
@@ -35,7 +35,9 @@ The SF-5a rollout evidence gate also requires staging-load artifacts to carry a
 `policy_digest_hex`, and governance approval artifacts must match that staged
 policy digest before promotion. Suite, staging, and policy digest mismatches
 mark the offending artifact invalid in the emitted summary before the gate can
-report ready.
+report ready. Local conformance artifacts must also keep `scenario_count` equal
+to the unique canonical `scenarios` inventory, and duplicate scenario entries
+fail the artifact before promotion can report ready.
 
 ## Objectives
 
@@ -55,6 +57,7 @@ report ready.
 | Fixture replay | Implemented | The suite covers full CAR replay, aligned and multi-range byte replay, unsupported chunkers, missing headers, corrupted proofs, corrupted CAR payloads, provider admission failures, rate limits, GAR denylist refusals, and capability-refusal fixtures. |
 | Metrics report | Implemented | `LoadTestReport` records total requests, elapsed time, per-scenario success/refusal/error counts, and P50/P95/P99 latency. |
 | Signed evidence | Implemented | `generate_attestation`, `verify_attestation_envelope`, and `cargo xtask sorafs-gateway-attest --verify` cover signed report validation. |
+| Payload-free rollout canary builder | Implemented | `scripts/build_sorafs_gateway_load_canary.py` builds checked-in local conformance, staging load, telemetry/SLO, transport-scope, and governance approval evidence artifacts from reviewed rollout facts. |
 | Live staging load evidence | Rollout evidence | Capture against deployed gateways once the operator selects hardware, cache state, and duration. |
 | HTTP/3 gateway load coverage | Transport follow-up | No committed SoraFS HTTP/3 gateway endpoint is present in this checkout; add HTTP/3 scenarios only after the gateway exposes that transport. |
 
@@ -92,6 +95,29 @@ Live gateways should additionally expose Prometheus metrics or JSON logs for:
 - `sorafs_gateway_bytes_total` total bytes served per run.
 - `sorafs_gateway_concurrency_active` active request gauge.
 
+`scripts/check_sorafs_gateway_load_rollout_evidence.py` validates payload-free
+local conformance, live staging load, telemetry/SLO, transport-scope, and
+governance approval evidence before SF-5a load promotion. It binds the live
+staging report back to the signed local conformance digest, requires live
+telemetry and governance artifacts to reference the staging report digest, and
+fails closed if raw reports, response bodies, fixture payloads, or runtime
+secrets appear in evidence. `scripts/run_sorafs_gateway_load_rollout_evidence.py`
+emits the matching collection plan and dry-run evidence contract so operators
+can review the required fields before submitting promotion packets, and the
+runner validates the schema-closed collection plan, required kinds, thresholds,
+external evidence map, evidence contract, and command steps before dry-run
+output or verifier execution. The shared runner plan guard also rejects
+non-canonical nested required-kind, threshold, external-evidence,
+evidence-contract, and command-step shapes before any live gateway-load contact.
+`scripts/build_sorafs_gateway_load_canary.py` builds individual payload-free
+evidence artifacts for local conformance, staging load, telemetry/SLO,
+transport-scope, and governance approval runs. The builder requires reviewed
+deployment context, complete deterministic scenario and metric coverage where
+applicable, suite/staging digest bindings, SLO threshold facts, and validates
+every generated artifact through
+`scripts/check_sorafs_gateway_load_rollout_evidence.py` before writing. Checked
+in response-file examples cover the local conformance and staging-load roots.
+
 ## Failure Injection Coverage
 
 - **Proof corruption:** B3 mutates PoR proof material and expects a 422 refusal.
@@ -113,3 +139,7 @@ Live gateways should additionally expose Prometheus metrics or JSON logs for:
 4. Add HTTP/3 scenarios only after the SoraFS gateway exposes a committed HTTP/3
    endpoint and configuration surface.
 5. Record cold-cache SLO baselines after the staging hardware profile is chosen.
+
+The checked-in canary builder and examples do not replace live staging load
+execution, signed local conformance report archival, or future HTTP/3 transport
+coverage once a committed gateway endpoint exists.

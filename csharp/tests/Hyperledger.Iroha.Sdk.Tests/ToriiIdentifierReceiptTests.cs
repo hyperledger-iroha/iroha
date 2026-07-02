@@ -31,18 +31,17 @@ public sealed class ToriiIdentifierReceiptTests
     }
 
     [Theory]
-    [InlineData("policy_id", " phone#retail ")]
-    [InlineData("opaque_id", " opaque-1 ")]
-    [InlineData("receipt_hash", " receipt-1 ")]
-    [InlineData("uaid", " uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef ")]
-    [InlineData("account_id", " sorauﾛ1Nmerchant ")]
-    [InlineData("backend", " bfv-programmed-sha3-256-v1 ")]
-    [InlineData("signature", " ABCD ")]
-    [InlineData("signature_payload_hex", " DEADBEEF ")]
+    [InlineData("payload.policy_id", " phone#retail ")]
+    [InlineData("payload.opaque_id", " opaque-1 ")]
+    [InlineData("payload.receipt_hash", " receipt-1 ")]
+    [InlineData("payload.uaid", " uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef ")]
+    [InlineData("payload.account_id", " sorauﾛ1Nmerchant ")]
+    [InlineData("payload.execution.backend", " bfv-programmed-sha3-256-v1 ")]
+    [InlineData("attestation.signature", " ABCD ")]
     public void IdentifierResolveResponseRejectsPaddedReceiptFields(string field, string value)
     {
         var receipt = ValidIdentifierResolveResponse();
-        receipt[field] = value;
+        SetNestedString(receipt, field, value);
 
         var error = Assert.Throws<JsonException>(
             () => JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(receipt.ToJsonString()));
@@ -52,18 +51,17 @@ public sealed class ToriiIdentifierReceiptTests
     }
 
     [Theory]
-    [InlineData("policy_id", "phone#ret ail")]
-    [InlineData("opaque_id", "opaque 1")]
-    [InlineData("receipt_hash", "receipt 1")]
-    [InlineData("uaid", "uaid:0123456789abcdef0123456789abcdef 0123456789abcdef0123456789abcdef")]
-    [InlineData("account_id", "sorauﾛ1N merchant")]
-    [InlineData("backend", "bfv programmed-sha3-256-v1")]
-    [InlineData("signature", "AB CD")]
-    [InlineData("signature_payload_hex", "DEAD BEEF")]
+    [InlineData("payload.policy_id", "phone#ret ail")]
+    [InlineData("payload.opaque_id", "opaque 1")]
+    [InlineData("payload.receipt_hash", "receipt 1")]
+    [InlineData("payload.uaid", "uaid:0123456789abcdef0123456789abcdef 0123456789abcdef0123456789abcdef")]
+    [InlineData("payload.account_id", "sorauﾛ1N merchant")]
+    [InlineData("payload.execution.backend", "bfv programmed-sha3-256-v1")]
+    [InlineData("attestation.signature", "AB CD")]
     public void IdentifierResolveResponseRejectsInternalWhitespaceReceiptFields(string field, string value)
     {
         var receipt = ValidIdentifierResolveResponse();
-        receipt[field] = value;
+        SetNestedString(receipt, field, value);
 
         var error = Assert.Throws<JsonException>(
             () => JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(receipt.ToJsonString()));
@@ -73,16 +71,13 @@ public sealed class ToriiIdentifierReceiptTests
     }
 
     [Theory]
-    [InlineData("signature", "ABC")]
-    [InlineData("signature", "ABCG")]
-    [InlineData("signature", "0XABCD")]
-    [InlineData("signature_payload_hex", "DEADBEE")]
-    [InlineData("signature_payload_hex", "DEADBEEX")]
-    [InlineData("signature_payload_hex", "0XDEADBEEF")]
+    [InlineData("attestation.signature", "ABC")]
+    [InlineData("attestation.signature", "ABCG")]
+    [InlineData("attestation.signature", "0XABCD")]
     public void IdentifierResolveResponseRejectsMalformedSignatureHexFields(string field, string value)
     {
         var receipt = ValidIdentifierResolveResponse();
-        receipt[field] = value;
+        SetNestedString(receipt, field, value);
 
         var error = Assert.Throws<JsonException>(
             () => JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(receipt.ToJsonString()));
@@ -92,50 +87,47 @@ public sealed class ToriiIdentifierReceiptTests
     }
 
     [Theory]
-    [InlineData("""{"policy_id":"phone#ret ail","account_id":"sorauﾛ1Nmerchant"}""", "signature_payload.policy_id.rule", "whitespace")]
-    [InlineData("""{"payload":{"policy_id":" phone#retail"}}""", "signature_payload.payload.policy_id", "whitespace")]
-    [InlineData("""{"payload":{"account_id":"sorauﾛ1Nmer chant"}}""", "signature_payload.payload.account_id", "whitespace")]
-    [InlineData("""{"payload":{"execution":{"executed_at_ms":"01710000000000"}}}""", "signature_payload.payload.execution.executed_at_ms", "canonical unsigned decimal")]
-    [InlineData("""{"payload":{"execution":{"executed_at_ms":0}}}""", "signature_payload.payload.execution.executed_at_ms", "positive")]
-    [InlineData("""{"payload":{"execution":{"expires_at_ms":-1}}}""", "signature_payload.payload.execution.expires_at_ms", "non-negative")]
-    [InlineData("""{"payload":{"execution":{"expires_at_ms":0}}}""", "signature_payload.payload.execution.expires_at_ms", "positive")]
-    [InlineData("""{"payload":{"opening":{"signature":"0XABCD"}}}""", "signature_payload.payload.opening.signature", "exact hex string")]
-    [InlineData("""{"payload":{"opening":{"payload":{"opened_at_ms":"1710000 000000"}}}}""", "signature_payload.payload.opening.payload.opened_at_ms", "whitespace")]
-    [InlineData("""{"payload":{"opening":{"payload":{"opened_at_ms":0}}}}""", "signature_payload.payload.opening.payload.opened_at_ms", "positive")]
-    [InlineData("""{"payload":{"opening":{"payload":{"expires_at_ms":0}}}}""", "signature_payload.payload.opening.payload.expires_at_ms", "positive")]
-    [InlineData("""{"attestation":{"kind":"Signed","signature":"ABCD"}}""", "signature_payload.attestation.kind", "signed or proof")]
-    [InlineData("""{"attestation":{"kind":"signed","signature":"0XABCD"}}""", "signature_payload.attestation.signature", "exact hex string")]
-    [InlineData("""{"attestation":{"kind":"signed","proof_b64":"AQID"}}""", "signature_payload.attestation signed attestations", "proof fields")]
-    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"@@@"}}""", "signature_payload.attestation.proof_b64", "valid base64")]
-    [InlineData("""{"kind":"proof","proof_b64":"AQID"}""", "signature_payload.proof_backend", "required")]
-    [InlineData("""{"opening":{"signature":"ABC"}}""", "signature_payload.opening.signature", "exact hex string")]
-    public void IdentifierResolveResponseRejectsMalformedLegacySignaturePayload(
-        string signaturePayloadJson,
+    [InlineData("""{"payload":{"policy_id":"phone#ret ail"}}""", "payload.policy_id", "whitespace")]
+    [InlineData("""{"payload":{"policy_id":" phone#retail"}}""", "payload.policy_id", "whitespace")]
+    [InlineData("""{"payload":{"account_id":"sorauﾛ1Nmer chant"}}""", "payload.account_id", "whitespace")]
+    [InlineData("""{"payload":{"execution":{"executed_at_ms":"01710000000000"}}}""", "payload.execution.executed_at_ms", "canonical unsigned decimal")]
+    [InlineData("""{"payload":{"execution":{"executed_at_ms":0}}}""", "payload.execution.executed_at_ms", "positive")]
+    [InlineData("""{"payload":{"execution":{"expires_at_ms":-1}}}""", "payload.execution.expires_at_ms", "non-negative")]
+    [InlineData("""{"payload":{"execution":{"expires_at_ms":0}}}""", "payload.execution.expires_at_ms", "positive")]
+    [InlineData("""{"payload":{"opening":{"signature":"0XABCD"}}}""", "payload.opening.signature", "exact hex string")]
+    [InlineData("""{"payload":{"opening":{"payload":{"opened_at_ms":"1710000 000000"}}}}""", "payload.opening.payload.opened_at_ms", "whitespace")]
+    [InlineData("""{"payload":{"opening":{"payload":{"opened_at_ms":0}}}}""", "payload.opening.payload.opened_at_ms", "positive")]
+    [InlineData("""{"payload":{"opening":{"payload":{"expires_at_ms":0}}}}""", "payload.opening.payload.expires_at_ms", "positive")]
+    [InlineData("""{"attestation":{"kind":"Signed","signature":"ABCD"}}""", "attestation.kind", "signed or proof")]
+    [InlineData("""{"attestation":{"kind":"signed","signature":"0XABCD"}}""", "attestation.signature", "exact hex string")]
+    [InlineData("""{"attestation":{"kind":"signed","proof_b64":"AQID"}}""", "attestation signed attestations", "proof fields")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_backend":"halo2/ipa","proof_b64":"@@@"}}""", "attestation.proof_b64", "valid base64")]
+    [InlineData("""{"attestation":{"kind":"proof","proof_b64":"AQID"}}""", "attestation.proof_backend", "required")]
+    public void IdentifierResolveResponseRejectsMalformedNestedEnvelopePatch(
+        string patchJson,
         string expectedField,
         string expectedReason)
     {
-        var receipt = ValidIdentifierResolveResponse();
-        receipt["signature_payload"] = JsonNode.Parse(signaturePayloadJson);
-
         var error = Assert.Throws<JsonException>(
-            () => JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(receipt.ToJsonString()));
+            () => JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(
+                NestedIdentifierResolveResponseWithPatch(patchJson)));
 
         Assert.Contains(expectedField, error.Message);
         Assert.Contains(expectedReason, error.Message);
     }
 
     [Theory]
-    [InlineData("resolved_at_ms", -1L, "non-negative")]
-    [InlineData("expires_at_ms", -1L, "non-negative")]
-    [InlineData("resolved_at_ms", 0L, "positive")]
-    [InlineData("expires_at_ms", 0L, "positive")]
+    [InlineData("payload.execution.executed_at_ms", -1L, "non-negative")]
+    [InlineData("payload.execution.expires_at_ms", -1L, "non-negative")]
+    [InlineData("payload.execution.executed_at_ms", 0L, "positive")]
+    [InlineData("payload.execution.expires_at_ms", 0L, "positive")]
     public void IdentifierResolveResponseRejectsNegativeReceiptTimes(
         string field,
         long value,
         string expectedReason)
     {
         var receipt = ValidIdentifierResolveResponse();
-        receipt[field] = value;
+        SetNestedNumber(receipt, field, value);
 
         var error = Assert.Throws<JsonException>(
             () => JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(receipt.ToJsonString()));
@@ -164,6 +156,71 @@ public sealed class ToriiIdentifierReceiptTests
 
         Assert.Contains(field, error.Message);
         Assert.Contains("positive", error.Message);
+    }
+
+    [Theory]
+    [InlineData("policy_id", "PolicyId", "payload.policy_id")]
+    [InlineData("opaque_id", "OpaqueId", "payload.opaque_id")]
+    [InlineData("receipt_hash", "ReceiptHash", "payload.receipt_hash")]
+    [InlineData("uaid", "Uaid", "payload.uaid")]
+    [InlineData("account_id", "AccountId", "payload.account_id")]
+    [InlineData("resolved_at_ms", "ResolvedAtMilliseconds", "payload.execution.executed_at_ms")]
+    [InlineData("expires_at_ms", "ExpiresAtMilliseconds", "payload.execution.expires_at_ms")]
+    [InlineData("backend", "Backend", "payload.execution.backend")]
+    [InlineData("signature", "Signature", "attestation.signature")]
+    public void IdentifierResolveResponseWriteRejectsEnvelopeFieldMismatches(
+        string field,
+        string expectedProperty,
+        string expectedEnvelopeField)
+    {
+        var valid = JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(
+            ValidIdentifierResolveResponse().ToJsonString())!;
+        var response = field switch
+        {
+            "policy_id" => valid with { PolicyId = "email#retail" },
+            "opaque_id" => valid with { OpaqueId = "opaque-2" },
+            "receipt_hash" => valid with { ReceiptHash = "receipt-2" },
+            "uaid" => valid with { Uaid = "uaid:1111111111111111111111111111111111111111111111111111111111111111" },
+            "account_id" => valid with { AccountId = "sorauﾛ1Ncustomer" },
+            "resolved_at_ms" => valid with { ResolvedAtMilliseconds = 1710000000001L },
+            "expires_at_ms" => valid with { ExpiresAtMilliseconds = 1710003600001L },
+            "backend" => valid with { Backend = "bfv-programmed-sha3-256-v2" },
+            "signature" => valid with { Signature = "BEEF" },
+            _ => throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown receipt field."),
+        };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
+
+        Assert.Contains(expectedProperty, error.Message);
+        Assert.Contains(expectedEnvelopeField, error.Message);
+        Assert.Contains("must match", error.Message);
+    }
+
+    [Fact]
+    public void IdentifierResolveResponseWriteRejectsSignaturePayloadHex()
+    {
+        var valid = JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(
+            ValidIdentifierResolveResponse().ToJsonString())!;
+        var response = valid with { SignaturePayloadHex = "ABCD" };
+
+        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
+
+        Assert.Contains("signature_payload_hex", error.Message);
+        Assert.Contains("must be empty", error.Message);
+    }
+
+    [Fact]
+    public void IdentifierResolveResponseWritePreservesNestedReceiptEnvelope()
+    {
+        var valid = JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(
+            ValidIdentifierResolveResponse().ToJsonString())!;
+
+        var serialized = JsonSerializer.Serialize(valid);
+        var receipt = JsonNode.Parse(serialized)!.AsObject();
+
+        Assert.False(receipt.ContainsKey("policy_id"));
+        Assert.Equal("phone#retail", receipt["payload"]!["policy_id"]!.GetValue<string>());
+        Assert.Equal("ABCD", receipt["attestation"]!["signature"]!.GetValue<string>());
     }
 
     [Fact]
@@ -245,46 +302,39 @@ public sealed class ToriiIdentifierReceiptTests
         Assert.Contains(expectedReason, error.Message);
     }
 
-    [Fact]
-    public void IdentifierResolveResponseRejectsMixedLegacyAndNestedEnvelope()
+    [Theory]
+    [InlineData("policy_id")]
+    [InlineData("opaque_id")]
+    [InlineData("receipt_hash")]
+    [InlineData("uaid")]
+    [InlineData("account_id")]
+    [InlineData("resolved_at_ms")]
+    [InlineData("expires_at_ms")]
+    [InlineData("backend")]
+    [InlineData("signature")]
+    [InlineData("signature_payload_hex")]
+    [InlineData("signature_payload")]
+    public void IdentifierResolveResponseRejectsRetiredFlatReceiptFields(string field)
     {
-        var error = Assert.Throws<JsonException>(
-            () => JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(
-                $$"""
-                {
-                  "policy_id": "phone#retail",
-                  "payload": {{NestedIdentifierPayloadJson()}},
-                  "attestation": {"kind":"signed","signature":"ABCD"}
-                }
-                """));
+        var receipt = ValidIdentifierResolveResponse();
+        if (field.EndsWith("_ms", StringComparison.Ordinal))
+        {
+            receipt[field] = 1710000000000L;
+        }
+        else
+        {
+            receipt[field] = "retired";
+        }
 
-        Assert.Contains("must not mix", error.Message);
-        Assert.Contains("legacy", error.Message);
+        var error = Assert.Throws<JsonException>(
+            () => JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(receipt.ToJsonString()));
+
+        Assert.Contains(field, error.Message);
+        Assert.Contains("current payload/attestation envelope", error.Message);
     }
 
     public static IEnumerable<object[]> DuplicateIdentifierResolveResponseJson()
     {
-        yield return new object[]
-        {
-            LegacyIdentifierResolveResponseJson(
-                """{"policy_id":"phone#retail","policy_id":"phone#retail","account_id":"sorauﾛ1Nmerchant"}"""),
-            "identifier resolve response.signature_payload.policy_id",
-        };
-        yield return new object[]
-        {
-            LegacyIdentifierResolveResponseJson(
-                """
-                {
-                  "payload": {
-                    "execution": {
-                      "backend": "bfv-programmed-sha3-256-v1",
-                      "backend": "bfv-programmed-sha3-256-v1"
-                    }
-                  }
-                }
-                """),
-            "identifier resolve response.signature_payload.payload.execution.backend",
-        };
         yield return new object[]
         {
             NestedIdentifierResolveResponse(
@@ -499,58 +549,30 @@ public sealed class ToriiIdentifierReceiptTests
     }
 
     [Fact]
-    public void IdentifierResolveResponseRejectsDuplicatePropertiesInsideIgnoredExtension()
+    public void IdentifierResolveResponseRejectsUnknownTopLevelExtension()
     {
         var json = ValidIdentifierResolveResponse()
             .ToJsonString();
-        json = json.Insert(json.Length - 1, ""","audit":{"nonce":1,"nonce":2}""");
+        json = json.Insert(json.Length - 1, ""","audit":{"nonce":1}""");
 
         var error = Assert.Throws<JsonException>(
             () => JsonSerializer.Deserialize<ToriiIdentifierResolveResponse>(json));
 
-        Assert.Contains("identifier receipt.audit.nonce", error.Message);
-        Assert.Contains("must not appear more than once", error.Message);
+        Assert.Contains("identifier receipt.audit", error.Message);
+        Assert.Contains("current payload/attestation envelope", error.Message);
     }
 
     private static JsonObject ValidIdentifierResolveResponse()
     {
-        return new JsonObject
-        {
-            ["policy_id"] = "phone#retail",
-            ["opaque_id"] = "opaque-1",
-            ["receipt_hash"] = "receipt-1",
-            ["uaid"] = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            ["account_id"] = "sorauﾛ1Nmerchant",
-            ["resolved_at_ms"] = 1710000000000L,
-            ["expires_at_ms"] = 1710003600000L,
-            ["backend"] = "bfv-programmed-sha3-256-v1",
-            ["signature"] = "ABCD",
-            ["signature_payload_hex"] = "DEADBEEF",
-            ["signature_payload"] = new JsonObject
-            {
-                ["policy_id"] = "phone#retail",
-                ["account_id"] = "sorauﾛ1Nmerchant",
-            },
-        };
+        return JsonNode.Parse(NestedIdentifierResolveResponse("""{"kind":"signed","signature":"ABCD"}"""))!.AsObject();
     }
 
-    private static string LegacyIdentifierResolveResponseJson(string signaturePayloadJson)
+    private static string NestedIdentifierResolveResponseWithPatch(string patchJson)
     {
-        return $$"""
-            {
-              "policy_id": "phone#retail",
-              "opaque_id": "opaque-1",
-              "receipt_hash": "receipt-1",
-              "uaid": "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-              "account_id": "sorauﾛ1Nmerchant",
-              "resolved_at_ms": 1710000000000,
-              "expires_at_ms": 1710003600000,
-              "backend": "bfv-programmed-sha3-256-v1",
-              "signature": "ABCD",
-              "signature_payload_hex": "DEADBEEF",
-              "signature_payload": {{signaturePayloadJson}}
-            }
-            """;
+        var envelope = ValidIdentifierResolveResponse();
+        var patch = JsonNode.Parse(patchJson)!.AsObject();
+        MergeObjectPatch(envelope, patch);
+        return envelope.ToJsonString();
     }
 
     private static JsonObject ValidIdentifierPolicySummary()
@@ -699,6 +721,39 @@ public sealed class ToriiIdentifierReceiptTests
         }
 
         current[segments[^1]] = value;
+    }
+
+    private static void SetNestedNumber(JsonObject payload, string fieldPath, long value)
+    {
+        var segments = fieldPath.Split('.');
+        var current = payload;
+        for (var index = 0; index < segments.Length - 1; index++)
+        {
+            current = current[segments[index]]!.AsObject();
+        }
+
+        current[segments[^1]] = value;
+    }
+
+    private static void MergeObjectPatch(JsonObject target, JsonObject patch)
+    {
+        foreach (var property in patch)
+        {
+            if (property.Key == "attestation")
+            {
+                target[property.Key] = property.Value?.DeepClone();
+                continue;
+            }
+
+            if (property.Value is JsonObject patchObject
+                && target[property.Key] is JsonObject targetObject)
+            {
+                MergeObjectPatch(targetObject, patchObject);
+                continue;
+            }
+
+            target[property.Key] = property.Value?.DeepClone();
+        }
     }
 
     private sealed class RecordingHandler : HttpMessageHandler
