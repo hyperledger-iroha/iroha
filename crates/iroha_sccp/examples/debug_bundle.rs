@@ -3,23 +3,35 @@
 use std::io::{self, Read};
 
 use iroha_sccp::{
-    NexusSccpMessageProofV1, SCCP_DOMAIN_SORA, SccpSourceAdapterProofV1,
+    NexusSccpMessageProofV1, SCCP_DOMAIN_SORA, SccpSourceAdapterEngineDeploymentV1,
+    SccpSourceAdapterProofV1, SccpSourceVerifierMaterialV1,
     build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready,
+    build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready,
     decode_nexus_bridge_finality_proof, decode_sccp_source_chain_proof_envelope,
     decode_sccp_source_consensus_proof, sccp_evm_family_mainnet_source_verifier_material_v1,
     sccp_message_source_domain, sccp_message_target_domain, sccp_message_transparent_public_inputs,
     sccp_message_transparent_public_inputs_with_source_verifier_material,
+    sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment,
+    sccp_source_adapter_engine_deployment_hash,
+    sccp_source_adapter_engine_deployment_matches_material,
     sccp_source_adapter_ready_with_material_for_domain,
+    sccp_source_adapter_ready_with_material_and_deployment_for_domain,
+    sccp_source_chain_proof_matches_adapter_deployment,
     sccp_source_verifier_material_from_evidence,
     sccp_source_verifier_material_from_message_bundle_evidence, sccp_source_verifier_material_hash,
     sccp_source_verifier_material_is_production_ready,
     sccp_source_verifier_material_uses_builtin_placeholder_components,
     verified_sccp_message_source_chain_proof_envelope_for_production_with_material,
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment,
+    verify_message_bundle_structure_with_source_verifier_material_and_deployment,
+    verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest,
     verify_message_bundle_structure, verify_message_bundle_structure_with_source_verifier_material,
     verify_nexus_bridge_finality_proof_structure, verify_sccp_payload_structure,
     verify_sccp_source_chain_proof_envelope_production_with_material,
+    verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment,
     verify_sccp_source_chain_proof_envelope_structure,
     verify_sccp_source_chain_proof_envelope_structure_with_material,
+    verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment,
 };
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -127,6 +139,103 @@ fn main() {
             "bundle.structure={}",
             verify_message_bundle_structure(&bundle)
         );
+        if let (Ok(material_path), Ok(deployment_path)) = (
+            std::env::var("SCCP_DEBUG_SOURCE_MATERIAL_JSON"),
+            std::env::var("SCCP_DEBUG_SOURCE_DEPLOYMENT_JSON"),
+        ) {
+            let material_text =
+                std::fs::read_to_string(material_path).expect("read source material json");
+            let deployment_text =
+                std::fs::read_to_string(deployment_path).expect("read source deployment json");
+            let material: SccpSourceVerifierMaterialV1 =
+                norito::json::from_str(&material_text).expect("decode source material json");
+            let deployment: SccpSourceAdapterEngineDeploymentV1 =
+                norito::json::from_str(&deployment_text).expect("decode source deployment json");
+            println!(
+                "debug.material.hash={}",
+                hex_encode(&sccp_source_verifier_material_hash(&material))
+            );
+            println!(
+                "debug.deployment.hash={}",
+                hex_encode(&sccp_source_adapter_engine_deployment_hash(&deployment))
+            );
+            println!(
+                "debug.deployment.matches_material={}",
+                sccp_source_adapter_engine_deployment_matches_material(&material, &deployment)
+            );
+            println!(
+                "debug.ready.material_deployment={}",
+                sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                    material.source_domain,
+                    &material,
+                    &deployment,
+                )
+            );
+            println!(
+                "debug.source_proof.matches_deployment={}",
+                sccp_source_chain_proof_matches_adapter_deployment(&source_proof, &deployment)
+            );
+            println!(
+                "debug.source_proof.structure.material_deployment={}",
+                verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
+                    &source_proof,
+                    &material,
+                    &deployment,
+                )
+            );
+            println!(
+                "debug.source_proof.production.material_deployment={}",
+                verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+                    &source_proof,
+                    &material,
+                    &deployment,
+                )
+            );
+            println!(
+                "debug.bundle.structure.material_deployment={}",
+                verify_message_bundle_structure_with_source_verifier_material_and_deployment(
+                    &bundle,
+                    &material,
+                    &deployment,
+                )
+            );
+            println!(
+                "debug.public_inputs.material_deployment={}",
+                sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment(
+                    &bundle,
+                    &material,
+                    &deployment,
+                )
+                .is_some()
+            );
+            println!(
+                "debug.production.bundle.material_deployment={}",
+                verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+                    &bundle,
+                    &material,
+                    &deployment,
+                )
+                .is_some()
+            );
+            let artifact =
+                build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+                    &bundle,
+                    &material,
+                    &deployment,
+                    true,
+                );
+            println!("debug.artifact.material_deployment={}", artifact.is_some());
+            if let Some(artifact) = artifact {
+                println!(
+                    "debug.artifact.verify_allow_unready_manifest={}",
+                    verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                        &artifact,
+                        &material,
+                        &deployment,
+                    )
+                );
+            }
+        }
         let material_from_bundle =
             sccp_source_verifier_material_from_message_bundle_evidence(&bundle);
         println!("material.from_bundle={}", material_from_bundle.is_some());
