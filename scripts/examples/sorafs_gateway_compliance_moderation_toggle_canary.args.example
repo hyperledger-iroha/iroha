@@ -8,6 +8,10 @@
 --bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --toggle-api-url https://gateway-compliance.internal/toggles
 --toggle-count 4
+--toggle provider-deny
+--toggle appeal-override
+--toggle legal-hold
+--toggle regional-emergency
 --toggle-digest-hex bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 --verified-claim iroha_config_bound
 --verified-claim operator_role_enforced

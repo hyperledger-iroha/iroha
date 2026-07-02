@@ -44,6 +44,7 @@ public enum KagemushaInstructionType: String, Equatable, Sendable {
 public enum KagemushaWireNames {
     public static let transferInstruction = "iroha_data_model::isi::offline::KagemushaTransfer"
     public static let redeemRecursiveInstruction = "iroha_data_model::isi::offline::RedeemKagemushaRecursive"
+    public static let recursiveTopUpRequest = "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1"
     public static let recursiveRedeemRequest = "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1"
 }
 
@@ -113,6 +114,39 @@ public struct KagemushaRecursiveRedeemTransactionRequest: Sendable {
     }
 }
 
+public struct KagemushaRecursiveTopUpTransactionRequest: Sendable {
+    public let chainId: String
+    public let authority: String
+    public let ttlMs: UInt64?
+    public let nonce: UInt32?
+    public let metadata: [String: ToriiJSONValue]
+    public let initRequestArchive: Data
+
+    public init(
+        chainId: String,
+        authority: String,
+        ttlMs: UInt64? = nil,
+        nonce: UInt32? = nil,
+        metadata: [String: ToriiJSONValue] = [:],
+        initRequestArchive: Data
+    ) {
+        self.chainId = chainId
+        self.authority = authority
+        self.ttlMs = ttlMs
+        self.nonce = nonce
+        self.metadata = metadata
+        self.initRequestArchive = initRequestArchive
+    }
+
+    public static func validateInputs(chainId: String, authority: String) throws {
+        _ = try TransactionInputValidator.validate(chainId: chainId, authorityId: authority)
+    }
+
+    public func validateInputs() throws {
+        try Self.validateInputs(chainId: chainId, authority: authority)
+    }
+}
+
 public enum KagemushaRecursiveRedeemRequestArchiveError: Error, Equatable, LocalizedError {
     case emptyRequestArchive
     case oversizedRequestArchive
@@ -129,6 +163,26 @@ public enum KagemushaRecursiveRedeemRequestArchiveError: Error, Equatable, Local
             return "Kagemusha recursive redeem request archive must be a valid Norito archive."
         case .unsupportedRequestArchiveType:
             return "Kagemusha recursive redeem request archive type is not supported by ABI-7 admission."
+        }
+    }
+}
+
+public enum KagemushaRecursiveTopUpRequestArchiveError: Error, Equatable, LocalizedError {
+    case emptyRequestArchive
+    case oversizedRequestArchive
+    case invalidRequestArchive
+    case unsupportedRequestArchiveType
+
+    public var errorDescription: String? {
+        switch self {
+        case .emptyRequestArchive:
+            return "Kagemusha recursive top-up init request archive must not be empty."
+        case .oversizedRequestArchive:
+            return "Kagemusha recursive top-up init request archive must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes."
+        case .invalidRequestArchive:
+            return "Kagemusha recursive top-up init request archive must be a valid Norito archive."
+        case .unsupportedRequestArchiveType:
+            return "Kagemusha recursive top-up init request archive type is not supported by ABI-15 admission."
         }
     }
 }
@@ -179,6 +233,41 @@ enum KagemushaInstructionTransactionEncoder {
         guard instructionType == .redeemRecursive else {
             throw KagemushaInstructionTransactionError.unexpectedInstructionArchiveType(
                 expected: .redeemRecursive,
+                actual: instructionType
+            )
+        }
+        let instructionPayload = encodeInstructionBox(
+            wireName: instructionType.wireName,
+            instructionArchive: instructionArchive
+        )
+        return try encodeTransaction(
+            chainId: ids.chainId,
+            authority: ids.authorityId,
+            creationTimeMs: creationTimeMs,
+            ttlMs: request.ttlMs,
+            nonce: request.nonce,
+            instructionPayload: instructionPayload,
+            metadata: request.metadata,
+            signingKey: signingKey
+        )
+    }
+
+    static func encodeRecursiveTopUp(
+        request: KagemushaRecursiveTopUpTransactionRequest,
+        signingKey: SigningKey,
+        creationTimeMs: UInt64,
+        topUp: (Data) throws -> Data = { try KagemushaRecursiveSpendProver.topUpSpend(requestArchive: $0) }
+    ) throws -> SignedTransactionEnvelope {
+        let ids = try TransactionInputValidator.validate(
+            chainId: request.chainId,
+            authorityId: request.authority
+        )
+        try KagemushaRecursiveTopUpRequestArchive.validate(request.initRequestArchive)
+        let instructionArchive = try topUp(request.initRequestArchive)
+        let instructionType = try validateInstructionArchive(instructionArchive)
+        guard instructionType == .transfer else {
+            throw KagemushaInstructionTransactionError.unexpectedInstructionArchiveType(
+                expected: .transfer,
                 actual: instructionType
             )
         }
@@ -337,6 +426,31 @@ public enum KagemushaRecursiveRedeemRequestArchive {
     }
 }
 
+public enum KagemushaRecursiveTopUpRequestArchive {
+    public static let typeName = "KagemushaRecursiveSpendInitRequestV1"
+    public static let schemaName = KagemushaWireNames.recursiveTopUpRequest
+
+    public static func validate(_ archive: Data) throws {
+        guard !archive.isEmpty else {
+            throw KagemushaRecursiveTopUpRequestArchiveError.emptyRequestArchive
+        }
+        guard archive.count <= KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes else {
+            throw KagemushaRecursiveTopUpRequestArchiveError.oversizedRequestArchive
+        }
+        guard let frame = noritoDecodeFrame(archive),
+              frame.header.compression == .none,
+              frame.paddingLength <= KagemushaInstructionTransactionEncoder.maxNoritoHeaderPaddingBytes else {
+            throw KagemushaRecursiveTopUpRequestArchiveError.invalidRequestArchive
+        }
+        guard noritoSchemaHash(forTypeName: schemaName) == frame.header.schema else {
+            throw KagemushaRecursiveTopUpRequestArchiveError.unsupportedRequestArchiveType
+        }
+        guard !frame.payload.isEmpty else {
+            throw KagemushaRecursiveTopUpRequestArchiveError.invalidRequestArchive
+        }
+    }
+}
+
 extension SwiftTransactionEncoder {
     static func encodeKagemushaInstruction(
         request: KagemushaInstructionTransactionRequest,
@@ -389,6 +503,33 @@ extension SwiftTransactionEncoder {
             redeem: redeem
         )
     }
+
+    static func encodeKagemushaRecursiveTopUp(
+        request: KagemushaRecursiveTopUpTransactionRequest,
+        keypair: Keypair,
+        creationTimeMs: UInt64
+    ) throws -> SignedTransactionEnvelope {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try encodeKagemushaRecursiveTopUp(
+            request: request,
+            signingKey: signingKey,
+            creationTimeMs: creationTimeMs
+        )
+    }
+
+    static func encodeKagemushaRecursiveTopUp(
+        request: KagemushaRecursiveTopUpTransactionRequest,
+        signingKey: SigningKey,
+        creationTimeMs: UInt64,
+        topUp: (Data) throws -> Data = { try KagemushaRecursiveSpendProver.topUpSpend(requestArchive: $0) }
+    ) throws -> SignedTransactionEnvelope {
+        try KagemushaInstructionTransactionEncoder.encodeRecursiveTopUp(
+            request: request,
+            signingKey: signingKey,
+            creationTimeMs: creationTimeMs,
+            topUp: topUp
+        )
+    }
 }
 
 public extension IrohaSDK {
@@ -430,6 +571,28 @@ public extension IrohaSDK {
         signingKey: SigningKey
     ) throws -> SignedTransactionEnvelope {
         try SwiftTransactionEncoder.encodeKagemushaRecursiveRedeem(
+            request: request,
+            signingKey: signingKey,
+            creationTimeMs: creationTimeProvider()
+        )
+    }
+
+    func buildKagemushaRecursiveTopUp(
+        request: KagemushaRecursiveTopUpTransactionRequest,
+        keypair: Keypair
+    ) throws -> SignedTransactionEnvelope {
+        try SwiftTransactionEncoder.encodeKagemushaRecursiveTopUp(
+            request: request,
+            keypair: keypair,
+            creationTimeMs: creationTimeProvider()
+        )
+    }
+
+    func buildKagemushaRecursiveTopUp(
+        request: KagemushaRecursiveTopUpTransactionRequest,
+        signingKey: SigningKey
+    ) throws -> SignedTransactionEnvelope {
+        try SwiftTransactionEncoder.encodeKagemushaRecursiveTopUp(
             request: request,
             signingKey: signingKey,
             creationTimeMs: creationTimeProvider()

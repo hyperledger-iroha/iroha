@@ -7620,9 +7620,9 @@ pub struct Metrics {
     pub nexus_config_diff_total: IntCounterVec,
     /// Number of Nexus lane catalog entries configured on this node.
     pub nexus_lane_configured_total: GenericGauge<AtomicU64>,
-    /// Placeholder lane identifier recorded during single-lane operation
+    /// Latest Nexus lane identifier recorded for legacy lane-context gauges.
     pub nexus_lane_id_placeholder: GenericGauge<AtomicU64>,
-    /// Placeholder data-space identifier recorded during single-lane operation
+    /// Latest Nexus dataspace identifier recorded for legacy lane-context gauges.
     pub nexus_dataspace_id_placeholder: GenericGauge<AtomicU64>,
     /// Nexus: per-lane governance seal status (1 = sealed, 0 = ready).
     pub nexus_lane_governance_sealed: GenericGaugeVec<AtomicU64>,
@@ -11984,12 +11984,12 @@ impl Default for Metrics {
         .expect("Infallible");
         let nexus_lane_id_placeholder = GenericGauge::new(
             "nexus_lane_id_placeholder",
-            "Placeholder lane identifier while nexus routing is in single-lane mode",
+            "Latest Nexus lane identifier recorded for legacy lane-context gauges",
         )
         .expect("Infallible");
         let nexus_dataspace_id_placeholder = GenericGauge::new(
             "nexus_dataspace_id_placeholder",
-            "Placeholder data-space identifier while nexus routing is in single-lane mode",
+            "Latest Nexus dataspace identifier recorded for legacy lane-context gauges",
         )
         .expect("Infallible");
         let nexus_config_diff_total = IntCounterVec::new(

@@ -122,6 +122,8 @@ def test_dry_run_prints_complete_gateway_load_rollout_plan(
         "policy_digest_hex"
         in plan["evidence_contract"]["staging_load"]["required_payload_fields"]
     )
+    assert "streams" in plan["evidence_contract"]["staging_load"]["required_payload_fields"]
+    assert "providers" in plan["evidence_contract"]["staging_load"]["required_payload_fields"]
     assert "metrics" in plan["evidence_contract"]["telemetry_slo"]["required_payload_fields"]
     assert (
         "http3_endpoint_committed"

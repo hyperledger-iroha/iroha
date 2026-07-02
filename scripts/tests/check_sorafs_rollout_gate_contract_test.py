@@ -8754,7 +8754,10 @@ def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "prints a dry-run command plan with the checker-backed `evidence_contract` map for the selected required kinds",
         "The checker exports those required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS` for downstream automation.",
+        "Issuer-bundle artifacts also bind `credential_count` to the unique canonical `credentials[].name` inventory and reject duplicate credential entries before promotion can report ready.",
         "Enrollment-portal artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
+        "Verifier-service artifacts also bind `proof_probe_count` to the unique canonical `probes[].name` inventory, require accepted and rejected proof counts to match the `probes[].accepted` partitions, and reject duplicate proof-probe entries before promotion can report ready.",
+        "Moderation-integration artifacts also bind `sortition_probe_count` and `commit_reveal_probe_count` to the unique canonical `sortition_probes[].name` and `commit_reveal_probes[].name` inventories and reject duplicate moderation-probe entries before promotion can report ready.",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -8773,11 +8776,55 @@ def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
     assert (
         "require_string_inventory_count_match(\n"
         "        payload,\n"
+        "        \"credentials\",\n"
+        "        \"credential_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"probes\",\n"
+        "        \"proof_probe_count\","
+    ) in checker
+    assert (
+        "accepted_valid_proof_count must match accepted probes count"
+        in checker
+    )
+    assert (
+        "rejected_invalid_proof_count must match rejected probes count"
+        in checker
+    )
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"sortition_probes\",\n"
+        "        \"sortition_probe_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"commit_reveal_probes\",\n"
+        "        \"commit_reveal_probe_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
         "        \"routes\",\n"
         "        \"route_count\","
     ) in checker
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
+    assert "test_issuer_credential_count_must_match_unique_credentials" in checker_test
+    assert "test_issuer_credentials_must_not_duplicate" in checker_test
+    assert "test_verifier_proof_probe_count_must_match_unique_probes" in checker_test
+    assert "test_verifier_probes_must_not_duplicate" in checker_test
+    assert "test_verifier_probe_partition_counts_must_match_probes" in checker_test
+    assert "test_moderation_sortition_probe_count_must_match_unique_probes" in checker_test
+    assert "test_moderation_sortition_probes_must_not_duplicate" in checker_test
+    assert (
+        "test_moderation_commit_reveal_probe_count_must_match_unique_probes"
+        in checker_test
+    )
+    assert "test_moderation_commit_reveal_probes_must_not_duplicate" in checker_test
     assert "test_enrollment_portal_route_count_must_match_unique_routes" in checker_test
     assert "test_enrollment_portal_routes_must_not_duplicate" in checker_test
 
@@ -8808,13 +8855,36 @@ def test_pop_credentials_canary_builder_is_checked_in() -> None:
     assert "holder_identities_included" in builder
     assert "raw_proofs_included" in builder
     assert "response_bodies_included" in builder
+    assert "--credential" in builder
+    assert "--accepted-proof-probe" in builder
+    assert "--rejected-proof-probe" in builder
+    assert "--sortition-probe" in builder
+    assert "--commit-reveal-probe" in builder
+    assert "validate_reviewed_inventory(" in builder
     assert "test_generated_canaries_pass_full_pop_gate" in builder_test
+    assert "test_issuer_credential_inventory_must_match_credential_count" in builder_test
+    assert "test_issuer_credential_inventory_must_not_duplicate" in builder_test
+    assert "test_verifier_accepted_probe_inventory_must_match_count" in builder_test
+    assert "test_verifier_rejected_probe_inventory_must_not_duplicate" in builder_test
+    assert "test_verifier_probe_inventories_must_not_overlap" in builder_test
+    assert "test_builds_payload_free_moderation_integration_canary" in builder_test
+    assert (
+        "test_moderation_sortition_probe_inventory_must_match_count"
+        in builder_test
+    )
+    assert (
+        "test_moderation_commit_reveal_probe_inventory_must_not_duplicate"
+        in builder_test
+    )
     assert "test_transcript_digest_privacy_backend_fails_before_write" in builder_test
     assert "test_output_symlink_is_rejected" in builder_test
     assert "--kind issuer_bundle" in issuer_example
+    assert "--credential credential-02" in issuer_example
     assert "--verified-claim issuer_key_policy_verified" in issuer_example
     assert "--kind verifier_service" in verifier_example
     assert "--route proof_verify" in verifier_example
+    assert "--accepted-proof-probe valid-proof-00" in verifier_example
+    assert "--rejected-proof-probe invalid-proof-02" in verifier_example
     assert "--policy-digest-hex" in verifier_example
     assert "build_sorafs_pop_credentials_canary.py" in docs
     assert "payload-free SFM-4b1 PoP credential canary builder" in docs
@@ -8995,7 +9065,10 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
         "its dry-run JSON includes the checker-backed `evidence_contract` map with the schema and required payload fields for every SFM-4a evidence kind, and the runner validates the schema-closed collection plan, external evidence map, evidence contract, and command steps before dry-run output or live canaries.",
         "It also rejects duplicate or unsupported `--source-entry` kinds before dry-run output or live canaries.",
         "cross-artifact runner/workflow binding failures are reflected on the offending artifacts in the emitted summary.",
+        "Committee artifacts also bind `result_count` to the unique canonical `results[].name` inventory and reject duplicate committee-result entries before promotion can report ready.",
         "Operator workflow artifacts also bind `route_count` and `passed_route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
+        "Juror notification transport artifacts also bind `probe_count` and `accepted_count` to the unique canonical `probes[].delivery_id` inventory and reject duplicate notification delivery probes before promotion can report ready.",
+        "Transparency publication artifacts also bind `probe_count`, `passed_probe_count`, and `source_entry_probe_count` to the unique canonical `probes[].source_kind` inventory and reject duplicate source-entry probes before promotion can report ready.",
         "Commit/reveal executor artifacts also bind `artifact_count` and `passed_artifact_count` to the unique canonical `artifacts[].name` inventory and reject duplicate artifact entries before promotion can report ready.",
         "Governance DAG artifacts also bind `producer_count` to the unique canonical `producers[].name` inventory and reject duplicate producer entries before promotion can report ready.",
         "End-to-end workflow artifacts also bind `step_count` and `passed_step_count` to the unique canonical `steps[].name` inventory and reject duplicate workflow-step entries before promotion can report ready.",
@@ -9017,12 +9090,20 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     assert '        "artifact_count",' in checker
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
+    assert '        "results",' in checker
     assert '        "passed_route_count",' in checker
+    assert "test_committee_result_count_must_match_unique_results" in checker_test
+    assert "test_committee_results_must_not_duplicate" in checker_test
     assert "test_operator_route_count_must_match_unique_routes" in checker_test
     assert "test_operator_passed_route_count_must_match_route_count" in checker_test
     assert "test_operator_routes_must_not_duplicate" in checker_test
+    assert "test_notification_probe_count_must_match_unique_deliveries" in checker_test
+    assert "test_notification_probes_must_not_duplicate_delivery_id" in checker_test
     assert "test_executor_artifact_count_must_match_unique_artifacts" in checker_test
     assert "test_executor_artifacts_must_not_duplicate" in checker_test
+    assert "test_transparency_probe_count_must_match_unique_source_kinds" in checker_test
+    assert "test_transparency_probes_must_not_duplicate_source_kind" in checker_test
+    assert "test_transparency_source_entry_probe_count_must_match_probe_count" in checker_test
     assert "test_governance_producer_count_must_match_unique_producers" in checker_test
     assert "test_governance_producers_must_not_duplicate" in checker_test
     assert "test_e2e_step_count_must_match_unique_steps" in checker_test
@@ -9041,8 +9122,10 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_TRANSPARENCY_SOURCE_KINDS" in builder
     assert "REQUIRED_GOVERNANCE_PRODUCERS" in builder
     assert "REQUIRED_E2E_STEPS" in builder
+    assert '"results": [{"name": name} for name in args.committee_results]' in builder
     assert '"passed_route_count": len(routes)' in builder
     assert "test_generated_canaries_pass_full_ai_prescreen_gate" in builder_tests
+    assert "test_committee_result_inventory_must_match_result_count" in builder_tests
     assert "test_operator_workflow_canary_records_passed_route_count" in builder_tests
     assert "scripts/build_sorafs_ai_prescreen_canary.py" in plan
     assert "scripts/build_sorafs_ai_prescreen_canary.py" in roadmap
@@ -9140,7 +9223,15 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
         "runner dry-run emits the checker-backed `evidence_contract` map listing each selected evidence kind's schema and required payload fields.",
         "Every recognized rollout artifact must also carry reviewed `deployment_id` and `environment` context",
         "blocks mixed reviewed deployment contexts across the same rollout bundle.",
+        "Appeal-intake artifacts also bind `case_count` to the unique canonical `cases[].name` inventory, require `accepted_case_count` to match the `cases[].accepted` partition, and reject duplicate case entries before promotion can report ready.",
+        "Sortition-roster artifacts also bind `panel_size` to the unique canonical `jurors[].name` inventory, require `panel_size` to match the `jurors[].eligible` partition, and reject duplicate roster juror entries before promotion can report ready.",
         "Appeal-intake, operator-workflow, commit/reveal, and decision-publication artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
+        "Evidence-viewer artifacts also bind `session_count` to the unique canonical `sessions[].name` inventory, require `attested_session_count` and `logged_session_count` to match the `sessions[].attested` and `sessions[].logged` partitions, and reject duplicate session entries before promotion can report ready.",
+        "Juror-notification artifacts also bind `notification_count` and `juror_count` to the unique canonical `notifications[].name` and `jurors[].name` inventories, require `delivered_notification_count` to match the `notifications[].delivered` partition, and reject duplicate notification or juror entries before promotion can report ready.",
+        "Commit/reveal artifacts also bind `commit_count` and `reveal_count` to the unique canonical `commits[].name` and `reveals[].name` inventories, reject duplicate commit or reveal entries, and reject reveal totals above the reviewed commit total before promotion can report ready.",
+        "Settlement-integration artifacts also bind `settlement_count` to the unique canonical `settlements[].name` inventory and reject duplicate settlement entries before promotion can report ready.",
+        "End-to-end panel artifacts also bind `peer_count` and `validator_count` to the unique canonical `peers[].name` and `validators[].name` inventories and reject duplicate peer or validator entries before promotion can report ready.",
+        "End-to-end panel artifacts also bind `case_count` to the unique canonical `cases[].name` inventory, require `case_count` to match the `cases[].passed` partition, and reject duplicate end-to-end case entries before promotion can report ready.",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -9165,6 +9256,137 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
     ) in checker
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"cases\",\n"
+        "        \"case_count\","
+    ) in checker
+    assert "accepted_case_count must match accepted cases count" in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"jurors\",\n"
+        "        \"panel_size\","
+    ) in checker
+    assert "panel_size must match eligible jurors count" in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"sessions\",\n"
+        "        \"session_count\","
+    ) in checker
+    assert "attested_session_count must match attested sessions count" in checker
+    assert "logged_session_count must match logged sessions count" in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"notifications\",\n"
+        "        \"notification_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"jurors\",\n"
+        "        \"juror_count\","
+    ) in checker
+    assert (
+        "delivered_notification_count must match delivered notifications count"
+        in checker
+    )
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"commits\",\n"
+        "        \"commit_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"reveals\",\n"
+        "        \"reveal_count\","
+    ) in checker
+    assert "reveal_count must be <= commit_count" in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"settlements\",\n"
+        "        \"settlement_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"peers\",\n"
+        "        \"peer_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"validators\",\n"
+        "        \"validator_count\","
+    ) in checker
+    assert "case_count must match passed cases count" in checker
+    assert "test_evidence_viewer_session_count_must_match_unique_sessions" in checker_test
+    assert "test_evidence_viewer_sessions_must_not_duplicate" in checker_test
+    assert (
+        "test_evidence_viewer_logged_session_count_must_match_inventory"
+        in checker_test
+    )
+    assert (
+        "test_juror_notification_count_must_match_unique_notifications"
+        in checker_test
+    )
+    assert "test_juror_notifications_must_not_duplicate" in checker_test
+    assert "test_delivered_notification_count_must_match_inventory" in checker_test
+    assert "test_juror_count_must_match_unique_jurors" in checker_test
+    assert "test_jurors_must_not_duplicate" in checker_test
+    assert (
+        "test_commit_reveal_commit_count_must_match_unique_commits"
+        in checker_test
+    )
+    assert "test_commit_reveal_commits_must_not_duplicate" in checker_test
+    assert (
+        "test_commit_reveal_reveal_count_must_match_unique_reveals"
+        in checker_test
+    )
+    assert "test_commit_reveal_reveals_must_not_duplicate" in checker_test
+    assert (
+        "test_commit_reveal_reveal_count_must_not_exceed_commit_count"
+        in checker_test
+    )
+    assert (
+        "test_settlement_integration_count_must_match_unique_settlements"
+        in checker_test
+    )
+    assert (
+        "test_settlement_integration_settlements_must_not_duplicate"
+        in checker_test
+    )
+    assert "test_appeal_intake_case_count_must_match_unique_cases" in checker_test
+    assert "test_appeal_intake_cases_must_not_duplicate" in checker_test
+    assert (
+        "test_appeal_intake_accepted_case_count_must_match_inventory"
+        in checker_test
+    )
+    assert "test_appeal_intake_case_acceptance_must_be_boolean" in checker_test
+    assert (
+        "test_sortition_roster_panel_size_must_match_unique_jurors"
+        in checker_test
+    )
+    assert "test_sortition_roster_jurors_must_not_duplicate" in checker_test
+    assert (
+        "test_sortition_roster_eligible_juror_count_must_match_inventory"
+        in checker_test
+    )
+    assert "test_sortition_roster_juror_eligibility_must_be_boolean" in checker_test
+    assert "test_e2e_peer_count_must_match_unique_peers" in checker_test
+    assert "test_e2e_peers_must_not_duplicate" in checker_test
+    assert "test_e2e_validator_count_must_match_unique_validators" in checker_test
+    assert "test_e2e_validators_must_not_duplicate" in checker_test
+    assert "test_e2e_case_count_must_match_unique_cases" in checker_test
+    assert "test_e2e_cases_must_not_duplicate" in checker_test
+    assert "test_e2e_passed_case_count_must_match_inventory" in checker_test
+    assert "test_e2e_case_passed_must_be_boolean" in checker_test
     assert "test_route_count_must_match_unique_routes_for_route_artifacts" in checker_test
     assert "test_routes_must_not_duplicate_for_route_artifacts" in checker_test
 
@@ -9184,6 +9406,11 @@ def test_moderation_panel_canary_builder_is_checked_in() -> None:
         / "examples"
         / "sorafs_moderation_panel_commit_reveal_canary.args.example"
     )
+    e2e_example = read(
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_moderation_panel_e2e_canary.args.example"
+    )
     docs = read(SORAFS_MODERATION_PANEL_PLAN)
 
     assert "CANARY_KINDS = tuple(KIND_BY_NAME)" in builder
@@ -9201,13 +9428,82 @@ def test_moderation_panel_canary_builder_is_checked_in() -> None:
     assert "commit_payloads_included" in builder
     assert "signed_urls_included" in builder
     assert "watermark_secrets_included" in builder
+    assert "--case" in builder
+    assert "--roster-juror" in builder
+    assert "--viewer-session" in builder
+    assert "--notification" in builder
+    assert "--juror" in builder
+    assert "--commit" in builder
+    assert "--reveal" in builder
+    assert "--settlement" in builder
+    assert "--peer" in builder
+    assert "--validator" in builder
+    assert "--panel-case" in builder
+    assert "validate_reviewed_inventory(" in builder
     assert "test_generated_canaries_pass_full_moderation_panel_gate" in builder_test
+    assert "test_builds_payload_free_appeal_intake_canary" in builder_test
+    assert "test_appeal_intake_case_inventory_must_match_case_count" in builder_test
+    assert "test_appeal_intake_case_inventory_must_not_duplicate" in builder_test
+    assert "test_builds_payload_free_sortition_roster_canary" in builder_test
+    assert (
+        "test_sortition_roster_juror_inventory_must_match_panel_size"
+        in builder_test
+    )
+    assert "test_sortition_roster_juror_inventory_must_not_duplicate" in builder_test
+    assert "test_builds_payload_free_evidence_viewer_canary" in builder_test
+    assert (
+        "test_evidence_viewer_session_inventory_must_match_session_count"
+        in builder_test
+    )
+    assert "test_evidence_viewer_session_inventory_must_not_duplicate" in builder_test
+    assert "test_builds_payload_free_juror_notifications_canary" in builder_test
+    assert (
+        "test_juror_notification_inventory_must_match_notification_count"
+        in builder_test
+    )
+    assert "test_juror_notification_inventory_must_not_duplicate" in builder_test
+    assert "test_juror_inventory_must_match_juror_count" in builder_test
+    assert "test_juror_inventory_must_not_duplicate" in builder_test
+    assert (
+        "test_commit_reveal_commit_inventory_must_match_commit_count"
+        in builder_test
+    )
+    assert "test_commit_reveal_commit_inventory_must_not_duplicate" in builder_test
+    assert (
+        "test_commit_reveal_reveal_inventory_must_match_reveal_count"
+        in builder_test
+    )
+    assert "test_commit_reveal_reveal_inventory_must_not_duplicate" in builder_test
+    assert (
+        "test_commit_reveal_reveal_count_must_not_exceed_commit_count"
+        in builder_test
+    )
+    assert "test_builds_payload_free_settlement_integration_canary" in builder_test
+    assert (
+        "test_settlement_integration_inventory_must_match_settlement_count"
+        in builder_test
+    )
+    assert (
+        "test_settlement_integration_inventory_must_not_duplicate"
+        in builder_test
+    )
     assert "test_under_replicated_e2e_panel_fails_before_write" in builder_test
+    assert "test_e2e_panel_peer_inventory_must_match_peer_count" in builder_test
+    assert "test_e2e_panel_validator_inventory_must_match_validator_count" in builder_test
+    assert "test_e2e_panel_case_inventory_must_match_case_count" in builder_test
+    assert "test_e2e_panel_case_inventory_must_not_duplicate" in builder_test
     assert "test_output_symlink_is_rejected" in builder_test
     assert "--kind\nappeal_intake" in intake_example
     assert "--verified-claim\nappellant_auth_enforced" in intake_example
+    assert "--case\nappeal-case-01" in intake_example
     assert "--kind\ncommit_reveal" in commit_example
     assert "--verified-claim\nmismatched_reveal_rejected" in commit_example
+    assert "--commit\ncommit-06" in commit_example
+    assert "--reveal\nreveal-06" in commit_example
+    assert "--kind\ne2e_panel" in e2e_example
+    assert "--panel-case\npanel-case-01" in e2e_example
+    assert "--peer\npeer-03" in e2e_example
+    assert "--validator\nvalidator-03" in e2e_example
     assert "build_sorafs_moderation_panel_canary.py" in docs
     assert "payload-free SFM-4b moderation panel canary builder" in docs
 
@@ -9285,6 +9581,7 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "allowing dry-run collection plans and downstream automation to inspect the exact SFM-3 evidence contract before live collection.",
+        "Publish/latest snapshot, proof verification, metrics, and routing/incentive consumption artifacts must bind `provider_count` to the unique canonical `providers[].name` inventory and reject duplicate provider entries before promotion can report ready.",
         "Event-watch evidence must carry a positive `limit`, keep `count` equal to the `events[]` length, and reject `count` values above that limit before transport evidence can report ready.",
         "Its `--dry-run` output includes the checker-backed `evidence_contract` map for publish/latest, provider, events, verify, metrics, transport, and consumption artifacts, and the runner validates the schema-closed collection plan, external evidence map, evidence contract, and command steps before dry-run output or live collection.",
     )
@@ -9354,10 +9651,15 @@ def test_reputation_canary_builder_is_checked_in() -> None:
     assert "SNAPSHOT_ANCHOR_KINDS" in builder
     assert "SNAPSHOT_BOUND_KINDS" in builder
     assert "duplicate --sibling-hex" in builder
+    assert "def provider_rows(args: argparse.Namespace)" in builder
+    assert '"providers": provider_rows(args)' in builder
+    assert "--provider-count must match the number of unique --provider-name values" in builder
     assert "test_generated_canaries_pass_full_reputation_gate" in builder_tests
     assert "test_duplicate_provider_proof_sibling_fails_before_write" in builder_tests
+    assert "test_provider_inventory_must_match_count_before_write" in builder_tests
     assert "scripts/build_sorafs_reputation_canary.py" in docs
     assert "unique provider proof sibling hashes" in docs
+    assert "reviewed provider names whose unique inventory matches" in docs
     assert "scripts/build_sorafs_reputation_canary.py" in roadmap
     assert (
         SCRIPTS_DIR / "examples" / "sorafs_reputation_provider_canary.args.example"
@@ -9501,6 +9803,7 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "planner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
         "binding with per-artifact summary invalidation and dry-run export of the checker-backed evidence contract.",
+        "Randomness artifacts also bind `provider_count` to the unique canonical `providers[].name` inventory and reject duplicate provider entries before promotion can report ready.",
         "Scheduler-runtime and reporting/archive artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -9517,11 +9820,19 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
     assert (
         "require_string_inventory_count_match(\n"
         "        payload,\n"
+        "        \"providers\",\n"
+        "        \"provider_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
         "        \"routes\",\n"
         "        \"route_count\","
     ) in checker
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
+    assert "test_randomness_provider_count_must_match_unique_providers" in checker_test
+    assert "test_randomness_providers_must_not_duplicate" in checker_test
     assert "test_scheduler_runtime_route_count_must_match_unique_routes" in checker_test
     assert "test_scheduler_runtime_routes_must_not_duplicate" in checker_test
     assert "test_reporting_archive_route_count_must_match_unique_routes" in checker_test
@@ -9540,7 +9851,11 @@ def test_por_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_REPORTING_ROUTES" in builder
     assert "REQUIRED_METRICS" in builder
     assert "SEED_REPLAY_BOUND_KINDS" in builder
+    assert "--provider" in builder
+    assert "validate_reviewed_inventory(" in builder
     assert "test_generated_canaries_pass_full_por_gate" in builder_tests
+    assert "test_randomness_provider_inventory_must_match_provider_count" in builder_tests
+    assert "test_randomness_provider_inventory_must_not_duplicate" in builder_tests
     assert "scripts/build_sorafs_por_canary.py" in plan
     assert "scripts/build_sorafs_por_canary.py" in roadmap
     assert (
@@ -9643,6 +9958,7 @@ def test_potr_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "planner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
+        "Multi-provider probes bind `provider_count` to the unique canonical `providers[].name` inventory and `receipt_count` to the unique canonical `receipts[].name` inventory, rejecting duplicate provider or receipt labels before promotion.",
         "proof-stream `route_count` binding to the unique canonical `routes[].name` inventory, duplicate route rejection",
         "The collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before contacting live PoTR services.",
     )
@@ -9665,8 +9981,20 @@ def test_potr_docs_keep_rollout_contract_markers() -> None:
     ) in checker
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
+    assert (
+        "        \"providers\",\n"
+        "        \"provider_count\","
+    ) in checker
+    assert (
+        "        \"receipts\",\n"
+        "        \"receipt_count\","
+    ) in checker
     assert "test_proof_stream_route_count_must_match_unique_routes" in checker_test
     assert "test_proof_stream_routes_must_not_duplicate" in checker_test
+    assert "test_probe_provider_count_must_match_unique_providers" in checker_test
+    assert "test_probe_providers_must_not_duplicate" in checker_test
+    assert "test_probe_receipt_count_must_match_unique_receipts" in checker_test
+    assert "test_probe_receipts_must_not_duplicate" in checker_test
 
 
 def test_potr_canary_builder_is_checked_in() -> None:
@@ -9681,7 +10009,12 @@ def test_potr_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_ROUTES" in builder
     assert "REQUIRED_METRICS" in builder
     assert "RECEIPT_SUMMARY_BOUND_KINDS" in builder
+    assert "--provider" in builder
+    assert "--receipt" in builder
+    assert "validate_reviewed_inventory(" in builder
     assert "test_generated_canaries_pass_full_potr_gate" in builder_tests
+    assert "test_probe_provider_inventory_must_match_provider_count" in builder_tests
+    assert "test_probe_receipt_inventory_must_not_duplicate" in builder_tests
     assert "scripts/build_sorafs_potr_canary.py" in plan
     assert "scripts/build_sorafs_potr_canary.py" in roadmap
     assert (
@@ -9763,6 +10096,7 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "planner includes the checker-backed `evidence_contract` map in dry-run output for the selected required kinds, and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
+        "Auditor-roster artifacts also bind `auditor_count` to the unique canonical `auditors[].name` inventory and reject duplicate auditor entries before promotion can report ready.",
         "Signed auditor API, worker lifecycle, and event stream artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
         "Signed auditor API, worker lifecycle, and event stream artifacts must also keep `route_count` equal to the unique canonical `routes[].name` inventory and reject duplicate route entries.",
         "Its collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before touching live repair services.",
@@ -9784,11 +10118,22 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
     assert (
         "require_string_inventory_count_match(\n"
         "        payload,\n"
+        "        \"auditors\",\n"
+        "        \"auditor_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
         "        \"routes\",\n"
         "        \"route_count\","
     ) in checker
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
+    assert (
+        "test_auditor_roster_auditor_count_must_match_unique_auditors"
+        in checker_test
+    )
+    assert "test_auditor_roster_auditors_must_not_duplicate" in checker_test
     assert "test_route_count_must_match_unique_routes_for_route_artifacts" in checker_test
     assert "test_routes_must_not_duplicate_for_route_artifacts" in checker_test
 
@@ -9796,6 +10141,9 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
 def test_repair_canary_builder_is_checked_in() -> None:
     builder = read(SCRIPTS_DIR / "build_sorafs_repair_canary.py")
     builder_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_repair_canary_test.py")
+    auditor_roster_example = read(
+        SCRIPTS_DIR / "examples" / "sorafs_repair_auditor_roster_canary.args.example"
+    )
     docs = read(SORAFS_REPAIR_PLAN)
     roadmap = read(REPO_ROOT / "roadmap.md")
 
@@ -9807,7 +10155,13 @@ def test_repair_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_METRICS" in builder
     assert "ROSTER_BOUND_KINDS" in builder
     assert "FAILURE_BOUND_KINDS" in builder
+    assert "--auditor" in builder
+    assert "validate_reviewed_inventory(" in builder
     assert "test_generated_canaries_pass_full_repair_gate" in builder_tests
+    assert "test_auditor_roster_inventory_must_match_auditor_count" in builder_tests
+    assert "test_auditor_roster_inventory_must_not_duplicate" in builder_tests
+    assert "--auditor" in auditor_roster_example
+    assert "auditor-02" in auditor_roster_example
     assert "scripts/build_sorafs_repair_canary.py" in docs
     assert "scripts/build_sorafs_repair_canary.py" in roadmap
     assert (
@@ -10091,6 +10445,7 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
         "`policy_digest_hex` and `provider_roster_digest_hex`, valid PDP policy and provider-roster digests are published as `valid_policy_digests` and `valid_provider_roster_digests`",
         "governance approval evidence must bind its `policy_digest_hex` and `provider_roster_digest_hex` to the matching valid proof-generation digests.",
         "Provider-transport artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
+        "Proof-generation artifacts also bind `provider_count`, `challenge_count`, and `proof_count` to the unique canonical `providers[].name`, `challenges[].name`, and `proofs[].name` inventories and reject duplicate provider, challenge, or proof entries before promotion can report ready.",
         "Proof-summary mismatches are recorded on the offending artifact in the JSON summary before required-kind validity is reported.",
         "Policy and provider-roster mismatches are recorded on the offending governance approval artifact through the same summary path.",
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
@@ -10111,11 +10466,35 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
     assert (
         "require_string_inventory_count_match(\n"
         "        payload,\n"
+        "        \"providers\",\n"
+        "        \"provider_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"challenges\",\n"
+        "        \"challenge_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"proofs\",\n"
+        "        \"proof_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
         "        \"routes\",\n"
         "        \"route_count\","
     ) in checker
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
+    assert "test_proof_generation_provider_count_must_match_unique_providers" in checker_test
+    assert "test_proof_generation_providers_must_not_duplicate" in checker_test
+    assert "test_proof_generation_challenge_count_must_match_unique_challenges" in checker_test
+    assert "test_proof_generation_challenges_must_not_duplicate" in checker_test
+    assert "test_proof_generation_proof_count_must_match_unique_proofs" in checker_test
+    assert "test_proof_generation_proofs_must_not_duplicate" in checker_test
     assert "test_provider_transport_route_count_must_match_unique_routes" in checker_test
     assert "test_provider_transport_routes_must_not_duplicate" in checker_test
 
@@ -10131,7 +10510,14 @@ def test_pdp_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_ROUTES" in builder
     assert "REQUIRED_METRICS" in builder
     assert "PROOF_SUMMARY_BOUND_KINDS" in builder
+    assert "--provider" in builder
+    assert "--challenge" in builder
+    assert "--proof" in builder
+    assert "validate_reviewed_inventory(" in builder
     assert "test_generated_canaries_pass_full_pdp_gate" in builder_tests
+    assert "test_proof_generation_provider_inventory_must_match_provider_count" in builder_tests
+    assert "test_proof_generation_challenge_inventory_must_not_duplicate" in builder_tests
+    assert "test_proof_generation_proof_inventory_must_not_duplicate" in builder_tests
     assert "scripts/build_sorafs_pdp_canary.py" in plan
     assert "scripts/build_sorafs_pdp_canary.py" in roadmap
     assert (
@@ -10370,7 +10756,7 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
         "the runner dry-run emits the checker-backed `evidence_contract` map for selected SFM-2 evidence kinds.",
         "Matcher, settlement, API gateway, event stream, SDK release, observability, reconciliation, and governance approval artifacts must carry a `contract_digest_hex` that matches a valid contract-surface artifact",
         "API gateway artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
-        "Reconciliation artifacts also bind `source_count` to the unique canonical `sources[].name` inventory and reject duplicate source entries before promotion can report ready.",
+        "Reconciliation artifacts also bind `peer_count` and `source_count` to the unique canonical `peers[].name` and `sources[].name` inventories and reject duplicate peer or source entries before promotion can report ready.",
         "collection planner with dry-run evidence-contract export",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
@@ -10396,6 +10782,12 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
     assert (
         "require_string_inventory_count_match(\n"
         "        payload,\n"
+        "        \"peers\",\n"
+        "        \"peer_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
         "        \"sources\",\n"
         "        \"source_count\","
     ) in checker
@@ -10403,6 +10795,8 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
     assert "allow_scalar_items=False" in checker
     assert "test_api_gateway_route_count_must_match_unique_routes" in checker_test
     assert "test_api_gateway_routes_must_not_duplicate" in checker_test
+    assert "test_reconciliation_peer_count_must_match_unique_peers" in checker_test
+    assert "test_reconciliation_peers_must_not_duplicate" in checker_test
     assert "test_reconciliation_source_count_must_match_unique_sources" in checker_test
     assert "test_reconciliation_sources_must_not_duplicate" in checker_test
 
@@ -10415,6 +10809,9 @@ def test_orderbook_canary_builder_is_checked_in() -> None:
     )
     api_example = read(
         SCRIPTS_DIR / "examples" / "sorafs_orderbook_api_canary.args.example"
+    )
+    reconciliation_example = read(
+        SCRIPTS_DIR / "examples" / "sorafs_orderbook_reconciliation_canary.args.example"
     )
     docs = read(SORAFS_ORDERBOOK_PLAN)
 
@@ -10432,14 +10829,20 @@ def test_orderbook_canary_builder_is_checked_in() -> None:
     assert "raw_receipts_included" in builder
     assert "response_bodies_included" in builder
     assert "duplicate --artifact id" in builder
+    assert "--peer" in builder
+    assert "validate_reviewed_inventory(" in builder
     assert "test_generated_canaries_pass_full_orderbook_gate" in builder_test
     assert "test_duplicate_sdk_artifact_id_fails_closed_without_leaking" in builder_test
     assert "test_missing_api_route_coverage_fails_closed" in builder_test
+    assert "test_response_file_can_build_reconciliation_canary" in builder_test
+    assert "test_reconciliation_peer_inventory_must_match_peer_count" in builder_test
     assert "test_output_symlink_is_rejected" in builder_test
     assert "--kind contract_surface" in contract_example
     assert "--verified-claim capability_policy_configured" in contract_example
     assert "--kind api_gateway" in api_example
     assert "--route events_get" in api_example
+    assert "--kind reconciliation" in reconciliation_example
+    assert "--peer peer-03" in reconciliation_example
     assert "build_sorafs_orderbook_canary.py" in docs
     assert "payload-free SFM-2 orderbook canary builder" in docs
 
@@ -10509,8 +10912,10 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "the collection planner dry-run JSON includes the checker-backed `evidence_contract` map for selected required kinds",
         "Production promotion remains blocked unless the summary status is `ready`, including at least two distinct staged billing cycles whose reference-decision ids match a valid reference-price artifact in the same evidence bundle.",
+        "Feed-collector and reference-price artifacts also bind `feed_count` to the unique canonical `feeds[].name` inventory, require `accepted_feed_count` to equal `feed_count`, and reject duplicate feed entries before promotion can report ready.",
+        "Billing-cycle artifacts also bind `statement_count` to the unique canonical `statements[].name` inventory and `line_item_count` to the unique canonical `line_items[].name` inventory, rejecting duplicate statement or line-item entries before promotion can report ready.",
         "Statement-publication artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
-        "Reconciliation artifacts also bind `source_count` to the unique canonical `sources[].name` inventory and reject duplicate source entries before promotion can report ready.",
+        "Reconciliation artifacts also bind `source_count` to the unique canonical `sources[].name` inventory and `line_item_count` to the unique canonical `line_items[].name` inventory, rejecting duplicate source or line-item entries before promotion can report ready.",
         "Native-bridge release artifacts also bind `artifact_count` to the unique canonical `artifacts[].id` inventory and reject duplicate artifact entries before promotion can report ready.",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
@@ -10525,6 +10930,25 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
     assert missing_current == {}
     checker = read(SCRIPTS_DIR / "check_sorafs_hedging_rollout_evidence.py")
     checker_test = read(SCRIPTS_DIR / "tests" / "check_sorafs_hedging_rollout_evidence_test.py")
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"feeds\",\n"
+        "        \"feed_count\","
+    ) in checker
+    assert 'require_count_equal(payload, "feed_count", "accepted_feed_count", errors)' in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"statements\",\n"
+        "        \"statement_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"line_items\",\n"
+        "        \"line_item_count\","
+    ) in checker
     assert (
         "require_string_inventory_count_match(\n"
         "        payload,\n"
@@ -10545,10 +10969,21 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
     ) in checker
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
+    assert "test_feed_collector_feed_count_must_match_unique_feeds" in checker_test
+    assert "test_feed_collector_feeds_must_not_duplicate" in checker_test
+    assert "test_reference_price_feed_count_must_match_unique_feeds" in checker_test
+    assert "test_reference_price_feeds_must_not_duplicate" in checker_test
+    assert "test_reference_price_accepted_feed_count_must_equal_feed_count" in checker_test
+    assert "test_billing_cycle_statement_count_must_match_unique_statements" in checker_test
+    assert "test_billing_cycle_statements_must_not_duplicate" in checker_test
+    assert "test_billing_cycle_line_item_count_must_match_unique_line_items" in checker_test
+    assert "test_billing_cycle_line_items_must_not_duplicate" in checker_test
     assert "test_statement_publication_route_count_must_match_unique_routes" in checker_test
     assert "test_statement_publication_routes_must_not_duplicate" in checker_test
     assert "test_reconciliation_source_count_must_match_unique_sources" in checker_test
     assert "test_reconciliation_sources_must_not_duplicate" in checker_test
+    assert "test_reconciliation_line_item_count_must_match_unique_line_items" in checker_test
+    assert "test_reconciliation_line_items_must_not_duplicate" in checker_test
     assert "test_native_bridge_artifact_count_must_match_unique_artifacts" in checker_test
     assert "test_native_bridge_artifacts_must_not_duplicate" in checker_test
 
@@ -10578,7 +11013,28 @@ def test_hedging_canary_builder_is_checked_in() -> None:
     assert "response_bodies_included" in builder
     assert "debug_artifacts" in builder
     assert "duplicate --artifact id" in builder
+    assert "--feed" in builder
+    assert "--statement" in builder
+    assert "--line-item" in builder
+    assert "validate_reviewed_inventory(" in builder
     assert "test_generated_canaries_pass_full_hedging_gate" in builder_test
+    assert "test_reference_price_feed_inventory_must_match_feed_count" in builder_test
+    assert "test_reference_price_feed_inventory_must_not_duplicate" in builder_test
+    assert (
+        "test_billing_cycle_statement_inventory_must_match_statement_digests"
+        in builder_test
+    )
+    assert "test_billing_cycle_statement_inventory_must_not_duplicate" in builder_test
+    assert (
+        "test_billing_cycle_line_item_inventory_must_match_line_item_count"
+        in builder_test
+    )
+    assert "test_billing_cycle_line_item_inventory_must_not_duplicate" in builder_test
+    assert (
+        "test_reconciliation_line_item_inventory_must_match_line_item_count"
+        in builder_test
+    )
+    assert "test_reconciliation_line_item_inventory_must_not_duplicate" in builder_test
     assert (
         "test_duplicate_native_bridge_artifact_id_fails_closed_without_leaking"
         in builder_test
@@ -10586,8 +11042,11 @@ def test_hedging_canary_builder_is_checked_in() -> None:
     assert "test_hedge_execution_enabled_requires_governance_before_write" in builder_test
     assert "test_output_symlink_is_rejected" in builder_test
     assert "--kind reference_price" in reference_example
+    assert "--feed feed-tertiary" in reference_example
     assert "--verified-claim signed_payload_verified" in reference_example
     assert "--kind billing_cycle" in billing_example
+    assert "--statement statement-01" in billing_example
+    assert "--line-item line-04" in billing_example
     assert "--verified-claim acknowledgement_required" in billing_example
     assert "build_sorafs_hedging_canary.py" in docs
     assert "payload-free SFM-5 hedging/billing canary builder" in docs
@@ -10716,10 +11175,13 @@ def test_evidence_viewer_canary_builder_is_checked_in() -> None:
     assert "session_tokens_included" in builder
     assert "signed_urls_included" in builder
     assert "watermark_secrets_included" in builder
+    assert "--viewer-session" in builder
     assert "test_generated_canary_passes_existing_evidence_viewer_gate" in builder_test
+    assert "test_duplicate_session_inventory_fails_before_write" in builder_test
     assert "test_missing_verified_claim_fails_closed" in builder_test
     assert "test_output_symlink_is_rejected" in builder_test
     assert "--verified-claim legal_hold_policy_bound" in example
+    assert "--viewer-session viewer-session-02" in example
     assert "--session-manifest-digest-hex" in example
     assert "build_sorafs_evidence_viewer_canary.py" in docs
     assert "payload-free `evidence_viewer` canary builder" in docs
@@ -10831,7 +11293,7 @@ def test_appeal_finance_live_dashboard_and_reconciliation_stay_open_in_docs() ->
         "Deposit custody uses the returned native `OpenAssetLock` instruction, which the authenticated payer must sign and submit through the normal transaction path",
         "The checker recognizes `sorafs.appeal_finance.*` SFM-4b2 rollout schemas for pricing config, quote APIs, deposit lifecycle, settlement execution, settlement submitter, moderation worker, Governance DAG publication, dashboard metrics, multi-peer reconciliation, and governance approval.",
         "It reports `ready` only when every required kind is present",
-        "the multi-peer reconciliation run covers at least four peers",
+        "The multi-peer reconciliation run covers at least four peers",
         "Capture hosted live/public dashboard and alert evidence that passes the SFM-4b2 rollout gate once the public Governance DAG and ledger reconciliation paths are deployed.",
         "Capture end-to-end evidence that covers quote creation, deposit posting, decision ingestion, settlement submission, disbursement, and treasury reconciliation against a multi-peer runtime ledger with at least four peers",
     )
@@ -10852,6 +11314,12 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
         "The checker also exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "`evidence_contract` map for the selected required kinds",
         "Quote API, deposit lifecycle, and settlement execution artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
+        "Deposit-lifecycle artifacts also bind `deposit_probe_count` to the unique canonical `deposit_probes[].name` inventory, require `confirmed_deposit_count` to match the `deposit_probes[].confirmed` partition, and reject duplicate deposit-probe entries before promotion can report ready.",
+        "Quote API artifacts also bind `quote_count` and `passed_quote_count` to the product of unique `classes` and `urgencies` inventories and reject duplicate quote dimension entries before promotion can report ready.",
+        "Settlement execution artifacts also bind `settlement_probe_count` to the unique `outcomes` inventory and reject duplicate outcome or reconciliation-status entries before promotion can report ready.",
+        "Settlement-submitter artifacts also bind `configured_signer_count` to the unique canonical `signers[].name` inventory, bind `queued_step_count` to the unique canonical `steps[].name` inventory, require `submitted_step_count` to match the `steps[].submitted` partition, and reject duplicate signer or submitter-step entries before promotion can report ready.",
+        "Governance-DAG publication artifacts also bind `report_count`, `weekly_rollup_count`, and `settlement_receipt_count` to the unique canonical `reports[].name`, `weekly_rollups[].name`, and `settlement_receipts[].name` inventories and reject duplicate publication entries before promotion can report ready.",
+        "Multi-peer reconciliation artifacts also bind `peer_count`, `validator_count`, and `case_count` to the unique canonical `peers[].name`, `validators[].name`, and `cases[].name` inventories, require `case_count` to match the `cases[].reconciled` partition, and reject duplicate peer, validator, or case entries before promotion can report ready.",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     stale: dict[str, list[str]] = {}
@@ -10881,6 +11349,110 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
     ) in checker
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"peers\",\n"
+        "        \"peer_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"validators\",\n"
+        "        \"validator_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"cases\",\n"
+        "        \"case_count\","
+    ) in checker
+    assert "case_count must match reconciled cases count" in checker
+    assert "def unique_scalar_inventory_count(" in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"deposit_probes\",\n"
+        "        \"deposit_probe_count\","
+    ) in checker
+    assert (
+        "confirmed_deposit_count must match confirmed deposit probes count"
+        in checker
+    )
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"signers\",\n"
+        "        \"configured_signer_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"steps\",\n"
+        "        \"queued_step_count\","
+    ) in checker
+    assert "submitted_step_count must match submitted steps count" in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"reports\",\n"
+        "        \"report_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"weekly_rollups\",\n"
+        "        \"weekly_rollup_count\","
+    ) in checker
+    assert (
+        "require_string_inventory_count_match(\n"
+        "        payload,\n"
+        "        \"settlement_receipts\",\n"
+        "        \"settlement_receipt_count\","
+    ) in checker
+    assert "quote_count must equal unique classes * urgencies count" in checker
+    assert "test_deposit_probe_count_must_match_unique_probes" in checker_test
+    assert "test_deposit_probes_must_not_duplicate" in checker_test
+    assert "test_confirmed_deposit_count_must_match_probe_partition" in checker_test
+    assert "test_deposit_probe_confirmation_must_be_boolean" in checker_test
+    assert (
+        "test_settlement_submitter_signer_count_must_match_unique_signers"
+        in checker_test
+    )
+    assert "test_settlement_submitter_signers_must_not_duplicate" in checker_test
+    assert (
+        "test_settlement_submitter_queued_step_count_must_match_unique_steps"
+        in checker_test
+    )
+    assert "test_settlement_submitter_steps_must_not_duplicate" in checker_test
+    assert (
+        "test_settlement_submitter_submitted_step_count_must_match_partition"
+        in checker_test
+    )
+    assert "test_settlement_submitter_step_submission_must_be_boolean" in checker_test
+    assert "test_governance_dag_report_count_must_match_unique_reports" in checker_test
+    assert "test_governance_dag_reports_must_not_duplicate" in checker_test
+    assert (
+        "test_governance_dag_weekly_rollup_count_must_match_unique_rollups"
+        in checker_test
+    )
+    assert (
+        "test_governance_dag_settlement_receipt_count_must_match_unique_receipts"
+        in checker_test
+    )
+    assert "test_quote_api_classes_must_not_duplicate" in checker_test
+    assert "test_quote_api_quote_count_must_match_dimension_product" in checker_test
+    assert "test_settlement_outcomes_must_not_duplicate" in checker_test
+    assert "test_settlement_probe_count_must_match_unique_outcomes" in checker_test
+    assert "test_settlement_reconciliation_statuses_must_not_duplicate" in checker_test
+    assert "test_multi_peer_peer_count_must_match_unique_peers" in checker_test
+    assert "test_multi_peer_peers_must_not_duplicate" in checker_test
+    assert "test_multi_peer_validator_count_must_match_unique_validators" in checker_test
+    assert "test_multi_peer_validators_must_not_duplicate" in checker_test
+    assert "test_multi_peer_case_count_must_match_unique_cases" in checker_test
+    assert "test_multi_peer_cases_must_not_duplicate" in checker_test
+    assert "test_multi_peer_reconciled_case_count_must_match_inventory" in checker_test
+    assert "test_multi_peer_case_reconciled_must_be_boolean" in checker_test
     assert "test_route_count_must_match_unique_routes_for_route_artifacts" in checker_test
     assert "test_routes_must_not_duplicate_for_route_artifacts" in checker_test
 
@@ -10917,13 +11489,56 @@ def test_appeal_finance_canary_builder_is_checked_in() -> None:
     assert "signed_transaction_included" in builder
     assert "response_bodies_included" in builder
     assert "raw_ledger_included" in builder
+    assert "--peer" in builder
+    assert "--validator" in builder
+    assert "--reconciliation-case" in builder
+    assert "--confirmed-deposit-probe" in builder
+    assert "--unconfirmed-deposit-probe" in builder
+    assert "--signer" in builder
+    assert "--submitted-step" in builder
+    assert "--queued-only-step" in builder
+    assert "--report" in builder
+    assert "--weekly-rollup" in builder
+    assert "--settlement-receipt" in builder
+    assert "validate_reviewed_inventory(" in builder
     assert "test_generated_canaries_pass_full_appeal_finance_gate" in builder_test
+    assert "test_builds_payload_free_deposit_lifecycle_canary" in builder_test
+    assert "test_builds_payload_free_settlement_submitter_canary" in builder_test
+    assert (
+        "test_builds_payload_free_governance_dag_publication_canary"
+        in builder_test
+    )
+    assert "test_deposit_confirmed_probe_inventory_must_match_count" in builder_test
+    assert (
+        "test_deposit_unconfirmed_probe_inventory_is_required_for_unconfirmed_count"
+        in builder_test
+    )
+    assert "test_deposit_probe_inventories_must_not_overlap" in builder_test
+    assert "test_submitter_signer_inventory_must_match_count" in builder_test
+    assert "test_submitter_submitted_step_inventory_must_match_count" in builder_test
+    assert (
+        "test_submitter_queued_only_step_inventory_is_required_for_pending_steps"
+        in builder_test
+    )
+    assert "test_submitter_step_inventories_must_not_overlap" in builder_test
+    assert "test_governance_dag_report_inventory_must_match_count" in builder_test
+    assert "test_governance_dag_weekly_rollup_inventory_is_required" in builder_test
+    assert (
+        "test_governance_dag_settlement_receipt_inventory_must_not_duplicate"
+        in builder_test
+    )
     assert "test_under_replicated_multi_peer_run_fails_before_write" in builder_test
+    assert "test_multi_peer_peer_inventory_must_match_peer_count" in builder_test
+    assert "test_multi_peer_validator_inventory_must_match_validator_count" in builder_test
+    assert "test_multi_peer_case_inventory_must_match_case_count" in builder_test
     assert "test_output_symlink_is_rejected" in builder_test
     assert "--kind\npricing_config" in pricing_example
     assert "--verified-claim\npricing_config_present" in pricing_example
     assert "--kind\nmulti_peer_reconciliation" in reconciliation_example
     assert "--verified-claim\nqc_quorum_satisfied" in reconciliation_example
+    assert "--peer\npeer-03" in reconciliation_example
+    assert "--validator\nvalidator-03" in reconciliation_example
+    assert "--reconciliation-case\nappeal-finance-case-01" in reconciliation_example
     assert "build_sorafs_appeal_finance_canary.py" in docs
     assert "payload-free SFM-4b2 appeal finance canary builder" in docs
 
@@ -11195,7 +11810,12 @@ def test_gateway_compliance_docs_keep_rollout_contract_markers() -> None:
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "including a checker-backed `evidence_contract` map with the schema and required payload fields for each selected evidence kind.",
         "Controller, moderation-toggle, reload, enforcement, honey-audit, appeal, transparency, observability, and governance artifacts must carry the same `bundle_digest_hex` as a valid feed-promotion artifact",
+        "Feed-promotion artifacts also bind `gateway_ack_count` and `denylist_entry_count` to the unique canonical `gateways[].name` and `denylist_entries[].name` inventories and reject duplicate gateway acknowledgement or denylist-entry entries before promotion can report ready.",
+        "Controller-runtime artifacts also bind `external_feed_count`, `fetched_feed_count`, `normalized_feed_count`, and `signed_feed_count` to the unique canonical `feeds[].name` inventory and reject duplicate feed entries before promotion can report ready.",
+        "Moderation-toggle artifacts also bind `toggle_count` and `approved_toggle_count` to the unique canonical `toggles[].name` inventory and reject duplicate toggle entries before promotion can report ready.",
+        "Gateway-reload artifacts also bind `reload_ack_count` to the unique canonical `gateways[].name` inventory and reject duplicate gateway acknowledgement entries before promotion can report ready.",
         "Enforcement-probe artifacts also bind `route_count` and `passed_route_count` to the unique canonical `routes[].name` inventory and reject duplicate route entries before promotion can report ready.",
+        "Honey-audit artifacts also bind `honey_probe_count` to the unique canonical `probes[].name` inventory and reject duplicate probe entries before promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -11212,10 +11832,32 @@ def test_gateway_compliance_docs_keep_rollout_contract_markers() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_gateway_compliance_rollout_evidence_test.py"
     )
     assert "require_string_inventory_count_match" in checker
+    assert '        "feeds",' in checker
+    assert '        "toggles",' in checker
+    assert '        "gateways",' in checker
+    assert '        "gateway_ack_count",' in checker
+    assert '        "denylist_entries",' in checker
     assert '        "route_count",' in checker
     assert '        "passed_route_count",' in checker
+    assert '        "honey_probe_count",' in checker
+    assert '        "probes",' in checker
+    assert "test_controller_runtime_feed_count_must_match_unique_feeds" in checker_test
+    assert "test_controller_runtime_feeds_must_not_duplicate" in checker_test
+    assert "test_feed_promotion_ack_count_must_match_unique_gateways" in checker_test
+    assert "test_feed_promotion_gateways_must_not_duplicate" in checker_test
+    assert (
+        "test_feed_promotion_denylist_entry_count_must_match_unique_entries"
+        in checker_test
+    )
+    assert "test_feed_promotion_denylist_entries_must_not_duplicate" in checker_test
+    assert "test_moderation_toggle_count_must_match_unique_toggles" in checker_test
+    assert "test_moderation_toggle_toggles_must_not_duplicate" in checker_test
+    assert "test_gateway_reload_ack_count_must_match_unique_gateways" in checker_test
+    assert "test_gateway_reload_gateways_must_not_duplicate" in checker_test
     assert "test_enforcement_route_count_must_match_unique_routes" in checker_test
     assert "test_enforcement_routes_must_not_duplicate" in checker_test
+    assert "test_honey_audit_probe_count_must_match_unique_probes" in checker_test
+    assert "test_honey_audit_probes_must_not_duplicate" in checker_test
 
 
 def test_gateway_compliance_canary_builder_is_checked_in() -> None:
@@ -11245,12 +11887,20 @@ def test_gateway_compliance_canary_builder_is_checked_in() -> None:
     assert "\"config_source\": \"iroha_config\"" in builder
     assert "raw_feeds_included" in builder
     assert "raw_toggle_payloads_included" in builder
+    assert "validate_feed_names" in builder
+    assert "validate_toggle_names" in builder
     assert "test_generated_canaries_pass_gateway_gate_with_feed_promotion_anchor" in builder_test
+    assert "test_missing_controller_feed_inventory_fails_closed" in builder_test
+    assert "test_duplicate_controller_feed_inventory_fails_closed" in builder_test
+    assert "test_missing_moderation_toggle_inventory_fails_closed" in builder_test
+    assert "test_duplicate_moderation_toggle_inventory_fails_closed" in builder_test
     assert "test_missing_verified_claim_fails_closed" in builder_test
     assert "test_output_symlink_is_rejected" in builder_test
     assert "--kind controller_runtime" in controller_example
+    assert "--feed ofac" in controller_example
     assert "--verified-claim rollback_plan_verified" in controller_example
     assert "--kind moderation_toggle" in toggle_example
+    assert "--toggle provider-deny" in toggle_example
     assert "--verified-claim rollback_verified" in toggle_example
     assert "build_sorafs_gateway_compliance_canary.py" in docs
     assert "payload-free controller-runtime and moderation-toggle canary builder" in docs
@@ -11316,6 +11966,7 @@ def test_gateway_load_rollout_evidence_work_stays_open_in_docs() -> None:
         "`scripts/check_sorafs_gateway_load_rollout_evidence.py` validates payload-free local conformance, live staging load, telemetry/SLO, transport-scope, and governance approval evidence before SF-5a load promotion.",
         "`scripts/run_sorafs_gateway_load_rollout_evidence.py` emits the matching collection plan and dry-run evidence contract",
         "runner validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
+        "Staging-load artifacts must also keep `stream_count` and `provider_count` equal to the unique canonical `streams[].name` and `providers[].name` inventories, and duplicate stream or provider entries fail the artifact before promotion can report ready.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
@@ -11333,6 +11984,11 @@ def test_gateway_load_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_SCENARIOS" in builder
     assert "REQUIRED_METRICS" in builder
     assert "test_generated_canaries_pass_full_gateway_load_gate" in builder_tests
+    assert "validate_provider_names" in builder
+    assert "generated_stream_inventory" in builder
+    assert "--provider" in read(
+        SCRIPTS_DIR / "examples" / "sorafs_gateway_load_staging_canary.args.example"
+    )
     assert "scripts/build_sorafs_gateway_load_canary.py" in plan
     assert "scripts/build_sorafs_gateway_load_canary.py" in roadmap
     assert (
@@ -12195,6 +12851,7 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "the collection planner dry-run JSON includes the checker-backed `evidence_contract` map for selected required kinds",
         "provider-bake artifacts prove the config-backed reserve lifecycle scheduler canary ran recently enough before bake completion",
+        "quote-matrix artifacts bind `scenario_count` and `passed_scenario_count` to the product of unique `storage_classes`, `tiers`, and `durations` inventories and reject duplicate dimension entries before promotion can report ready",
         "lifecycle-service and signed-route artifacts bind `route_count` to the unique canonical `routes[].name` inventories and reject duplicate route entries before promotion can report ready",
         "reserve-movement artifacts prove live chain submission coverage, submitted transaction-hash readback, automatic finality polling",
         "governance approval artifacts prove source-entry publication, downstream compliance application, consumer coverage",
@@ -12222,6 +12879,10 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
     ) in checker
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
+    assert "def unique_scalar_inventory_count(" in checker
+    assert "scenario_count must equal unique storage_classes * tiers * " in checker
+    assert "test_quote_matrix_dimensions_must_not_duplicate" in checker_test
+    assert "test_quote_matrix_scenario_count_must_match_dimension_product" in checker_test
     assert "test_route_count_must_match_unique_routes_for_route_artifacts" in checker_test
     assert "test_routes_must_not_duplicate_for_route_artifacts" in checker_test
 

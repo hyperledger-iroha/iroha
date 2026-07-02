@@ -1,5 +1,10 @@
+target
+/target
 **/target
 .git
+.cache
+/.cache
+**/.cache
 .gradle
 .venv
 .pytest_cache
@@ -22,3 +27,9 @@ dist
 localnet-*
 target-*
 tmp
+IrohaSwift
+docs
+kotlin
+java
+javascript
+csharp

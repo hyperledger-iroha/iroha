@@ -155,6 +155,7 @@ javascript/iroha_js/target-cargo/
 python/norito_py/build/
 python/iroha_python/dist/
 python/iroha_python/src/iroha_python/*.so
+python/iroha_python/src/iroha_python/*.so.*
 scripts/__pycache__/
 
 # Swift Package Manager scratch artefacts

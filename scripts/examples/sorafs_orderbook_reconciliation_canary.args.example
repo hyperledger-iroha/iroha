@@ -1,0 +1,20 @@
+# Reviewed reconciliation canary inputs for the SFM-2 orderbook gate.
+--kind reconciliation
+--out artifacts/sorafs/orderbook/staged/reconciliation-canary.json
+--deployment-id sorafs-orderbook-prod-20260701
+--environment production
+--generated-at-unix 1800100000
+--now-unix 1800100000
+--contract-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--peer-count 4
+--peer peer-00
+--peer peer-01
+--peer peer-02
+--peer peer-03
+--source contract
+--source matcher
+--source torii-mirror
+--source settlement-service
+--source governance-dag
+--verified-claim contract_mirror_reconciliation_passed
+--verified-claim evidence_dag_published

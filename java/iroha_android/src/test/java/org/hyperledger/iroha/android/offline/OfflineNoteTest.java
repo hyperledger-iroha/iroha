@@ -3949,7 +3949,8 @@ public final class OfflineNoteTest {
         certificateJson,
         "device_proof.operation is not supported");
 
-    for (final String invalidPlatform : List.of("ios-appattest", "android-keymint ", "Android")) {
+    for (final String invalidPlatform :
+        List.of("ios-appattest", "android-keymint", "android-keymint ", "Android")) {
       proof = deviceProofJson();
       proof.put("platform", invalidPlatform);
       assertToriiIssuerClientRejectsDeviceProof(

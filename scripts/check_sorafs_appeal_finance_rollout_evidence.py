@@ -263,6 +263,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "passed_route_count",
         "routes",
         "deposit_probe_count",
+        "deposit_probes",
         "confirmed_deposit_count",
         "payer_auth_enforced",
         "participant_status_gate_enforced",
@@ -298,7 +299,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "settlement_submitter": COMMON_CANARY_REQUIRED_FIELDS
     + (
         "configured_signer_count",
+        "signers",
         "queued_step_count",
+        "steps",
         "submitted_step_count",
         "receipt_published",
         "required_authority_matched",
@@ -329,8 +332,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "governance_dag_publication": COMMON_CANARY_REQUIRED_FIELDS
     + (
         "report_count",
+        "reports",
         "weekly_rollup_count",
+        "weekly_rollups",
         "settlement_receipt_count",
+        "settlement_receipts",
         "payload_kinds",
         "publish_index_verified",
         "canonical_to_payloads_verified",
@@ -358,8 +364,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "multi_peer_reconciliation": COMMON_CANARY_REQUIRED_FIELDS
     + (
         "peer_count",
+        "peers",
         "validator_count",
+        "validators",
         "case_count",
+        "cases",
         "deposit_posted",
         "decision_ingested",
         "settlement_submitted",
@@ -516,6 +525,31 @@ def validate_pricing_config(
     require_false(payload, "response_bodies_included", errors)
 
 
+def unique_scalar_inventory_count(
+    payload: dict[str, Any],
+    field: str,
+    errors: list[str],
+) -> int:
+    """Return the unique scalar labels for a rollout inventory field."""
+
+    items = payload.get(field)
+    if not isinstance(items, list):
+        return 0
+    labels: list[str] = []
+    malformed = False
+    for item in items:
+        if not isinstance(item, str) or not item or item.strip() != item:
+            malformed = True
+            continue
+        labels.append(item)
+    if malformed:
+        return 0
+    unique_labels = set(labels)
+    if len(unique_labels) != len(labels):
+        errors.append(f"{field} must not contain duplicate values")
+    return len(unique_labels)
+
+
 def validate_quote_api(
     payload: dict[str, Any],
     errors: list[str],
@@ -530,9 +564,15 @@ def validate_quote_api(
     )
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
     validate_route_inventory(payload, REQUIRED_QUOTE_ROUTES, errors)
-    require_count_equal(payload, "quote_count", "passed_quote_count", errors)
+    quote_count = require_count_equal(payload, "quote_count", "passed_quote_count", errors)
     require_string_coverage(payload, "classes", "", REQUIRED_APPEAL_CLASSES, errors)
     require_string_coverage(payload, "urgencies", "", REQUIRED_URGENCIES, errors)
+    class_count = unique_scalar_inventory_count(payload, "classes", errors)
+    urgency_count = unique_scalar_inventory_count(payload, "urgencies", errors)
+    if quote_count and class_count and urgency_count:
+        expected_quotes = class_count * urgency_count
+        if quote_count != expected_quotes:
+            errors.append("quote_count must equal unique classes * urgencies count")
     require_bool_true(payload, "deterministic_replay_passed", errors)
     require_bool_true(payload, "deposit_bounds_enforced", errors)
     require_maximum_number(
@@ -566,8 +606,39 @@ def validate_deposit_lifecycle(
     )
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
     validate_route_inventory(payload, REQUIRED_DEPOSIT_ROUTES, errors)
-    require_positive_int(payload, "deposit_probe_count", errors)
-    require_positive_int(payload, "confirmed_deposit_count", errors)
+    deposit_probe_count = require_positive_int(payload, "deposit_probe_count", errors)
+    confirmed_deposit_count = require_positive_int(
+        payload, "confirmed_deposit_count", errors
+    )
+    require_string_inventory_count_match(
+        payload,
+        "deposit_probes",
+        "deposit_probe_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    confirmed_probe_count = 0
+    for index, record in require_object_array(payload, "deposit_probes", errors):
+        require_string(record, "name", errors)
+        confirmed = record.get("confirmed")
+        if not isinstance(confirmed, bool):
+            errors.append(f"deposit_probes[{index}].confirmed must be a boolean")
+        elif confirmed:
+            confirmed_probe_count += 1
+    if (
+        isinstance(deposit_probe_count, int)
+        and isinstance(confirmed_deposit_count, int)
+        and confirmed_deposit_count > deposit_probe_count
+    ):
+        errors.append("confirmed_deposit_count must be <= deposit_probe_count")
+    if (
+        isinstance(confirmed_deposit_count, int)
+        and confirmed_deposit_count != confirmed_probe_count
+    ):
+        errors.append(
+            "confirmed_deposit_count must match confirmed deposit probes count"
+        )
     require_bool_true(payload, "payer_auth_enforced", errors)
     require_bool_true(payload, "participant_status_gate_enforced", errors)
     require_bool_true(payload, "mismatched_escrow_rejected", errors)
@@ -607,7 +678,7 @@ def validate_settlement_execution(
     )
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
     validate_route_inventory(payload, REQUIRED_SETTLEMENT_ROUTES, errors)
-    require_positive_int(payload, "settlement_probe_count", errors)
+    settlement_probe_count = require_positive_int(payload, "settlement_probe_count", errors)
     require_positive_int(payload, "instruction_step_count", errors)
     require_string_coverage(payload, "outcomes", "", REQUIRED_OUTCOMES, errors)
     require_string_coverage(
@@ -617,6 +688,10 @@ def validate_settlement_execution(
         REQUIRED_RECONCILIATION_STATUSES,
         errors,
     )
+    outcome_count = unique_scalar_inventory_count(payload, "outcomes", errors)
+    unique_scalar_inventory_count(payload, "reconciliation_statuses", errors)
+    if settlement_probe_count and outcome_count and settlement_probe_count != outcome_count:
+        errors.append("settlement_probe_count must match unique outcomes count")
     require_bool_true(payload, "drawdown_instruction_present", errors)
     require_bool_true(payload, "cancel_instruction_present", errors)
     require_bool_true(payload, "required_signer_bound", errors)
@@ -649,8 +724,45 @@ def validate_settlement_submitter(
     )
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
     require_positive_int(payload, "configured_signer_count", errors)
-    require_positive_int(payload, "queued_step_count", errors)
-    require_positive_int(payload, "submitted_step_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "signers",
+        "configured_signer_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "signers", errors):
+        require_string(record, "name", errors)
+    queued_step_count = require_positive_int(payload, "queued_step_count", errors)
+    submitted_step_count = require_positive_int(payload, "submitted_step_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "steps",
+        "queued_step_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    submitted_partition_count = 0
+    for index, record in require_object_array(payload, "steps", errors):
+        require_string(record, "name", errors)
+        submitted = record.get("submitted")
+        if not isinstance(submitted, bool):
+            errors.append(f"steps[{index}].submitted must be a boolean")
+        elif submitted:
+            submitted_partition_count += 1
+    if (
+        isinstance(queued_step_count, int)
+        and isinstance(submitted_step_count, int)
+        and submitted_step_count > queued_step_count
+    ):
+        errors.append("submitted_step_count must be <= queued_step_count")
+    if (
+        isinstance(submitted_step_count, int)
+        and submitted_step_count != submitted_partition_count
+    ):
+        errors.append("submitted_step_count must match submitted steps count")
     require_bool_true(payload, "receipt_published", errors)
     require_bool_true(payload, "required_authority_matched", errors)
     require_bool_true(payload, "missing_signer_rejected", errors)
@@ -714,8 +826,38 @@ def validate_governance_dag_publication(
     )
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
     require_positive_int(payload, "report_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "reports",
+        "report_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "reports", errors):
+        require_string(record, "name", errors)
     require_positive_int(payload, "weekly_rollup_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "weekly_rollups",
+        "weekly_rollup_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "weekly_rollups", errors):
+        require_string(record, "name", errors)
     require_positive_int(payload, "settlement_receipt_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "settlement_receipts",
+        "settlement_receipt_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "settlement_receipts", errors):
+        require_string(record, "name", errors)
     require_string_coverage(payload, "payload_kinds", "", REQUIRED_PAYLOAD_KINDS, errors)
     require_bool_true(payload, "publish_index_verified", errors)
     require_bool_true(payload, "canonical_to_payloads_verified", errors)
@@ -767,8 +909,46 @@ def validate_multi_peer_reconciliation(
     )
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
     require_minimum_int(payload, "peer_count", options.min_peers, errors)
+    require_string_inventory_count_match(
+        payload,
+        "peers",
+        "peer_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "peers", errors):
+        require_string(record, "name", errors)
     require_minimum_int(payload, "validator_count", options.min_peers, errors)
-    require_positive_int(payload, "case_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "validators",
+        "validator_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "validators", errors):
+        require_string(record, "name", errors)
+    case_count = require_positive_int(payload, "case_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "cases",
+        "case_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    reconciled_case_count = 0
+    for index, record in require_object_array(payload, "cases", errors):
+        require_string(record, "name", errors)
+        reconciled = record.get("reconciled")
+        if not isinstance(reconciled, bool):
+            errors.append(f"cases[{index}].reconciled must be a boolean")
+        elif reconciled:
+            reconciled_case_count += 1
+    if case_count > 0 and case_count != reconciled_case_count:
+        errors.append("case_count must match reconciled cases count")
     require_bool_true(payload, "deposit_posted", errors)
     require_bool_true(payload, "decision_ingested", errors)
     require_bool_true(payload, "settlement_submitted", errors)

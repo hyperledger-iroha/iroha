@@ -4252,7 +4252,7 @@ impl IVMHost for WsvHost {
                     return Ok(Self::pointer_gas(0));
                 }
                 let tlv = vm.memory.validate_tlv(addr)?;
-                if tlv.type_id != PointerType::NoritoBytes {
+                if !matches!(tlv.type_id, PointerType::NoritoBytes | PointerType::Blob) {
                     return Err(VMError::NoritoInvalid);
                 }
                 let encoded_len = tlv.payload.len();

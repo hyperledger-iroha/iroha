@@ -250,6 +250,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "runner_hash_hex",
         "quorum",
         "result_count",
+        "results",
         "aggregation",
         "subject",
         "subject_digest_hex",
@@ -391,6 +392,16 @@ def validate_committee(payload: dict[str, Any], errors: list[str]) -> None:
         errors,
         message="result_count must be at least quorum",
     )
+    require_string_inventory_count_match(
+        payload,
+        "results",
+        "result_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _, record in require_object_array(payload, "results", errors):
+        require_string(record, "name", errors)
     require_string_equal(payload, "aggregation", "median_score_bps", errors)
     require_string(payload, "subject", errors)
     require_hex(payload, "subject_digest_hex", HEX64_LEN, errors)
@@ -460,6 +471,7 @@ def validate_probe_array(
     *,
     success_field: str,
     status_field: str,
+    identity_field: str | None = None,
 ) -> None:
     probe_records = require_object_array(payload, field, errors)
     if not probe_records:
@@ -468,6 +480,15 @@ def validate_probe_array(
     require_count_length_match(
         probe_count, probe_records, "probe_count", "probes", errors
     )
+    if identity_field is not None:
+        require_string_inventory_count_match(
+            payload,
+            field,
+            "probe_count",
+            errors,
+            field=identity_field,
+            allow_scalar_items=False,
+        )
     for index, record in probe_records:
         require_bool_true(
             record,
@@ -488,6 +509,14 @@ def validate_notification_transport(payload: dict[str, Any], errors: list[str]) 
     require_string(payload, "webhook_url", errors)
     require_hex(payload, "manifest_body_blake3", HEX64_LEN, errors)
     require_count_equal(payload, "probe_count", "accepted_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "probes",
+        "accepted_count",
+        errors,
+        field="delivery_id",
+        allow_scalar_items=False,
+    )
     require_false(payload, "payload_bytes_included", errors)
     require_false(payload, "private_payloads_included", errors)
     validate_probe_array(
@@ -496,6 +525,7 @@ def validate_notification_transport(payload: dict[str, Any], errors: list[str]) 
         errors,
         success_field="response_success",
         status_field="response_status",
+        identity_field="delivery_id",
     )
     for index, probe in enumerate(payload.get("probes", [])):
         record = require_object(probe, f"probes[{index}]", errors)
@@ -571,7 +601,15 @@ def validate_commit_reveal_executor(payload: dict[str, Any], errors: list[str]) 
 def validate_transparency_publication(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "workflow_digest_hex", HEX64_LEN, errors)
     require_count_equal(payload, "probe_count", "passed_probe_count", errors)
-    require_positive_int(payload, "source_entry_probe_count", errors)
+    require_count_equal(payload, "probe_count", "source_entry_probe_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "probes",
+        "source_entry_probe_count",
+        errors,
+        field="source_kind",
+        allow_scalar_items=False,
+    )
     require_false(payload, "payload_bytes_included", errors)
     require_false(payload, "private_payloads_included", errors)
     require_false(payload, "response_bodies_included", errors)
@@ -588,6 +626,7 @@ def validate_transparency_publication(payload: dict[str, Any], errors: list[str]
         errors,
         success_field="response_success",
         status_field="response_status",
+        identity_field="source_kind",
     )
     for index, probe in enumerate(payload.get("probes", [])):
         record = require_object(probe, f"probes[{index}]", errors)

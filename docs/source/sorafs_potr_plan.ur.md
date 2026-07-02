@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/sorafs_potr_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5a6e8aa5db21a3b35072ec2960f2fa4eec354d0f09391d40f24dc76bbaa2d4c6
-source_last_modified: "2026-07-01T19:36:06.991852+00:00"
-translation_last_reviewed: 2026-06-25
+source_hash: fe25d8594eba61d7c27234a30012a84a0e272dfcb050f7a486e1264c9c477791
+source_last_modified: "2026-07-02T07:45:55.169061+00:00"
+translation_last_reviewed: 2026-07-02
 ---
 
 # PoTR-Lite Deadline Proofs Status
@@ -173,11 +173,17 @@ reviewed `policy_digest_hex` values as `valid_policy_digests` for the aggregate
 production-readiness gate. Receipt summary, PQ key-roster, and reputation-weight
 policy binding failures are recorded on the offending artifact before
 required-kind validity is computed, so the JSON summary matches the fail-closed
-process result. The collection planner exposes those exact required payload
-fields through `--dry-run` and validates the schema-closed collection plan,
-required kinds, thresholds, external evidence map, evidence contract, and
-command steps before contacting live PoTR services. The shared runner plan
-guard rejects non-canonical nested required-kind, threshold, external-evidence,
+process result. Multi-provider probes bind `provider_count` to the unique
+canonical `providers[].name` inventory and `receipt_count` to the unique
+canonical `receipts[].name` inventory, rejecting duplicate provider or receipt
+labels before promotion. The proof-stream gate applies the same
+proof-stream `route_count` binding to the unique canonical `routes[].name`
+inventory, duplicate route rejection, and per-route status/latency/Norito
+checks. The collection planner exposes those exact required payload fields
+through `--dry-run` and validates the schema-closed collection plan, required
+kinds, thresholds, external evidence map, evidence contract, and command steps
+before contacting live PoTR services. The shared runner plan guard rejects
+non-canonical nested required-kind, threshold, external-evidence,
 evidence-contract, and command-step shapes before any live PoTR contact.
 
 The rollout evidence scripts have focused Python coverage in:

@@ -194,8 +194,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "proof_generation": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "provider_count",
+        "providers",
         "challenge_count",
+        "challenges",
         "proof_count",
+        "proofs",
         "provider_signatures_verified",
         "manifest_binding_verified",
         "commitment_binding_verified",
@@ -358,8 +361,38 @@ def validate_proof_generation(
     options: ValidationOptions,
 ) -> None:
     require_minimum_int(payload, "provider_count", options.min_providers, errors)
+    require_string_inventory_count_match(
+        payload,
+        "providers",
+        "provider_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "providers", errors):
+        require_string(record, "name", errors)
     require_minimum_int(payload, "challenge_count", options.min_challenges, errors)
+    require_string_inventory_count_match(
+        payload,
+        "challenges",
+        "challenge_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "challenges", errors):
+        require_string(record, "name", errors)
     require_minimum_int(payload, "proof_count", options.min_proofs, errors)
+    require_string_inventory_count_match(
+        payload,
+        "proofs",
+        "proof_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "proofs", errors):
+        require_string(record, "name", errors)
     require_bool_true(payload, "provider_signatures_verified", errors)
     require_bool_true(payload, "manifest_binding_verified", errors)
     require_bool_true(payload, "commitment_binding_verified", errors)

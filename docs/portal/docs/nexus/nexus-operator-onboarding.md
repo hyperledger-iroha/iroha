@@ -64,7 +64,7 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
    ```
    This prints the resolved configuration and fails early if catalogue/routing entries are inconsistent or if genesis and config disagree.
 2. If you deploy containers, run the same command inside the image after loading it with `docker load -i <profile>-<version>-<os>-image.tar` (remember to include `--sora`).
-3. Check logs for warnings about placeholder lane/data-space identifiers. If any appear, revisit Step 4—production deployments must not rely on the placeholder IDs that ship with the templates.
+3. Check logs and `--trace-config` output for lane/data-space validation warnings. If any appear, revisit Step 4 so the effective catalog, aliases, and routing rules match the council-approved topology.
 4. Execute your local smoke procedure (e.g., submit a `FindNetworkStatus` query with `iroha_cli`, confirm telemetry endpoints expose `nexus_lane_state_total`, and verify streaming keys are rotated or imported as required).
 
 ## Step 6 — Cutover and hand-off

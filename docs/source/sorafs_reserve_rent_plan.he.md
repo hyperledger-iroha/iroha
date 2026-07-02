@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/sorafs_reserve_rent_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 157ea835676a553ffc40176c33468cc3d80ee8a204169eec2fbd6be67d3f8d10
-source_last_modified: "2026-06-25T18:08:03+00:00"
-translation_last_reviewed: 2026-06-25
+source_hash: 45710c44c48f393c2d55b97c5f297abc2dc86109437aa37a975e86d2189a5692
+source_last_modified: "2026-07-02T06:45:27.120013+00:00"
+translation_last_reviewed: 2026-07-02
 ---
 
 # Reserve+Rent & Lifecycle Policy
@@ -512,7 +512,10 @@ bake timestamps are fresh, lifecycle lag and signed-route latency remain under
 the configured thresholds, provider-bake artifacts prove the config-backed
 reserve lifecycle scheduler canary ran recently enough before bake completion,
 advanced defaulting providers, synced gateway compliance, and preserved
-orderbook rejection, lifecycle-service and signed-route artifacts bind
+orderbook rejection, quote-matrix artifacts bind `scenario_count` and
+`passed_scenario_count` to the product of unique `storage_classes`, `tiers`, and
+`durations` inventories and reject duplicate dimension entries before promotion
+can report ready, lifecycle-service and signed-route artifacts bind
 `route_count` to the unique canonical `routes[].name` inventories and reject
 duplicate route entries before promotion can report ready, reserve-movement
 artifacts prove live chain submission

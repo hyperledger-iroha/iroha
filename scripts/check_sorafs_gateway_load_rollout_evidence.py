@@ -51,6 +51,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_maximum_number,
     require_minimum_int,
     require_object,
+    require_object_array,
     require_passed_status,
     require_policy_digest,
     require_positive_int,
@@ -192,7 +193,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "cache_state",
         "duration_seconds",
         "stream_count",
+        "streams",
         "provider_count",
+        "providers",
         "success_rate_bps",
         "error_rate_bps",
         "p95_latency_ms",
@@ -301,7 +304,27 @@ def validate_staging_load(
     require_object(payload, "cache_state", errors)
     require_minimum_int(payload, "duration_seconds", options.min_staging_duration_secs, errors)
     require_minimum_int(payload, "stream_count", options.min_streams, errors)
+    require_string_inventory_count_match(
+        payload,
+        "streams",
+        "stream_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _, record in require_object_array(payload, "streams", errors):
+        require_string(record, "name", errors)
     require_positive_int(payload, "provider_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "providers",
+        "provider_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _, record in require_object_array(payload, "providers", errors):
+        require_string(record, "name", errors)
     require_minimum_int(payload, "success_rate_bps", options.min_success_rate_bps, errors)
     require_maximum_number(payload, "error_rate_bps", options.max_error_rate_bps, errors)
     require_maximum_number(payload, "p95_latency_ms", options.max_p95_latency_ms, errors)

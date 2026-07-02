@@ -112,6 +112,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             args.extend(["--metric", metric])
     elif kind == "reconciliation":
         args.extend(["--peer-count", str(CHECKER.DEFAULT_MIN_RECONCILIATION_PEERS)])
+        for index in range(CHECKER.DEFAULT_MIN_RECONCILIATION_PEERS):
+            args.extend(["--peer", f"peer-{index:02d}"])
         for source in MODULE.REQUIRED_RECONCILIATION_SOURCES:
             args.extend(["--source", source])
     elif kind == "governance_approval":
@@ -182,6 +184,55 @@ def test_response_file_can_build_sdk_release_canary(tmp_path: Path) -> None:
         MODULE.REQUIRED_SDK_LANGUAGES
     )
     assert payload["artifact_count"] == len(MODULE.REQUIRED_SDK_LANGUAGES)
+
+
+def test_response_file_can_build_reconciliation_canary(tmp_path: Path) -> None:
+    args_file = tmp_path / "reconciliation.args"
+    args_file.write_text(
+        "\n".join(args_for("reconciliation", tmp_path)),
+        encoding="utf-8",
+    )
+
+    assert MODULE.main([f"@{args_file}"]) == 0
+
+    payload = json.loads(canary_path(tmp_path, "reconciliation").read_text("utf-8"))
+    assert payload["peer_count"] == CHECKER.DEFAULT_MIN_RECONCILIATION_PEERS
+    assert [peer["name"] for peer in payload["peers"]] == [
+        f"peer-{index:02d}" for index in range(CHECKER.DEFAULT_MIN_RECONCILIATION_PEERS)
+    ]
+    assert [source["name"] for source in payload["sources"]] == list(
+        MODULE.REQUIRED_RECONCILIATION_SOURCES
+    )
+
+
+def test_reconciliation_peer_inventory_must_match_peer_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("reconciliation", tmp_path)
+    peer_count_index = args.index("--peer-count")
+    args[peer_count_index + 1] = str(CHECKER.DEFAULT_MIN_RECONCILIATION_PEERS + 1)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--peer unique values must match --peer-count" in captured.err
+    assert not canary_path(tmp_path, "reconciliation").exists()
+
+
+def test_reconciliation_peer_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("reconciliation", tmp_path)
+    first_peer = args.index("--peer") + 1
+    args.extend(["--peer", args[first_peer]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--peer must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "reconciliation").exists()
 
 
 def test_duplicate_sdk_artifact_id_fails_closed_without_leaking(

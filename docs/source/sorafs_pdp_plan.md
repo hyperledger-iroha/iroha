@@ -42,7 +42,11 @@ Implemented locally:
   its `policy_digest_hex` and `provider_roster_digest_hex` to the matching
   valid proof-generation digests. Provider-transport artifacts also bind
   `route_count` to the unique canonical `routes[].name` inventory and reject
-  duplicate route entries before promotion can report ready.
+  duplicate route entries before promotion can report ready. Proof-generation
+  artifacts also bind `provider_count`, `challenge_count`, and `proof_count` to
+  the unique canonical `providers[].name`, `challenges[].name`, and
+  `proofs[].name` inventories and reject duplicate provider, challenge, or
+  proof entries before promotion can report ready.
   Proof-summary mismatches are recorded on the offending artifact in the JSON
   summary before required-kind validity is reported. Policy and provider-roster
   mismatches are recorded on the offending governance approval artifact through
@@ -60,10 +64,11 @@ Implemented locally:
   governance/repair, observability, and governance approval evidence. The
   builder requires reviewed deployment context, complete PDP route and metric
   coverage where applicable, proof-summary digest bindings, provider/challenge/
-  proof minimum counts, route/proof latency thresholds, config-backed
-  governance metadata, and reviewed policy and provider-roster digest input for
-  proof-generation and governance-approval canaries, then validates every
-  generated artifact through
+  proof minimum counts, reviewed provider/challenge/proof names whose unique
+  inventories match their scalar counts, route/proof latency thresholds,
+  config-backed governance metadata, and reviewed policy and provider-roster
+  digest input for proof-generation and governance-approval canaries, then
+  validates every generated artifact through
   `scripts/check_sorafs_pdp_rollout_evidence.py` before writing. Checked-in
   response-file examples cover provider transport and proof-generation
   canaries.

@@ -3,14 +3,14 @@
 //! Orderbook and streaming-settlement payload schemas for SoraFS (SFM-2).
 //!
 //! These Norito payloads provide the deterministic data-model foundation for
-//! the future SoraFS XOR orderbook. The pure helpers in this module cover
-//! deterministic pair and full-book snapshot matching, fee calculation,
-//! settlement-channel opening, receipt application, and payload signature
-//! verification. Runtime account authorization, service-side sequencing,
-//! contract submission, and durable escrow mutation still belong to the runtime
-//! layers that consume these payloads.
+//! the SoraFS XOR orderbook. The pure helpers in this module cover deterministic
+//! pair and full-book snapshot matching, fee calculation, settlement-channel
+//! opening, receipt application, replay-safe runtime snapshots, and payload
+//! signature verification. Runtime account authorization, service-side
+//! sequencing, contract submission, and durable escrow mutation still belong to
+//! the runtime layers that consume these payloads.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use blake3::Hasher;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
@@ -460,10 +460,10 @@ impl OrderbookRuntimeSnapshotV1 {
             }
         }
 
-        let mut trade_ids = BTreeSet::new();
+        let mut trades_by_id = BTreeMap::new();
         for trade in &self.trades {
             trade.validate()?;
-            if !trade_ids.insert(trade.trade_id) {
+            if trades_by_id.insert(trade.trade_id, trade).is_some() {
                 return Err(OrderbookValidationError::DuplicateTradeId {
                     trade_id: trade.trade_id,
                 });
@@ -471,6 +471,7 @@ impl OrderbookRuntimeSnapshotV1 {
         }
 
         let mut channel_ids = BTreeSet::new();
+        let mut channel_replay = BTreeMap::new();
         for channel in &self.settlement_channels {
             channel.validate()?;
             if !channel_ids.insert(channel.channel_id) {
@@ -478,12 +479,39 @@ impl OrderbookRuntimeSnapshotV1 {
                     channel_id: channel.channel_id,
                 });
             }
-            if !trade_ids.contains(&channel.trade_id) {
+            let Some(trade) = trades_by_id.get(&channel.trade_id) else {
                 return Err(OrderbookValidationError::SnapshotChannelTradeMissing {
                     channel_id: channel.channel_id,
                     trade_id: channel.trade_id,
                 });
+            };
+            let expected_total_bytes = trade
+                .filled_gib
+                .checked_mul(BYTES_PER_GIB)
+                .ok_or(OrderbookValidationError::ByteCountOverflow)?;
+            if channel.total_bytes != expected_total_bytes {
+                return Err(
+                    OrderbookValidationError::SnapshotChannelTotalBytesMismatch {
+                        channel_id: channel.channel_id,
+                        total_bytes: channel.total_bytes,
+                        expected_total_bytes,
+                    },
+                );
             }
+            channel_replay.insert(
+                channel.channel_id,
+                SnapshotChannelReplayV1 {
+                    trade_id: channel.trade_id,
+                    total_bytes: channel.total_bytes,
+                    remaining_bytes: channel.remaining_bytes,
+                    xor_locked: channel.xor_locked,
+                    opened_at_unix: channel.opened_at_unix,
+                    updated_at_unix: channel.updated_at_unix,
+                    initial_escrow: trade_escrow_requirement_v1(trade)?,
+                    delivered_bytes: 0,
+                    debited: XorAmount::zero(),
+                },
+            );
         }
 
         let mut receipt_ids = BTreeSet::new();
@@ -495,23 +523,26 @@ impl OrderbookRuntimeSnapshotV1 {
                     receipt_id: receipt.receipt_id,
                 });
             }
-            let Some(channel) = self
-                .settlement_channels
-                .iter()
-                .find(|channel| channel.channel_id == receipt.channel_id)
-            else {
+            let Some(replay) = channel_replay.get_mut(&receipt.channel_id) else {
                 return Err(OrderbookValidationError::SnapshotReceiptChannelMissing {
                     receipt_id: receipt.receipt_id,
                     channel_id: receipt.channel_id,
                 });
             };
-            if channel.trade_id != receipt.trade_id {
+            if replay.trade_id != receipt.trade_id {
                 return Err(OrderbookValidationError::SettlementChannelMismatch);
             }
-            if receipt.issued_at_unix < channel.opened_at_unix
-                || receipt.issued_at_unix > channel.updated_at_unix
+            if receipt.issued_at_unix < replay.opened_at_unix
+                || receipt.issued_at_unix > replay.updated_at_unix
             {
                 return Err(OrderbookValidationError::InvalidTimestamp);
+            }
+            let delivered = receipt.range.len()?;
+            if receipt.range.end > replay.total_bytes {
+                return Err(OrderbookValidationError::ReceiptExceedsChannelBytes {
+                    range_end: receipt.range.end,
+                    total_bytes: replay.total_bytes,
+                });
             }
             if let Some((_, _, _, existing_receipt_id)) =
                 receipts_by_channel
@@ -532,6 +563,47 @@ impl OrderbookRuntimeSnapshotV1 {
                 receipt.range.end,
                 receipt.receipt_id,
             ));
+            replay.delivered_bytes = replay
+                .delivered_bytes
+                .checked_add(delivered)
+                .ok_or(OrderbookValidationError::ByteCountOverflow)?;
+            replay.debited = replay
+                .debited
+                .checked_add(receipt.xor_debited)
+                .map_err(OrderbookValidationError::Amount)?;
+            if replay.debited.as_micro() > replay.initial_escrow.as_micro() {
+                return Err(OrderbookValidationError::ReceiptExceedsEscrow {
+                    debited: replay.debited.as_micro(),
+                    escrow: replay.initial_escrow.as_micro(),
+                });
+            }
+        }
+
+        for (channel_id, replay) in channel_replay {
+            let expected_remaining_bytes = replay
+                .total_bytes
+                .checked_sub(replay.delivered_bytes)
+                .ok_or(OrderbookValidationError::ByteCountOverflow)?;
+            if replay.remaining_bytes != expected_remaining_bytes {
+                return Err(
+                    OrderbookValidationError::SnapshotChannelReceiptBytesMismatch {
+                        channel_id,
+                        remaining_bytes: replay.remaining_bytes,
+                        expected_remaining_bytes,
+                    },
+                );
+            }
+            let expected_xor_locked = replay
+                .initial_escrow
+                .checked_sub(replay.debited)
+                .map_err(OrderbookValidationError::Amount)?;
+            if replay.xor_locked != expected_xor_locked {
+                return Err(OrderbookValidationError::SnapshotChannelEscrowMismatch {
+                    channel_id,
+                    escrow_micro: replay.xor_locked.as_micro(),
+                    expected_escrow_micro: expected_xor_locked.as_micro(),
+                });
+            }
         }
 
         let mut expired_order_ids = BTreeSet::new();
@@ -551,6 +623,19 @@ impl OrderbookRuntimeSnapshotV1 {
 
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SnapshotChannelReplayV1 {
+    trade_id: [u8; 32],
+    total_bytes: u64,
+    remaining_bytes: u64,
+    xor_locked: XorAmount,
+    opened_at_unix: u64,
+    updated_at_unix: u64,
+    initial_escrow: XorAmount,
+    delivered_bytes: u64,
+    debited: XorAmount,
 }
 
 #[derive(Debug, Clone)]
@@ -917,6 +1002,11 @@ impl SettlementChannelV1 {
             return Err(OrderbookValidationError::InvalidRemainingBytes {
                 remaining_bytes: self.remaining_bytes,
                 total_bytes: self.total_bytes,
+            });
+        }
+        if self.status == SettlementChannelStatusV1::Closed && self.remaining_bytes != 0 {
+            return Err(OrderbookValidationError::ClosedChannelHasRemainingBytes {
+                remaining_bytes: self.remaining_bytes,
             });
         }
         if self.xor_locked.is_zero()
@@ -1424,6 +1514,42 @@ pub enum OrderbookValidationError {
         /// Missing trade id.
         trade_id: [u8; 32],
     },
+    /// Snapshot channel byte coverage differs from the referenced trade.
+    #[error(
+        "snapshot channel {channel_id:02x?} total bytes {total_bytes} differ from trade bytes {expected_total_bytes}"
+    )]
+    SnapshotChannelTotalBytesMismatch {
+        /// Channel id.
+        channel_id: [u8; 32],
+        /// Stored channel byte coverage.
+        total_bytes: u64,
+        /// Byte coverage derived from the referenced trade.
+        expected_total_bytes: u64,
+    },
+    /// Snapshot channel remaining bytes differ from accepted receipt replay.
+    #[error(
+        "snapshot channel {channel_id:02x?} remaining bytes {remaining_bytes} differ from receipt replay {expected_remaining_bytes}"
+    )]
+    SnapshotChannelReceiptBytesMismatch {
+        /// Channel id.
+        channel_id: [u8; 32],
+        /// Stored remaining channel bytes.
+        remaining_bytes: u64,
+        /// Remaining bytes after replaying accepted receipts.
+        expected_remaining_bytes: u64,
+    },
+    /// Snapshot channel escrow differs from accepted receipt replay.
+    #[error(
+        "snapshot channel {channel_id:02x?} locked escrow {escrow_micro} differs from receipt replay {expected_escrow_micro}"
+    )]
+    SnapshotChannelEscrowMismatch {
+        /// Channel id.
+        channel_id: [u8; 32],
+        /// Stored locked escrow in micro-XOR.
+        escrow_micro: u128,
+        /// Locked escrow after replaying accepted receipts.
+        expected_escrow_micro: u128,
+    },
     /// Snapshot receipt references a channel absent from the snapshot.
     #[error("snapshot receipt {receipt_id:02x?} references missing channel {channel_id:02x?}")]
     SnapshotReceiptChannelMissing {
@@ -1492,6 +1618,12 @@ pub enum OrderbookValidationError {
         remaining_bytes: u64,
         /// Total bytes.
         total_bytes: u64,
+    },
+    /// Closed channel still has unsettled bytes.
+    #[error("closed settlement channel still has {remaining_bytes} remaining bytes")]
+    ClosedChannelHasRemainingBytes {
+        /// Remaining bytes.
+        remaining_bytes: u64,
     },
     /// Escrow is zero.
     #[error("escrow amount must be positive")]

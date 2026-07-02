@@ -62,6 +62,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     recognized_evidence_artifacts_are_valid,
     require_status_in,
     require_string,
+    require_string_inventory_count_match,
     require_string_equal,
     require_string_value_equal,
     required_evidence_kind_names,
@@ -127,12 +128,14 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "snapshot_id_hex",
         "merkle_root_hex",
         "provider_count",
+        "providers",
     ),
     "latest": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "snapshot_id_hex",
         "merkle_root_hex",
         "provider_count",
+        "providers",
     ),
     "provider": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
@@ -156,6 +159,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "snapshot_id_hex",
         "merkle_root_hex",
         "provider_count",
+        "providers",
         "provider_id",
         "provider_score_bps",
     ),
@@ -167,6 +171,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "snapshot_id_hex",
         "merkle_root_hex",
         "provider_count",
+        "providers",
         "snapshot_age_seconds",
         "ingest_lag_seconds",
     ),
@@ -191,6 +196,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "snapshot_id_hex",
         "merkle_root_hex",
         "provider_count",
+        "providers",
     ),
 }
 SNAPSHOT_ANCHOR_KINDS = ("publish", "latest")
@@ -376,6 +382,7 @@ def validate_snapshot_summary(
     snapshot_id = require_hex(payload, "snapshot_id_hex", HEX32_LEN, errors)
     merkle_root = require_hex(payload, "merkle_root_hex", HEX64_LEN, errors)
     provider_count = require_minimum_int(payload, "provider_count", 1, errors)
+    validate_provider_inventory(payload, errors)
     require_recent_timestamp(
         payload,
         "generated_at_unix",
@@ -385,6 +392,21 @@ def validate_snapshot_summary(
         path=f"{context}.generated_at_unix",
     )
     return snapshot_id, merkle_root, provider_count
+
+
+def validate_provider_inventory(payload: dict[str, Any], errors: list[str]) -> None:
+    """Require provider_count to match reviewed provider labels."""
+
+    require_string_inventory_count_match(
+        payload,
+        "providers",
+        "provider_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _, provider in require_object_array(payload, "providers", errors):
+        require_string(provider, "name", errors)
 
 
 def validate_common_rollout_context(
@@ -499,6 +521,7 @@ def validate_verify(evidence: LoadedEvidence, errors: list[str]) -> tuple[str, s
     snapshot_id = require_hex(payload, "snapshot_id_hex", HEX32_LEN, errors)
     merkle_root = require_hex(payload, "merkle_root_hex", HEX64_LEN, errors)
     require_minimum_int(payload, "provider_count", 1, errors)
+    validate_provider_inventory(payload, errors)
     provider_id = require_string(payload, "provider_id", errors)
     require_int_range(
         payload,
@@ -532,6 +555,7 @@ def validate_metrics(
     snapshot_id = require_hex(payload, "snapshot_id_hex", HEX32_LEN, errors)
     merkle_root = require_hex(payload, "merkle_root_hex", HEX64_LEN, errors)
     provider_count = require_minimum_int(payload, "provider_count", 1, errors)
+    validate_provider_inventory(payload, errors)
     require_maximum_number(
         payload,
         "snapshot_age_seconds",
@@ -586,6 +610,7 @@ def validate_consumption(evidence: LoadedEvidence, errors: list[str]) -> tuple[s
     snapshot_id = require_hex(payload, "snapshot_id_hex", HEX32_LEN, errors)
     merkle_root = require_hex(payload, "merkle_root_hex", HEX64_LEN, errors)
     provider_count = require_minimum_int(payload, "provider_count", 1, errors)
+    validate_provider_inventory(payload, errors)
     return snapshot_id, merkle_root, provider_count
 
 

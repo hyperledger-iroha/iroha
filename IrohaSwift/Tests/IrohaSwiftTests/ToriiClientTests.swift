@@ -9680,7 +9680,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineReadinessRejectsMalformedRecursiveCompactReadiness() async throws {
+    func testGetOfflineReadinessRejectsMalformedKagemushaAbiVersions() async throws {
         func payload(extra: String = "",
                      compactAvailable: String = "true",
                      compactMode: String = "\"recursive_compact_v1\"",
@@ -9707,6 +9707,11 @@ final class ToriiClientTests: XCTestCase {
             (payload(compact: "\"2147483648\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range"),
             (payload(compactAvailable: "1"), "Expected to decode Bool"),
             (payload(compactCircuit: "\"kagemusha-recursive-compact-v1 \""), "offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace"),
+            (payload(extra: "\"offline_kagemusha_abi7\": true,"), "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_mode\": \"recursive_compact_v1\","), "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_bridge_abi_version\": 7,"), "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_circuit_id\": \"kagemusha-recursive-compact-v1\","), "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_artifacts\": false,"), "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*"),
             (payload(extra: "\"unexpected_offline_readiness_field\": true,"), "unexpected_offline_readiness_field is not a supported offline readiness field")
         ]
 

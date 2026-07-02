@@ -46,7 +46,9 @@ use crate::{
     query::store::LiveQueryStoreHandle,
     state::{
         SnapshotNoritoBlob, SnapshotPublicLaneRewardClaim, SnapshotSpaceDirectoryManifestSet,
-        State, deserialize::KuraSeed, storage_transactions::TransactionsBlockError,
+        State, deserialize::KuraSeed, public_lane_reward_record_matches_key,
+        public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
+        storage_transactions::TransactionsBlockError,
     },
 };
 
@@ -64,24 +66,30 @@ fn serialize_state_snapshot(
         .world
         .public_lane_validators
         .iter()
-        .map(|(_key, value)| SnapshotNoritoBlob {
-            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        .filter_map(|(key, value)| {
+            public_lane_validator_record_matches_key(key, value).then(|| SnapshotNoritoBlob {
+                encoded_hex: hex::encode(NoritoEncode::encode(value)),
+            })
         })
         .collect();
     let public_lane_stake_shares: Vec<_> = view
         .world
         .public_lane_stake_shares
         .iter()
-        .map(|(_key, value)| SnapshotNoritoBlob {
-            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        .filter_map(|(key, value)| {
+            public_lane_stake_share_matches_key(key, value).then(|| SnapshotNoritoBlob {
+                encoded_hex: hex::encode(NoritoEncode::encode(value)),
+            })
         })
         .collect();
     let public_lane_rewards: Vec<_> = view
         .world
         .public_lane_rewards
         .iter()
-        .map(|(_key, value)| SnapshotNoritoBlob {
-            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        .filter_map(|(key, value)| {
+            public_lane_reward_record_matches_key(key, value).then(|| SnapshotNoritoBlob {
+                encoded_hex: hex::encode(NoritoEncode::encode(value)),
+            })
         })
         .collect();
     let public_lane_reward_claims: Vec<_> = view

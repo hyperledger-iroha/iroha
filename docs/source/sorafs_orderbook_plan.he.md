@@ -4,8 +4,8 @@ direction: rtl
 source: docs/source/sorafs_orderbook_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1aa129abf73d425b5cf723bd0719d43bd831b01fa741c01c18c04bc21b43f9b1
-source_last_modified: "2026-07-01T21:14:16.180618+00:00"
+source_hash: 7b77772ba58bb33571b16617ce952a5caad35d2c9a91843192b69dfa0b4974c8
+source_last_modified: "2026-07-02T08:10:51.066437+00:00"
 translation_last_reviewed: 2026-07-02
 ---
 # SoraFS XOR Orderbook & Streaming Settlement
@@ -452,6 +452,8 @@ python3 scripts/build_sorafs_orderbook_canary.py \
   @scripts/examples/sorafs_orderbook_contract_canary.args.example
 python3 scripts/build_sorafs_orderbook_canary.py \
   @scripts/examples/sorafs_orderbook_api_canary.args.example
+python3 scripts/build_sorafs_orderbook_canary.py \
+  @scripts/examples/sorafs_orderbook_reconciliation_canary.args.example
 ```
 
 The checker recognizes `sorafs.orderbook.*` SFM-2 rollout schemas for contract
@@ -469,9 +471,10 @@ same rollout bundle. Governance approval must also carry a `policy_digest_hex`
 that matches a valid contract-surface policy digest from the same rollout
 bundle. API gateway artifacts also bind `route_count` to the unique canonical
 `routes[].name` inventory and reject duplicate route entries before promotion
-can report ready. Reconciliation artifacts also bind `source_count` to the
-unique canonical `sources[].name` inventory and reject duplicate source entries
-before promotion can report ready. The collection planner's
+can report ready. Reconciliation artifacts also bind `peer_count` and
+`source_count` to the unique canonical `peers[].name` and `sources[].name`
+inventories and reject duplicate peer or source entries before promotion can
+report ready. The collection planner's
 dry-run JSON also includes the checker-backed `evidence_contract` map so operators can inspect
 the exact required fields for each requested evidence kind before collecting or
 submitting live orderbook artifacts. Use the payload-free SFM-2 orderbook

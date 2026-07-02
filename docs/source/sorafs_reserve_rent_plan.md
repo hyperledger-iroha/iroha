@@ -506,7 +506,10 @@ bake timestamps are fresh, lifecycle lag and signed-route latency remain under
 the configured thresholds, provider-bake artifacts prove the config-backed
 reserve lifecycle scheduler canary ran recently enough before bake completion,
 advanced defaulting providers, synced gateway compliance, and preserved
-orderbook rejection, lifecycle-service and signed-route artifacts bind
+orderbook rejection, quote-matrix artifacts bind `scenario_count` and
+`passed_scenario_count` to the product of unique `storage_classes`, `tiers`, and
+`durations` inventories and reject duplicate dimension entries before promotion
+can report ready, lifecycle-service and signed-route artifacts bind
 `route_count` to the unique canonical `routes[].name` inventories and reject
 duplicate route entries before promotion can report ready, reserve-movement
 artifacts prove live chain submission

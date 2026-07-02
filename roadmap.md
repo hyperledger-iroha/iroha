@@ -828,12 +828,20 @@ pre-release client or script payload-alias assumptions outside production.
   handling, penalty lookup, staking admission, peer/account cleanup guards,
   multisig account-rekey rewrites, Soracloud runtime authority, host-finance
   stake accounting, and the Torii public-lane validator app API. Public-lane
-  reward-claim, commit election profile, multisig account-rekey, and Torii
-  stake-share/reward app API paths now apply the same exact-key rule to
+  reward-claim, commit election profile, multisig account-rekey, slash handling,
+  and Torii stake-share/reward app API paths now apply the same exact-key rule to
   `(lane_id, validator, staker)` shares and `(lane_id, epoch)` reward records
-  before consuming or exposing account-facing economic state. Remaining Nexus
-  scale-out work should keep new validator lifecycle, economic, and autoscale
-  paths on the same key/record invariant.
+  before consuming or exposing account-facing economic state. Slashing also
+  stages validator and share mutations until exact stake-share rows can satisfy
+  the whole slash, with self stake debited through exact self-owned share rows
+  before delegator rows. Canonical state snapshot export now applies the same
+  filter before serializing public-lane validator, stake-share, and reward rows,
+  so stale mismatched storage cannot be normalized into live rows on restore.
+  Account, asset-definition, and domain unregister guards now apply the exact-key
+  rule before treating public-lane stake-share or reward rows as cleanup
+  blockers, so malformed ignored rows cannot keep unrelated state undeletable.
+  Remaining Nexus scale-out work should keep new validator lifecycle, economic,
+  and autoscale paths on the same key/record invariant.
 - Public-lane staking authority is now part of that invariant: validator
   registration/exit require the validator account, registration initial stake
   must be validator-owned self-stake, and bond/schedule-unbond/finalize-unbond
@@ -851,11 +859,49 @@ pre-release client or script payload-alias assumptions outside production.
   overrides for reset lanes and lanes absent from the updated catalog, and
   newly created lane ids discard pre-staged overrides as stale prior-incarnation
   state before the lane can accept fresh emergency authority.
+- Public-lane validator reset cleanup now pins both storage-key and embedded
+  record lane ownership even when the storage-key validator account and embedded
+  validator account disagree, so stale mismatched validator rows cannot retain
+  live scope or survive lane destruction.
+- Future-created autoscale repair-retire coverage now proves invalid managed
+  lanes block unrelated lifecycle changes without side effects, while the
+  explicit repair retire prunes stale future-lane DA pin-intent indexes and
+  emergency overrides and preserves active default-lane state.
 - Autoscale scale-in cleanup now has same-block adversarial coverage proving
   emergency validator overrides, public-lane economic rows, public validator
   terminalization, and AXT replay ledger rows staged earlier in the block for
   the managed elastic lane being retired are cleaned from both the block overlay
   and committed world state, while surviving default-lane rows remain intact.
+  That same-block economic cleanup now also covers surviving-key stake-share and
+  reward rows whose embedded record lane is the retired autoscale lane, while
+  preserving reward-claim cursors as key-owned state because they carry no
+  embedded lane.
+- Committed autoscale lifecycle publish now mirrors that persistent reset cleanup
+  after the world block overlay has committed, covering AXT replay rows, DA
+  pin-intent indexes, public-lane validators/economics, verified relay contract
+  state, emergency overrides, and embedded retired-lane stale rows without
+  mutating WSV storage while the committing world overlay is still live. The
+  focused regression now reaches that cleanup through `StateBlock::commit()` so
+  future autoscale commit hooks should keep persistent WSV block mutations after
+  `world.commit()` to avoid storage lock inversion.
+- Commit ordering now keeps fallible autoscale geometry reconciliation before
+  transaction commit, but publishes the autoscale catalog/runtime reset and
+  staged DA commitment, pin-intent indexes, block-hash log entries,
+  latest-header/query-index markers, commit-topology cells, or verified relay
+  hydration only after a registered transaction block commits successfully.
+  Staged autoscale/DA/verified-relay side effects with `MissingInsertBlock`
+  abort before geometry, WSV cleanup, or relay-cache hydration, and WSV-only
+  commits without an inserted transaction block no longer advance block metadata
+  caches. Future commit hooks should preserve that boundary so aborted
+  transaction commits cannot leak lane lifecycle, DA runtime state, verified
+  relay authority, or topology-derived lane authority.
+- Operator config-swap cleanup now has matching DA pin-intent world-index
+  coverage: `set_nexus` lane retirement must remove reset-lane ticket, alias,
+  manifest, and lane-epoch indexes while leaving active-lane indexes intact.
+- Public-lane Torii reward aggregation now has adversarial coverage for
+  key/record mismatched reward rows, proving user-visible pending-reward results
+  ignore forged embedded lane or epoch values while valid later epochs remain
+  payable up to the requested bound.
 - Privacy production readiness now requires a 4-peer localnet
   shield-to-redeem lifecycle evidence set: shield tx, hop proof, recursive
   init/verify, recursive append/verify, unshield proof, redeem tx, replay
@@ -5760,6 +5806,10 @@ pre-release client or script payload-alias assumptions outside production.
   before the summary reports `ready`, rejecting raw
   snapshot/proof/provider records, request/response bodies, bearer tokens,
   signed transactions, private keys, and other payload-bearing fields. Snapshot
+  anchors, proof-verification, metrics, and routing/incentive consumption
+  artifacts now also bind `provider_count` to the unique canonical
+  `providers[].name` inventory and reject duplicate provider entries before
+  promotion can report ready. Snapshot
   binding failures are marked on the offending artifact before required-kind
   summary validity is reported, and malformed snapshot-binding validation
   inputs now fail closed on required/bound kind containers, binding-pair
@@ -6595,7 +6645,8 @@ pre-release client or script payload-alias assumptions outside production.
   `scripts/build_sorafs_reputation_canary.py` now builds payload-free
   publish/latest, provider, events, verify, metrics, transport, and
   consumption canary artifacts through the SFM-3 checker before rollout review,
-  requiring reviewed deployment context, snapshot id/root bindings, provider
+  requiring reviewed deployment context, snapshot id/root bindings, reviewed
+  provider names whose unique inventory matches `provider_count`, provider
   proof inputs where applicable, unique provider proof sibling hashes, and
   snapshot-age/ingest-lag threshold facts before writing. The SFM-3 rollout
   checker also rejects duplicate provider proof sibling hashes in externally
@@ -6739,7 +6790,11 @@ pre-release client or script payload-alias assumptions outside production.
   `provider_roster_digest_hex`, publishes valid governed provider-roster
   digests as `valid_provider_roster_digests`, with binding failures marked on the
   offending artifact through the shared scalar binding error recorder before
-  required-kind summary validity is reported. The PDP collection planner now emits the
+  required-kind summary validity is reported. Proof-generation artifacts now
+  also bind `provider_count`, `challenge_count`, and `proof_count` to the unique
+  canonical `providers[].name`, `challenges[].name`, and `proofs[].name`
+  inventories, rejecting duplicate provider, challenge, or proof rows before
+  PDP readiness can report ready. The PDP collection planner now emits the
   checker-backed `evidence_contract` map for the selected required kinds during
   dry-run review, and validates the schema-closed collection-plan envelope plus
   canonical nested required-kind, threshold, external-evidence, checker-backed
@@ -6751,7 +6806,8 @@ pre-release client or script payload-alias assumptions outside production.
   the unique canonical route-name inventory so duplicate route rows cannot
   inflate readiness, enforces proof-summary digest bindings plus
   proof-generation/governance policy-digest and provider-roster digest input,
-  provider/challenge/proof count, and latency thresholds before writing, validates every generated
+  reviewed provider/challenge/proof inventories whose unique names match their
+  scalar counts, and latency thresholds before writing, validates every generated
   artifact through the PDP rollout checker, and ships provider-transport and
   proof-generation response-file examples. PDP
   remains fail-closed in embedded Torii proof streaming until
@@ -6915,6 +6971,8 @@ pre-release client or script payload-alias assumptions outside production.
   exact manual-trigger retired route-state, scheduler-runtime and
   reporting/archive `route_count` binding to the unique canonical
   `routes[].name` inventories with duplicate route rejection,
+  randomness `provider_count` binding to the unique canonical
+  `providers[].name` inventory with duplicate provider rejection,
   observability, and
   governance approval evidence, and requires scheduler/replay/reporting/
   observability/governance artifacts to bind back to a valid randomness
@@ -6934,7 +6992,8 @@ pre-release client or script payload-alias assumptions outside production.
   `scripts/build_sorafs_por_canary.py` builds payload-free randomness,
   scheduler-runtime, validator-replay, reporting/archive, observability, and
   governance-approval canary artifacts with randomness/governance policy-digest
-  input through the same checker before rollout review. Remaining SF-9
+  input and reviewed randomness provider inventories through the same checker
+  before rollout review. Remaining SF-9
   work is live drand/VRF/auditor run evidence that passes this gate and
   governance archive handoff evidence with the deployment-specific
   SQL/Parquet `archive_backend` recorded in reporting/archive artifacts, not
@@ -6957,8 +7016,11 @@ pre-release client or script payload-alias assumptions outside production.
   observability/governance artifacts to bind back to a valid multi-provider
   probe `receipt_summary_digest_hex` in the same evidence bundle, with binding
   failures marked on the offending artifact through the shared scalar binding
-  error recorder before required-kind summary validity is reported; the
-  matching collection planner accepts reviewed staged
+  error recorder before required-kind summary validity is reported. The
+  multi-provider probe now also binds `provider_count` to the unique canonical
+  `providers[].name` inventory and `receipt_count` to the unique canonical
+  `receipts[].name` inventory, rejecting duplicate provider or receipt labels
+  before readiness can report ready; the matching collection planner accepts reviewed staged
   evidence paths, supports `@ARGFILE`, forwards age,
   route-latency, hot/warm deadline, provider-count, and receipt-count
   thresholds, and emits a dry-run-visible verifier command, checker-backed
@@ -6971,11 +7033,12 @@ pre-release client or script payload-alias assumptions outside production.
   multi-provider-probe, receipt-validation, proof-stream,
   reputation-integration, observability, and governance-approval canary
   artifacts through the same checker before rollout review, requiring complete
-  tier, route, and metric coverage, binding proof-stream `route_count` to the
-  unique canonical route-name inventory so duplicate route rows cannot inflate
-  readiness, plus receipt-summary, PQ key-roster, and reputation-weight policy
-  digest bindings, governance policy-digest metadata, and deadline threshold
-  facts before writing. The SF-14 gate summary now also
+  tier, route, and metric coverage, reviewed provider and receipt inventories
+  whose unique names match their scalar counts, binding proof-stream
+  `route_count` to the unique canonical route-name inventory so duplicate route
+  rows cannot inflate readiness, plus receipt-summary, PQ key-roster, and
+  reputation-weight policy digest bindings, governance policy-digest metadata,
+  and deadline threshold facts before writing. The SF-14 gate summary now also
   publishes governance approval `policy_digest_hex` values as
   `valid_policy_digests` so aggregate production readiness can tether PoTR
   promotion policy metadata to recognized governance artifacts.
@@ -7023,7 +7086,10 @@ pre-release client or script payload-alias assumptions outside production.
   requires governance approval `policy_digest_hex` to match a valid
   staging-load `policy_digest_hex`, requires local conformance `scenario_count`
   to match the unique canonical scenario inventory, rejects duplicate scenario
-  entries before required-kind validity is reported,
+  entries before required-kind validity is reported, requires staging-load
+  `stream_count` and `provider_count` to match the unique canonical
+  `streams[].name` and `providers[].name` inventories, rejects duplicate stream
+  or provider entries before required-kind validity is reported,
   rejects raw reports/response bodies/fixture payloads/runtime secrets, and
   keeps HTTP/3 load evidence explicitly scoped as deferred until a committed
   gateway transport exists. `scripts/run_sorafs_gateway_load_rollout_evidence.py`
@@ -7034,7 +7100,8 @@ pre-release client or script payload-alias assumptions outside production.
   new `scripts/build_sorafs_gateway_load_canary.py` helper builds payload-free
   checked-in canary artifacts for each SF-5a gate kind, requires complete
   deterministic scenario and gateway metric coverage where applicable, enforces
-  suite/staging digest bindings and SLO threshold facts before writing,
+  reviewed staging-provider inventory, generated per-stream inventory,
+  suite/staging digest bindings, and SLO threshold facts before writing,
   validates every generated artifact through the gateway-load checker, and
   ships local conformance and staging-load response-file examples. The
   static rollout contract keeps live gateway-load, staging-load, HTTP/3 soak,
@@ -7283,6 +7350,8 @@ pre-release client or script payload-alias assumptions outside production.
   recorded through the shared scalar binding error recorder and runner tuple
   binding failures recorded through the shared string-tuple binding error
   recorder so artifact invalidation cannot drift from other rollout gates,
+  binds committee `result_count` to the unique canonical `results[].name`
+  inventory so duplicate committee-result rows cannot inflate readiness,
   binds operator-workflow `route_count` and `passed_route_count` to the unique
   canonical `routes[].name` inventory so duplicate route rows cannot inflate
   readiness, and emits `sorafs.moderation.ai_prescreen.rollout_evidence_gate.v1`
@@ -7300,7 +7369,7 @@ pre-release client or script payload-alias assumptions outside production.
   or live canaries.
   `scripts/build_sorafs_ai_prescreen_canary.py` now builds payload-free
   checked-in SFM-4a canary artifacts for each gate kind, fails closed on
-  missing runner/workflow binding inputs or incomplete operator-route,
+  missing runner/workflow binding inputs, committee-result inventory mismatches, or incomplete operator-route,
   transparency-source, Governance DAG producer, and workflow-step coverage,
   validates every generated artifact through the AI pre-screen rollout checker,
   and ships response-file examples for the end-to-end workflow anchor, juror
@@ -7310,10 +7379,15 @@ pre-release client or script payload-alias assumptions outside production.
   valid commit/reveal executor artifacts publish their top-level
   `execution_summary_digest_hex` values as `valid_executor_summary_digests`;
   the final SoraFS aggregate gate accepts both metadata fields only when they
-  match recognized artifact fingerprints. Commit/reveal executor artifacts also
-  bind `artifact_count` and `passed_artifact_count` to the unique canonical
-  `artifacts[].name` inventory, so duplicate executor bundle artifact rows
-  cannot inflate readiness. Governance DAG artifacts also bind
+  match recognized artifact fingerprints. Juror notification transport
+  artifacts now bind `probe_count` and `accepted_count` to the unique canonical
+  `probes[].delivery_id` inventory, and transparency publication artifacts bind
+  `probe_count`, `passed_probe_count`, and `source_entry_probe_count` to the
+  unique canonical `probes[].source_kind` inventory, so duplicate delivery or
+  source-entry probe rows cannot inflate readiness. Commit/reveal executor
+  artifacts also bind `artifact_count` and `passed_artifact_count` to the unique
+  canonical `artifacts[].name` inventory, so duplicate executor bundle artifact
+  rows cannot inflate readiness. Governance DAG artifacts also bind
   `producer_count` to the unique canonical `producers[].name` inventory, and
   end-to-end workflow artifacts bind `step_count` and `passed_step_count` to
   the unique canonical `steps[].name` inventory, so duplicate producer or
@@ -7382,9 +7456,25 @@ pre-release client or script payload-alias assumptions outside production.
   match a valid feed-promotion `policy_digest_hex`, and bundle/policy
   mismatches mark the offending artifact invalid through the shared scalar
   binding error recorder before required-kind validity is reported. The
-  enforcement-probe artifact also binds `route_count` and `passed_route_count`
+  feed-promotion artifact now binds `gateway_ack_count` and
+  `denylist_entry_count` to the unique canonical `gateways[].name` and
+  `denylist_entries[].name` inventories and rejects duplicate gateway
+  acknowledgement or denylist-entry entries before promotion can report ready. The
+  controller-runtime artifact now binds `external_feed_count`,
+  `fetched_feed_count`, `normalized_feed_count`, and `signed_feed_count` to the
+  unique canonical `feeds[].name` inventory and rejects duplicate feed entries
+  before promotion can report ready. The moderation-toggle artifact also binds
+  `toggle_count` and `approved_toggle_count` to the unique canonical
+  `toggles[].name` inventory and rejects duplicate toggle entries before
+  promotion can report ready. The gateway-reload artifact now binds
+  `reload_ack_count` to the unique canonical `gateways[].name` inventory and
+  rejects duplicate gateway acknowledgement entries before promotion can report
+  ready. The enforcement-probe artifact also binds
+  `route_count` and `passed_route_count`
   to the unique canonical `routes[].name` inventory and rejects duplicate route
-  entries before promotion can report ready. The
+  entries before promotion can report ready. The honey-audit artifact now binds
+  `honey_probe_count` to the unique canonical `probes[].name` inventory and
+  rejects duplicate probe entries before promotion can report ready. The
   matching collection planner accepts
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness,
 	  latency, gateway-count, denylist-entry, and honey-probe thresholds, and emits
@@ -7399,10 +7489,13 @@ pre-release client or script payload-alias assumptions outside production.
 	  promotion checks. A new
   `scripts/build_sorafs_gateway_compliance_canary.py` helper now builds
   payload-free controller-runtime and moderation-toggle canaries from reviewed
-  deployment facts, requires every positive proof claim explicitly, forces raw
-  feed/toggle payload and response-body flags to `false`, validates the generated
-  artifact through the SFM-4 checker contract, and writes atomically without
-  following output symlinks. Remaining
+  deployment facts, requires every positive proof claim explicitly, requires
+  reviewed controller `--feed` names whose unique inventory matches
+  `--feed-count`, requires reviewed moderation `--toggle` names whose unique
+  inventory matches `--toggle-count`, forces raw feed/toggle payload and
+  response-body flags to `false`, validates the generated artifact through the
+  SFM-4 checker contract, and writes atomically without following output
+  symlinks. Remaining
 		  SFM-4 gateway compliance production work is the always-on compliance
   controller daemon, persisted production catalog state, moderation
   toggle/override service deployment,
@@ -7699,9 +7792,9 @@ pre-release client or script payload-alias assumptions outside production.
   contract-surface policies as `valid_policy_digests`, requires governance
   approval `policy_digest_hex` to match one of those valid policy digests, and
   binds API gateway `route_count` to the unique canonical `routes[].name`
-  inventory plus reconciliation `source_count` to the unique canonical
-  `sources[].name` inventory so duplicate route or source rows cannot inflate
-  readiness, and marks
+  inventory plus reconciliation `peer_count` and `source_count` to the unique
+  canonical `peers[].name` and `sources[].name` inventories so duplicate route,
+  peer, or source rows cannot inflate readiness, and marks
   contract-digest and policy-digest mismatches on the offending artifact through
   the shared scalar binding error recorder before required-kind summary validity
   is reported. The
@@ -7720,9 +7813,12 @@ pre-release client or script payload-alias assumptions outside production.
   reviewed deployment facts, requires every positive proof claim and required
   coverage set explicitly, forces raw contract/snapshot/receipt/response/ledger
   payload flags to `false`, requires reviewed `--policy-digest-hex` input for
-  contract-surface and governance-approval canaries, validates generated artifacts through the orderbook
-  checker contract, rejects duplicate SDK release artifact ids, and writes
-  atomically without following output symlinks. The
+  contract-surface and governance-approval canaries, requires reviewed
+  reconciliation `--peer` labels whose unique inventory matches
+  `--peer-count`, validates generated artifacts through the orderbook checker
+  contract, rejects duplicate SDK release artifact ids, ships contract, API, and
+  reconciliation response-file examples, and writes atomically without following
+  output symlinks. The
   rollout-gate static contract now pins
   the on-chain contract, durable matcher, daemonized settlement, escrow-custody,
   contract-stream, and live-dashboard orderbook service surfaces as unshipped
@@ -7775,8 +7871,15 @@ pre-release client or script payload-alias assumptions outside production.
   aggregate production-readiness gate to tether both new metadata surfaces to
   recognized artifact fingerprints, requires governance approval
   `policy_digest_hex` to match one of those valid verifier policies, binds
-  enrollment-portal `route_count` to the unique canonical `routes[].name`
-  inventory so duplicate route rows cannot inflate readiness, and blocks promotion when governance still
+  issuer-bundle `credential_count` to the unique canonical `credentials[].name`
+  inventory plus enrollment-portal `route_count` to the unique canonical `routes[].name`
+  inventory and verifier-service `proof_probe_count` to the unique canonical
+  `probes[].name` inventory with accepted/rejected proof counts bound to
+  `probes[].accepted` partitions, and binds moderation-integration
+  `sortition_probe_count` and `commit_reveal_probe_count` to the unique
+  canonical `sortition_probes[].name` and `commit_reveal_probes[].name`
+  inventories, so duplicate credential, route, proof-probe, or moderation-probe
+  rows cannot inflate readiness, and blocks promotion when governance still
   points at the local
   transcript-digest-only proof foundation instead of a production
   privacy-preserving proof backend; the production
@@ -7794,11 +7897,14 @@ pre-release client or script payload-alias assumptions outside production.
   payload-free SFM-4b1 canaries for issuer bundle, commitment root, revocation
   registry, enrollment portal, juror client, verifier service, moderation
   integration, metrics/alerts, and governance approval evidence from reviewed
-  deployment facts, requires every positive proof claim and route/metric
+  deployment facts, requires every positive proof claim and credential/proof-probe/route/metric
   coverage set explicitly, requires reviewed verifier/governance policy-digest
   input, forces raw credential/proof/identity/attestation/response-body flags
   to `false`, rejects the transcript-digest-only privacy
-  backend before writing, validates generated artifacts through the PoP checker
+  backend before writing, requires reviewed `--credential`,
+  `--accepted-proof-probe`, `--rejected-proof-probe`, `--sortition-probe`, and
+  `--commit-reveal-probe` labels whose unique inventories match the credential,
+  verifier proof, and moderation-integration probe counts, validates generated artifacts through the PoP checker
   contract, and writes atomically without following output symlinks. The
   rollout-gate static contract now also pins the
   production verifier's fail-closed transcript-digest boundary and scans SoraFS
@@ -7881,8 +7987,27 @@ pre-release client or script payload-alias assumptions outside production.
   recorder before required-kind summary validity is reported, binds quote-API,
   deposit-lifecycle, and settlement-execution `route_count` to the unique
   canonical `routes[].name` inventories so duplicate route rows cannot inflate
-  readiness, and requires at
-  least four peers before promotion can report `ready`. The matching collection
+  readiness, binds deposit-lifecycle `deposit_probe_count` to the unique
+  canonical `deposit_probes[].name` inventory with `confirmed_deposit_count`
+  bound to the `deposit_probes[].confirmed` partition, binds quote-API
+  `quote_count` and `passed_quote_count` to the product of unique `classes` and
+  `urgencies` inventories so duplicate quote dimension rows cannot inflate
+  readiness, binds settlement-submitter `configured_signer_count` to the unique
+  canonical `signers[].name` inventory and `queued_step_count` to the unique
+  canonical `steps[].name` inventory with `submitted_step_count` bound to
+  `steps[].submitted`, binds settlement-execution
+  `settlement_probe_count` to the unique `outcomes` inventory while rejecting
+  duplicate outcome or reconciliation-status rows, binds Governance-DAG
+  publication `report_count`, `weekly_rollup_count`, and
+  `settlement_receipt_count` to the unique canonical `reports[].name`,
+  `weekly_rollups[].name`, and `settlement_receipts[].name` inventories so
+  duplicate publication rows cannot inflate readiness, binds multi-peer
+  reconciliation `peer_count`, `validator_count`, and `case_count` to the
+  unique canonical `peers[].name`, `validators[].name`, and `cases[].name`
+  inventories, requires `case_count` to match the `cases[].reconciled`
+  partition, rejects duplicate peer, validator, or case rows so reviewed
+  inventory cannot inflate readiness, and requires at least four peers
+  before promotion can report `ready`. The matching collection
   planner accepts
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness,
   latency, settlement-lag, and peer-count thresholds, and emits a dry-run-visible
@@ -7896,7 +8021,12 @@ pre-release client or script payload-alias assumptions outside production.
   Governance DAG, dashboard, multi-peer reconciliation, and governance canary
   artifacts with explicit verified claims, complete required route/class/
   urgency/outcome/status/payload/metric coverage, shared config-digest binding,
-  pricing-config/governance policy-digest input, forced raw-payload omission
+  pricing-config/governance policy-digest input, reviewed peer/validator/
+  reconciliation-case labels plus confirmed/unconfirmed deposit-probe labels and settlement-submitter
+  signer/step labels plus Governance-DAG report/weekly-rollup/
+  settlement-receipt labels whose unique inventories match the multi-peer,
+  deposit lifecycle, submitter, and publication count fields, forced
+  raw-payload omission
   flags, checker-backed prevalidation, atomic symlink-safe writes, and
   pricing-config plus multi-peer reconciliation example argfiles. The
   rollout-gate static contract
@@ -7940,10 +8070,33 @@ pre-release client or script payload-alias assumptions outside production.
   `policy_digest_hex`, valid e2e panel policy digests are published as
   `valid_policy_digests`, and governance approval `policy_digest_hex` must
   match one of those valid panel policy digests before the gate can report
-  ready. Appeal-intake, operator-workflow, commit/reveal, and
-  decision-publication artifacts also bind `route_count` to the unique
+  ready. End-to-end panel artifacts also bind `peer_count` and
+  `validator_count` to the unique canonical `peers[].name` and
+  `validators[].name` inventories and reject duplicate peer or validator
+  entries before promotion can report ready. End-to-end panel artifacts also
+  bind `case_count` to the unique canonical `cases[].name` inventory, require
+  `case_count` to match the `cases[].passed` partition, and reject duplicate
+  end-to-end case entries before promotion can report ready. Appeal-intake
+  artifacts also bind
+  `case_count` to the unique canonical `cases[].name` inventory, require
+  `accepted_case_count` to match the `cases[].accepted` partition, and reject
+  duplicate case entries before promotion can report ready. Sortition-roster
+  artifacts also bind `panel_size` to the unique canonical `jurors[].name`
+  inventory, require `panel_size` to match the `jurors[].eligible` partition,
+  and reject duplicate roster juror entries before promotion can report ready.
+  Appeal-intake,
+  operator-workflow,
+  commit/reveal, and decision-publication artifacts also bind `route_count` to
+  the unique
   canonical `routes[].name` inventory so duplicate route rows cannot inflate
-  readiness. The moderation-panel gate also requires reviewed
+  readiness. Commit/reveal artifacts also bind `commit_count` and
+  `reveal_count` to the unique canonical `commits[].name` and `reveals[].name`
+  inventories, reject duplicate commit or reveal entries, and reject reveal
+  totals above the reviewed commit total before promotion can report ready.
+  Settlement-integration artifacts also bind `settlement_count` to the unique
+  canonical `settlements[].name` inventory and reject duplicate settlement
+  entries before promotion can report ready. The moderation-panel gate also
+  requires reviewed
   `deployment_id`/`environment` context on every artifact and blocks mixed
   reviewed deployment contexts across the same rollout bundle. The matching
   collection planner now validates the schema-closed collection-plan envelope
@@ -7961,9 +8114,21 @@ pre-release client or script payload-alias assumptions outside production.
   transparency/reputation, e2e panel, metrics, and governance canary artifacts
   with explicit verified claims, complete required route/viewer/scenario/
   publication/metric coverage, shared case/roster/tally digest bindings,
-  reviewed e2e/governance policy-digest input, forced raw-payload omission
-  flags, checker-backed prevalidation, atomic
-  symlink-safe writes, and appeal-intake plus commit/reveal example argfiles.
+  reviewed appeal-intake case labels whose unique inventory matches
+  `case_count`, reviewed sortition-roster juror labels whose unique inventory
+  matches `panel_size`,
+  reviewed evidence-viewer session labels whose unique inventory matches
+  `session_count`, reviewed juror-notification labels whose unique inventories
+  match `notification_count` and `juror_count`, reviewed commit/reveal labels
+  whose unique inventories match `commit_count` and `reveal_count`, reviewed
+  settlement-integration labels whose unique inventory matches
+  `settlement_count`, reviewed e2e case labels whose unique inventory matches
+  `case_count`, reviewed e2e peer/validator
+  labels, reviewed e2e/governance policy-digest input, forced raw-payload
+  omission flags,
+  checker-backed prevalidation,
+  atomic symlink-safe writes, and appeal-intake, commit/reveal, and e2e example
+  argfiles.
   The evidence-viewer canary now covers SFM-4b3-specific controls for
   role-scoped manifests, short-lived URLs, attested/logged sessions, strict CSP,
   disabled offline mode, watermark overlay/metadata hashing, append-only access
@@ -8023,10 +8188,16 @@ pre-release client or script payload-alias assumptions outside production.
   statement-publication, reconciliation, metrics/alert, native-bridge-release,
   and governance-approval artifacts, rejects payload-bearing evidence including
   common camel-case or hyphenated secret-key spellings, requires reviewed
-  `deployment_id`/`environment` context on every artifact, requires each staged
-  billing cycle to carry payload-free line-item, statement-bundle,
+  `deployment_id`/`environment` context on every artifact, binds
+  feed-collector and reference-price `feed_count` to the unique canonical
+  `feeds[].name` inventory while requiring `accepted_feed_count` to equal
+  `feed_count` so duplicate feed rows cannot inflate readiness, requires each
+  staged billing cycle to carry payload-free line-item, statement-bundle,
   reconciliation, and per-statement digest roots, requires the per-statement
-  digest count to match the signed statement count, requires every staged
+  digest count to match the signed statement count, binds billing-cycle
+  `statement_count` to the unique canonical `statements[].name` inventory and
+  `line_item_count` to the unique canonical `line_items[].name` inventory so
+  duplicate statement or line-item rows cannot inflate readiness, requires every staged
   billing cycle to reference a valid reference-price decision from the same
   rollout bundle, requires statement-publication, reconciliation, metrics/alert,
   and governance-approval artifacts to bind back to a valid staged billing
@@ -8039,7 +8210,8 @@ pre-release client or script payload-alias assumptions outside production.
   binding error recorders before required-kind summary validity is reported,
   binds statement-publication `route_count` to the unique canonical
   `routes[].name` inventory plus reconciliation `source_count` to the unique
-  canonical `sources[].name` inventory, and native-bridge release
+  canonical `sources[].name` inventory and reconciliation `line_item_count` to
+  the unique canonical `line_items[].name` inventory, and native-bridge release
   `artifact_count` to the unique canonical `artifacts[].id` inventory, so
   duplicate route, source, or artifact rows cannot inflate readiness, and
   requires two distinct successful staged billing cycles before
@@ -8058,12 +8230,15 @@ pre-release client or script payload-alias assumptions outside production.
   canaries for feed collector, reference price, billing cycle, statement
   publication, reconciliation, metrics/alerts,
   native-bridge release, and governance approval evidence from reviewed
-  deployment facts, requires every positive proof claim and route/source/metric
-  coverage set explicitly, forces raw feed/statement/financial-record/response/
+  deployment facts, requires every positive proof claim and
+  feed/line-item/route/source/metric coverage set explicitly, forces raw feed/statement/financial-record/response/
   debug payload flags to `false`, rejects ungoverned hedge-execution enablement
   and duplicate native-bridge release artifact ids before writing, requires
-  reviewed `--policy-digest-hex` input for billing-cycle and
-  governance-approval canaries, validates generated artifacts through the hedging/billing
+  reviewed `--feed` labels whose unique inventory matches `--feed-count`,
+  reviewed `--statement` labels whose unique inventory matches
+  `--statement-digest-hex`, requires reviewed `--line-item` labels whose unique
+  inventory matches `--line-item-count`, requires reviewed `--policy-digest-hex` input for
+  billing-cycle and governance-approval canaries, validates generated artifacts through the hedging/billing
   checker contract, and writes atomically without following output symlinks. A checked-in
   SFM-5 Grafana dashboard and Prometheus alert/test pack now
   defines the hedging/billing observability contract for feed lag/divergence,
@@ -8164,9 +8339,13 @@ pre-release client or script payload-alias assumptions outside production.
   `policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple, and
   provider-bake artifacts must prove the config-backed scheduler canary ran,
   advanced defaulting providers, synced gateway compliance, and preserved
-  orderbook rejection, lifecycle and signed-route `route_count` fields must
-  bind to the unique canonical `routes[].name` inventories so duplicate route
-  rows cannot inflate readiness, and reserve-movement artifacts must prove live
+  orderbook rejection, quote-matrix `scenario_count` and
+  `passed_scenario_count` fields must bind to the product of unique
+  `storage_classes`, `tiers`, and `durations` inventories so duplicate matrix
+  dimension rows cannot inflate readiness, lifecycle and signed-route
+  `route_count` fields must bind to the unique canonical `routes[].name`
+  inventories so duplicate route rows cannot inflate readiness, and
+  reserve-movement artifacts must prove live
   chain
   submission coverage, submitted transaction-hash readback, automatic finality
   polling, confirmed-status polling, timeout rejection, submitted, confirmed,
@@ -8305,8 +8484,10 @@ pre-release client or script payload-alias assumptions outside production.
   failure-bundle, handoff-digest, or policy-digest mismatches on the offending
   artifact through the shared scalar binding error recorder, binds signed
   auditor API, worker-lifecycle, and event-stream `route_count` to the unique
-  canonical `routes[].name` inventories so duplicate route rows cannot inflate
-  readiness, and reports those failures before required-kind summary validity is
+  canonical `routes[].name` inventories, and binds auditor-roster
+  `auditor_count` to the unique canonical `auditors[].name` inventory, so
+  duplicate route or auditor rows cannot inflate readiness, and reports those
+  failures before required-kind summary validity is
   reported. The
   matching collection planner accepts reviewed staged evidence
   paths, supports `@ARGFILE`, forwards age, route-latency, event-lag,
@@ -8323,7 +8504,8 @@ pre-release client or script payload-alias assumptions outside production.
   review, requiring complete failure-source, route, lifecycle-status,
   handoff-target, and metric coverage plus roster/failure/handoff digest
   bindings, reviewed policy-digest input for governance handoff and approval
-  canaries, and latency threshold facts before writing. Remaining repair production work
+  canaries, reviewed auditor labels whose unique inventory matches
+  `--auditor-count`, and latency threshold facts before writing. Remaining repair production work
   is live PoR/PoTR failure, repair, escalation, and governance handoff evidence
   with the deployed auditor roster and coordinator that passes this gate. The
   rollout-gate static contract now pins live operator-evidence capture,
@@ -19874,9 +20056,28 @@ operator-provided rollout bundles.
   capacity, scale-out, or scale-in decisions run, so corrupted future-created
   lanes cannot be counted by the autoscaler. Unrelated lifecycle/config updates
   cannot silently preserve future-created autoscale lanes, while explicit
-  operator repair-retire plans can remove them. Live-state default-route
-  sharding applies the same committed-height boundary before selecting elastic
-  lanes, preventing future-created lanes from receiving default-route traffic or
+  operator repair-retire plans can remove them; Torii endpoint coverage now
+  also proves that repair-retire calls for invalid-height, future-created,
+  out-of-range, off-default, and disabled-autoscale owned lanes clear stale
+  lane-specific queue limits while rejected unrelated plans and active-lane
+  manual-retire attempts leave the catalog and queue cache untouched.
+  Operator-authored additions carrying reserved autoscale markers or ids inside
+  the reserved elastic range are also pinned as no-side-effect endpoint
+  rejections even when the rejected lane metadata includes scheduler capacity
+  overrides.
+  Generic malformed lifecycle plans and disabled-Nexus lifecycle attempts,
+  including duplicate additions or retires, unknown retire targets, unknown
+  dataspace additions, and default-route retire/replacement attempts, are
+  likewise pinned as no-side-effect public API failures for both committed
+  catalogs and queue-local scheduler limits.
+  The core queue lifecycle helper now directly proves rejected autoscale-reserved
+  scheduler metadata cannot refresh queue-local lane catalogs or TEU limits
+  before the state catalog accepts the plan, and accepted repair-retire plans
+  clear stale per-lane TEU overrides after future-created autoscale lanes are
+  removed from the state catalog.
+  Live-state default-route sharding applies the same committed-height boundary
+  before selecting elastic lanes, preventing future-created lanes from receiving
+  default-route traffic or
   appearing in route plans. Block execution, static execution-context
   revalidation, transaction validation without embedded routing context, and
   proposal routing refresh now use a block-height-aware Nexus/world routing
@@ -19907,7 +20108,10 @@ operator-provided rollout bundles.
   future-created or otherwise inactive autoscale lanes during admission, gossip
   routing, proposal refresh, pending reroute, journal replay, or requeue, while
   preserving the legacy dynamic-dataspace fallback only for the unreserved
-  default public lane.
+  default public lane. The queue and transaction-gossip negative fixtures now
+  use canonical autoscale elastic lane shape and assert activation at the
+  declared creation height, so those regressions prove the height gate rather
+  than malformed-lane rejection.
   Lane relay authority applies the same activation-height boundary before
   accepting manifest-bound or commit-topology-derived validator sets for
   autoscale elastic lanes, so relays for not-yet-created lanes cannot be

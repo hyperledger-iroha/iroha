@@ -4,7 +4,7 @@
 //! identifiers that the Nexus scheduler expects, based on the runtime
 //! configuration. The router abstraction keeps the queue decoupled from the
 //! exact routing policy while allowing metrics to reflect the real
-//! assignments instead of single-lane placeholders.
+//! assignments instead of collapsing metrics to the primary lane.
 
 use std::{collections::BTreeSet, str::FromStr, sync::Arc};
 

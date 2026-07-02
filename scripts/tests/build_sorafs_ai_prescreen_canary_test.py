@@ -85,6 +85,12 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         )
     elif kind == "committee":
         args.extend(["--committee-url", "https://committee.example"])
+        for result in (
+            "runner-result-a",
+            "runner-result-b",
+            "runner-result-c",
+        ):
+            args.extend(["--committee-result", result])
     elif kind == "operator_workflow":
         args.extend(
             [
@@ -167,6 +173,12 @@ def test_generated_canaries_pass_full_ai_prescreen_gate(tmp_path: Path) -> None:
     assert payload["valid_notification_manifest_digests"] == [DIGEST]
     assert payload["valid_executor_summary_digests"] == [DIGEST]
     assert payload["valid_policy_digests"] == [POLICY_DIGEST]
+    committee_payload = json.loads(canary_path(tmp_path, "committee").read_text("utf-8"))
+    assert committee_payload["results"] == [
+        {"name": "runner-result-a"},
+        {"name": "runner-result-b"},
+        {"name": "runner-result-c"},
+    ]
     for kind in MODULE.CANARY_KINDS:
         assert payload["required"][kind]["artifact_count"] == 1
         assert payload["required"][kind]["artifacts"][0]["valid"] is True
@@ -224,6 +236,35 @@ def test_committee_result_count_must_cover_quorum(
 
     captured = capsys.readouterr()
     assert "--result-count must be >= --quorum" in captured.err
+    assert not canary_path(tmp_path, "committee").exists()
+
+
+def test_committee_result_inventory_must_match_result_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("committee", tmp_path)
+    args.extend(["--result-count", "4"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--committee-result unique values must match --result-count" in captured.err
+    assert not canary_path(tmp_path, "committee").exists()
+
+
+def test_committee_result_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("committee", tmp_path)
+    first_result = args.index("--committee-result") + 1
+    args.extend(["--committee-result", args[first_result]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--committee-result must not contain duplicates" in captured.err
     assert not canary_path(tmp_path, "committee").exists()
 
 

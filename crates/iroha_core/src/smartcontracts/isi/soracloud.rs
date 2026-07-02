@@ -17971,7 +17971,7 @@ mod tests {
         metadata::Metadata,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
-            LaneConfig, LaneId, LaneVisibility, PublicLaneValidatorRecord,
+            LaneConfig, LaneId, LaneVisibility, PublicLaneStakeShare, PublicLaneValidatorRecord,
             PublicLaneValidatorStatus,
         },
         permission::Permission,
@@ -18290,20 +18290,32 @@ mod tests {
         validator: AccountId,
         total_stake: u64,
     ) {
+        let bonded = Numeric::new(total_stake, 0);
         state_transaction.world.public_lane_validators.insert(
             (LaneId::SINGLE, validator.clone()),
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
                 peer_id: PeerId::from(validator.signatory().clone()),
-                stake_account: validator,
-                total_stake: Numeric::new(total_stake, 0),
-                self_stake: Numeric::new(total_stake, 0),
+                stake_account: validator.clone(),
+                total_stake: bonded.clone(),
+                self_stake: bonded.clone(),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
                 activation_height: None,
                 last_reward_epoch: None,
+            },
+        );
+        state_transaction.world.public_lane_stake_shares.insert(
+            (LaneId::SINGLE, validator.clone(), validator.clone()),
+            PublicLaneStakeShare {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                staker: validator,
+                bonded,
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
             },
         );
     }
@@ -18347,20 +18359,32 @@ mod tests {
         validator: AccountId,
         total_stake: u64,
     ) {
+        let bonded = Numeric::new(total_stake, 0);
         state_transaction.world.public_lane_validators.insert(
             (lane_id, validator.clone()),
             PublicLaneValidatorRecord {
                 lane_id,
                 validator: validator.clone(),
                 peer_id: PeerId::from(validator.signatory().clone()),
-                stake_account: validator,
-                total_stake: Numeric::new(total_stake, 0),
-                self_stake: Numeric::new(total_stake, 0),
+                stake_account: validator.clone(),
+                total_stake: bonded.clone(),
+                self_stake: bonded.clone(),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
                 activation_height: None,
                 last_reward_epoch: None,
+            },
+        );
+        state_transaction.world.public_lane_stake_shares.insert(
+            (lane_id, validator.clone(), validator.clone()),
+            PublicLaneStakeShare {
+                lane_id,
+                validator: validator.clone(),
+                staker: validator,
+                bonded,
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
             },
         );
     }

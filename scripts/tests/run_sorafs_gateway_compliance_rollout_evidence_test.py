@@ -114,6 +114,10 @@ def test_dry_run_prints_complete_gateway_compliance_rollout_plan(
         "policy_digest_hex"
         in plan["evidence_contract"]["feed_promotion"]["required_payload_fields"]
     )
+    assert (
+        "denylist_entries"
+        in plan["evidence_contract"]["feed_promotion"]["required_payload_fields"]
+    )
     assert plan["evidence_contract"]["controller_runtime"]["schema"] == (
         "sorafs.gateway_compliance.controller_runtime_canary.v1"
     )
@@ -144,6 +148,7 @@ def test_dry_run_prints_complete_gateway_compliance_rollout_plan(
         "denial_reasons_observed"
         in plan["evidence_contract"]["enforcement_probe"]["required_payload_fields"]
     )
+    assert "probes" in plan["evidence_contract"]["honey_audit"]["required_payload_fields"]
     assert "metrics" in plan["evidence_contract"]["observability"]["required_payload_fields"]
     assert (
         "iroha_config_bound"

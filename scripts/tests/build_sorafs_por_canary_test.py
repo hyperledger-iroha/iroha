@@ -59,7 +59,10 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(["--seed-replay-digest-hex", DIGEST])
     if kind in MODULE.POLICY_DIGEST_KINDS:
         args.extend(["--policy-digest-hex", POLICY_DIGEST])
-    if kind == "scheduler_runtime":
+    if kind == "randomness":
+        for index in range(CHECKER.DEFAULT_MIN_PROVIDERS):
+            args.extend(["--provider", f"provider-{index:02d}"])
+    elif kind == "scheduler_runtime":
         for route in MODULE.REQUIRED_RUNTIME_ROUTES:
             args.extend(["--runtime-route", route])
     elif kind == "validator_replay":
@@ -136,6 +139,54 @@ def test_response_file_can_build_reporting_archive_canary(tmp_path: Path) -> Non
     assert payload["manual_trigger_route_state"] == "retired"
     assert payload["archive_backend"] == "parquet"
     assert payload["routes"][0]["name"] == MODULE.REQUIRED_REPORTING_ROUTES[0]
+
+
+def test_response_file_can_build_randomness_canary(tmp_path: Path) -> None:
+    args_file = tmp_path / "randomness.args"
+    args_file.write_text(
+        "\n".join(args_for("randomness", tmp_path)),
+        encoding="utf-8",
+    )
+
+    assert MODULE.main([f"@{args_file}"]) == 0
+
+    payload = json.loads(canary_path(tmp_path, "randomness").read_text("utf-8"))
+    assert payload["provider_count"] == CHECKER.DEFAULT_MIN_PROVIDERS
+    assert payload["providers"] == [
+        {"name": f"provider-{index:02d}"}
+        for index in range(CHECKER.DEFAULT_MIN_PROVIDERS)
+    ]
+
+
+def test_randomness_provider_inventory_must_match_provider_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("randomness", tmp_path)
+    index = args.index("--provider")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider unique values must match --provider-count" in captured.err
+    assert not canary_path(tmp_path, "randomness").exists()
+
+
+def test_randomness_provider_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("randomness", tmp_path)
+    first_provider_index = args.index("--provider")
+    args[first_provider_index + 1] = "provider-01"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider must not contain duplicates" in captured.err
+    assert "--provider unique values must match --provider-count" in captured.err
+    assert not canary_path(tmp_path, "randomness").exists()
 
 
 def test_missing_runtime_route_coverage_fails_closed(tmp_path: Path, capsys) -> None:

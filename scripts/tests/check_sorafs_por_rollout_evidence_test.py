@@ -40,6 +40,7 @@ def base(schema: str) -> dict:
 
 def randomness(*, provider_count: int = 3, challenge_count: int = 3) -> dict:
     payload = base("sorafs.por.randomness_canary.v1")
+    providers = [{"name": f"provider-{index:02d}"} for index in range(provider_count)]
     payload.update(
         {
             "drand_round_verified": True,
@@ -50,6 +51,7 @@ def randomness(*, provider_count: int = 3, challenge_count: int = 3) -> dict:
             "deterministic_seed_replay_verified": True,
             "forced_challenge_policy_verified": True,
             "provider_count": provider_count,
+            "providers": providers,
             "challenge_count": challenge_count,
             "seed_replay_digest_hex": DIGEST,
             "policy_digest_hex": DIGEST,
@@ -296,6 +298,38 @@ def test_randomness_requires_minimum_provider_count(tmp_path: Path) -> None:
     write_json(tmp_path / "randomness.json", randomness(provider_count=2))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_randomness_provider_count_must_match_unique_providers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = randomness()
+    payload["provider_count"] += 1
+    write_json(tmp_path / "randomness.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["randomness"]["artifacts"][0]
+    assert "provider_count must match unique providers count" in artifact["errors"]
+
+
+def test_randomness_providers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = randomness()
+    payload["providers"].append(dict(payload["providers"][0]))
+    payload["provider_count"] = len(payload["providers"])
+    write_json(tmp_path / "randomness.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["randomness"]["artifacts"][0]
+    assert "providers must not contain duplicate values" in artifact["errors"]
+    assert "provider_count must match unique providers count" in artifact["errors"]
 
 
 def test_randomness_requires_minimum_challenge_count(tmp_path: Path) -> None:

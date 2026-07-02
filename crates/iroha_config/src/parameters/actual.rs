@@ -3154,7 +3154,7 @@ impl Nexus {
     }
 }
 
-/// Lane manifest registry configuration (placeholder).
+/// Lane manifest registry configuration.
 #[derive(Debug, Clone)]
 pub struct LaneRegistry {
     /// Optional directory containing lane manifest files.
@@ -3356,7 +3356,7 @@ impl LaneConfig {
     ///
     /// # Panics
     /// Panics when the derived catalog is empty (should never happen because
-    /// [`LaneCatalog::default`] always contains the single-lane placeholder).
+    /// [`LaneCatalog::default`] always contains the primary lane).
     #[must_use]
     pub fn primary(&self) -> &LaneConfigEntry {
         self.entries
