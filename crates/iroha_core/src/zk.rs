@@ -341,7 +341,7 @@ pub const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID: &str =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1;
 /// Production opening length for the ABI-7 one-hop recursive compact verifier-slice circuit.
 pub const KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN: u32 = 4;
-/// Legacy Reserved-lineage circuit-family identifier for recursive spend lineage proofs.
+/// Canonical Reserved-lineage circuit-family identifier for recursive spend lineage proofs.
 pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID: &str =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1;
 /// Profile-specific Reserved-lineage circuit identifier for the first offline hop.
@@ -366,16 +366,17 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K: u32 = 12;
 #[cfg(feature = "zk-halo2-ipa")]
 const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_STACK_BYTES: usize = 4 * 1024 * 1024 * 1024;
 
-/// Environment switch for developer-only Reserved-lineage runtime key generation.
+/// Environment switch for developer-only Reserved-lineage key-artifact generation.
 ///
 /// Production SDK and bridge paths should supply packaged verifier/proving key
-/// artifacts. Generating the recursive verifier-slice keys on-device or in
-/// request handling is intentionally disabled by default because the current
-/// non-native verifier circuit materialization is extremely expensive.
+/// artifacts. Generating recursive verifier-slice keys from request handling is
+/// intentionally unavailable outside explicit developer artifact-generation
+/// runs because the current non-native verifier circuit materialization is
+/// extremely expensive.
 pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV: &str =
     "IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN";
 
-const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED: &str = "Kagemusha Reserved-lineage proving requires packaged verifier/proving key artifacts; runtime recursive verifier-slice key generation is disabled by default";
+const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED: &str = "Kagemusha Reserved-lineage proving requires packaged verifier/proving key artifacts; runtime recursive verifier-slice key generation is developer-only and requires an explicit artifact-generation override";
 
 #[cfg(feature = "zk-halo2-ipa")]
 fn kagemusha_recursive_spend_lineage_runtime_keygen_enabled() -> bool {
@@ -852,7 +853,7 @@ pub fn kagemusha_recursive_fixed_window_table_schedule(
 ///
 /// This digest is deterministic for the verifier width and fixed-window profile
 /// and uses no trusted setup. It is intended as the compact public commitment
-/// for future compressed recursive verifier evidence that reuses shifted
+/// for compressed recursive verifier evidence that reuses the current shifted
 /// fixed-window table families.
 ///
 /// # Errors
@@ -2022,13 +2023,13 @@ fn build_kagemusha_recursive_aggregation_semantic_vk_box_with_circuit_id(
     Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
 }
 
-/// Build the compatibility inline verifier key for ABI-7 recursive compact Kagemusha tokens.
+/// Build the canonical LEN=4 inline verifier key for ABI-7 recursive compact Kagemusha tokens.
 ///
-/// This helper returns the LEN=4 one-hop verifier-slice key retained for older
-/// internal callers. Package-backed ABI-7 callers should use
-/// [`kagemusha_recursive_compact_payment_token_one_hop_vk_box`] or
-/// [`kagemusha_recursive_compact_payment_token_append_vk_box`] with an explicit
-/// opening length.
+/// This helper returns the one-hop verifier-slice key used by CLI, SDK, and
+/// governance-record generation. Callers that need a specific verifier-slice
+/// profile should use [`kagemusha_recursive_compact_payment_token_one_hop_vk_box`]
+/// or [`kagemusha_recursive_compact_payment_token_append_vk_box`] with an
+/// explicit opening length.
 ///
 /// # Errors
 ///
@@ -4107,16 +4108,17 @@ fn is_native_halo2_pasta_backend_label(backend: &str) -> bool {
         return false;
     };
     // Native dispatch still contains developer fixtures for local proof tests;
-    // production backend admission must never advertise those circuit ids.
+    // production backend admission must never advertise those circuit ids or
+    // retired unqualified profile roots.
     let profile = normalized.rsplit('/').next().unwrap_or("");
     !profile.starts_with("tiny-")
         && !is_developer_only_backend_label(&normalized)
-        && !is_legacy_vote_bool_backend_profile(profile)
-        && !is_legacy_anon_transfer_backend_profile(profile)
+        && !is_retired_unqualified_vote_bool_backend_profile(profile)
+        && !is_retired_unqualified_anon_transfer_backend_profile(profile)
         && is_native_halo2_pasta_circuit_id(&normalized)
 }
 
-fn is_legacy_vote_bool_backend_profile(profile: &str) -> bool {
+fn is_retired_unqualified_vote_bool_backend_profile(profile: &str) -> bool {
     matches!(
         profile,
         "vote-bool-commit"
@@ -4126,7 +4128,7 @@ fn is_legacy_vote_bool_backend_profile(profile: &str) -> bool {
     )
 }
 
-fn is_legacy_anon_transfer_backend_profile(profile: &str) -> bool {
+fn is_retired_unqualified_anon_transfer_backend_profile(profile: &str) -> bool {
     matches!(
         profile,
         "anon-transfer-2x2"
@@ -8442,9 +8444,9 @@ fn kagemusha_verified_fold_step(
 /// public root, nullifier, output, asset, and chain tags exposed by each proof
 /// match the folded hop metadata.
 ///
-/// Future mode-2 work can replace this checked pre-fold path with transparent
-/// in-circuit recursive aggregation once the full recursive verifier is the
-/// canonical compact-token verifier.
+/// Mode-2 recursive compact evidence uses the separate recursive aggregation
+/// paths; this helper remains the checked pre-fold verifier for aggregation
+/// mode `1` folded-token construction.
 ///
 /// # Errors
 ///
@@ -8632,8 +8634,8 @@ pub use pasta_tiny::PallasIpaBatchVerifierPreflight;
 
 /// Validate and bind an ordered batch of native Pallas IPA verifier witnesses.
 ///
-/// This is the production host-side preflight for the future Kagemusha
-/// recursive aggregation mode. It accepts only the bounded power-of-two opening
+/// This is the production host-side preflight for Kagemusha recursive
+/// aggregation mode `2`. It accepts only the bounded power-of-two opening
 /// widths currently used by the transparent no-trusted-setup Halo2 IPA
 /// corridor, validates every native witness transcript/reduction/accumulator
 /// relation with the optimized deterministic Pallas MSM backend, and returns a
@@ -10935,7 +10937,7 @@ fn prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas
     record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
     envelopes: &[iroha_zkp_halo2::OpenVerifyEnvelope],
     key_artifacts: Option<&iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1>,
-    one_hop_fallback_proving_key_bytes: Option<&[u8]>,
+    one_hop_proving_key_bytes: Option<&[u8]>,
     block_height: Option<u64>,
 ) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
     if let Some(artifacts) = key_artifacts {
@@ -10982,7 +10984,7 @@ fn prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas
                 Some(entry.one_hop_proving_key_archive.as_slice()),
             )
         } else {
-            (None, one_hop_fallback_proving_key_bytes)
+            (None, one_hop_proving_key_bytes)
         };
         return prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelopes(
             record_bundle,
@@ -11015,7 +11017,7 @@ fn prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas
             Some(entry.one_hop_proving_key_archive.as_slice()),
         )
     } else {
-        (None, one_hop_fallback_proving_key_bytes)
+        (None, one_hop_proving_key_bytes)
     };
     let mut token =
         prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelopes(
@@ -11134,9 +11136,9 @@ fn prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas
 
 /// Verify a record-backed ABI-7 recursive compact-token transcript and prove it.
 ///
-/// This uses generated verifier keys and the runtime proving-key cache when
-/// portable key artifacts are not supplied. Bridges and SDKs should prefer the
-/// key-package overload so runtime key generation is not required.
+/// This overload is for developer key-artifact plumbing that supplies an
+/// explicit one-hop proving key archive. Production callers should use the
+/// key-package overload so verifier and proving key material is fully packaged.
 ///
 /// # Errors
 ///
@@ -12347,54 +12349,11 @@ pub fn prove_kagemusha_recursive_spend_lineage_append_from_record_bundle_and_pal
     )
 }
 
-const KAGEMUSHA_RECORD_BACKED_COMPACT_PROVER_REQUIRED: &str = "Kagemusha compact-token proving requires verifier-record trust anchors; use prove_verified_kagemusha_compact_payment_token_from_bundle_with_records or prove_verified_kagemusha_compact_payment_token_from_record_bundle";
-/// Legacy diagnostic retained for ABI-7 recursive compact compatibility probes.
+/// Diagnostic emitted when recursive compact proof composition cannot continue.
 pub const KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE: &str = "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch to be composed into the compact proof";
 
-/// Legacy multi-hop diagnostic retained for older package-missing callers.
+/// Diagnostic emitted by multi-hop recursive compact prover composition.
 pub const KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE: &str = "recursive compact Kagemusha multi-hop payment-token proving requires the append verifier batch to be composed into the compact proof";
-
-/// Reject unanchored private-hop compact Kagemusha token proving.
-///
-/// This ABI is retained so callers get a stable error instead of accidentally
-/// proving compact tokens against caller-supplied inline verifier keys. Use
-/// [`prove_verified_kagemusha_compact_payment_token_from_bundle_with_records`]
-/// or [`prove_verified_kagemusha_compact_payment_token_from_record_bundle`].
-///
-/// # Errors
-///
-/// Always returns an error requiring verifier-record trust anchors.
-#[cfg(feature = "zk-halo2-ipa")]
-pub fn prove_verified_kagemusha_compact_payment_token(
-    _chain_id: &iroha_data_model::ChainId,
-    _asset: &iroha_data_model::asset::AssetDefinitionId,
-    _steps: &[KagemushaFoldProofStep<'_>],
-    _circuit_id: &str,
-    _vk_box: &VerifyingKeyBox,
-    _proving_key_bytes: Option<&[u8]>,
-) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
-    Err(KAGEMUSHA_RECORD_BACKED_COMPACT_PROVER_REQUIRED.to_owned())
-}
-
-/// Reject unanchored serializable-bundle compact Kagemusha token proving.
-///
-/// This ABI is retained so callers get a stable error instead of accidentally
-/// proving compact tokens against caller-supplied inline verifier keys. Use
-/// [`prove_verified_kagemusha_compact_payment_token_from_bundle_with_records`]
-/// or [`prove_verified_kagemusha_compact_payment_token_from_record_bundle`].
-///
-/// # Errors
-///
-/// Always returns an error requiring verifier-record trust anchors.
-#[cfg(feature = "zk-halo2-ipa")]
-pub fn prove_verified_kagemusha_compact_payment_token_from_bundle(
-    _bundle: &iroha_data_model::offline::KagemushaVerifiedFoldBundle,
-    _circuit_id: &str,
-    _vk_box: &VerifyingKeyBox,
-    _proving_key_bytes: Option<&[u8]>,
-) -> Result<iroha_data_model::offline::KagemushaCompactPaymentToken, String> {
-    Err(KAGEMUSHA_RECORD_BACKED_COMPACT_PROVER_REQUIRED.to_owned())
-}
 
 /// Verify a serializable Kagemusha fold bundle against active hop verifier
 /// records and prove one compact payment token.
@@ -13954,7 +13913,7 @@ pub fn preverify_kagemusha_recursive_aggregation_proof_bundle(
 /// `kagemusha-recursive-compact-v1` tokens. It proves host-side that the
 /// recursive proof bundle is canonically bound to its evidence and that the
 /// supplied folded public inputs are exactly the reserved mode-2 projection of
-/// the same aggregation transcript. It does not make the legacy checked
+/// the same aggregation transcript. It does not make the checked-prefold
 /// compact-token verifier accept mode `2`.
 ///
 /// # Errors
@@ -14259,8 +14218,8 @@ pub fn verify_kagemusha_recursive_aggregation_proof_bundle_with_record_at_height
 /// Verify a reserved recursive compact projection against a transparent key.
 ///
 /// This combines backend verification of the recursive aggregation proof with
-/// the folded public-input projection check required by ABI-7 mode-2 compact
-/// token admission. It remains a projection helper and does not make the legacy
+/// the folded public-input projection check required by recursive compact-token
+/// admission. It remains a projection helper and does not make the checked-prefold
 /// [`verify_kagemusha_compact_payment_token`] path accept mode `2`.
 #[must_use]
 pub fn verify_kagemusha_recursive_compact_projection_proof_bundle(
@@ -43927,7 +43886,7 @@ mod kagemusha_folded_real_prover_tests {
         );
         assert!(
             !verify_kagemusha_compact_payment_token(&token, &compact_vk_box),
-            "legacy checked-prefold compact verifier must remain closed for recursive mode-2 tokens"
+            "checked-prefold compact verifier must remain closed for recursive mode-2 tokens"
         );
 
         let mut windowed_record = compact_record.clone();
@@ -45392,8 +45351,8 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_lineage_init_default_rejects_missing_key_artifacts_before_runtime_keygen()
-     {
+    fn kagemusha_recursive_spend_lineage_init_rejects_missing_key_artifacts_before_runtime_keygen()
+    {
         if std::env::var_os(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV).is_some() {
             return;
         }
@@ -45427,7 +45386,7 @@ mod kagemusha_folded_real_prover_tests {
                 current_note,
                 None,
             )
-            .expect_err("default Reserved-lineage init must require packaged key artifacts");
+            .expect_err("Reserved-lineage init must require packaged key artifacts");
         assert!(
             err.contains("packaged verifier/proving key artifacts"),
             "unexpected key-artifact guard error: {err}"
@@ -46878,15 +46837,15 @@ mod kagemusha_folded_real_prover_tests {
         .expect_err("reserved lineage spend envelope verifier hash must match record");
         assert!(err.contains("verifier-key hash mismatch"), "{err}");
 
-        let mut legacy_inner_lineage_bundle = lineage_bundle.clone();
+        let mut non_zk1_inner_lineage_bundle = lineage_bundle.clone();
         attach_recursive_spend_halo2_envelope(
-            &mut legacy_inner_lineage_bundle,
+            &mut non_zk1_inner_lineage_bundle,
             hash_vk(&lineage_vk_box),
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
             vec![0xB1; 64],
         );
         let err = ensure_kagemusha_recursive_spend_lineage_envelope_binding(
-            &legacy_inner_lineage_bundle,
+            &non_zk1_inner_lineage_bundle,
             Some(hash_vk(&lineage_vk_box)),
         )
         .expect_err("reserved lineage spend proof must require a strict ZK1 inner envelope");
@@ -48117,7 +48076,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
-    fn prove_kagemusha_compact_payment_token_rejects_recursive_mode_on_legacy_path() {
+    fn prove_kagemusha_compact_payment_token_rejects_recursive_mode_on_folded_path() {
         let vk_box = kagemusha_vk_box();
         let mut public_inputs = sample_public_inputs();
         public_inputs.aggregation_mode =
@@ -51066,44 +51025,6 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
-    fn prove_verified_kagemusha_compact_payment_token_requires_verifier_records() {
-        let (chain_id, asset, hop, _record) = sample_confidential_v2_verified_hop();
-        let step = hop.as_step();
-        let vk_box = kagemusha_vk_box();
-
-        let err = prove_verified_kagemusha_compact_payment_token(
-            &chain_id,
-            &asset,
-            &[step],
-            KAGEMUSHA_FOLDED_CIRCUIT_ID,
-            &vk_box,
-            None,
-        )
-        .expect_err("unanchored direct compact prover must require verifier records");
-        assert!(
-            err.contains("verifier-record trust anchors"),
-            "unexpected error: {err}"
-        );
-
-        let bundle = KagemushaVerifiedFoldBundle {
-            chain_id,
-            asset,
-            steps: vec![hop.as_bundle_step()],
-        };
-        let err = prove_verified_kagemusha_compact_payment_token_from_bundle(
-            &bundle,
-            KAGEMUSHA_FOLDED_CIRCUIT_ID,
-            &vk_box,
-            None,
-        )
-        .expect_err("unanchored bundle compact prover must require verifier records");
-        assert!(
-            err.contains("verifier-record trust anchors"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
     #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn prove_verified_kagemusha_compact_payment_token_from_bundle_with_records_emits_real_proof() {
         let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
@@ -51947,9 +51868,9 @@ fn extract_pasta_fp_instances_impl(
 // Tiny pasta circuits used for dispatch verification across transparent IPA paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod pasta_tiny {
-    // Temporary dispatch-verification circuits remain until aggregation mode 2
-    // wires the non-native Vesta/Fq verifier foundations into the in-circuit
-    // Halo2 IPA verifier gadget.
+    // Dispatch-verification circuits exercise the non-native Vesta/Fq verifier
+    // foundations used by current aggregation mode 2 and the in-circuit Halo2
+    // IPA verifier gadget.
     #![cfg_attr(not(test), allow(dead_code))]
 
     use halo2_proofs::{
@@ -63436,7 +63357,7 @@ mod pasta_tiny {
 
     /// Circuit wrapper proving table derivation and table-reused selection together.
     ///
-    /// This is the smallest compressed-table composition used by the future
+    /// This is the smallest compressed-table composition used by the current
     /// recursive verifier: the selector reads the table columns produced by the
     /// table-derivation gadget directly, so no duplicate selection-table copy is
     /// assigned or equality-linked.
@@ -69848,8 +69769,8 @@ mod pasta_tiny {
     /// domain separation and binds the parameter fingerprint, witness order,
     /// fixed-window table profile and schedule digest, transcript projections,
     /// `b` reductions, accumulator folds, final terms, and proof-final scalars
-    /// after each witness has passed native verifier preflight. It is intended
-    /// as the compact host bridge surface for the future recursive-in-circuit
+    /// after each witness has passed native verifier preflight. It is the
+    /// compact host bridge surface for the current recursive-in-circuit
     /// aggregation mode.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct PallasIpaBatchVerifierPreflight {
@@ -77862,18 +77783,19 @@ mod tests {
             "package-only compact verifier dispatch must reject unparsable verifier-key bytes"
         );
 
-        let mut legacy_runtime_keygen_attempted = false;
-        let legacy = resolve_vk_cached(backend, &params, &invalid_vk_box, &circuit, || {
-            legacy_runtime_keygen_attempted = true;
-            halo2_backend::keygen_vk(&params, &circuit)
-        });
+        let mut runtime_keygen_attempted = false;
+        let runtime_keygen_result =
+            resolve_vk_cached(backend, &params, &invalid_vk_box, &circuit, || {
+                runtime_keygen_attempted = true;
+                halo2_backend::keygen_vk(&params, &circuit)
+            });
         assert!(
-            legacy.is_err(),
-            "legacy verifier-key resolver must reject the forged verifier-key commitment"
+            runtime_keygen_result.is_err(),
+            "runtime-keygen verifier resolver must reject the forged verifier-key commitment"
         );
         assert!(
-            legacy_runtime_keygen_attempted,
-            "legacy verifier-key resolver attempts runtime keygen on unparsable bytes"
+            runtime_keygen_attempted,
+            "runtime-keygen verifier resolver attempts runtime keygen on unparsable bytes"
         );
         assert!(
             resolve_packaged_vk_cached::<CacheCircuit>(
@@ -77883,7 +77805,7 @@ mod tests {
                 &circuit,
             )
             .is_err(),
-            "package-only resolver must keep rejecting after a legacy fallback attempt"
+            "package-only resolver must keep rejecting after a runtime-keygen attempt"
         );
     }
 

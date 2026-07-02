@@ -489,6 +489,19 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             to,
             asset,
             amount,
+            dataspace,
+        } => {
+            f(*from);
+            f(*to);
+            f(*asset);
+            f(*amount);
+            f(*dataspace);
+        }
+        TransferBatchAsset {
+            from,
+            to,
+            asset,
+            amount,
         } => {
             f(*from);
             f(*to);
@@ -1084,6 +1097,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::RegisterAsset { .. }
         | Instr::CreateNewAsset { .. }
         | Instr::TransferAsset { .. }
+        | Instr::TransferBatchAsset { .. }
         | Instr::EscrowOpenOffer { .. }
         | Instr::EscrowAccept { .. }
         | Instr::EscrowMarkPaymentSent { .. }

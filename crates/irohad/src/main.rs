@@ -6231,6 +6231,7 @@ fn apply_concurrency_config(
         concurrency.guest_stack_bytes,
         stack_budget_bytes,
     );
+    iroha_core::sumeragi::set_sumeragi_stack_size_bytes(concurrency.sumeragi_stack_bytes);
     if stack_outcome.scheduler_clamped
         || stack_outcome.prover_clamped
         || stack_outcome.guest_clamped

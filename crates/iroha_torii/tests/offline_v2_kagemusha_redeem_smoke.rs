@@ -13,7 +13,7 @@ async fn offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request() {
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("optional_kagemusha_echo_string"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("parse_kagemusha_amount_echo"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("must use canonical Numeric text"));
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("reject_kagemusha_legacy_redeem_fields"));
+    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("reject_kagemusha_retired_redeem_fields"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("reject_kagemusha_auxiliary_redeem_fields"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("must be a canonical base64 string"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("must not contain surrounding whitespace"));
@@ -21,7 +21,7 @@ async fn offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request() {
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_ASSET_MISMATCH"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_AMOUNT_MISMATCH"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_SOURCE_MISMATCH"));
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_LEGACY_FIELD"));
+    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_RETIRED_FIELD"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_AUXILIARY_FIELD"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_KAGEMUSHA_REDEEM_INVALID"));
     assert!(
@@ -29,11 +29,11 @@ async fn offline_v2_notes_redeem_accepts_kagemusha_recursive_redeem_request() {
             .contains("offline_v2_notes_redeem_rejects_kagemusha_optional_echo_field_shapes")
     );
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains(
-        "offline_v2_notes_redeem_rejects_legacy_redemption_smuggled_with_kagemusha_marker"
+        "offline_v2_notes_redeem_rejects_retired_redemption_smuggled_with_kagemusha_marker"
     ));
     assert!(
         OFFLINE_V2_ISSUER_SOURCE
-            .contains("offline_v2_notes_redeem_rejects_legacy_fields_with_kagemusha_archive")
+            .contains("offline_v2_notes_redeem_rejects_retired_fields_with_kagemusha_archive")
     );
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains(
         "offline_v2_notes_redeem_rejects_auxiliary_kagemusha_fields_with_redeem_archive"

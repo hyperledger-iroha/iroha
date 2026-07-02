@@ -13072,7 +13072,7 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
           platform_payload: {
             TonInternalMessage: {
               message_body_boc: "b5ee9c72",
-              query_id: "7",
+              query_id: "18446744073709551615",
               destination_binding: {
                 version: 1,
                 key: "sccp:ton:governed-recursive-zk:v1",
@@ -13178,7 +13178,7 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
         kind: "ton_internal_message",
         value: {
           messageBodyBoc: "b5ee9c72",
-          queryId: 7,
+          queryId: "18446744073709551615",
           destinationBinding: {
             version: 1,
             key: "sccp:ton:governed-recursive-zk:v1",
@@ -13220,6 +13220,93 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
       finalityProof: "bb66",
     },
   });
+});
+
+test("getSccpMessageProofArtifact rejects TON query_id above uint64", async () => {
+  const messageId = "11".repeat(32);
+  const payloadHash = "22".repeat(32);
+  const commitmentRoot = "33".repeat(32);
+  const finalityBlockHash = "44".repeat(32);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        local_domain: 0,
+        counterparty_domain: 4,
+        security_model: "RecursiveZk",
+        anchor_governance: "CryptographicProof",
+        destination_binding: {
+          version: 1,
+          key: "sccp:ton:governed-recursive-zk:v1",
+          binding_hash: "56".repeat(32),
+        },
+        proof_family: "stark-fri-v1",
+        verifier_backend: { version: 1, key: "ton-contract-v1" },
+        message_backend: "sccp/stark-fri-v1/ton",
+        registry_backend: "bridge/sccp/stark-fri-v1/ton",
+        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+        finality_model: "TonMasterchain",
+        verifier_target: "TonContract",
+        public_inputs: {
+          version: 1,
+          message_id: messageId,
+          payload_hash: payloadHash,
+          target_domain: 4,
+          commitment_root: commitmentRoot,
+          finality_height: "19",
+          finality_block_hash: finalityBlockHash,
+        },
+        proof_bytes: "aa55",
+        submission_package: {
+          version: 1,
+          proof_family: "stark-fri-v1",
+          verifier_backend: { version: 1, key: "ton-contract-v1" },
+          envelope_encoding: "ton_message_body_boc_v1",
+          submission_kind: "internal_message",
+          verifier_entrypoint: "op::submit_sccp_message_proof",
+          platform_payload: {
+            TonInternalMessage: {
+              message_body_boc: "b5ee9c72",
+              query_id: "18446744073709551616",
+              destination_binding: {
+                version: 1,
+                key: "sccp:ton:governed-recursive-zk:v1",
+                binding_hash: "56".repeat(32),
+              },
+              destination_binding_hash: "56".repeat(32),
+              proof_bytes: "aa55",
+              public_inputs_bytes: "cc77",
+              bundle_bytes: "dd88",
+              statement_hash: "99".repeat(32),
+            },
+          },
+          arguments: [{ key: "message_body_boc", encoding: "ton_boc", bytes: "b5ee9c72" }],
+          envelope_bytes: "b5ee9c72",
+        },
+        bundle: {
+          version: 1,
+          commitment_root: commitmentRoot,
+          commitment: {
+            version: 1,
+            kind: "Transfer",
+            target_domain: 4,
+            message_id: messageId,
+            payload_hash: payloadHash,
+          },
+          merkle_proof: { steps: [] },
+          payload: { Transfer: { version: 1 } },
+          finality_proof: "bb66",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  await assert.rejects(
+    () => client.getSccpMessageProofArtifact(`0x${messageId}`),
+    /payload\.query_id must be at most 18446744073709551615/u,
+  );
 });
 
 test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async () => {
@@ -13630,7 +13717,7 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
         kind: "ton_internal_message",
         value: {
           messageBodyBoc: "b5ee9c72",
-          queryId: 7,
+          queryId: "7",
           destinationBinding: {
             version: 1,
             key: "sccp:ton:governed-recursive-zk:v1",
@@ -21353,17 +21440,50 @@ test("registerContractCode posts manifest JSON", async () => {
 
 test("deployContract submits base64 payload and returns response", async () => {
   let captured;
+  const contractAddress = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
   const responsePayload = {
     ok: true,
-    contract_alias: "router::universal",
-    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-    previous_contract_address: null,
-    upgraded: false,
-    dataspace: "universal",
-    deploy_nonce: 7,
-    tx_hash_hex: "a".repeat(64),
-    code_hash_hex: "b".repeat(64),
-    abi_hash_hex: "c".repeat(64),
+    bundle_name: "single:router::universal",
+    bundle_digest: "d".repeat(64),
+    chain_fingerprint: `0@${"e".repeat(64)}`,
+    dry_run: false,
+    completed_stages: ["deploy:router::universal"],
+    failure_point: null,
+    contracts: [
+      {
+        name: "router::universal",
+        contract_alias: "router::universal",
+        contract_address: contractAddress,
+        previous_contract_address: null,
+        upgraded: false,
+        dataspace: "universal",
+        deploy_nonce: 7,
+        tx_hash_hex: "a".repeat(64),
+        code_hash_hex: "b".repeat(64),
+        abi_hash_hex: "c".repeat(64),
+        status: "submitted",
+      },
+    ],
+    init_calls: [],
+    assertions: [],
+    operation_receipt: {
+      operation_kind: "contract_deploy",
+      status: "submitted",
+      transport: "torii",
+      dataspace: "universal",
+      contract_alias: "router::universal",
+      contract_address: contractAddress,
+      code_hash_hex: "b".repeat(64),
+      abi_hash_hex: "c".repeat(64),
+      tx_hash_hex: "a".repeat(64),
+      entrypoint: null,
+      entrypoint_hash_hex: null,
+      gas_limit: null,
+      gas_used: null,
+      gas_asset_id: null,
+      fee_sponsor: null,
+      payload_digest_hex: "f".repeat(64),
+    },
   };
   const fetchImpl = async (url, init) => {
     captured = { url, init };
@@ -21395,28 +21515,43 @@ test("deployContract submits base64 payload and returns response", async () => {
 
 test("deployContract exposes optional pipeline_status diagnostics", async () => {
   const txHash = "a".repeat(64);
+  const pipelineStatus = {
+    hash: txHash,
+    status: { kind: "Queued", block_height: null, rejection_reason: null },
+    summary: "Queued",
+    diagnostics: [],
+    scope: "local",
+    resolved_from: "queue",
+  };
   const fetchImpl = async () =>
     createResponse({
       status: 200,
       jsonData: {
         ok: true,
-        contract_alias: "router::universal",
-        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-        previous_contract_address: null,
-        upgraded: false,
-        dataspace: "universal",
-        deploy_nonce: 7,
-        tx_hash_hex: txHash,
-        pipeline_status: {
-          hash: txHash,
-          status: { kind: "Queued", block_height: null, rejection_reason: null },
-          summary: "Queued",
-          diagnostics: [],
-          scope: "local",
-          resolved_from: "queue",
-        },
-        code_hash_hex: "b".repeat(64),
-        abi_hash_hex: "c".repeat(64),
+        bundle_name: "single:router::universal",
+        bundle_digest: "d".repeat(64),
+        chain_fingerprint: `0@${"e".repeat(64)}`,
+        dry_run: false,
+        completed_stages: ["deploy:router::universal"],
+        failure_point: null,
+        contracts: [
+          {
+            name: "router::universal",
+            contract_alias: "router::universal",
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            previous_contract_address: null,
+            upgraded: false,
+            dataspace: "universal",
+            deploy_nonce: 7,
+            tx_hash_hex: txHash,
+            pipeline_status: pipelineStatus,
+            code_hash_hex: "b".repeat(64),
+            abi_hash_hex: "c".repeat(64),
+            status: "submitted",
+          },
+        ],
+        init_calls: [],
+        assertions: [],
       },
       headers: { "content-type": "application/json" },
     });
@@ -21427,8 +21562,8 @@ test("deployContract exposes optional pipeline_status diagnostics", async () => 
     contractAlias: "router::universal",
     codeB64: Buffer.from("payload"),
   });
-  assert.equal(result.pipeline_status?.status?.kind, "Queued");
-  assert.equal(result.pipeline_status?.content?.hash, txHash);
+  assert.equal(result.contracts[0].pipeline_status?.status?.kind, "Queued");
+  assert.equal(result.contracts[0].pipeline_status?.content?.hash, txHash);
 });
 
 test("deployContract rejects invalid base64 payloads", async () => {
@@ -21771,6 +21906,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     validationFeePolicyVersion: 7,
     validationFeePolicyHash: "AB".repeat(32),
     validationFeeInstructionIndex: 1,
+    validationFeeTransferEntryIndex: 2,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/propose`);
   assert.equal(captured.init.headers["Content-Type"], "application/x-norito");
@@ -21793,6 +21929,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       validationFeePolicyVersion: 7,
       validationFeePolicyHash: "AB".repeat(32),
       validationFeeInstructionIndex: 1,
+      validationFeeTransferEntryIndex: 2,
     }),
     {
       multisig_account_alias: "cbdc@banka",
@@ -21802,6 +21939,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       validation_fee_policy_version: "7",
       validation_fee_policy_hash: "ab".repeat(32),
       validation_fee_instruction_index: "1",
+      validation_fee_transfer_entry_index: "2",
     },
   );
 });
@@ -21883,6 +22021,24 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
     () =>
       client.proposeMultisig({
         ...request,
+        validationFeeTransferEntryIndex: 2,
+      }),
+    /requires policy metadata/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeTransferEntryIndex: 2,
+      }),
+    /requires instruction index/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
         validationFeePolicyVersion: 7,
       }),
     /provided together/,
@@ -21894,6 +22050,17 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
         validationFeePolicyVersion: 7,
         validationFeePolicyHash: "ab".repeat(32),
         validationFeeInstructionIndex: -1,
+      }),
+    /non-negative integer/,
+  );
+  await assert.rejects(
+    () =>
+      client.proposeMultisig({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeInstructionIndex: 1,
+        validationFeeTransferEntryIndex: -2,
       }),
     /non-negative integer/,
   );
@@ -21914,6 +22081,20 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
     /requires policy metadata/,
   );
   assert.throws(
+    () => buildMultisigProposeRequest({ ...request, validationFeeTransferEntryIndex: 2 }),
+    /requires policy metadata/,
+  );
+  assert.throws(
+    () =>
+      buildMultisigProposeRequest({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeTransferEntryIndex: 2,
+      }),
+    /requires instruction index/,
+  );
+  assert.throws(
     () => buildMultisigProposeRequest({ ...request, validationFeePolicyVersion: 7 }),
     /provided together/,
   );
@@ -21924,6 +22105,17 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
         validationFeePolicyVersion: 7,
         validationFeePolicyHash: "ab".repeat(32),
         validationFeeInstructionIndex: -1,
+      }),
+    /non-negative integer/,
+  );
+  assert.throws(
+    () =>
+      buildMultisigProposeRequest({
+        ...request,
+        validationFeePolicyVersion: 7,
+        validationFeePolicyHash: "ab".repeat(32),
+        validationFeeInstructionIndex: 1,
+        validationFeeTransferEntryIndex: -2,
       }),
     /non-negative integer/,
   );

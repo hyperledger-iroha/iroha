@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::isi::transfer::{TransferAssetBatch, TransferAssetBatchEntry};
+use iroha_data_model::nexus::DataSpaceId;
 use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, IVMHost, Memory, PointerType,
@@ -39,6 +40,11 @@ fn make_asset_tlv(asset: &AssetDefinitionId) -> Vec<u8> {
 fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     let buf = to_bytes(&amount.into()).expect("encode numeric into Norito");
     make_tlv(PointerType::NoritoBytes as u16, &buf)
+}
+
+fn make_dataspace_tlv(dataspace: DataSpaceId) -> Vec<u8> {
+    let buf = to_bytes(&dataspace).expect("encode DataSpaceId into Norito");
+    make_tlv(PointerType::DataSpaceId as u16, &buf)
 }
 
 fn make_transfer_batch_tlv(
@@ -163,8 +169,14 @@ fn transfer_syscall_with_tlv_pointers() {
         Memory::INPUT_START + acc_from.len() as u64 + acc_to.len() as u64 + 16,
     );
     vm.set_register(13, Memory::INPUT_START + amount_offset);
+    let dataspace_tlv = make_dataspace_tlv(DataSpaceId::UNIVERSAL);
+    let dataspace_offset = amount_offset + amount_tlv.len() as u64 + 8;
+    vm.memory
+        .preload_input(dataspace_offset, &dataspace_tlv)
+        .expect("preload input");
+    vm.set_register(14, Memory::INPUT_START + dataspace_offset);
 
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_ASSET as u8]);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_ASSET_SCOPED as u8]);
     vm.load_program(&prog).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 
@@ -267,7 +279,7 @@ fn transfer_batch_syscalls_buffer_entries() {
     let amount1 = make_numeric_tlv(10_u64);
     let amount1_ptr = vm.alloc_input_tlv(&amount1).expect("alloc amount 1 tlv");
     vm.set_register(13, amount1_ptr);
-    host.syscall(syscalls::SYSCALL_TRANSFER_ASSET, &mut vm)
+    host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm)
         .expect("push entry 1");
 
     vm.set_register(10, 1);
@@ -276,7 +288,7 @@ fn transfer_batch_syscalls_buffer_entries() {
     let amount2 = make_numeric_tlv(5_u64);
     let amount2_ptr = vm.alloc_input_tlv(&amount2).expect("alloc amount 2 tlv");
     vm.set_register(13, amount2_ptr);
-    host.syscall(syscalls::SYSCALL_TRANSFER_ASSET, &mut vm)
+    host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm)
         .expect("push entry 2");
 
     host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_END, &mut vm)

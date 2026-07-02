@@ -47,7 +47,9 @@ impl WalletSignatureV1 {
     /// Construct an Ed25519 signature from raw bytes.
     #[must_use]
     pub fn from_ed25519_bytes(bytes: &[u8]) -> Option<Self> {
-        (bytes.len() == 64).then(|| Self::new(Algorithm::Ed25519, Signature::from_bytes(bytes)))
+        iroha_crypto::ed25519_parse_signature(bytes)
+            .ok()
+            .map(|signature| Self::new(Algorithm::Ed25519, signature))
     }
 }
 
@@ -403,13 +405,50 @@ pub enum ConnectP2pMessageV1 {
 #[cfg(test)]
 mod signature_tests {
     use super::*;
+    use iroha_crypto::KeyPair;
+
+    const SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
 
     #[test]
     fn ed25519_helper_maps_bytes() {
-        let raw = [0xAAu8; 64];
-        let sig = WalletSignatureV1::from_ed25519_bytes(&raw).expect("ed25519 helper");
+        let key_pair = KeyPair::try_from_seed(vec![0x44; 32], Algorithm::Ed25519)
+            .expect("Connect signature fixture keypair");
+        let signature =
+            Signature::try_new(key_pair.private_key(), b"iroha-connect-wallet-signature")
+                .expect("Connect signature fixture signs");
+        let sig =
+            WalletSignatureV1::from_ed25519_bytes(signature.payload()).expect("ed25519 helper");
         assert_eq!(sig.algorithm, Algorithm::Ed25519);
-        assert_eq!(sig.bytes(), raw.as_slice());
+        assert_eq!(sig.bytes(), signature.payload());
+    }
+
+    #[test]
+    fn ed25519_helper_rejects_malformed_signature_r() {
+        let key_pair = KeyPair::try_from_seed(vec![0x45; 32], Algorithm::Ed25519)
+            .expect("Connect malformed signature fixture keypair");
+        let signature =
+            Signature::try_new(key_pair.private_key(), b"iroha-connect-wallet-signature")
+                .expect("Connect malformed signature fixture signs");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = signature.payload().to_vec();
+            malformed[..32].copy_from_slice(&replacement_r);
+            assert!(
+                WalletSignatureV1::from_ed25519_bytes(&malformed).is_none(),
+                "{label} Ed25519 signature R must fail at the Connect boundary"
+            );
+        }
     }
 }
 
@@ -1126,9 +1165,22 @@ mod tests {
             }),
             sig_wallet: WalletSignatureV1::new(
                 Algorithm::Ed25519,
-                Signature::from_bytes(&[9u8; 64]),
+                Signature::try_from_bytes(&[9u8; 64])
+                    .expect("Connect approve fixture signature is non-empty and nonzero"),
             ),
         }
+    }
+
+    #[test]
+    fn wallet_signature_from_ed25519_bytes_rejects_inert_payload() {
+        assert!(
+            WalletSignatureV1::from_ed25519_bytes(&[0u8; 64]).is_none(),
+            "all-zero wallet signatures must fail at the Connect boundary"
+        );
+        assert!(
+            WalletSignatureV1::from_ed25519_bytes(&[]).is_none(),
+            "empty wallet signatures must fail at the Connect boundary"
+        );
     }
 
     #[test]

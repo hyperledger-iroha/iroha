@@ -12,75 +12,65 @@ import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 
 public final class OfflineJsonParser {
+  private static final String[] REMOVED_KAGEMUSHA_ABI7_READINESS_FIELDS = {
+    "offline_kagemusha_abi7",
+    "offline_kagemusha_abi7_mode",
+    "offline_kagemusha_abi7_bridge_abi_version",
+    "offline_kagemusha_abi7_circuit_id",
+    "offline_kagemusha_abi7_artifacts"
+  };
 
   private OfflineJsonParser() {}
 
   public static OfflineReadiness parseOfflineReadiness(final byte[] payload) {
     final Object root = parse(payload);
     final Map<String, Object> object = expectObject(root, "root");
-    final boolean offlineKagemushaAbi7 = asOptionalBoolean(object.get("offline_kagemusha_abi7"), false);
-    final boolean offlineKagemushaAbi7Artifacts =
-        asOptionalBoolean(object.get("offline_kagemusha_abi7_artifacts"), false);
-    final String offlineKagemushaAbi7CircuitId =
-        asNullableString(object.get("offline_kagemusha_abi7_circuit_id"));
+    rejectRemovedKagemushaAbi7ReadinessFields(object);
     return new OfflineReadiness(
-        asOptionalBoolean(object.get("offline_note"), false),
-        asOptionalBoolean(object.get("offline_one_use_keys"), false),
-        asOptionalBoolean(object.get("offline_recursive_note_proof"), false),
-        asOptionalBoolean(object.get("offline_fountain_qr"), false),
-        asOptionalBoolean(object.get("offline_sync_optional"), false),
+        asOptionalBoolean(object.get("offline_note"), "offline_note", false),
+        asOptionalBoolean(object.get("offline_one_use_keys"), "offline_one_use_keys", false),
+        asOptionalBoolean(
+            object.get("offline_recursive_note_proof"), "offline_recursive_note_proof", false),
+        asOptionalBoolean(object.get("offline_fountain_qr"), "offline_fountain_qr", false),
+        asOptionalBoolean(object.get("offline_sync_optional"), "offline_sync_optional", false),
         asBoolean(object.get("offline_telemetry"), "offline_telemetry"),
-        asBooleanOrDefault(
+        asBoolean(
             object.get("offline_kagemusha_recursive_compact_available"),
-            offlineKagemushaAbi7,
             "offline_kagemusha_recursive_compact_available"),
-        asPresentReadinessStringOrFallback(
+        asPresentReadinessString(
             object.get("offline_kagemusha_recursive_compact_mode"),
-            object.get("offline_kagemusha_abi7_mode"),
             "offline_kagemusha_recursive_compact_mode"),
-        Integer.valueOf(asPresentReadinessIntegerOrFallback(
+        Integer.valueOf(asPresentReadinessInteger(
             object.get("offline_kagemusha_recursive_compact_required_native_bridge_abi_version"),
-            object.get("offline_kagemusha_abi7_bridge_abi_version"),
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version")),
-        asPresentReadinessStringOrFallback(
+        asPresentReadinessString(
             object.get("offline_kagemusha_recursive_compact_circuit_id"),
-            offlineKagemushaAbi7CircuitId,
             "offline_kagemusha_recursive_compact_circuit_id"),
-        asBooleanOrDefault(
+        asBoolean(
             object.get("offline_kagemusha_recursive_compact_artifacts_available"),
-            offlineKagemushaAbi7Artifacts,
             "offline_kagemusha_recursive_compact_artifacts_available"));
   }
 
   public static OfflineV2Readiness parseOfflineV2Readiness(final byte[] payload) {
     final Object root = parse(payload);
     final Map<String, Object> object = expectObject(root, "root");
-    final boolean offlineKagemushaAbi7 = asOptionalBoolean(object.get("offline_kagemusha_abi7"), false);
-    final boolean offlineKagemushaAbi7Artifacts =
-        asOptionalBoolean(object.get("offline_kagemusha_abi7_artifacts"), false);
-    final String offlineKagemushaAbi7CircuitId =
-        asNullableString(object.get("offline_kagemusha_abi7_circuit_id"));
+    rejectRemovedKagemushaAbi7ReadinessFields(object);
     return new OfflineV2Readiness(
         asBoolean(object.get("offline_telemetry"), "offline_telemetry"),
-        asBooleanOrDefault(
+        asBoolean(
             object.get("offline_kagemusha_recursive_compact_available"),
-            offlineKagemushaAbi7,
             "offline_kagemusha_recursive_compact_available"),
-        asPresentReadinessStringOrFallback(
+        asPresentReadinessString(
             object.get("offline_kagemusha_recursive_compact_mode"),
-            object.get("offline_kagemusha_abi7_mode"),
             "offline_kagemusha_recursive_compact_mode"),
-        Integer.valueOf(asPresentReadinessIntegerOrFallback(
+        Integer.valueOf(asPresentReadinessInteger(
             object.get("offline_kagemusha_recursive_compact_required_native_bridge_abi_version"),
-            object.get("offline_kagemusha_abi7_bridge_abi_version"),
             "offline_kagemusha_recursive_compact_required_native_bridge_abi_version")),
-        asPresentReadinessStringOrFallback(
+        asPresentReadinessString(
             object.get("offline_kagemusha_recursive_compact_circuit_id"),
-            offlineKagemushaAbi7CircuitId,
             "offline_kagemusha_recursive_compact_circuit_id"),
-        asBooleanOrDefault(
+        asBoolean(
             object.get("offline_kagemusha_recursive_compact_artifacts_available"),
-            offlineKagemushaAbi7Artifacts,
             "offline_kagemusha_recursive_compact_artifacts_available"));
   }
 
@@ -94,9 +84,10 @@ public final class OfflineJsonParser {
     final List<Object> rawItems = asList(object.get("items"), "items");
     final List<OfflineTransferList.OfflineTransferItem> items = new ArrayList<>(rawItems.size());
     for (int i = 0; i < rawItems.size(); i++) {
-      items.add(parseTransferItem(expectObject(rawItems.get(i), "items[" + i + "]")));
+      final String itemPath = "items[" + i + "]";
+      items.add(parseTransferItem(expectObject(rawItems.get(i), itemPath), itemPath));
     }
-    final long total = asOptionalLong(object.get("total"), rawItems.size());
+    final long total = asOptionalLong(object.get("total"), "total", rawItems.size());
     return new OfflineTransferList(items, total);
   }
 
@@ -123,13 +114,15 @@ public final class OfflineJsonParser {
     return bool.booleanValue();
   }
 
-  private static boolean asBooleanOrDefault(
-      final Object value, final boolean defaultValue, final String path) {
-    return value == null ? defaultValue : asBoolean(value, path);
-  }
-
-  private static boolean asOptionalBoolean(final Object value, final boolean defaultValue) {
-    return value instanceof Boolean bool ? bool.booleanValue() : defaultValue;
+  private static boolean asOptionalBoolean(
+      final Object value, final String path, final boolean defaultValue) {
+    if (value == null) {
+      return defaultValue;
+    }
+    if (!(value instanceof Boolean bool)) {
+      throw new IllegalStateException(path + " must be a boolean");
+    }
+    return bool.booleanValue();
   }
 
   private static String asPresentReadinessString(final Object value, final String path) {
@@ -140,11 +133,6 @@ public final class OfflineJsonParser {
       throw new IllegalStateException(path + " must be an exact non-empty string");
     }
     return string;
-  }
-
-  private static String asPresentReadinessStringOrFallback(
-      final Object value, final Object fallback, final String path) {
-    return asPresentReadinessString(value == null ? fallback : value, path);
   }
 
   private static int asPresentReadinessInteger(final Object value, final String path) {
@@ -178,11 +166,6 @@ public final class OfflineJsonParser {
     }
   }
 
-  private static int asPresentReadinessIntegerOrFallback(
-      final Object value, final Object fallback, final String path) {
-    return asPresentReadinessInteger(value == null ? fallback : value, path);
-  }
-
   private static int asPositiveReadinessInteger(final BigInteger value, final String path) {
     if (value.signum() <= 0) {
       throw new IllegalStateException(path + " must be a positive integer");
@@ -205,8 +188,18 @@ public final class OfflineJsonParser {
     }
   }
 
-  private static OfflineTransferList.OfflineTransferItem parseTransferItem(
+  private static void rejectRemovedKagemushaAbi7ReadinessFields(
       final Map<String, Object> object) {
+    for (final String field : REMOVED_KAGEMUSHA_ABI7_READINESS_FIELDS) {
+      if (object.containsKey(field)) {
+        throw new IllegalStateException(
+            field + " is not supported; use offline_kagemusha_recursive_compact_*");
+      }
+    }
+  }
+
+  private static OfflineTransferList.OfflineTransferItem parseTransferItem(
+      final Map<String, Object> object, final String path) {
     final List<OfflineTransferList.ReceiptSummary> summaries = parseReceiptSummaries(object);
     return new OfflineTransferList.OfflineTransferItem(
         asOptionalString(pick(object, "bundle_id_hex", "bundleIdHex", "bundle_id", "bundleId")),
@@ -220,9 +213,16 @@ public final class OfflineJsonParser {
         asOptionalString(pick(object, "total_amount", "totalAmount")),
         asOptionalString(pick(object, "claimed_delta", "claimedDelta")),
         asOptionalString(pick(object, "status")),
-        asOptionalLong(pick(object, "receipt_count", "receiptCount"), summaries.size()),
-        asOptionalLong(pick(object, "recorded_at_ms", "recordedAtMs"), 0L),
-        asOptionalLong(pick(object, "recorded_at_height", "recordedAtHeight"), 0L),
+        asOptionalLong(
+            pick(object, "receipt_count", "receiptCount"),
+            path + ".receipt_count",
+            summaries.size()),
+        asOptionalLong(
+            pick(object, "recorded_at_ms", "recordedAtMs"), path + ".recorded_at_ms", 0L),
+        asOptionalLong(
+            pick(object, "recorded_at_height", "recordedAtHeight"),
+            path + ".recorded_at_height",
+            0L),
         asOptionalObject(pick(object, "transfer")),
         summaries);
   }
@@ -284,21 +284,39 @@ public final class OfflineJsonParser {
     return asOptionalString(value);
   }
 
-  private static long asOptionalLong(final Object value, final long defaultValue) {
+  private static long asOptionalLong(
+      final Object value, final String path, final long defaultValue) {
     if (value == null) {
       return defaultValue;
     }
-    if (value instanceof Number number) {
-      return number.longValue();
+    if (value instanceof BigInteger bigInteger) {
+      return checkedLong(bigInteger, path);
     }
-    if (value instanceof String string) {
-      final String trimmed = string.trim();
-      if (trimmed.isEmpty()) {
-        return defaultValue;
+    if (value instanceof BigDecimal bigDecimal) {
+      try {
+        return checkedLong(bigDecimal.toBigIntegerExact(), path);
+      } catch (final ArithmeticException ex) {
+        throw new IllegalStateException(path + " must be an integer", ex);
       }
-      return Long.parseLong(trimmed);
     }
-    return defaultValue;
+    if (value instanceof Byte
+        || value instanceof Short
+        || value instanceof Integer
+        || value instanceof Long) {
+      return ((Number) value).longValue();
+    }
+    if (value instanceof Float || value instanceof Double) {
+      throw new IllegalStateException(path + " must be an integer");
+    }
+    throw new IllegalStateException(path + " must be a JSON integer number");
+  }
+
+  private static long checkedLong(final BigInteger value, final String path) {
+    try {
+      return value.longValueExact();
+    } catch (final ArithmeticException ex) {
+      throw new IllegalStateException(path + " must fit in signed 64-bit range", ex);
+    }
   }
 
   @SuppressWarnings("unchecked")

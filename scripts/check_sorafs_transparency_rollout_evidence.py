@@ -29,8 +29,10 @@ from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
 from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
     build_evidence_artifact,
     count_evidence_artifacts,
+    recognized_evidence_artifacts,
     count_evidence_files,
     evidence_gate_status,
     evidence_artifact_is_valid,
@@ -43,7 +45,9 @@ from sorafs_evidence_validation import (  # noqa: E402
     record_evidence_validation_errors,
     require_2xx_status,
     require_bool_true,
+    require_count_length_match,
     require_count_match,
+    require_count_value_equal,
     require_false,
     require_hex,
     validate_standard_evidence_payload,
@@ -56,6 +60,8 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_recent_timestamp,
     require_string,
     require_string_coverage,
+    require_string_inventory_count_match,
+    require_sum_equal,
     validate_bound_evidence_digest_references,
 )
 from sorafs_required_kinds import (  # noqa: E402
@@ -118,6 +124,7 @@ DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
 COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
     "schema",
     "status",
+    "generated_at_unix",
     "deployment_id",
     "environment",
     "deployment_context_reviewed",
@@ -227,8 +234,10 @@ SENSITIVE_KEYS = {
 
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "generated_at_unix",
     "deployment_id",
     "environment",
+    "deployment_context_reviewed",
     "source_batch_digest_hex",
     "cycle_digest_hex",
 )
@@ -241,8 +250,19 @@ def validate_probe_array(
     *,
     success_field: str,
     status_field: str,
-) -> None:
-    for index, record in require_object_array(payload, field, errors):
+) -> list[tuple[int, dict[str, Any]]]:
+    probe_records = require_object_array(payload, field, errors)
+    if not probe_records:
+        return []
+    probe_count = require_positive_int(payload, "probe_count", errors)
+    require_count_length_match(
+        probe_count,
+        probe_records,
+        "probe_count",
+        field,
+        errors,
+    )
+    for index, record in probe_records:
         require_bool_true(
             record,
             success_field,
@@ -269,6 +289,17 @@ def validate_probe_array(
             errors,
             path=f"{field}[{index}].response_body_blake3",
         )
+    return probe_records
+
+
+def count_probe_records_with_value(
+    probe_records: list[tuple[int, dict[str, Any]]],
+    field: str,
+    value: str,
+) -> int:
+    """Count validated probe records carrying a specific field value."""
+
+    return sum(1 for _index, record in probe_records if record.get(field) == value)
 
 
 def validate_routes(
@@ -314,6 +345,38 @@ def validate_routes(
                 )
 
 
+def validate_route_inventory(
+    payload: dict[str, Any],
+    required_routes: tuple[str, ...],
+    errors: list[str],
+    *,
+    require_passed_count: bool,
+) -> int:
+    if require_passed_count:
+        require_count_match(payload, "route_count", "passed_route_count", errors)
+        route_count = payload.get("route_count")
+    else:
+        route_count = require_positive_int(payload, "route_count", errors)
+    require_string_coverage(
+        payload,
+        "routes",
+        "name",
+        required_routes,
+        errors,
+        allow_scalar_items=False,
+        trim_values=False,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    return route_count if isinstance(route_count, int) and not isinstance(route_count, bool) else 0
+
+
 def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: list[str]) -> None:
     require_passed_status(payload, errors)
     for field in kind.required_false_flags:
@@ -332,34 +395,41 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
             allow_scalar_items=False,
             trim_values=False,
         )
-        validate_probe_array(
+        probe_records = validate_probe_array(
             payload,
             "probes",
             errors,
             success_field="response_success",
             status_field="response_status",
         )
+        require_count_value_equal(
+            payload,
+            "source_entry_probe_count",
+            len(probe_records),
+            "source_entry probes count",
+            errors,
+        )
     elif kind.name == "publication":
         require_hex(payload, "source_batch_digest_hex", HEX64_LEN, errors)
         require_hex(payload, "cycle_digest_hex", HEX64_LEN, errors)
-        require_count_match(payload, "route_count", "passed_route_count", errors)
         require_positive_int(payload, "cycle_detail_probe_count", errors)
-        require_string_coverage(
+        validate_route_inventory(
             payload,
-            "routes",
-            "name",
             REQUIRED_PUBLICATION_ROUTES,
             errors,
-            allow_scalar_items=False,
-            trim_values=False,
+            require_passed_count=True,
         )
         require_bool_true(payload, "publisher_identity_required", errors)
         validate_routes(payload, errors, publication=True)
     elif kind.name == "privacy_aggregate":
         require_hex(payload, "cycle_digest_hex", HEX64_LEN, errors)
         require_count_match(payload, "probe_count", "passed_probe_count", errors)
-        require_positive_int(payload, "source_event_probe_count", errors)
-        require_positive_int(payload, "publish_due_probe_count", errors)
+        source_event_probe_count = require_positive_int(
+            payload, "source_event_probe_count", errors
+        )
+        publish_due_probe_count = require_positive_int(
+            payload, "publish_due_probe_count", errors
+        )
         require_string_coverage(
             payload,
             "probes",
@@ -369,42 +439,70 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
             allow_scalar_items=False,
             trim_values=False,
         )
-        validate_probe_array(
+        probe_records = validate_probe_array(
             payload,
             "probes",
             errors,
             success_field="response_success",
             status_field="response_status",
         )
+        require_count_value_equal(
+            payload,
+            "source_event_probe_count",
+            count_probe_records_with_value(probe_records, "action", "source_event"),
+            "source_event probes count",
+            errors,
+        )
+        require_count_value_equal(
+            payload,
+            "publish_due_probe_count",
+            count_probe_records_with_value(probe_records, "action", "publish_due"),
+            "publish_due probes count",
+            errors,
+        )
+        probe_count = payload.get("probe_count")
+        if isinstance(probe_count, int) and not isinstance(probe_count, bool):
+            require_sum_equal(
+                probe_count,
+                (
+                    ("source_event_probe_count", source_event_probe_count),
+                    ("publish_due_probe_count", publish_due_probe_count),
+                ),
+                "probe_count",
+                errors,
+            )
     elif kind.name == "proof_token_issuance":
         require_hex(payload, "cycle_digest_hex", HEX64_LEN, errors)
         require_count_match(payload, "probe_count", "passed_probe_count", errors)
         require_positive_int(payload, "issuance_probe_count", errors)
-        validate_probe_array(
+        probe_records = validate_probe_array(
             payload,
             "probes",
             errors,
             success_field="response_success",
             status_field="response_status",
         )
+        require_count_value_equal(
+            payload,
+            "issuance_probe_count",
+            len(probe_records),
+            "issuance probes count",
+            errors,
+        )
     elif kind.name == "explorer":
         require_hex(payload, "cycle_digest_hex", HEX64_LEN, errors)
-        route_count = require_positive_int(payload, "route_count", errors)
-        require_minimum_value(route_count, "route_count", 3, errors)
-        require_string_coverage(
+        route_count = validate_route_inventory(
             payload,
-            "routes",
-            "name",
             REQUIRED_EXPLORER_ROUTES,
             errors,
-            allow_scalar_items=False,
-            trim_values=False,
+            require_passed_count=False,
         )
+        require_minimum_value(route_count, "route_count", 3, errors)
         validate_routes(payload, errors)
 
 
 def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list[str]]:
-    return validate_standard_evidence_payload(
+    kind_name, errors = validate_standard_evidence_payload(
         payload,
         SCHEMA_TO_KIND,
         "SoraFS transparency rollout artifact",
@@ -413,6 +511,9 @@ def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list
         validate_kind_specific,
         require_reviewed_deployment_context=True,
     )
+    if kind_name is not None:
+        require_positive_int(payload, "generated_at_unix", errors)
+    return kind_name, errors
 
 
 
@@ -451,7 +552,7 @@ def build_summary(
             )
             continue
         artifact = build_evidence_artifact(
-            path,
+            archive_artifact_path_label(path, evidence_dirs),
             digest,
             payload,
             validation_errors,
@@ -525,8 +626,12 @@ def build_summary(
         "schema": SUMMARY_SCHEMA,
         "status": evidence_gate_status(errors),
         "required_kinds": required_evidence_kind_names(required_kinds),
+        "thresholds": {
+            "max_evidence_bytes": MAX_EVIDENCE_BYTES,
+        },
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
+        "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_source_batch_digests": sorted(valid_source_batch_digests),
         "valid_cycle_digests": sorted(valid_cycle_digests),
         "required": required,

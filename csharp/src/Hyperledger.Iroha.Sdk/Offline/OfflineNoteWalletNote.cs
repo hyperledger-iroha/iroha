@@ -573,13 +573,12 @@ public static class OfflineNoteWalletNoteJsonCodec
     {
         return state switch
         {
-            "spendable" or "SPENDABLE" => OfflineNoteWalletNoteState.Spendable,
-            "receivePending" or "RECEIVE_PENDING" => OfflineNoteWalletNoteState.ReceivePending,
-            "spent" or "SPENT" or "spendPending" or "SPEND_PENDING" => OfflineNoteWalletNoteState.Spent,
-            "redeemPending" or "REDEEM_PENDING" => OfflineNoteWalletNoteState.RedeemPending,
-            "redeemed" or "REDEEMED" => OfflineNoteWalletNoteState.Redeemed,
-            "cancelled" or "CANCELLED" => OfflineNoteWalletNoteState.Cancelled,
-            "changePending" or "CHANGE_PENDING" => OfflineNoteWalletNoteState.Spendable,
+            "spendable" => OfflineNoteWalletNoteState.Spendable,
+            "receivePending" => OfflineNoteWalletNoteState.ReceivePending,
+            "spent" => OfflineNoteWalletNoteState.Spent,
+            "redeemPending" => OfflineNoteWalletNoteState.RedeemPending,
+            "redeemed" => OfflineNoteWalletNoteState.Redeemed,
+            "cancelled" => OfflineNoteWalletNoteState.Cancelled,
             _ => throw InvalidField("state"),
         };
     }

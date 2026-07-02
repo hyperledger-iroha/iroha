@@ -66,6 +66,17 @@ def write_open_flags() -> int:
     )
 
 
+def write_all(fd: int, chunk: bytes) -> None:
+    """Write every byte to a generated fixture descriptor after short writes."""
+
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write Android SoraFS codegen fixture")
+        view = view[written:]
+
+
 def validate_codegen_path(path: Path, label: str) -> None:
     """Reject symlinked codegen fixture paths and parent chains before I/O."""
 
@@ -126,14 +137,11 @@ def write_json(path: Path, payload: dict, *, label: str = "JSON fixture") -> Non
     validate_codegen_path(path, label)
     ensure_codegen_directory(path.parent, f"{label} parent directory")
     validate_codegen_path(path, label)
+    rendered = (json.dumps(payload, indent=2, allow_nan=False) + "\n").encode("utf-8")
     fd = -1
     try:
         fd = os.open(path, write_open_flags(), 0o666)
-        handle = os.fdopen(fd, "w", encoding="utf-8")
-        fd = -1
-        with handle:
-            json.dump(payload, handle, indent=2)
-            handle.write("\n")
+        write_all(fd, rendered)
     except OSError as error:
         raise ValueError(f"failed to write {label} `{path}`: {error}") from error
     finally:

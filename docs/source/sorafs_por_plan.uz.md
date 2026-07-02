@@ -4,11 +4,12 @@ direction: ltr
 source: docs/source/sorafs_por_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ab47380ee5f214b20198f21426d47e91566ce9c24f19c26532f39f9baf2af538
+source_hash: f302a29f7275a746caac5de1051110ffbfee60ad6956e2402c8783a823501655
 source_last_modified: "2026-06-25T17:41:33+00:00"
 translation_last_reviewed: 2026-06-25
 title: SoraFS PoR Challenge Scheduler & Randomness Integration
 summary: SF-9a implementation status for PoR randomness, scheduler runtime wiring, telemetry, persistence, and remaining rollout evidence.
+source_mtime: 2026-07-01T19:42:54.666167+00:00
 ---
 
 # SoraFS PoR Challenge Scheduler & Randomness Integration
@@ -30,16 +31,41 @@ fixtures. The reference validator also provides
 
 Remaining SF-9a rollout work is live deployment evidence for external drand,
 VRF, and auditor feeds, plus any production governance archive handoff required
-by the operator. `scripts/check_sorafs_por_rollout_evidence.py` now provides
+by the operator; each deployment's SQL/Parquet archive backend decision is now
+part of the checked reporting/archive evidence. `scripts/check_sorafs_por_rollout_evidence.py` now provides
 the fail-closed SF-9 rollout evidence gate for deployed PoR scheduler,
 randomness, validator, reporting, archive, observability, and governance
 promotion packets, and `scripts/run_sorafs_por_rollout_evidence.py` provides
-the matching reviewed collection planner/runner. The gate now also requires
+the matching reviewed collection planner/runner. The checker exports its
+required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the
+planner includes the checker-backed `evidence_contract` map in dry-run output
+for the selected required kinds, and validates the schema-closed collection
+plan, required kinds, thresholds, external evidence map, evidence contract, and
+command steps before dry-run output or verifier execution. The shared runner
+plan guard also rejects non-canonical nested required-kind, threshold,
+external-evidence, evidence-contract, and command-step shapes before dry-run
+output or verifier execution. The gate now also requires
 scheduler runtime, validator replay, reporting/archive, observability, and
 governance approval artifacts to carry a `seed_replay_digest_hex` matching a
 valid randomness artifact in the same evidence bundle. Seed-replay mismatches
 are recorded on the offending artifact in the JSON summary before required-kind
-validity is reported.
+validity is reported. Randomness artifacts also carry `policy_digest_hex`,
+valid PoR policy digests are published as `valid_policy_digests`, and
+governance approval evidence must bind its `policy_digest_hex` to one of those
+valid randomness policy digests. Policy mismatches are recorded on the offending
+governance approval artifact through the same summary path.
+`scripts/build_sorafs_por_canary.py` builds individual payload-free SF-9 canary
+artifacts for randomness, scheduler runtime, validator replay,
+reporting/archive, observability, and governance approval evidence. The
+builder requires reviewed deployment context, complete runtime/reporting route
+and metric coverage where applicable, seed-replay digest bindings, provider
+and challenge minimum counts, route, scheduler-lag, and report-latency
+threshold facts, the SQL/Parquet archive backend selection, the manual-trigger
+route decision, config-backed governance metadata, reviewed policy digest input
+for randomness and governance-approval canaries, and validates every generated
+artifact through `scripts/check_sorafs_por_rollout_evidence.py` before writing.
+Checked-in response-file examples cover randomness and scheduler-runtime
+canaries.
 
 ## Randomness Model
 1. **Epoch cadence:** 1-hour epochs (`epoch_id = floor(unix_time / 3600)`).
@@ -308,8 +334,13 @@ repair/governance handoff, missing `sorafs-validate por` replay, unresolved
 manual-trigger route policy, report latency above threshold, missing PoR metrics
 or alerts, critical alerts, seed replay digest drift across runtime/replay/
 reporting/observability/governance artifacts, and governance packets not bound
-to `iroha_config`. Seed-replay binding failures are attached to the offending
-artifact in the emitted summary.
+to `iroha_config`. Governance approval evidence must also carry a
+`policy_digest_hex` matching a valid randomness artifact. Seed-replay binding
+failures are attached to the offending artifact in the emitted summary, and
+policy binding failures are attached to the governance approval artifact.
+Scheduler-runtime and reporting/archive artifacts also bind `route_count` to
+the unique canonical `routes[].name` inventory and reject duplicate route
+entries before promotion can report ready.
 
 ## Rollout Status
 Implemented locally:
@@ -324,16 +355,19 @@ Implemented locally:
   checked-in dashboard and alert fixtures.
 - `generate_por_fixtures` and `sorafs-validate por` reference validation.
 - Fail-closed SF-9 rollout evidence gate, collection planner, operator argfile
-  templates, and focused tests, including cross-artifact seed replay digest
-  binding with per-artifact summary invalidation.
+  templates, payload-free canary builder, and focused tests, including
+  cross-artifact seed replay digest binding with per-artifact summary
+  invalidation and dry-run export of the checker-backed evidence contract.
+  Policy digest binding from randomness to governance approval is now covered
+  by the same evidence gate.
 
 Remaining production gates:
 - Archive a live drand/VRF/auditor run showing deterministic challenge
   generation and verdict replay that passes the SF-9 rollout evidence gate with
   all runtime/replay/reporting/governance evidence bound to the same seed replay
-  digest and any binding failure marked on the offending artifact in the emitted
-  summary.
-- Decide whether each deployment needs the SQL/Parquet warehouse layer in
-  addition to the node-local Norito snapshot.
+  digest, governance approval bound to the randomness policy digest, and any
+  binding failure marked on the offending artifact in the emitted summary.
+- Capture each deployment's reviewed SQL/Parquet archive backend selection in
+  the SF-9 reporting/archive evidence packet.
 - Capture governance DAG archive handoff evidence for production operators and
   include it in the SF-9 reporting/archive evidence packet.

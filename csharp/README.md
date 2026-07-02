@@ -99,7 +99,7 @@ This initial slice provides the foundation needed for a usable managed SDK:
   list DTOs snapshot assigned arrays and return detached arrays on access while
   preserving malformed missing/null list rejection in the raw converters
 - verifying-key registry read/write helpers validate exact backend/name route text, canonical I105 authority, private-key, circuit, gas-schedule, curve, CID, commitment, and status request fields, plus positive version, `vk_len`, and max proof-size fields before HTTP dispatch, and inline verifying-key byte arrays are snapshotted on assignment and access before serialization; accepted 32-byte hex casing/prefixes and status labels are canonicalized only after exact text preflight, verifying-key read responses validate the detail envelope, id/record backend-name material, version/height/status fields, lowercase hashes, inline key base64, and record metadata before returning raw JSON to callers, and verifying-key register/update responses reject malformed or non-accepted envelopes before returning raw JSON to callers
-- identifier resolve requests validate exact policy ids and encrypted-input text before dispatch; identifier policy listing responses plus raw policy summary/page DTO deserialization validate exact policy ids, resolver public keys, page totals, list items, and duplicate object keys inside decoded policy parameter or ignored extension JSON, and both ToriiClient/raw resolve receipts validate exact policy ids, signature hex fields with exact lowercase `0x` prefix handling when present, legacy `signature_payload` objects, duplicate object keys inside legacy, nested, or ignored receipt JSON, payload identifiers, attestation fields, canonical proof base64, execution/opening metadata, and positive canonical timestamp strings before callers trust Torii JSON responses; padded, whitespace-containing, control-character, malformed, noncanonical, zero-timestamp, or mixed signed/proof receipt shapes fail during deserialization
+- identifier resolve requests validate exact policy ids and encrypted-input text before dispatch; identifier policy listing responses plus raw policy summary/page DTO deserialization validate exact policy ids, resolver public keys, page totals, list items, and duplicate object keys inside decoded policy parameter or ignored extension JSON, and both ToriiClient/raw resolve receipts require the current nested `payload`/`attestation` envelope, reject retired flat receipt fields, and validate exact payload identifiers, attestation signatures, canonical proof base64, execution/opening metadata, duplicate object keys, and positive canonical timestamp strings before callers trust Torii JSON responses; padded, whitespace-containing, control-character, malformed, noncanonical, zero-timestamp, unknown-extension, or mixed signed/proof receipt shapes fail during deserialization
 - identifier policy, contract instance inventory, and contract state response list
   DTOs snapshot assigned arrays and return detached arrays on access while
   preserving malformed null/missing list rejection in raw converters
@@ -354,7 +354,7 @@ This initial slice provides the foundation needed for a usable managed SDK:
   integer fields reject leading-zero or overflowing decimal/hex text before
   proof material is trusted
 - managed Offline Note receipt ACK value and Norito/text codecs for the
-  legacy `OfflineNoteReceiptAckEnvelope` handoff payload with exact compact
+  `OfflineNoteReceiptAckEnvelope` handoff payload with exact compact
   layout-flag validation
 - managed Offline Note canonical payload models and compact Norito codecs for
   key-certificate payloads, issued claims, redeem public inputs, audit public
@@ -373,7 +373,8 @@ This initial slice provides the foundation needed for a usable managed SDK:
 - managed Offline Note wallet-note persistence record and JSON codec using the
   same field names as Swift/Kotlin/Android secure stores, with exact persisted
   scope/replay-prevention text fields and duplicate-property rejection before
-  persisted JSON fields are trusted
+  persisted JSON fields are trusted. Retired `spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING`
+  wallet-note state names are rejected; first-release records must use current state names.
 - `IrohaClient`, `LedgerClient`, and `ToriiClient` entry points, with raw JSON helpers still available for uncovered endpoints
 - fixture-backed unit tests against the repo's canonical address vectors
 
@@ -735,9 +736,10 @@ reject empty, malformed, tampered, or wrong-type instruction archives, and keep
 recursive redeem derivation inside the native bridge.
 
 Use `PreferredMode(...)` to select `recursive_compact_v1` when the complete
-ABI-7 compact-token native surface is available, fall back to
-`recursive_spend_v1` when only the ABI-6 recursive-spend surface is available,
-and otherwise use `checked_prefold_v1`.
+ABI-7 compact-token native surface is available, `recursive_spend_v1` when only
+the complete ABI-6-or-later native surface is available, and otherwise `null`.
+Zero-argument selection probes the native bridge; explicit capability selection
+must pass both `recursiveCompactAvailable` and `recursiveSpendAvailable`.
 The ABI-7 `recursive_compact_v1` compact-token symbols remain source-stable and
 probe `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend.
 Use `BuildPallasOpenEnvelopesArchive(...)` for the current-hop record bundle
@@ -763,6 +765,17 @@ current-hop and, when required, previous-proof Pallas opening archives. These
 helpers still validate typed or raw lineage key material and previous-lineage
 record selection before invoking the Pallas builders, so builder availability
 or malformed record bundles cannot mask lineage-admission errors.
+The raw recursive init/append wrappers and record-backed bridge helpers decode
+`KagemushaVerifiedFoldRecordBundle` enough to reject over-limit `steps` count
+prefixes before loading the native bridge. Raw init/append request wrappers
+and the direct record-backed recursive aggregation/compact prover helpers also
+reject Pallas open-envelope archives whose top-level native vector schema or
+envelope count does not match the folded record-bundle hop count. The same C#
+managed preflight decodes each supplied Pallas `OpenVerifyEnvelope` far enough
+to reject malformed IPA params/public/proof counts, missing or malformed
+`vk_commitment` / `public_inputs_schema_hash` / `domain_tag` metadata options,
+empty or over-limit transcript labels, and trailing envelope bytes before
+native dispatch.
 Use `ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(...)`
 with record-bundle, Pallas open-envelope, and recursive compact key-artifact
 archives, and `VerifyRecursiveCompactPaymentToken(...)` with compact-token and
@@ -780,7 +793,7 @@ includes packaged compact proving-key archives and matching verifier-slice
 material. Production defaults still stay on ABI 6 Reserved-lineage recursive
 spend until that artifact set is shipped and signed for release. Empty,
 malformed, missing, or oversized local archives fail as `ArgumentException`;
-bridge error code `-312` remains classified as legacy reserved ABI-7 state. The
+bridge error code `-312` remains classified as reserved ABI-7 state. The
 ABI-7 launch boundary remains explicit: the one-hop LEN=4 compact-token proof
 path uses a packaged compact one-hop proving-key, while release evidence
 continues to track the proof-composition reservation, generic compact-token
@@ -792,12 +805,13 @@ Reserved-lineage branching, use `CanRedeemWitnessless(...)`,
 `CanSelectAppendOutputCircuitId(...)` instead of duplicating circuit-id rules in
 app code. `ValidateRedeemLineagePreflight(...)` or the metadata-bound
 `Redeem(...)` overload rejects missing semantic lineage witnesses and missing
-Reserved-lineage verifier records before native dispatch. Newer redeem request
+Reserved-lineage verifier records before native dispatch. Redeem request
 archives may carry additional `lineage_verifier_records`; use the overloads
 with `lineageVerifierRecordsCount` and
 `lineageWitnessHasReservedPreviousProofs` when a record-backed lineage witness
-spans multiple Reserved-lineage proof profiles, while the legacy
-`lineage_verifier_record` single-record path remains supported.
+spans multiple Reserved-lineage proof profiles. The single-record
+`lineage_verifier_record` field is the first-release scalar record slot, not a
+an alternate decode route.
 `IsSupportedPreviousProofCircuitId(...)` and
 `RequiresPreviousLineageVerifierRecordForAppend(...)` tell app code when to
 reject an unknown previous proof circuit and when to include
@@ -828,7 +842,12 @@ Verify request archives must pass the same public-binding preflight before the
 native bridge returns a recursive spend verify result: Reserved-lineage bundles
 require a matching active `lineage_verifier_record`, semantic bundles must omit
 it, and unsupported proof attachments are rejected as malformed requests rather
-than soft invalid proof results.
+than soft invalid proof results. Redeem request archives keep the same
+single-record path and also carry the trailing defaulted
+`lineage_verifier_records` vector for additional Reserved-lineage verifier
+records; C# metadata-bound `Redeem(...)` overloads accept either source through
+the plural record-count preflight while the single-record boolean overloads
+are part of the first-release API.
 Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
@@ -874,6 +893,11 @@ until real proving, verification, chain admission, witness privacy checks,
 deterministic testing, negative/adversarial testing, replay/nullifier rejection
 testing, parser/verifier fuzzing, performance gates, and external audit signoff
 are complete.
+
+`PrivacyProofRequestV1(...)` performs managed preflight before loading the
+native bridge: `publicInputs` must be non-empty, `witness` and `proof` are
+capped at 33,554,432 bytes, and diagnostics name the offending component (for
+example, `proof must not exceed 33554432 bytes`).
 
 C# also exposes the deterministic privacy FFI status/error-code contract for
 diagnostics and cross-language parity: `StatusError`, `ErrorNullPointer`,

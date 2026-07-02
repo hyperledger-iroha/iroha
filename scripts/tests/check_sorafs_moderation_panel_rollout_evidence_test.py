@@ -33,6 +33,7 @@ def write_json(path: Path, payload: dict) -> Path:
 
 
 def with_context(payload: dict) -> dict:
+    payload.setdefault("generated_at_unix", GENERATED_AT)
     payload["deployment_id"] = DEPLOYMENT_ID
     payload["environment"] = ENVIRONMENT
     payload["deployment_context_reviewed"] = True
@@ -318,6 +319,7 @@ def e2e_panel(*, peer_count: int = 4) -> dict:
         "case_digest_hex": DIGEST,
         "roster_hash_hex": DIGEST,
         "tally_digest_hex": DIGEST,
+        "policy_digest_hex": DIGEST,
         "peer_count": peer_count,
         "validator_count": peer_count,
         "case_count": 2,
@@ -421,6 +423,19 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
             "tally_digest_hex": DIGEST,
         }
     ]
+    assert payload["valid_policy_digests"] == [DIGEST]
+    assert payload["valid_evidence_viewer_digest_sets"] == [
+        {
+            "case_digest_hex": DIGEST,
+            "roster_hash_hex": DIGEST,
+            "session_manifest_digest_hex": DIGEST,
+            "watermark_metadata_digest_hex": DIGEST,
+            "access_log_digest_hex": DIGEST,
+            "legal_hold_receipt_digest_hex": DIGEST,
+            "transparency_report_digest_hex": DIGEST,
+            "audit_digest_hex": DIGEST,
+        }
+    ]
     assert payload["required"]["appeal_intake"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
@@ -480,11 +495,10 @@ def test_mixed_reviewed_deployment_context_fails(tmp_path: Path) -> None:
         "deployment_id": DEPLOYMENT_ID,
         "environment": ENVIRONMENT,
     }
-    assert (
-        "e2e_panel.deployment_id `moderation-panel-staging-b` does not match "
-        f"`{DEPLOYMENT_ID}`"
-        in result["errors"]
-    )
+    joined = "\n".join(result["errors"])
+    assert "e2e_panel.deployment_id does not match previous value" in result["errors"]
+    assert "moderation-panel-staging-b" not in joined
+    assert DEPLOYMENT_ID not in joined
 
 
 def test_missing_e2e_panel_fails(tmp_path: Path) -> None:
@@ -494,6 +508,69 @@ def test_missing_e2e_panel_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_e2e_panel_requires_policy_digest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = e2e_panel()
+    del payload["policy_digest_hex"]
+    write_json(tmp_path / "e2e-panel.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["e2e_panel"]["artifacts"][0]
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+    assert result["valid_policy_digests"] == []
+
+
+def test_governance_approval_policy_digest_must_match_e2e_panel(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    required = result["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert result["valid_policy_digests"] == [DIGEST]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval policy_digest_hex must match a valid "
+        "e2e_panel policy_digest_hex"
+    ]
+
+
+def test_policy_bound_subset_requires_e2e_panel_anchor(tmp_path: Path) -> None:
+    write_json(tmp_path / "governance-approval.json", governance_approval())
+    summary = tmp_path / "summary.json"
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-kind",
+            "governance_approval",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert result["valid_policy_digests"] == []
+    assert artifact["valid"] is False
+    assert (
+        "governance_approval policy_digest_hex must match a valid "
+        "e2e_panel policy_digest_hex"
+    ) in artifact["errors"]
+
+
 def test_stale_appeal_intake_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = appeal_intake()
@@ -501,6 +578,58 @@ def test_stale_appeal_intake_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "appeal-intake.json", payload)
 
     assert run_gate(tmp_path) == 1
+
+
+def test_route_count_must_match_unique_routes_for_route_artifacts(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        ("appeal_intake", "appeal-intake.json", appeal_intake),
+        ("operator_workflow", "operator-workflow.json", operator_workflow),
+        ("commit_reveal", "commit-reveal.json", commit_reveal),
+        ("decision_publication", "decision-publication.json", decision_publication),
+    )
+    for kind, filename, factory in cases:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["route_count"] += 1
+        payload["passed_route_count"] = payload["route_count"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_routes_must_not_duplicate_for_route_artifacts(tmp_path: Path) -> None:
+    cases = (
+        ("appeal_intake", "appeal-intake.json", appeal_intake),
+        ("operator_workflow", "operator-workflow.json", operator_workflow),
+        ("commit_reveal", "commit-reveal.json", commit_reveal),
+        ("decision_publication", "decision-publication.json", decision_publication),
+    )
+    for kind, filename, factory in cases:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["routes"].append(dict(payload["routes"][0]))
+        payload["route_count"] = len(payload["routes"])
+        payload["passed_route_count"] = len(payload["routes"])
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "routes must not contain duplicate values" in artifact["errors"]
+        assert "route_count must match unique routes count" in artifact["errors"]
 
 
 def test_payload_leakage_fails(tmp_path: Path) -> None:
@@ -557,8 +686,14 @@ def test_evidence_viewer_requires_auditable_digest_coverage(tmp_path: Path) -> N
     payload = evidence_viewer()
     del payload["access_log_digest_hex"]
     write_json(tmp_path / "evidence-viewer.json", payload)
+    summary = tmp_path / "summary.json"
 
-    assert run_gate(tmp_path) == 1
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["evidence_viewer"]["artifacts"][0]
+    assert "access_log_digest_hex must be a non-empty string" in artifact["errors"]
+    assert result["valid_evidence_viewer_digest_sets"] == []
 
 
 def test_evidence_viewer_requires_transparency_export_targets(tmp_path: Path) -> None:

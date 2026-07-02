@@ -57,6 +57,13 @@ class RawResponse:
         return self.payload[:size]
 
 
+class HostileImportedScalar:
+    def __str__(self):
+        raise AssertionError(
+            "secret-token imported EVM source live metadata was stringified"
+        )
+
+
 class OversizedResponse:
     def __enter__(self):
         return self
@@ -343,6 +350,32 @@ def source_args(module, fake, *, domain=1):
     return args, material_hash, deployment_hash
 
 
+def full_evm_source_live_summary(module):
+    fake = fake_opener_for(module)
+    args, material_hash, deployment_hash = source_args(module, fake)
+    return module.collect_live_evidence(
+        SimpleNamespace(
+            rpc_url="https://ethereum.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            bridge_address=fake.bridge,
+            expected_rpc_chain_id=1,
+            expected_source_bridge_code_hash=fake.bridge_code_hash,
+            deployment_transaction_hash=bytes.fromhex("de" * 32),
+            source_trust_anchor_hash=args.source_trust_anchor_hash,
+            consensus_verifier_hash=args.consensus_verifier_hash,
+            message_inclusion_verifier_hash=args.message_inclusion_verifier_hash,
+            finality_policy_hash=args.finality_policy_hash,
+            adapter_verifier_vk_hash=args.adapter_verifier_vk_hash,
+            deployment_receipt_hash=args.deployment_receipt_hash,
+            expected_source_verifier_material_hash=material_hash,
+            expected_source_adapter_engine_deployment_hash=deployment_hash,
+            block_tag="finalized",
+            timeout=1.0,
+        ),
+        opener=fake.opener,
+    )
+
+
 def test_evm_source_json_rpc_response_size_is_bounded():
     module = load_live_module()
 
@@ -526,6 +559,11 @@ def test_evm_source_json_rpc_rejects_envelope_drift():
             "string JSON-RPC id was accepted",
         ),
         (
+            {"jsonrpc": "2.0", "id": True, "result": "0x38"},
+            "response id",
+            "boolean JSON-RPC id was accepted",
+        ),
+        (
             {"id": 1, "result": "0x38"},
             "protocol version",
             "missing JSON-RPC protocol version was accepted",
@@ -656,6 +694,73 @@ def test_evm_source_live_numeric_parsers_require_canonical_decimal():
     assert module._source_bridge_deployment_receipt_is_verified(source_bridge) is False
 
 
+def test_evm_source_live_cli_parsers_reject_non_string_values_without_stringification():
+    module = load_live_module()
+
+    class HostileSourceLiveParserValue:
+        def __str__(self):
+            raise AssertionError(
+                "secret-token-evm-source-live-parser-value was stringified"
+            )
+
+        def __repr__(self):
+            raise AssertionError(
+                "secret-token-evm-source-live-parser-value was repr'd"
+            )
+
+        def strip(self):
+            raise AssertionError("secret-token-evm-source-live-parser-value strip ran")
+
+        def startswith(self, _prefix):
+            raise AssertionError(
+                "secret-token-evm-source-live-parser-value startswith ran"
+            )
+
+        def lower(self):
+            raise AssertionError("secret-token-evm-source-live-parser-value lower ran")
+
+        def isascii(self):
+            raise AssertionError(
+                "secret-token-evm-source-live-parser-value isascii ran"
+            )
+
+        def isdecimal(self):
+            raise AssertionError(
+                "secret-token-evm-source-live-parser-value isdecimal ran"
+            )
+
+    cases = (
+        (
+            module.parse_domain,
+            "domain must be eth, bsc, 1, or 2",
+        ),
+        (
+            lambda value: module._parse_hex32(value, label="component hash"),
+            "component hash must be canonical lowercase 0x hex",
+        ),
+        (
+            module._parse_rpc_chain_id,
+            "--expected-rpc-chain-id must be a canonical decimal integer",
+        ),
+        (
+            module.parse_block_tag,
+            "--block-tag must be latest, safe, finalized, or a positive "
+            "canonical lowercase 0x block number",
+        ),
+    )
+
+    for parser, expected_message in cases:
+        try:
+            parser(HostileSourceLiveParserValue())
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert "HostileSourceLiveParserValue" not in rendered
+        else:
+            raise AssertionError("hostile EVM source-live parser value was accepted")
+
+
 def test_evm_source_live_receipt_ready_predicate_redacts_imported_address_parser_failures(
     monkeypatch,
 ):
@@ -745,7 +850,13 @@ def test_evm_source_live_receipt_ready_predicate_uses_guarded_receipt_hash_parse
 def test_evm_source_live_hex_parsers_redact_helper_exit_parser_causes(monkeypatch):
     module = load_live_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         detail = (
             "secret-token EVM source live hex TypeError detail"
             if exception_type is TypeError
@@ -794,6 +905,27 @@ def test_evm_source_live_hex_parsers_redact_helper_exit_parser_causes(monkeypatc
                 )
 
 
+def test_evm_source_live_rpc_fixed_hex_nonzero_controls_reject_non_booleans():
+    module = load_live_module()
+
+    for nonzero in (1, "true", None):
+        try:
+            module._rpc_fixed_hex_data(
+                "0x" + "00" * 32,
+                method="eth_getTransactionReceipt",
+                byte_length=32,
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == (
+                "EVM source-live RPC fixed hex nonzero must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed EVM source-live RPC fixed-hex nonzero control accepted"
+            )
+
+
 def test_evm_source_live_block_tag_parser_rejects_unstable_or_noncanonical_tags():
     module = load_live_module()
 
@@ -824,6 +956,16 @@ def test_evm_source_live_block_tag_parser_rejects_unstable_or_noncanonical_tags(
 def test_evm_source_live_cli_defaults_eth_to_finalized_and_bsc_to_latest():
     module = load_live_module()
     parser = module.build_parser()
+
+    assert module.default_block_tag_for_domain(module.SCCP_DOMAIN_ETH) == "finalized"
+    assert module.default_block_tag_for_domain(module.SCCP_DOMAIN_BSC) == "latest"
+    for alias_domain in (True, False):
+        try:
+            module.default_block_tag_for_domain(alias_domain)
+        except module.argparse.ArgumentTypeError as exc:
+            assert str(exc) == "domain must be an EVM-family source lane"
+        else:
+            raise AssertionError("boolean EVM source-live block-tag domain was accepted")
 
     eth_fake = fake_opener_for(module)
     eth_args = parser.parse_args(
@@ -1094,6 +1236,13 @@ def test_evm_source_live_toml_revalidates_imported_summary_metadata(monkeypatch)
         ),
         (
             lambda forged: forged["source_bridge"].__setitem__(
+                "expected_rpc_chain_id",
+                True,
+            ),
+            "expected source RPC chain id",
+        ),
+        (
+            lambda forged: forged["source_bridge"].__setitem__(
                 "expected_source_bridge_code_hash",
                 "0x" + "aa" * 32,
             ),
@@ -1170,6 +1319,9 @@ def test_evm_source_live_toml_revalidates_imported_summary_metadata(monkeypatch)
         assert "secret-token" not in rendered
         assert "must be hex" not in rendered
         assert exc.__cause__ is None
+        assert (
+            exc.__suppress_context__ is True
+        ), "EVM source live runtime metadata context leaked"
     else:
         raise AssertionError("invalid EVM source live runtime metadata rendered TOML")
 
@@ -1297,6 +1449,66 @@ def test_evm_source_live_toml_revalidates_imported_summary_metadata(monkeypatch)
                 raise AssertionError(
                     "EVM source live TOML leaked parser detail for bridge address"
                 )
+
+
+def test_evm_source_live_rejects_non_string_copied_metadata_without_stringifying():
+    module = load_live_module()
+    summary = full_evm_source_live_summary(module)
+
+    cases = (
+        (
+            ("source_bridge", "bridge_address"),
+            "source bridge address must be an exact hex string",
+        ),
+        (
+            ("source_bridge", "expected_source_bridge_code_hash"),
+            "expected source bridge code hash must be an exact hex string",
+        ),
+        (
+            ("source_bridge", "bridge_runtime_bytecode_hex"),
+            "source bridge runtime bytecode must be exact 0x-prefixed hex",
+        ),
+        (
+            ("source_bridge", "deployment_transaction_hash"),
+            "deployment transaction hash must be an exact hex string",
+        ),
+        (
+            ("source_bridge", "deployment_receipt_contract_address"),
+            "deployment receipt contract address must be an exact hex string",
+        ),
+        (
+            ("source_bridge", "deployment_receipt_finalized_block_hash"),
+            "deployment receipt finalized block hash must be an exact hex string",
+        ),
+        (
+            ("source_records", "source_verifier_material_hash"),
+            "source verifier material hash must be an exact hex string",
+        ),
+        (
+            ("source_records", "expected_source_adapter_engine_deployment_hash"),
+            "expected source adapter engine deployment hash must be an exact hex string",
+        ),
+    )
+
+    for path, expected_message in cases:
+        forged = copy.deepcopy(summary)
+        container = forged
+        for key in path[:-1]:
+            container = container[key]
+        container[path[-1]] = HostileImportedScalar()
+
+        try:
+            module.render_offline_toml(forged)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                f"EVM source TOML accepted non-string copied {'.'.join(path)}"
+            )
 
 
 def test_bsc_source_live_evidence_uses_canonical_bsc_profile():
@@ -1532,7 +1744,13 @@ def test_evm_source_live_redacts_receipt_field_parser_exception_causes(monkeypat
     )
 
     for target_method, expected_message in cases:
-        for exception_type in (SystemExit, TypeError, RuntimeError, ValueError):
+        for exception_type in (
+            module.argparse.ArgumentTypeError,
+            SystemExit,
+            TypeError,
+            RuntimeError,
+            ValueError,
+        ):
             fake = fake_opener_for(module)
 
             def fail_target_receipt_field(
@@ -1606,7 +1824,13 @@ def test_evm_source_live_redacts_receipt_readback_parser_exception_causes(monkey
     )
 
     for target_method, expected_message in cases:
-        for exception_type in (SystemExit, TypeError, RuntimeError, ValueError):
+        for exception_type in (
+            module.argparse.ArgumentTypeError,
+            SystemExit,
+            TypeError,
+            RuntimeError,
+            ValueError,
+        ):
             fake = fake_opener_for(module)
 
             def fail_target_receipt_readback(
@@ -1662,7 +1886,13 @@ def test_evm_source_live_redacts_receipt_block_hash_metadata_reparse_failures(
     module = load_live_module()
     original_parse_hex32 = module._parse_hex32
 
-    for exception_type in (SystemExit, TypeError, RuntimeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        TypeError,
+        RuntimeError,
+        ValueError,
+    ):
         fake = fake_opener_for(module)
 
         def fail_receipt_block_hash(value, *, label, exception_type=exception_type):

@@ -18,7 +18,10 @@ import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
-/** Native JVM implementation of Iroha Offline Note canonical Norito encodings. */
+/**
+ * Archived classic Offline Note model/codec helpers kept as fixture-only
+ * inputs; production offline payments use Kagemusha.
+ */
 object OfflineNote {
     const val KEY_CERTIFICATE_PAYLOAD_DOMAIN: String =
         "iroha:offline-note:key-certificate-payload"
@@ -74,9 +77,23 @@ object OfflineNote {
         "iroha_data_model::offline::model::OfflineNoteInputNullifierPreimage"
     private const val PAYMENT_TOKEN_ID_PREIMAGE_SCHEMA =
         "iroha_data_model::offline::model::OfflineNotePaymentTokenIdPreimage"
+
+    fun canonicalAssetId(assetId: String): String {
+        val encoder = NoritoEncoder(NoritoHeader.COMPACT_LEN)
+        writeAssetId(encoder, assetId)
+        val decoder = NoritoDecoder(encoder.toByteArray(), NoritoHeader.COMPACT_LEN)
+        val canonical = readAssetId(decoder)
+        require(decoder.remaining() == 0) {
+            "Trailing bytes after Offline Note asset id canonicalization"
+        }
+        return canonical
+    }
+
+    fun canonicalAmountString(amount: String): String = parseNumeric(amount).canonicalString
+
     /**
-     * Historical classic Offline Note instruction wire names retained only for
-     * compatibility fixture decoding; production offline payments use Kagemusha
+     * Historical classic Offline Note instruction wire names kept only for
+     * fixture-only decoding; production offline payments use Kagemusha
      * flows.
      */
     const val ISSUE_INSTRUCTION_SCHEMA: String =
@@ -644,13 +661,15 @@ object OfflineNote {
     ) {
         private val _noteCommitment = noteCommitment.copyOf()
         private val _keyCertificatePayloadHash = keyCertificatePayloadHash.copyOf()
-        val canonicalAmount: String = parseNumeric(amount).canonicalString
+        val canonicalAmount: String = canonicalAmountString(amount)
 
         init {
             require(domain == ISSUED_CLAIM_DOMAIN) { "unsupported issued claim domain" }
             requireHash(_noteCommitment, "note_commitment")
             requireHash(_keyCertificatePayloadHash, "key_certificate_payload_hash")
-            parseAssetId(assetId)
+            val canonicalAssetIdValue = canonicalAssetId(assetId)
+            require(assetId == canonicalAssetIdValue) { "asset_id must be canonical" }
+            require(amount == canonicalAmount) { "amount must be canonical" }
         }
 
         fun noteCommitment(): ByteArray = _noteCommitment.copyOf()
@@ -1744,12 +1763,28 @@ object OfflineNote {
         val dataspaceId = if (parts.size == 3) {
             val scope = parts[2]
             require(scope.startsWith("dataspace:")) { "asset scope must use dataspace:<id>" }
-            scope.substring("dataspace:".length).toLong()
+            parseDataspaceId(scope.substring("dataspace:".length))
         } else {
             null
         }
         return ParsedAssetId(parts[1], definitionBytes, dataspaceId)
     }
+
+    private fun parseDataspaceId(value: String): Long {
+        require(isCanonicalUnsignedDecimal(value)) {
+            "asset scope must use canonical dataspace:<id>"
+        }
+        return try {
+            value.toLong()
+        } catch (ex: NumberFormatException) {
+            throw IllegalArgumentException("asset scope dataspace id must fit in signed 64-bit range", ex)
+        }
+    }
+
+    private fun isCanonicalUnsignedDecimal(value: String): Boolean =
+        value.isNotEmpty() &&
+            (value == "0" || !value.startsWith("0")) &&
+            value.all { it in '0'..'9' }
 
     private fun parseNumeric(value: String): NumericValue {
         val decimal = BigDecimal(value)

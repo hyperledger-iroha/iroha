@@ -776,7 +776,9 @@ fn verify_signature_hex(
     digest: &[u8],
     verification_key: &PublicKey,
 ) -> Result<(), TryReadError> {
-    let signature = Signature::from_hex(signature_hex)
+    let signature_bytes = hex::decode(signature_hex)
+        .map_err(|_| TryReadError::SignatureMalformed(signature_hex.to_owned()))?;
+    let signature = Signature::try_from_bytes(&signature_bytes)
         .map_err(|_| TryReadError::SignatureMalformed(signature_hex.to_owned()))?;
     signature
         .verify(verification_key, digest)
@@ -2219,12 +2221,16 @@ mod tests {
             taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
             sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
             tron_verifier_address: "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ".to_owned(),
+            ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", "11".repeat(32)),
             verifier_key_hash: format!("0x{}", "22".repeat(32)),
             proof_artifact_hash: None,
             proving_key_hash: None,
             native_evm_prover_bundle_hash: None,
             native_evm_prover_bundle: None,
+            source_verifier_material: None,
+            source_adapter_engine_deployment: None,
+            source_adapter_engine: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: None,
@@ -2784,6 +2790,64 @@ mod tests {
     }
 
     #[test]
+    async fn snapshot_roundtrip_preserves_sccp_outbound_messages() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
+        let block =
+            signed_block_with_transaction(accepted_log_transaction("sccp-outbound-snapshot"));
+        store_block_and_mark_state_height(&mut state, &kura, block);
+        let key = iroha_data_model::bridge::SccpOutboundMessageKey {
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            message_id: [0xA5; 32],
+        };
+        let record = iroha_data_model::bridge::SccpOutboundMessageRecord {
+            payload_hash: [0x5A; 32],
+            recorded_at_height: u64::try_from(state.view().height()).expect("height fits u64"),
+        };
+        state
+            .world
+            .sccp_outbound_messages
+            .insert(key.clone(), record);
+        let key_pair = checked_random_snapshot_keypair();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+        let snapshot_bytes =
+            std::fs::read(store_dir.join(SNAPSHOT_FILE_NAME)).expect("snapshot bytes");
+        let snapshot_value: json::Value =
+            json::from_slice(&snapshot_bytes).expect("snapshot JSON should parse");
+        assert!(
+            snapshot_world_has_field(&snapshot_value, "sccp_outbound_messages"),
+            "new snapshots must carry the SCCP outbound replay registry"
+        );
+
+        let snapshot_state = try_read_snapshot(
+            &store_dir,
+            &kura,
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("snapshot read");
+
+        let restored = snapshot_state
+            .view()
+            .world
+            .sccp_outbound_messages
+            .get(&key)
+            .copied()
+            .expect("SCCP outbound replay key should survive snapshot roundtrip");
+        assert_eq!(restored, record);
+    }
+
+    #[test]
     async fn snapshot_write_signature_file_uses_checked_signing_and_verifies_digest() {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
@@ -2839,6 +2903,37 @@ mod tests {
         };
 
         assert!(matches!(error, TryReadError::SignatureInvalid(_)));
+    }
+
+    #[test]
+    async fn snapshot_read_rejects_all_zero_signature_sidecar_before_verification() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = checked_random_snapshot_keypair();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
+        std::fs::write(
+            store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
+            "00".repeat(64),
+        )
+        .expect("replace snapshot signature");
+
+        let Err(error) = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        ) else {
+            panic!("snapshot with all-zero signature should be rejected")
+        };
+
+        assert!(matches!(error, TryReadError::SignatureMalformed(_)));
     }
 
     #[test]

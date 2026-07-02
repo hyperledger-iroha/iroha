@@ -15,6 +15,8 @@ use super::votes::record_vote_drop_without_roster;
 use super::*;
 use iroha_crypto::{Algorithm, HashOf};
 
+const AUTO_WORKER_MIN: usize = 2;
+const AUTO_WORKER_MAX: usize = 8;
 const VOTE_VERIFY_BATCH_MAX: usize = 64;
 static VOTE_VERIFY_AGGREGATE_USED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static VOTE_VERIFY_AGGREGATE_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -28,11 +30,12 @@ fn resolve_worker_config(
     result_queue_cap: usize,
 ) -> (usize, usize, usize) {
     let threads = if worker_threads == 0 {
-        std::thread::available_parallelism()
+        let detected = std::thread::available_parallelism()
             .map(|count| count.get())
-            .unwrap_or(1)
+            .unwrap_or(1);
+        detected.clamp(AUTO_WORKER_MIN, AUTO_WORKER_MAX)
     } else {
-        worker_threads
+        worker_threads.max(1)
     };
     let work_queue_cap = if work_queue_cap == 0 {
         threads.saturating_mul(4).max(4)
@@ -256,7 +259,8 @@ pub(super) fn spawn_vote_verify_workers(
                 }
 
                 let verify_single = |prepared: &PreparedVote| {
-                    let signature = Signature::from_bytes(&prepared.work.vote.bls_sig);
+                    let signature = Signature::try_from_bytes(&prepared.work.vote.bls_sig)
+                        .map_err(|_| VoteSignatureError::SignatureInvalid)?;
                     signature
                         .verify(&prepared.public_key, &prepared.preimage)
                         .map_err(|_| VoteSignatureError::SignatureInvalid)
@@ -671,11 +675,20 @@ mod tests {
     fn vote_verify_worker_config_auto_scales() {
         let expected_threads = std::thread::available_parallelism()
             .map(|count| count.get())
-            .unwrap_or(1);
+            .unwrap_or(1)
+            .clamp(AUTO_WORKER_MIN, AUTO_WORKER_MAX);
         let (threads, work_cap, result_cap) = resolve_worker_config(0, 0, 0);
         assert_eq!(threads, expected_threads);
         assert_eq!(work_cap, expected_threads.saturating_mul(4).max(4));
         assert_eq!(result_cap, expected_threads.saturating_mul(8).max(8));
+    }
+
+    #[test]
+    fn vote_verify_worker_config_preserves_explicit_count() {
+        let (threads, work_cap, result_cap) = resolve_worker_config(32, 0, 0);
+        assert_eq!(threads, 32);
+        assert_eq!(work_cap, 128);
+        assert_eq!(result_cap, 256);
     }
 
     #[test]
@@ -928,6 +941,65 @@ mod tests {
             work_tx
                 .send(VoteVerifyWork {
                     id: 8,
+                    key,
+                    vote,
+                    signature_topology: topology,
+                    pops: Arc::new(BTreeMap::new()),
+                    chain_id,
+                    mode_tag: super::PERMISSIONED_TAG,
+                })
+                .expect("send vote verify work");
+            drop(work_tx);
+
+            let result = handle
+                .result_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("vote verify result");
+            assert!(matches!(
+                result.signature_result,
+                Err(VoteSignatureError::SignatureInvalid)
+            ));
+
+            drop(handle.work_txs);
+            for join in handle.join_handles {
+                if let Err(err) = join.join() {
+                    panic!("vote verify worker panicked: {err:?}");
+                }
+            }
+        }
+
+        #[test]
+        fn vote_verify_rejects_all_zero_signature_material() {
+            let handle = spawn_vote_verify_workers(None, 1, 1, 1);
+            let work_tx = handle.work_txs[0].clone();
+
+            let signer = checked_seed_keypair(vec![0x53; 32], Algorithm::BlsNormal);
+            let topology = Arc::new(super::network_topology::Topology::new(vec![PeerId::from(
+                signer.public_key().clone(),
+            )]));
+            let chain_id: ChainId = "vote-all-zero-signature-test".parse().expect("chain id");
+            let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0x25; Hash::LENGTH],
+            ));
+            let vote = crate::sumeragi::consensus::Vote {
+                phase: crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+                post_state_root: Hash::prehashed([1u8; Hash::LENGTH]),
+                height: 1,
+                view: 0,
+                epoch: 0,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
+                highest_qc: None,
+                signer: 0,
+                bls_sig: vec![0_u8; 96],
+            };
+            let key = VoteVerifyKey::from_vote(&vote);
+
+            work_tx
+                .send(VoteVerifyWork {
+                    id: 9,
                     key,
                     vote,
                     signature_topology: topology,

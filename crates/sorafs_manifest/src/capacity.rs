@@ -8,9 +8,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Verifier, VerifyingKey,
-};
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use norito::{
     core::{DecodeFromSlice, decode_field_canonical},
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
@@ -436,7 +434,11 @@ pub struct ReplicationOrderSignatureV1 {
 
 impl ReplicationOrderSignatureV1 {
     fn validate(&self) -> Result<(), SignedReplicationOrderValidationError> {
-        if self.public_key.is_empty() || self.signature.is_empty() {
+        if self.public_key.is_empty()
+            || crate::inert_bytes(&self.public_key)
+            || self.signature.is_empty()
+            || crate::inert_bytes(&self.signature)
+        {
             return Err(SignedReplicationOrderValidationError::InvalidSignature);
         }
         Ok(())
@@ -524,15 +526,17 @@ impl SignedReplicationOrderV1 {
 
         let mut public_key = [0u8; PUBLIC_KEY_LENGTH];
         public_key.copy_from_slice(&self.signature.public_key);
-        let verifying_key = VerifyingKey::from_bytes(&public_key).map_err(|err| {
-            ReplicationOrderSignatureVerificationError::InvalidPublicKey {
-                reason: err.to_string(),
-            }
-        })?;
+        let verifying_key =
+            crate::checked_ed25519_verifying_key_from_bytes(&public_key).map_err(|err| {
+                ReplicationOrderSignatureVerificationError::InvalidPublicKey { reason: err }
+            })?;
 
         let mut signature = [0u8; SIGNATURE_LENGTH];
         signature.copy_from_slice(&self.signature.signature);
-        let signature = DalekSignature::from_bytes(&signature);
+        let signature =
+            crate::checked_ed25519_signature_from_bytes(&signature).map_err(|reason| {
+                ReplicationOrderSignatureVerificationError::Verification { reason }
+            })?;
 
         let payload_bytes = self.signature_payload_bytes().map_err(|err| {
             ReplicationOrderSignatureVerificationError::PayloadEncoding {
@@ -540,7 +544,7 @@ impl SignedReplicationOrderV1 {
             }
         })?;
         verifying_key
-            .verify(&payload_bytes, &signature)
+            .verify_strict(&payload_bytes, &signature)
             .map_err(
                 |err| ReplicationOrderSignatureVerificationError::Verification {
                     reason: err.to_string(),
@@ -1386,6 +1390,40 @@ mod tests {
         assert!(matches!(
             envelope.verify_signature(),
             Err(ReplicationOrderSignatureVerificationError::Verification { .. })
+        ));
+    }
+
+    #[test]
+    fn signed_replication_order_rejects_all_zero_signature_material() {
+        let mut envelope = sign_replication_order(base_replication_order(), &[0xA7; 32]);
+        envelope.signature.signature.fill(0);
+
+        let err = envelope
+            .verify_signature()
+            .expect_err("all-zero replication order signature must be rejected");
+        assert!(matches!(
+            err,
+            ReplicationOrderSignatureVerificationError::Verification { reason }
+                if reason.contains("all zero")
+        ));
+    }
+
+    #[test]
+    fn signed_replication_order_validate_rejects_all_zero_signature_material() {
+        let mut envelope = sign_replication_order(base_replication_order(), &[0xA7; 32]);
+        envelope.signature.signature.fill(0);
+
+        assert!(matches!(
+            envelope.validate(),
+            Err(SignedReplicationOrderValidationError::InvalidSignature)
+        ));
+
+        envelope.signature.signature = vec![0xA7; 64];
+        envelope.signature.public_key = vec![0; 32];
+
+        assert!(matches!(
+            envelope.validate(),
+            Err(SignedReplicationOrderValidationError::InvalidSignature)
         ));
     }
 

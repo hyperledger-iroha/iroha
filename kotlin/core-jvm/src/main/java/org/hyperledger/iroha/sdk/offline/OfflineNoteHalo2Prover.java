@@ -291,9 +291,12 @@ public final class OfflineNoteHalo2Prover {
 
   public static boolean verifyOpenVerifyEnvelope(
       final byte[] envelope, final String publicInputsHashHex) {
+    if (!isExactLowerHex(publicInputsHashHex, 64)) {
+      return false;
+    }
     final byte[] payload = proofPayloadFromOpenVerifyEnvelope(envelope);
     final DecodedPayload decoded = decodeZk1ProofPayload(payload);
-    if (!hexLower(publicInputsHash(decoded.publicValues)).equals(publicInputsHashHex.trim().toLowerCase(java.util.Locale.ROOT))) {
+    if (!hexLower(publicInputsHash(decoded.publicValues)).equals(publicInputsHashHex)) {
       return false;
     }
     return verifyZk1Payload(payload, decoded.publicValues);
@@ -900,6 +903,20 @@ public final class OfflineNoteHalo2Prover {
       out[i * 2 + 1] = digits[value & 0x0F];
     }
     return new String(out);
+  }
+
+  private static boolean isExactLowerHex(final String value, final int expectedLength) {
+    if (value == null || value.length() != expectedLength) {
+      return false;
+    }
+    for (int i = 0; i < value.length(); i++) {
+      final char ch = value.charAt(i);
+      if ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')) {
+        continue;
+      }
+      return false;
+    }
+    return true;
   }
 
   private static BigInteger limbs(final String... littleEndianHex) {

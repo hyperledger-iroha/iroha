@@ -275,7 +275,23 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
     }
 
     public func buildTransferInstructionBox(input: NexusTransferInput) throws -> Data {
-        try SwiftNexusTransferPayloadEncoder.encodeInstructionBox(input: input)
+        if let parsed = OfflineNorito.parsePublicAssetIdLiteral(input.sourceAssetID) {
+            let nativeAssetDefinitionId: String
+            if let dataspaceId = parsed.dataspaceId {
+                nativeAssetDefinitionId = "\(parsed.assetDefinitionId)#dataspace:\(dataspaceId)"
+            } else {
+                nativeAssetDefinitionId = parsed.assetDefinitionId
+            }
+            if let nativeInstruction = try NoritoNativeBridge.shared.encodeTransferInstructionBox(
+                authority: parsed.accountId,
+                assetDefinitionId: nativeAssetDefinitionId,
+                quantity: input.quantity,
+                destination: input.destinationAccountID
+            ) {
+                return nativeInstruction
+            }
+        }
+        return try SwiftNexusTransferPayloadEncoder.encodeInstructionBox(input: input)
     }
 
     public func finalizeSignedTransaction(signable: NexusSignableTransaction,
@@ -541,8 +557,11 @@ private enum SwiftNexusTransferPayloadEncoder {
         metadata[IrohaValidationFeeTransactionMetadataKey.policyVersion] = .number(Double(request.policyVersion))
         metadata[IrohaValidationFeeTransactionMetadataKey.policyHash] = .string(normalizedPolicyHash)
         metadata[IrohaValidationFeeTransactionMetadataKey.instructionIndex] = .number(1)
-        if let feeSponsor = request.principal.feeSponsor?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !feeSponsor.isEmpty {
+        if let rawFeeSponsor = request.principal.feeSponsor {
+            let feeSponsor = try TransactionInputValidator.sanitizeAccountId(
+                rawFeeSponsor,
+                field: "feeSponsor"
+            )
             metadata[feeSponsorMetadataKey] = .string(feeSponsor)
         }
         if let memo = request.principal.description?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -723,16 +742,17 @@ private enum SwiftNexusTransferPayloadEncoder {
         return try OfflineNorito.canonicalAssetIdLiteral(candidate)
     }
 
-    private static func normalizedValidationFeePolicyHash(_ value: String) throws -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hexDigits = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
-        guard trimmed == value,
-              trimmed.count == 64,
-              trimmed.unicodeScalars.allSatisfy({ hexDigits.contains($0) }) else {
-            throw ValidationFeeTransferRequestError.malformedPolicyHash(value)
-        }
-        return trimmed.lowercased()
+}
+
+fileprivate func normalizedValidationFeePolicyHash(_ value: String) throws -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    let hexDigits = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+    guard trimmed == value,
+          trimmed.count == 64,
+          trimmed.unicodeScalars.allSatisfy({ hexDigits.contains($0) }) else {
+        throw ValidationFeeTransferRequestError.malformedPolicyHash(value)
     }
+    return trimmed.lowercased()
 }
 
 extension SwiftTransactionEncoder {
@@ -776,28 +796,43 @@ extension SwiftTransactionEncoder {
         }
         let destination = ids.accountIds["destination"] ?? principal.destination
         let treasury = ids.accountIds["treasury"] ?? request.treasuryAccountId
-        let payload = try SwiftNexusTransferPayloadEncoder.encodeValidationFeeTransfer(
-            request: request,
-            chainId: ids.chainId,
-            authority: ids.authorityId,
-            destinationAccountID: destination,
-            treasuryAccountID: treasury,
-            principalAssetDefinitionID: principalAssetDefinitionID,
-            feeAssetDefinitionID: feeAssetDefinitionID,
-            creationTimeMs: creationTimeMs
-        )
-        let payloadHash = IrohaHash.hash(payload)
-        let signature = try signingKey.sign(payloadHash)
-        let signable = NexusSignableTransaction(
-            payloadBytes: payload,
-            payloadHashHex: payloadHash.hexLowercase(),
-            authority: ids.authorityId,
-            signingPublicKey: try signingKey.publicKey()
-        )
-        return try SwiftNexusTransactionCodec().finalizeSignedTransaction(
-            signable: signable,
-            signature: NexusWalletSignature(signature: signature)
-        )
+        let normalizedPolicyHash = try normalizedValidationFeePolicyHash(request.policyHashHex)
+        guard request.policyVersion > 0 else {
+            throw ValidationFeeTransferRequestError.invalidPolicyVersion
+        }
+        var metadata = request.transactionMetadata
+        metadata[IrohaValidationFeeTransactionMetadataKey.policyVersion] =
+            .number(Double(request.policyVersion))
+        metadata[IrohaValidationFeeTransactionMetadataKey.policyHash] =
+            .string(normalizedPolicyHash)
+        metadata[IrohaValidationFeeTransactionMetadataKey.instructionIndex] = .number(1)
+        let metadataJSON = try ToriiJSONValue.object(metadata).encodedData()
+        let memo = request.principal.description?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let privateKey = try SwiftTransactionEncoder.privateKeyBytes(from: signingKey)
+        let native = try SwiftTransactionEncoder.bridgeOrThrow {
+            try NoritoNativeBridge.shared.encodeValidationFeeTransfer(
+                chainId: ids.chainId,
+                authority: ids.authorityId,
+                creationTimeMs: creationTimeMs,
+                ttlMs: principal.ttlMs,
+                nonce: principal.nonce,
+                principalAssetDefinitionId: principalAssetDefinitionID,
+                principalQuantity: principal.quantity,
+                destination: destination,
+                feeAssetDefinitionId: feeAssetDefinitionID,
+                feeQuantity: request.feeQuantity,
+                treasury: treasury,
+                policyVersion: request.policyVersion,
+                policyHashHex: normalizedPolicyHash,
+                feeInstructionIndex: 1,
+                feeSponsor: principal.feeSponsor,
+                memo: memo?.isEmpty == true ? nil : memo,
+                transactionMetadataJSON: metadataJSON,
+                privateKey: privateKey
+            )
+        }
+        return try SwiftTransactionEncoder.wrap(native: native)
     }
 }
 

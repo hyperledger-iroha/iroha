@@ -30,11 +30,12 @@ from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
 from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
     build_evidence_artifact,
     count_evidence_artifacts,
+    recognized_evidence_artifacts,
     count_evidence_files,
     evidence_gate_status,
-    evidence_artifact_detail,
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
@@ -43,6 +44,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
+    validate_bound_evidence_digest_references,
     validate_bound_evidence_tuple_references,
     require_2xx_status,
     require_bool_true,
@@ -71,6 +73,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     record_string_value_binding_errors,
     require_zero_count,
 )
@@ -118,6 +121,7 @@ CYCLE_BOUND_KINDS = (
     "metrics_alerts",
     "governance_approval",
 )
+POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -219,6 +223,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "total_usd_micro",
         "reference_price_bound",
         "reference_decision_id_hex",
+        "policy_digest_hex",
         "line_item_root_hex",
         "statement_bundle_digest_hex",
         "reconciliation_digest_hex",
@@ -298,11 +303,26 @@ class ValidationOptions:
 FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_id",
     "environment",
+    "deployment_context_reviewed",
+    "cycle_id",
+    "cycle_index",
+    "generated_at_unix",
+    "decision_id_hex",
+    "statement_count",
+    "reference_decision_id_hex",
+    "policy_digest_hex",
+    "statement_bundle_digest_hex",
+    "reconciliation_digest_hex",
+)
+BILLING_CYCLE_DETAIL_FIELDS: tuple[str, ...] = (
+    "deployment_id",
+    "environment",
     "cycle_id",
     "cycle_index",
     "generated_at_unix",
     "statement_count",
     "reference_decision_id_hex",
+    "policy_digest_hex",
     "statement_bundle_digest_hex",
     "reconciliation_digest_hex",
 )
@@ -392,6 +412,7 @@ def validate_billing_cycle(
     require_positive_int(payload, "total_usd_micro", errors)
     require_bool_true(payload, "reference_price_bound", errors)
     require_hex(payload, "reference_decision_id_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
     require_hex(payload, "line_item_root_hex", HEX64_LEN, errors)
     require_hex(payload, "statement_bundle_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "reconciliation_digest_hex", HEX64_LEN, errors)
@@ -414,6 +435,14 @@ def validate_statement_publication(payload: dict[str, Any], errors: list[str]) -
     require_hex(payload, "statement_bundle_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "reconciliation_digest_hex", HEX64_LEN, errors)
     require_count_equal(payload, "route_count", "passed_route_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     require_positive_int(payload, "acknowledgement_probe_count", errors)
     require_string_coverage(
         payload,
@@ -436,6 +465,14 @@ def validate_reconciliation(payload: dict[str, Any], errors: list[str]) -> None:
         "name",
         REQUIRED_RECONCILIATION_SOURCES,
         errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "sources",
+        "source_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
     )
     require_count_equal(payload, "line_item_count", "reconciled_line_item_count", errors)
     require_zero_count(payload, "mismatch_count", errors)
@@ -469,6 +506,14 @@ def validate_native_bridge_release(payload: dict[str, Any], errors: list[str]) -
         "artifact_count",
         "artifacts",
         errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "artifacts",
+        "artifact_count",
+        errors,
+        field="id",
+        allow_scalar_items=False,
     )
     for _index, record in artifact_records:
         require_string(record, "id", errors)
@@ -548,8 +593,10 @@ def build_summary(
     valid_billing_cycles: list[dict[str, Any]] = []
     valid_billing_cycle_artifacts: list[dict[str, Any]] = []
     valid_reference_decision_ids: set[str] = set()
+    valid_policy_digests: set[str] = set()
     valid_cycle_bindings: set[tuple[str, str]] = set()
     cycle_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -572,22 +619,26 @@ def build_summary(
             )
             continue
         artifact = build_evidence_artifact(
-            path,
+            archive_artifact_path_label(path, evidence_dirs),
             digest,
             payload,
             validation_errors,
             FINGERPRINT_FIELDS,
         )
-        if kind_name == "billing_cycle":
-            artifact["cycle"] = evidence_artifact_fingerprint(artifact)
-            if evidence_artifact_is_valid(artifact):
-                valid_billing_cycle_artifacts.append(artifact)
-        elif kind_name == "reference_price" and evidence_artifact_is_valid(artifact):
+        artifact_valid = evidence_artifact_is_valid(artifact)
+        if kind_name == "billing_cycle" and artifact_valid:
+            valid_billing_cycle_artifacts.append(artifact)
+            policy_digest = evidence_artifact_fingerprint(artifact).get("policy_digest_hex")
+            if isinstance(policy_digest, str):
+                valid_policy_digests.add(policy_digest.lower())
+        if kind_name == "reference_price" and artifact_valid:
             decision_id = payload.get("decision_id_hex")
             if isinstance(decision_id, str):
                 valid_reference_decision_ids.add(decision_id.lower())
-        elif kind_name in CYCLE_BOUND_KINDS and evidence_artifact_is_valid(artifact):
+        if kind_name in CYCLE_BOUND_KINDS and artifact_valid:
             cycle_bound_artifacts.append((kind_name, artifact))
+        if kind_name in POLICY_BOUND_KINDS and artifact_valid:
+            policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
@@ -595,7 +646,7 @@ def build_summary(
         required_kinds, ("billing_cycle", "reference_price")
     ):
         for artifact in valid_billing_cycle_artifacts:
-            cycle = evidence_artifact_detail(artifact, "cycle")
+            cycle = evidence_artifact_fingerprint(artifact)
             decision_id = cycle.get("reference_decision_id_hex")
             record_string_value_binding_errors(
                 artifact,
@@ -609,10 +660,14 @@ def build_summary(
             )
 
     valid_billing_cycles = [
-        cycle
+        {
+            field: cycle[field]
+            for field in BILLING_CYCLE_DETAIL_FIELDS
+            if field in cycle
+        }
         for artifact in valid_billing_cycle_artifacts
-        for cycle in [evidence_artifact_detail(artifact, "cycle")]
-        if evidence_artifact_is_valid(artifact) and cycle
+        for cycle in [evidence_artifact_fingerprint(artifact)]
+        if evidence_artifact_is_valid(artifact)
     ]
     valid_cycle_bindings = {
         (statement_bundle.lower(), reconciliation_digest.lower())
@@ -656,6 +711,23 @@ def build_summary(
         ),
     )
 
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("billing_cycle",) + POLICY_BOUND_KINDS,
+        bound_artifacts=policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must reference a valid "
+            "billing_cycle policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex requires a valid billing_cycle "
+            "policy_digest_hex"
+        ),
+    )
+
     required = build_required_evidence_summary(
         required_kinds,
         artifacts_by_kind,
@@ -676,8 +748,10 @@ def build_summary(
         },
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
+        "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_billing_cycles": valid_billing_cycles,
         "valid_reference_decision_ids": sorted(valid_reference_decision_ids),
+        "valid_policy_digests": sorted(valid_policy_digests),
         "valid_cycle_bindings": [
             {
                 "statement_bundle_digest_hex": statement_bundle,

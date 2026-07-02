@@ -11,6 +11,28 @@ class OfflineCashDeviceBinding(
     val iosBundleId: String? = null,
     val iosEnvironment: String? = null,
 ) {
+    init {
+        require(platform == "ios" || platform == "android" || platform == "android-keymint") {
+            "platform must be a supported first-release value"
+        }
+        require(attestationKeyId.isExactNonEmptyProtocolString()) {
+            "attestation_key_id must be an exact non-empty string"
+        }
+        require(deviceId.isExactNonEmptyProtocolString()) {
+            "device_id must be an exact non-empty string"
+        }
+        require(offlinePublicKey.isExactNonEmptyProtocolString()) {
+            "offline_public_key must be an exact non-empty string"
+        }
+        requireOptionalExactNonEmptyProtocolString(iosTeamId, "ios_team_id")
+        requireOptionalExactNonEmptyProtocolString(iosBundleId, "ios_bundle_id")
+        if (iosEnvironment != null) {
+            require(iosEnvironment == "production" || iosEnvironment == "development") {
+                "ios_environment must be production or development"
+            }
+        }
+    }
+
     internal fun toJsonMap(): Map<String, Any?> {
         val map = LinkedHashMap<String, Any?>()
         map["platform"] = platform
@@ -23,4 +45,15 @@ class OfflineCashDeviceBinding(
         if (iosEnvironment != null) map["ios_environment"] = iosEnvironment
         return map
     }
+
+    private fun requireOptionalExactNonEmptyProtocolString(value: String?, field: String) {
+        if (value != null) {
+            require(value.isExactNonEmptyProtocolString()) {
+                "$field must be an exact non-empty string"
+            }
+        }
+    }
+
+    private fun String.isExactNonEmptyProtocolString(): Boolean =
+        isNotEmpty() && trim() == this
 }

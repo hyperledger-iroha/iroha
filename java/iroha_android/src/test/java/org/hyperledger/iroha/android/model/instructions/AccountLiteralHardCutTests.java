@@ -22,6 +22,7 @@ public final class AccountLiteralHardCutTests {
     tests.persistCouncilRejectsDomainSuffixedMembers();
     tests.uaidPortfolioQueryAcceptsAssetSelectorsAndRejectsMalformedSelectors();
     tests.offlineListParamsAcceptsAssetSelectorsAndRejectsMalformedSelectors();
+    tests.offlineListParamsRejectsNormalizedVerdictIdHex();
     tests.connectApprovePreimageRejectsDomainSuffix();
     System.out.println("[IrohaAndroid] AccountLiteralHardCutTests passed.");
   }
@@ -103,6 +104,29 @@ public final class AccountLiteralHardCutTests {
   }
 
   @Test
+  public void offlineListParamsRejectsNormalizedVerdictIdHex() {
+    final String verdictId = repeat("ab", 32);
+    final OfflineListParams params = OfflineListParams.builder().verdictIdHex(verdictId).build();
+    assert verdictId.equals(params.toQueryParameters().get("verdict_id_hex"))
+        : "offline list verdict id hex must be preserved";
+
+    expectIllegalArgument(
+        () -> OfflineListParams.builder().verdictIdHex(" " + verdictId).build().toQueryParameters());
+    expectIllegalArgument(
+        () -> OfflineListParams.builder().verdictIdHex(verdictId + " ").build().toQueryParameters());
+    expectIllegalArgument(
+        () -> OfflineListParams.builder().verdictIdHex(repeat("AB", 32)).build().toQueryParameters());
+    expectIllegalArgument(
+        () -> OfflineListParams.builder().verdictIdHex("0x" + verdictId).build().toQueryParameters());
+    expectIllegalArgument(
+        () -> OfflineListParams.builder().verdictIdHex("abc").build().toQueryParameters());
+    expectIllegalArgument(
+        () -> OfflineListParams.builder().verdictIdHex("").build().toQueryParameters());
+    expectIllegalArgument(
+        () -> OfflineListParams.builder().verdictIdHex("zz").build().toQueryParameters());
+  }
+
+  @Test
   public void connectApprovePreimageRejectsDomainSuffix() throws Exception {
     final byte[] sessionId = fill(0x10, 32);
     final byte[] appPublic = fill(0x20, 32);
@@ -147,6 +171,14 @@ public final class AccountLiteralHardCutTests {
     final byte[] out = new byte[size];
     Arrays.fill(out, (byte) value);
     return out;
+  }
+
+  private static String repeat(final String value, final int count) {
+    final StringBuilder builder = new StringBuilder(value.length() * count);
+    for (int i = 0; i < count; i++) {
+      builder.append(value);
+    }
+    return builder.toString();
   }
 
   private static String readTaggedUtf8(final ByteBuffer reader, final String expectedTag) {

@@ -15,9 +15,6 @@ public enum OfflineNoteV2Constants {
     public static let iosAppAttestPlatform = "ios-appattest"
     public static let iosAppAttestAssertionScheme = "apple-appattest-counter-v1"
     public static let iosAppAttestAssertionKeyAlgorithm = "app-attest-p256"
-    public static let iosAppAttestLegacyPlatform = "ios-app-attest"
-    public static let iosAppAttestLegacyAssertionScheme = "apple-app-attest-v1"
-    public static let iosAppAttestLegacyAssertionKeyAlgorithm = "ecdsa-p256-sha256"
     public static let androidKeyMintPlatform = "android-keymint"
     public static let androidKeyMintAssertionScheme = "android-keymint-ecdsa-p256-usage-limit-v1"
     public static let androidKeyMintAssertionKeyAlgorithm = "ecdsa-p256-sha256"
@@ -49,6 +46,7 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
     case unsupportedRecursiveProofBackend(expected: String, actual: String)
     case unsupportedDomain(field: String, expected: String, actual: String)
     case unsupportedDeviceAttestationProfile(String)
+    case nonCanonicalField(field: String)
 
     public var errorDescription: String? {
         switch self {
@@ -94,6 +92,8 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
             return "\(field) must be \(expected), got \(actual)."
         case let .unsupportedDeviceAttestationProfile(reason):
             return "Unsupported Offline V2 device attestation profile: \(reason)."
+        case let .nonCanonicalField(field):
+            return "\(field) must be canonical."
         }
     }
 }
@@ -339,8 +339,8 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
         )
     }
 
-    public func keyCertificate() throws -> OfflineNoteKeyCertificateV2 {
-        try OfflineNoteKeyCertificateV2(
+    public func keyCertificatePayload() throws -> OfflineNoteKeyCertificatePayloadV2 {
+        try OfflineNoteKeyCertificatePayloadV2(
             version: OfflineNoteV2Constants.keyCertificateVersion,
             platform: platform,
             keyId: keyId,
@@ -351,13 +351,12 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
             assertionKeyAlgorithm: assertionKeyAlgorithm,
             assertionPublicKey: assertionPublicKey,
             assertionUsageCountLimit: assertionUsageCountLimit,
-            oneUse: oneUse,
-            issuerSignature: Data(repeating: 0, count: 64)
+            oneUse: oneUse
         )
     }
 
     public func keyCertificatePayloadHash() throws -> Data {
-        try keyCertificate().payloadHash()
+        IrohaHash.hash(try keyCertificatePayload().noritoEncoded())
     }
 
     public func noritoEncoded() throws -> Data {
@@ -710,8 +709,16 @@ public struct OfflineNoteIssuedClaimV2: Equatable, Sendable {
         self.domain = domain
         self.noteCommitment = noteCommitment
         self.keyCertificatePayloadHash = keyCertificatePayloadHash
-        self.assetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
-        self.amount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+        let canonicalAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
+        guard assetId == canonicalAssetId else {
+            throw OfflineNoteV2Error.nonCanonicalField(field: "asset_id")
+        }
+        let canonicalAmount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+        guard amount == canonicalAmount else {
+            throw OfflineNoteV2Error.nonCanonicalField(field: "amount")
+        }
+        self.assetId = canonicalAssetId
+        self.amount = canonicalAmount
     }
 
     public static func fromIssue(_ issue: OfflineNoteIssueV2) throws -> OfflineNoteIssuedClaimV2 {
@@ -1188,9 +1195,6 @@ enum OfflineNoteV2TypeNames {
     static let auditInstruction = "iroha_data_model::isi::offline::AuditOfflineNote"
     static let registerDeviceAttestationInstruction =
         "iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation"
-    static let issueInstructionAlias = "iroha_data_model::isi::offline::IssueOfflineNoteV2"
-    static let redeemInstructionAlias = "iroha_data_model::isi::offline::RedeemOfflineNoteV2"
-    static let auditInstructionAlias = "iroha_data_model::isi::offline::AuditOfflineNoteV2"
 }
 
 enum OfflineNoteV2Validation {
@@ -1351,14 +1355,6 @@ enum OfflineNoteV2Validation {
                 assertionKeyAlgorithm: assertionKeyAlgorithm,
                 assertionUsageCountLimit: assertionUsageCountLimit
             )
-        case OfflineNoteV2Constants.iosAppAttestLegacyPlatform:
-            guard assertionScheme == OfflineNoteV2Constants.iosAppAttestLegacyAssertionScheme,
-                  assertionKeyAlgorithm == OfflineNoteV2Constants.iosAppAttestLegacyAssertionKeyAlgorithm,
-                  assertionUsageCountLimit == nil else {
-                throw OfflineNoteV2Error.unsupportedDeviceAttestationProfile(
-                    "legacy iOS App Attest certificates require \(OfflineNoteV2Constants.iosAppAttestLegacyAssertionScheme), \(OfflineNoteV2Constants.iosAppAttestLegacyAssertionKeyAlgorithm), and no assertion usage limit"
-                )
-            }
         case OfflineNoteV2Constants.androidKeyMintPlatform:
             try validateAndroidKeyMintProfile(
                 keyId: keyId,

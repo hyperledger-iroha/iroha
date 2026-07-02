@@ -63,6 +63,7 @@ import {
   SCCP_TAIRA_NETWORK_PREFIX_V1,
   SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
   SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+  SCCP_TAIRA_TON_XOR_ROUTE_ID_V1,
   SCCP_TAIRA_XOR_ASSET_KEY_V1,
   SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1,
   SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1,
@@ -307,23 +308,30 @@ import {
   SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1,
   tairaXorRouteIdHash,
   tairaXorBscRouteIdHash,
+  tairaXorTonRouteIdHash,
   tairaXorAssetKeyHash,
   buildTairaXorTransferPayload,
   buildTairaXorBscTransferPayload,
+  buildTairaXorTonTransferPayload,
   buildTairaXorTronToTairaTransferPayload,
   buildTairaXorBscToTairaTransferPayload,
   buildTairaXorSccpRecordDescriptor,
   buildTairaXorBscSccpRecordDescriptor,
+  buildTairaXorTonSccpRecordDescriptor,
   buildRecordSccpMessageInstructionBytes,
   buildTairaXorSccpBurnRecordContractPayload,
   buildTairaXorBscSccpBurnRecordContractPayload,
+  buildTairaXorTonSccpBurnRecordContractPayload,
   buildTairaXorSccpBurnRecordZkIvmRequest,
   buildTairaXorBscSccpBurnRecordZkIvmRequest,
+  buildTairaXorTonSccpBurnRecordZkIvmRequest,
   tairaXorCanonicalTransferPayloadBytes,
   tairaXorBscCanonicalTransferPayloadBytes,
+  tairaXorTonCanonicalTransferPayloadBytes,
   tairaXorBscToTairaCanonicalTransferPayloadBytes,
   tairaXorTransferMessageId,
   tairaXorBscTransferMessageId,
+  tairaXorTonTransferMessageId,
   tairaXorTronToTairaCanonicalTransferPayloadBytes,
   tairaXorTronToTairaTransferMessageId,
   tairaXorBscToTairaTransferMessageId,
@@ -365,6 +373,12 @@ const HEX32_E = `0x${"ee".repeat(32)}`;
 const HEX32_F = `0x${"12".repeat(32)}`;
 const HEX32_G = `0x${"56".repeat(32)}`;
 const HEX32_H = `0x${"78".repeat(32)}`;
+const GOVERNED_SOLANA_TOWER_REPLAY_HASH = `0x${"b7".repeat(32)}`;
+const GOVERNED_SOLANA_ACCOUNTSDB_LATTICE_HASH = `0x${"c8".repeat(32)}`;
+const GOVERNED_SOLANA_BANK_FORK_CHOICE_HASH = `0x${"d9".repeat(32)}`;
+const GOVERNED_TON_MASTERCHAIN_CONFIG_HASH = `0x${"26".repeat(32)}`;
+const GOVERNED_TON_VALIDATOR_SET_TRANSITION_HASH = `0x${"27".repeat(32)}`;
+const GOVERNED_TON_SHARD_ACCOUNTS_DICTIONARY_HASH = `0x${"28".repeat(32)}`;
 const TRON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR =
   "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8";
 const TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR =
@@ -9128,17 +9142,26 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
 
   const auditedSolanaDeployment = {
     ...sampleSourceRecordInput(SCCP_DOMAIN_SOL),
-    solanaTowerReplayVerifierHash: `0x${"bb".repeat(32)}`,
-    solanaFullAccountsdbLatticeVerifierHash: `0x${"cc".repeat(32)}`,
-    solanaBankForkChoiceVerifierHash: `0x${"dd".repeat(32)}`,
+    solanaTowerReplayVerifierHash: GOVERNED_SOLANA_TOWER_REPLAY_HASH,
+    solanaFullAccountsdbLatticeVerifierHash:
+      GOVERNED_SOLANA_ACCOUNTSDB_LATTICE_HASH,
+    solanaBankForkChoiceVerifierHash: GOVERNED_SOLANA_BANK_FORK_CHOICE_HASH,
   };
   assert.equal(
     sccpSourceAdapterEngineDeploymentHash(auditedSolanaDeployment),
-    "0x97e5c4196aff6387b9d973e663de3ce9345e1d8c3de89d22505b2197e282dc61",
+    "0xb5a584c5885140ccacffef3b87b1919a2cb7f832869fca9294dfbdd413717e90",
   );
   assert.equal(
     sccpSolanaFullLightClientGateHash(auditedSolanaDeployment),
-    "0xe23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02",
+    "0xfaa3db315129651b8cd9bc9d4297a5d0503eb5fefbe1a6664a90de3407aaa98b",
+  );
+  assert.throws(
+    () =>
+      sccpSourceAdapterDeploymentBindingFromDeployment({
+        ...auditedSolanaDeployment,
+        solanaTowerReplayVerifierHash: `0x${"b8".repeat(32)}`,
+      }),
+    /governed Solana full-light-client audit/,
   );
   assert.notEqual(
     sccpSolanaFullLightClientGateHash({
@@ -9228,13 +9251,15 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
 
   const auditedTonDeployment = {
     ...sampleSourceRecordInput(SCCP_DOMAIN_TON),
-    tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
-    tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
-    tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
+    tonMasterchainConfigVerifierHash: GOVERNED_TON_MASTERCHAIN_CONFIG_HASH,
+    tonValidatorSetTransitionVerifierHash:
+      GOVERNED_TON_VALIDATOR_SET_TRANSITION_HASH,
+    tonShardAccountsDictionaryVerifierHash:
+      GOVERNED_TON_SHARD_ACCOUNTS_DICTIONARY_HASH,
   };
   assert.equal(
     sccpSourceAdapterEngineDeploymentHash(auditedTonDeployment),
-    "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07",
+    "0x260e2d8bf0d8f68e1888962b7ceff604788ef07cceb78d6b6b008f60039683b3",
   );
   const derivedTonBinding =
     sccpSourceAdapterDeploymentBindingFromDeployment(auditedTonDeployment);
@@ -9243,12 +9268,12 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
     sourceDomain: SCCP_DOMAIN_TON,
     targetDomain: SCCP_DOMAIN_SORA,
     sourceAdapterDeploymentHash:
-      "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07",
+      "0x260e2d8bf0d8f68e1888962b7ceff604788ef07cceb78d6b6b008f60039683b3",
     sourceAdapterDeploymentReceiptHash: auditedTonDeployment.deploymentReceiptHash,
   });
   assert.equal(
     sccpTonFullLightClientGateHash(auditedTonDeployment),
-    "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48",
+    "0x1518fbca4f8fd96756ef5318530fdcb2f0c131f00e0236bbd0dc885baaf8196b",
   );
   assert.notEqual(
     sccpTonFullLightClientGateHash({
@@ -9273,10 +9298,18 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
   assert.throws(
     () =>
       sccpSourceAdapterDeploymentBindingFromDeployment({
+        ...auditedTonDeployment,
+        tonMasterchainConfigVerifierHash: `0x${"2a".repeat(32)}`,
+      }),
+    /governed TON full-light-client audit/,
+  );
+  assert.throws(
+    () =>
+      sccpSourceAdapterDeploymentBindingFromDeployment({
         ...sampleSourceRecordInput(SCCP_DOMAIN_TON),
         tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
       }),
-    /TON audit verifier hashes/,
+    /governed TON full-light-client audit/,
   );
   assert.throws(
     () =>
@@ -11336,9 +11369,11 @@ test("binds TON proof requests to relay context and source adapter deployment", 
   );
   const auditedTonDeployment = {
     ...sampleSourceRecordInput(SCCP_DOMAIN_TON),
-    tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
-    tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
-    tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
+    tonMasterchainConfigVerifierHash: GOVERNED_TON_MASTERCHAIN_CONFIG_HASH,
+    tonValidatorSetTransitionVerifierHash:
+      GOVERNED_TON_VALIDATOR_SET_TRANSITION_HASH,
+    tonShardAccountsDictionaryVerifierHash:
+      GOVERNED_TON_SHARD_ACCOUNTS_DICTIONARY_HASH,
   };
   const descriptorRequest = buildTonSccpProofRequest({
     publicInputs: sampleTonPublicInputs,
@@ -15599,6 +15634,183 @@ test("builds canonical TAIRA XOR BSC-destination transfer payloads and message i
         routeId: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
       }),
     /routeId must be taira_bsc_xor/u,
+  );
+});
+
+test("builds canonical TAIRA XOR TON-destination payloads and burn-record requests", () => {
+  const sender = TAIRA_ACCOUNT_ID;
+  const recipient = `0:${"12".repeat(32)}`;
+  const amount = 25_000_000n;
+  const nonce = 42n;
+  const payload = buildTairaXorTonTransferPayload({
+    tairaAccountId: sender,
+    tonRecipient: recipient,
+    amount,
+    nonce,
+  });
+  assert.equal(Object.isFrozen(payload), true);
+  assert.deepEqual(payload, {
+    version: 1,
+    source_domain: SCCP_DOMAIN_SORA,
+    dest_domain: SCCP_DOMAIN_TON,
+    nonce: nonce.toString(),
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    amount: amount.toString(),
+    sender_codec: SCCP_CODEC_TEXT_UTF8,
+    sender,
+    recipient_codec: SCCP_CODEC_TON_RAW,
+    recipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1,
+  });
+
+  const expectedCanonical = testConcatBytes(
+    testU8(1),
+    testU32Le(SCCP_DOMAIN_SORA),
+    testU32Le(SCCP_DOMAIN_TON),
+    testU64Le(nonce),
+    testU32Le(SCCP_DOMAIN_SORA),
+    testU8(SCCP_CODEC_TEXT_UTF8),
+    testVecBytes(testTextEncoder.encode(SCCP_TAIRA_XOR_ASSET_KEY_V1)),
+    testU128Le(amount),
+    testU8(SCCP_CODEC_TEXT_UTF8),
+    testVecBytes(testTextEncoder.encode(sender)),
+    testU8(SCCP_CODEC_TON_RAW),
+    testVecBytes(testTextEncoder.encode(recipient)),
+    testU8(SCCP_CODEC_TEXT_UTF8),
+    testVecBytes(testTextEncoder.encode(SCCP_TAIRA_TON_XOR_ROUTE_ID_V1)),
+  );
+  assert.deepEqual(
+    canonicalSccpTransferPayloadBytes(payload),
+    expectedCanonical,
+  );
+  assert.deepEqual(
+    tairaXorTonCanonicalTransferPayloadBytes({
+      tairaSender: sender,
+      recipientAddress: recipient,
+      amount: amount.toString(),
+      nonce: nonce.toString(),
+    }),
+    expectedCanonical,
+  );
+
+  const expectedMessageId = testBytesToHex(
+    keccak_256(
+      testConcatBytes(
+        testTextEncoder.encode("sccp:transfer:v1"),
+        expectedCanonical,
+      ),
+    ),
+  );
+  assert.equal(sccpTransferMessageId(payload), expectedMessageId);
+  assert.equal(
+    tairaXorTonTransferMessageId({
+      sender,
+      tonRecipient: recipient,
+      amount,
+      nonce,
+    }),
+    expectedMessageId,
+  );
+  assert.equal(
+    tairaXorTonRouteIdHash(),
+    testBytesToHex(
+      keccak_256(testTextEncoder.encode(SCCP_TAIRA_TON_XOR_ROUTE_ID_V1)),
+    ),
+  );
+
+  const descriptor = buildTairaXorTonSccpRecordDescriptor({
+    chainId: SCCP_TAIRA_CHAIN_ID_V1,
+    networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
+    tairaAccountId: sender,
+    recipientAddress: recipient,
+    amount,
+    nonce,
+    expectedMessageId,
+    expectedCanonicalPayloadBytes: expectedCanonical,
+  });
+  assert.equal(descriptor.route_id, SCCP_TAIRA_TON_XOR_ROUTE_ID_V1);
+  assert.equal(descriptor.dest_domain, SCCP_DOMAIN_TON);
+  assert.equal(descriptor.payload.recipient_codec, SCCP_CODEC_TON_RAW);
+  assert.equal(descriptor.payload.recipient, recipient);
+  assert.deepEqual(descriptor.canonicalPayloadBytes, expectedCanonical);
+
+  const contract = buildTairaXorTonSccpBurnRecordContractPayload({
+    descriptor,
+    settlementAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    authority: sender,
+  });
+  assert.equal(contract.entrypoint, SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1);
+  assert.equal(contract.descriptor.route_id, SCCP_TAIRA_TON_XOR_ROUTE_ID_V1);
+  assert.equal(contract.payload.sender, sender);
+  assert.equal(contract.payload.amount, amount.toString());
+  assert.match(contract.payload.record_instruction, /^0x[0-9a-f]+$/u);
+
+  const request = buildTairaXorTonSccpBurnRecordZkIvmRequest({
+    chainId: SCCP_TAIRA_CHAIN_ID_V1,
+    networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
+    sender,
+    recipientAddress: recipient,
+    amount,
+    nonce,
+    settlementAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+    authority: sender,
+    vkRef: { backend: "stark/fri", name: "ivm-exec-v1" },
+    bytecode: "AQIDBA==",
+    gasLimit: 3000000,
+  });
+  assert.equal(request.route_id, SCCP_TAIRA_TON_XOR_ROUTE_ID_V1);
+  assert.equal(request.asset_key, SCCP_TAIRA_XOR_ASSET_KEY_V1);
+  assert.deepEqual(request.request.metadata.contract_payload, contract.payload);
+
+  assert.throws(
+    () =>
+      buildTairaXorTonTransferPayload({
+        tairaAccountId: sender,
+        recipientAddress: `0:${"AB".repeat(32)}`,
+        amount,
+        nonce,
+      }),
+    /lowercase canonical hex/u,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorTonTransferPayload({
+        tairaAccountId: sender,
+        recipientAddress: `-1:${"12".repeat(32)}`,
+        amount,
+        nonce,
+      }),
+    /workchain must be basechain 0/u,
+  );
+  assert.throws(
+    () =>
+      buildTairaXorTonTransferPayload({
+        tairaAccountId: sender,
+        recipientAddress: recipient,
+        amount,
+        nonce,
+        routeId: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+      }),
+    /routeId must be taira_ton_xor/u,
+  );
+  const bscDescriptor = buildTairaXorBscSccpRecordDescriptor({
+    chainId: SCCP_TAIRA_CHAIN_ID_V1,
+    networkPrefix: SCCP_TAIRA_NETWORK_PREFIX_V1,
+    tairaAccountId: sender,
+    recipientAddress: `0x${"11".repeat(20)}`,
+    amount,
+    nonce,
+  });
+  assert.throws(
+    () =>
+      buildTairaXorTonSccpBurnRecordContractPayload({
+        descriptor: bscDescriptor,
+        settlementAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      }),
+    /descriptor\.route_id must be taira_ton_xor/u,
   );
 });
 

@@ -1587,20 +1587,22 @@ impl IVMHost for DefaultHost {
                 Self::expect_tlv(vm, 12, PointerType::AccountId)?;
                 Ok(Self::mutation_gas(0))
             }
-            crate::syscalls::SYSCALL_TRANSFER_ASSET => {
+            crate::syscalls::SYSCALL_TRANSFER_V1 => {
                 if self.fastpq_batch_active {
                     self.push_fastpq_batch_entry(vm)
                 } else {
-                    // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)
-                    Self::expect_tlv(vm, 10, PointerType::AccountId)?;
-                    Self::expect_tlv(vm, 11, PointerType::AccountId)?;
-                    Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;
-                    let amount_ptr = vm.register(13);
-                    if amount_ptr != 0 {
-                        Self::expect_tlv(vm, 13, PointerType::NoritoBytes)?;
-                    }
-                    Ok(Self::mutation_gas(0))
+                    Err(crate::VMError::PermissionDenied)
                 }
+            }
+            crate::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
+                // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId,
+                // r13=&NoritoBytes(Numeric), r14=&DataSpaceId
+                Self::expect_tlv(vm, 10, PointerType::AccountId)?;
+                Self::expect_tlv(vm, 11, PointerType::AccountId)?;
+                Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;
+                Self::expect_tlv(vm, 13, PointerType::NoritoBytes)?;
+                Self::expect_tlv(vm, 14, PointerType::DataSpaceId)?;
+                Ok(Self::mutation_gas(0))
             }
             crate::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN => self.begin_fastpq_batch(),
             crate::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),
@@ -1804,26 +1806,38 @@ impl IVMHost for DefaultHost {
                     if bytes.len() != 48 {
                         return None;
                     }
+                    if bytes.iter().all(|&byte| byte == 0) {
+                        return None;
+                    }
                     let mut arr = [0u8; 48];
                     arr.copy_from_slice(bytes);
-                    let ct = G1Affine::from_compressed(&arr);
-                    if ct.is_some().into() {
-                        Some(ct.unwrap())
-                    } else {
+                    let point = G1Affine::from_compressed(&arr).into_option()?;
+                    if bool::from(point.is_identity()) {
+                        return None;
+                    }
+                    if point.to_compressed() != arr {
                         None
+                    } else {
+                        Some(point)
                     }
                 }
                 fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
                     if bytes.len() != 96 {
                         return None;
                     }
+                    if bytes.iter().all(|&byte| byte == 0) {
+                        return None;
+                    }
                     let mut arr = [0u8; 96];
                     arr.copy_from_slice(bytes);
-                    let ct = G2Affine::from_compressed(&arr);
-                    if ct.is_some().into() {
-                        Some(ct.unwrap())
-                    } else {
+                    let point = G2Affine::from_compressed(&arr).into_option()?;
+                    if bool::from(point.is_identity()) {
+                        return None;
+                    }
+                    if point.to_compressed() != arr {
                         None
+                    } else {
+                        Some(point)
                     }
                 }
                 fn hash_to_g2(msg: &[u8]) -> G2Affine {
@@ -1974,26 +1988,38 @@ impl IVMHost for DefaultHost {
                     if bytes.len() != 48 {
                         return None;
                     }
+                    if bytes.iter().all(|&byte| byte == 0) {
+                        return None;
+                    }
                     let mut arr = [0u8; 48];
                     arr.copy_from_slice(bytes);
-                    let ct = G1Affine::from_compressed(&arr);
-                    if ct.is_some().into() {
-                        Some(ct.unwrap())
-                    } else {
+                    let point = G1Affine::from_compressed(&arr).into_option()?;
+                    if bool::from(point.is_identity()) {
+                        return None;
+                    }
+                    if point.to_compressed() != arr {
                         None
+                    } else {
+                        Some(point)
                     }
                 }
                 fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
                     if bytes.len() != 96 {
                         return None;
                     }
+                    if bytes.iter().all(|&byte| byte == 0) {
+                        return None;
+                    }
                     let mut arr = [0u8; 96];
                     arr.copy_from_slice(bytes);
-                    let ct = G2Affine::from_compressed(&arr);
-                    if ct.is_some().into() {
-                        Some(ct.unwrap())
-                    } else {
+                    let point = G2Affine::from_compressed(&arr).into_option()?;
+                    if bool::from(point.is_identity()) {
+                        return None;
+                    }
+                    if point.to_compressed() != arr {
                         None
+                    } else {
+                        Some(point)
                     }
                 }
                 fn hash_to_g2(msg: &[u8]) -> G2Affine {

@@ -1244,6 +1244,44 @@ mod tests {
     }
 
     #[test]
+    fn stark_fri_query_shape_rejects_unused_merkle_direction_bits() {
+        let params = StarkFriParamsV1 {
+            version: 1,
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+            domain_tag: "iroha:test:unused-merkle-dir-bits".to_owned(),
+        };
+        let values = vec![0; 1_usize << usize::from(params.n_log2)];
+        let mut envelope = stark_synthesize_fri_envelope_from_field_values_v1(
+            params.clone(),
+            "IROHA-TEST-STARK-UNUSED-MERKLE-DIR-BITS".to_owned(),
+            &values,
+            &[],
+        )
+        .expect("synthesize field-value FRI envelope");
+
+        let path = &mut envelope.proof.queries[0][0].path_y0;
+        assert_eq!(path.dirs.len(), 1);
+        path.dirs[0] |= 0b1000_0000;
+
+        assert_eq!(
+            validate_stark_fri_query_shape_and_indices_v1(
+                &params,
+                &envelope.transcript_label,
+                &envelope.proof.commits.roots,
+                &[],
+                &envelope.proof.queries,
+            )
+            .expect_err("unused Merkle direction bits must be rejected"),
+            "FRI query Merkle path depth mismatch"
+        );
+    }
+
+    #[test]
     fn without_replacement_query_schedule_uses_bound_specific_offsets() {
         assert_without_replacement_query_schedule_uses_bound_specific_offsets(
             STARK_HASH_SHA256_V1,
@@ -2572,6 +2610,24 @@ mod tests {
         assert!(bfv_full_bootstrap_stark_air_transcript_label_allowed_v1(
             &env.transcript_label
         ));
+        let compressed_bytes =
+            norito::to_compressed_bytes(&env, Some(norito::CompressionConfig::default()))
+                .expect("encode compressed BFV STARK envelope");
+        assert_ne!(
+            compressed_bytes, bytes,
+            "compressed BFV STARK envelope bytes must differ from canonical v1 bytes"
+        );
+        let compressed_env: StarkVerifyEnvelopeV1 = norito::decode_from_bytes(&compressed_bytes)
+            .expect("compressed BFV STARK envelope must remain structurally decodable");
+        assert_eq!(
+            norito::to_bytes(&compressed_env).expect("re-encode compressed BFV STARK envelope"),
+            bytes,
+            "compressed BFV STARK envelope must decode to the same typed proof as canonical bytes"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_envelope(&compressed_bytes, &material),
+            "artifact-bound BFV verifier must reject noncanonical compressed proof framing"
+        );
         let expected_params =
             bfv_full_bootstrap_stark_air_params_v1(material.proof_input_material.statement_hash);
         assert!(bfv_full_bootstrap_stark_air_params_match_v1(
@@ -2589,6 +2645,16 @@ mod tests {
                 witness.bound_mode,
             ),
             "public-padding BFV verifier must accept a generated native AIR envelope without private trace rows"
+        );
+        assert!(
+            !verify_stark_fri_bfv_full_bootstrap_air_public_padding_envelope(
+                &compressed_bytes,
+                material.proof_input_material.statement_hash,
+                material.arithmetic_trace_material_digest,
+                witness.slot_index,
+                witness.bound_mode,
+            ),
+            "public-padding BFV verifier must reject noncanonical compressed proof framing"
         );
         let expected_base_indices = bfv_full_bootstrap_expected_base_indices_v1(
             material.proof_input_material.statement_hash,
@@ -7338,6 +7404,13 @@ fn verify_stark_fri_envelope_with_context(
         Ok(e) => e,
         Err(_) => return false,
     };
+    let canonical_bytes = match norito::to_bytes(&env) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+    if canonical_bytes.as_slice() != bytes {
+        return false;
+    }
     if validate_stark_transcript_label(
         &env.transcript_label,
         effective_max_transcript_label_len(limits),

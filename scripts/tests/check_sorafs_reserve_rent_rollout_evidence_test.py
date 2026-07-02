@@ -36,6 +36,7 @@ def write_json(path: Path, payload: dict) -> Path:
 
 def with_reviewed_context(payload: dict) -> dict:
     payload = dict(payload)
+    payload.setdefault("generated_at_unix", GENERATED_AT)
     payload.setdefault("deployment_id", DEPLOYMENT_ID)
     payload.setdefault("environment", ENVIRONMENT)
     payload.setdefault("deployment_context_reviewed", True)
@@ -353,6 +354,15 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["schema"] == "sorafs.reserve_rent.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
     assert payload["required"]["signed_routes"]["valid"] is True
+    for row in payload["required"].values():
+        assert row["present"] is True
+        assert row["valid"] is True
+        for artifact in row["artifacts"]:
+            fingerprint = artifact["fingerprint"]
+            assert fingerprint["generated_at_unix"] == GENERATED_AT
+            assert fingerprint["deployment_id"] == DEPLOYMENT_ID
+            assert fingerprint["environment"] == ENVIRONMENT
+            assert fingerprint["deployment_context_reviewed"] is True
     assert payload["valid_policy_matrix_ledger_bindings"] == [
         {
             "policy_digest_hex": DIGEST,
@@ -363,6 +373,11 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["valid_provider_bakes"] == [
         {
             "bake_id": "reserve-bake-001",
+            "deployment_id": DEPLOYMENT_ID,
+            "environment": ENVIRONMENT,
+            "policy_digest_hex": DIGEST,
+            "matrix_digest_hex": MATRIX_DIGEST,
+            "ledger_digest_hex": LEDGER_DIGEST,
             "started_at_unix": GENERATED_AT - 3_600,
             "completed_at_unix": GENERATED_AT,
             "provider_count": 3,
@@ -375,6 +390,54 @@ def test_missing_signed_routes_fails(tmp_path: Path) -> None:
     (tmp_path / "signed-routes.json").unlink()
 
     assert run_gate(tmp_path) == 1
+
+
+def test_route_count_must_match_unique_routes_for_route_artifacts(
+    tmp_path: Path,
+) -> None:
+    route_artifacts = (
+        ("lifecycle_service", "lifecycle-service.json", lifecycle_service),
+        ("signed_routes", "signed-routes.json", signed_routes),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["route_count"] += 1
+        payload["passed_route_count"] = payload["route_count"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_routes_must_not_duplicate_for_route_artifacts(tmp_path: Path) -> None:
+    route_artifacts = (
+        ("lifecycle_service", "lifecycle-service.json", lifecycle_service),
+        ("signed_routes", "signed-routes.json", signed_routes),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["routes"].append(dict(payload["routes"][0]))
+        payload["route_count"] = len(payload["routes"])
+        payload["passed_route_count"] = len(payload["routes"])
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "routes must not contain duplicate values" in artifact["errors"]
+        assert "route_count must match unique routes count" in artifact["errors"]
 
 
 def test_stale_ledger_digest_fails(tmp_path: Path) -> None:
@@ -423,6 +486,23 @@ def test_policy_config_requires_policy_digest(tmp_path: Path) -> None:
     artifact = payload["required"]["policy_config"]["artifacts"][0]
     assert artifact["valid"] is False
     assert "policy_digest_hex must be 64 hex characters" in artifact["errors"]
+
+
+def test_policy_config_requires_generated_at_for_aggregate_freshness(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = policy_config()
+    del payload["generated_at_unix"]
+    write_json(tmp_path / "policy-config.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["policy_config"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "generated_at_unix must be a positive integer" in artifact["errors"]
 
 
 def test_quote_matrix_requires_policy_digest(tmp_path: Path) -> None:

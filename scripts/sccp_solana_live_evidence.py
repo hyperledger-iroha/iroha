@@ -94,10 +94,20 @@ def _summary_ready(summary: dict[str, Any], field: str, *, fallback: str | None 
 
 
 def _parse_hex32(value: str, *, label: str) -> bytes:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     return evidence.parse_hex_bytes(value, label=label, byte_length=32)
 
 
+def _parse_solana_program_id(value: str, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be a Solana public key")
+    return evidence.normalize_solana_program_id(value, label=label)
+
+
 def _parse_positive_u64(value: str, *, label: str) -> int:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be a positive u64")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must be a positive u64")
     text = value
@@ -181,6 +191,11 @@ def _json_rpc(
         raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
     if not isinstance(decoded, dict):
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
+    if decoded.get("jsonrpc") != "2.0":
+        raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
+    response_id = decoded.get("id")
+    if type(response_id) is not int or response_id != 1:
+        raise RuntimeError(f"JSON-RPC {method} returned a mismatched response id")
     error = decoded.get("error")
     if error is not None:
         raise RuntimeError(f"JSON-RPC {method} returned error response")
@@ -242,7 +257,7 @@ def _account_data(account: dict[str, Any], *, label: str) -> bytes:
         raise RuntimeError(f"{label} account data must use base64 encoding")
     try:
         raw = base64.b64decode(data[0], validate=True)
-    except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
         raise RuntimeError(f"{label} account data is invalid base64") from None
     if base64.b64encode(raw).decode("ascii") != data[0]:
         raise RuntimeError(f"{label} account data must be canonical base64")
@@ -255,6 +270,8 @@ def _require_upgradeable_loader_account(
     label: str,
     executable: bool,
 ) -> bytes:
+    if type(executable) is not bool:
+        raise ValueError("Solana live account executable must be a boolean")
     owner = account.get("owner")
     if owner != UPGRADEABLE_LOADER_ID:
         raise RuntimeError(f"{label} account owner must be the BPF upgradeable loader")
@@ -400,23 +417,30 @@ def _live_positive_u64(live: dict[str, Any], field: str, *, label: str) -> int:
     ):
         parsed = int(value, 10)
     else:
-        raise ValueError(f"{label} must be a positive decimal")
+        raise ValueError(f"{label} must be a positive decimal") from None
     if parsed <= 0 or parsed > 0xFFFF_FFFF_FFFF_FFFF:
-        raise ValueError(f"{label} must be a positive decimal")
+        raise ValueError(f"{label} must be a positive decimal") from None
     return parsed
 
 
 def _live_base64_bytes(live: dict[str, Any], field: str, *, label: str) -> bytes:
     value = live.get(field)
     if not isinstance(value, str) or not value or value != value.strip():
-        raise ValueError(f"{label} must be present")
+        raise ValueError(f"{label} must be present") from None
     try:
         raw = base64.b64decode(value, validate=True)
-    except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
         raise ValueError(f"{label} must be base64") from None
     if base64.b64encode(raw).decode("ascii") != value:
         raise ValueError(f"{label} must be canonical base64")
     return raw
+
+
+def _exact_live_string(live: dict[str, Any], field: str, *, label: str) -> str:
+    value = live.get(field)
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError(f"{label} must be an exact non-empty string") from None
+    return value
 
 
 def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes, bytes]:
@@ -429,21 +453,29 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
 
     try:
         program_id = evidence.normalize_solana_program_id(
-            str(live.get("verifier_program_id", "")),
+            _exact_live_string(
+                live,
+                "verifier_program_id",
+                label="verifier_program_id",
+            ),
             label="verifier program id",
         )
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("Solana live verifier program id metadata is invalid") from None
     try:
         programdata_address = evidence.normalize_solana_program_id(
-            str(live.get("programdata_address", "")),
+            _exact_live_string(
+                live,
+                "programdata_address",
+                label="programdata_address",
+            ),
             label="programdata address",
         )
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("Solana live ProgramData address metadata is invalid") from None
     try:
         verifier_code_hash = _parse_hex32(
-            str(live.get("verifier_code_hash", "")),
+            _exact_live_string(live, "verifier_code_hash", label="verifier_code_hash"),
             label="verifier_code_hash",
         )
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
@@ -457,7 +489,9 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
         or not executable_base64
         or executable_base64 != executable_base64.strip()
     ):
-        raise ValueError("Solana ProgramData executable base64 metadata must be present")
+        raise ValueError(
+            "Solana ProgramData executable base64 metadata must be present"
+        ) from None
     try:
         program_bytes = evidence.parse_program_bytes_base64(
             executable_base64,
@@ -553,7 +587,11 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
             "Solana ProgramData metadata base64 metadata must decode to 45 bytes"
         )
     metadata_hash = _parse_hex32(
-        str(live.get("programdata_metadata_blake2b256", "")),
+        _exact_live_string(
+            live,
+            "programdata_metadata_blake2b256",
+            label="programdata_metadata_blake2b256",
+        ),
         label="programdata_metadata_blake2b256",
     )
     derived_metadata_hash = hashlib.blake2b(
@@ -661,6 +699,12 @@ def _summary(args: argparse.Namespace, live: dict[str, Any]) -> dict[str, Any]:
             f"expected {expected_programdata}, got {live['programdata_address']}"
         )
     expected_programdata_slot = getattr(args, "expected_programdata_slot", None)
+    if expected_programdata_slot is not None:
+        expected_programdata_slot = _live_positive_u64(
+            {"expected_programdata_slot": expected_programdata_slot},
+            "expected_programdata_slot",
+            label="expected ProgramData slot",
+        )
     if (
         expected_programdata_slot is not None
         and str(expected_programdata_slot) != live["programdata_slot"]
@@ -834,7 +878,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--verifier-program-id",
         required=True,
-        type=lambda value: evidence.normalize_solana_program_id(
+        type=lambda value: _parse_solana_program_id(
             value,
             label="verifier program id",
         ),
@@ -848,7 +892,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--expected-programdata-address",
-        type=lambda value: evidence.normalize_solana_program_id(
+        type=lambda value: _parse_solana_program_id(
             value,
             label="expected programdata address",
         ),
@@ -864,55 +908,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--expected-verifier-code-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="expected verifier code hash",
-            byte_length=32,
         ),
         help="Pinned BLAKE2b-256 hash of the deployed ProgramData executable bytes.",
     )
     parser.add_argument(
         "--route-allowlist-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="route allowlist hash",
-            byte_length=32,
         ),
         help="Governed Solana route allowlist hash.",
     )
     parser.add_argument(
         "--source-verifier-material-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="source verifier material hash",
-            byte_length=32,
         ),
         help="Source verifier material record hash bound into the route allowlist.",
     )
     parser.add_argument(
         "--source-adapter-engine-deployment-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="source adapter engine deployment hash",
-            byte_length=32,
         ),
         help="Source adapter engine deployment record hash bound into the route allowlist.",
     )
     parser.add_argument(
         "--route-canary-evidence-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="route canary evidence hash",
-            byte_length=32,
         ),
         help="Post-deploy route canary evidence hash for all-lanes TOML metadata.",
     )
     parser.add_argument(
         "--expected-destination-binding-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="expected destination binding hash",
-            byte_length=32,
         ),
         help="Expected canonical SORA -> Solana destination binding hash.",
     )
@@ -973,13 +1011,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded

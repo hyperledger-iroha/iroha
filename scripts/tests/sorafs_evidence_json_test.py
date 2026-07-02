@@ -16,6 +16,8 @@ if str(SCRIPTS_DIR) not in sys.path:
 from sorafs_evidence_json import (  # noqa: E402
     decode_evidence_json,
     EvidenceFileTooLargeError,
+    EVIDENCE_JSON_LOAD_DIAGNOSTIC,
+    EVIDENCE_JSON_READ_DIAGNOSTIC,
     evidence_read_open_flags,
     load_evidence_json,
     load_evidence_json_with_sha256,
@@ -91,9 +93,9 @@ def test_load_evidence_json_with_sha256_or_record_error_records_failure(
 
     assert loaded is None
     assert errors == [
-        f"{evidence}: failed to load evidence JSON: "
-        "evidence root must be a JSON object"
+        f"{EVIDENCE_JSON_LOAD_DIAGNOSTIC}: evidence root must be a JSON object"
     ]
+    assert str(evidence) not in errors[0]
 
 
 def test_load_evidence_json_rejects_non_path_without_traceback() -> None:
@@ -116,9 +118,9 @@ def test_load_evidence_json_with_sha256_or_record_error_records_non_path() -> No
 
     assert loaded is None
     assert errors == [
-        "evidence.json: failed to load evidence JSON: "
-        "evidence path must be a path"
+        f"{EVIDENCE_JSON_LOAD_DIAGNOSTIC}: evidence path must be a path"
     ]
+    assert "evidence.json:" not in errors[0]
 
 
 def test_load_evidence_json_with_sha256_or_record_error_sanitizes_malformed_path_label() -> None:
@@ -133,12 +135,11 @@ def test_load_evidence_json_with_sha256_or_record_error_sanitizes_malformed_path
 
         assert loaded is None
         assert errors == [
-            "<non-path>: failed to load evidence JSON: evidence path must be a path"
-            if isinstance(path, bytes)
-            else "<non-canonical-path>: failed to load evidence JSON: "
-            "evidence path must be a path"
+            f"{EVIDENCE_JSON_LOAD_DIAGNOSTIC}: evidence path must be a path"
         ]
         assert "\n" not in errors[0]
+        assert "<non-path>" not in errors[0]
+        assert "<non-canonical-path>" not in errors[0]
 
 
 def test_load_evidence_json_with_sha256_or_record_error_sanitizes_malformed_os_error(
@@ -151,8 +152,9 @@ def test_load_evidence_json_with_sha256_or_record_error_sanitizes_malformed_os_e
 
     assert loaded is None
     assert errors == [
-        "<non-canonical-path>: failed to load evidence JSON: <non-canonical-error>"
+        f"{EVIDENCE_JSON_LOAD_DIAGNOSTIC}: evidence file must exist and be a file"
     ]
+    assert str(evidence) not in errors[0]
 
 
 def test_load_evidence_json_with_sha256_or_record_error_rejects_malformed_errors(
@@ -220,7 +222,8 @@ def test_read_evidence_bytes_rejects_symlink_before_open(tmp_path: Path) -> None
     try:
         read_evidence_bytes(symlink, 1024)
     except ValueError as error:
-        assert str(error) == f"evidence file `{symlink}` must not be a symlink"
+        assert str(error) == "evidence file must not be a symlink"
+        assert str(symlink) not in str(error)
     else:
         raise AssertionError("expected symlink evidence read to fail")
 
@@ -232,33 +235,29 @@ def test_read_evidence_bytes_rejects_directory_before_open(tmp_path: Path) -> No
     try:
         read_evidence_bytes(evidence_dir, 1024)
     except ValueError as error:
-        assert (
-            str(error)
-            == f"evidence file `{evidence_dir}` must exist and be a file"
-        )
+        assert str(error) == "evidence file must exist and be a file"
+        assert str(evidence_dir) not in str(error)
     else:
         raise AssertionError("expected directory evidence read to fail")
 
 
-def test_load_evidence_json_with_sha256_or_record_error_rejects_parent_symlink(
+def test_load_evidence_json_with_sha256_or_record_error_accepts_parent_symlink(
     tmp_path: Path,
 ) -> None:
     target_root = tmp_path / "target-root"
     symlink_root = tmp_path / "evidence-root"
     target = target_root / "evidence.json"
+    raw = b'{"schema":"test"}'
     target_root.mkdir()
-    target.write_text('{"schema":"test"}', encoding="utf-8")
+    target.write_bytes(raw)
     symlink_root.symlink_to(target_root, target_is_directory=True)
 
     evidence = symlink_root / "evidence.json"
     errors: list[str] = []
     loaded = load_evidence_json_with_sha256_or_record_error(evidence, 1024, errors)
 
-    assert loaded is None
-    assert errors == [
-        f"{evidence}: failed to load evidence JSON: "
-        f"evidence file parent `{symlink_root}` must not be a symlink"
-    ]
+    assert loaded == ({"schema": "test"}, hashlib.sha256(raw).hexdigest())
+    assert errors == []
 
 
 def test_validate_evidence_file_for_read_records_inspection_failure(
@@ -279,11 +278,9 @@ def test_validate_evidence_file_for_read_records_inspection_failure(
     try:
         validate_evidence_file_for_read(evidence)
     except RuntimeError as error:
-        assert (
-            str(error)
-            == f"evidence file `{evidence}` cannot be inspected: "
-            "evidence symlink stat denied"
-        )
+        assert str(error) == "evidence file cannot be inspected"
+        assert str(evidence) not in str(error)
+        assert "evidence symlink stat denied" not in str(error)
     else:
         raise AssertionError("expected evidence inspection failure")
 
@@ -308,8 +305,10 @@ def test_load_evidence_json_with_sha256_or_record_error_records_runtime_failure(
 
     assert loaded is None
     assert errors == [
-        f"{evidence}: failed to load evidence JSON: evidence read denied"
+        f"{EVIDENCE_JSON_LOAD_DIAGNOSTIC}: {EVIDENCE_JSON_READ_DIAGNOSTIC}"
     ]
+    assert str(evidence) not in errors[0]
+    assert "evidence read denied" not in errors[0]
 
 
 def test_load_evidence_json_rejects_oversized_file(tmp_path: Path) -> None:
@@ -438,9 +437,10 @@ def test_load_evidence_json_with_sha256_or_record_error_records_duplicate_key(
 
     assert loaded is None
     assert errors == [
-        f"{evidence}: failed to load evidence JSON: "
+        f"{EVIDENCE_JSON_LOAD_DIAGNOSTIC}: "
         "evidence JSON object contains duplicate key `schema`"
     ]
+    assert str(evidence) not in errors[0]
 
 
 def test_load_evidence_json_with_sha256_or_record_error_sanitizes_malformed_duplicate_key(
@@ -454,9 +454,10 @@ def test_load_evidence_json_with_sha256_or_record_error_sanitizes_malformed_dupl
 
     assert loaded is None
     assert errors == [
-        f"{evidence}: failed to load evidence JSON: "
+        f"{EVIDENCE_JSON_LOAD_DIAGNOSTIC}: "
         "evidence JSON object contains duplicate key `<non-canonical>`"
     ]
+    assert str(evidence) not in errors[0]
 
 
 def test_load_evidence_json_rejects_non_standard_numeric_constants(

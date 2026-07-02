@@ -20,9 +20,10 @@ by adjacent SoraFS event/readback APIs.
 fail-closed SFM-4b rollout evidence gate for deployed moderation-panel
 promotion packets, and
 `scripts/run_sorafs_moderation_panel_rollout_evidence.py` provides the matching
-reviewed evidence collection planner/runner with dry-run `evidence_contract`
-output listing each selected evidence kind's schema and required payload
-fields.
+reviewed evidence collection planner/runner. The checker exports its
+required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the runner
+dry-run emits the checker-backed `evidence_contract` map listing each selected
+evidence kind's schema and required payload fields.
 Every recognized rollout artifact must also carry reviewed `deployment_id` and
 `environment` context, so staging or production evidence cannot be satisfied by
 local, mock, dev, or otherwise unreviewed deployment packets. The gate also
@@ -35,6 +36,10 @@ artifacts must bind back to a case-bound sortition `roster_hash_hex`; and
 publication, settlement, transparency/reputation, metrics, end-to-end, and
 governance artifacts must bind back to a roster-bound commit/reveal
 `tally_digest_hex`.
+End-to-end panel artifacts also publish `policy_digest_hex`; governance
+approval artifacts must bind `policy_digest_hex` to that valid end-to-end
+policy digest, and the checker emits those valid panel policy digests as
+`valid_policy_digests`.
 It does not yet ship the full moderation appeal service, SoraFS juror panel
 engine, secure evidence viewer, durable voting orchestrator, or portal workflow
 described in the original plan.
@@ -171,6 +176,31 @@ python3 scripts/run_sorafs_moderation_panel_rollout_evidence.py \
   --dry-run
 ```
 
+When operators have reviewed the deployed production facts, use
+`scripts/build_sorafs_moderation_panel_canary.py` as the payload-free SFM-4b moderation panel canary builder
+for the individual evidence artifacts consumed by the gate. The builder covers
+every current parent-gate evidence kind, requires explicit `--verified-claim`
+input for positive safety claims, complete intake/operator/ballot/decision
+route, viewer role/security/event/export, commit-reveal scenario, publication
+target, outcome, and metric coverage where applicable, shared
+case/roster/tally digest bindings, and threshold-bounded route, event-lag,
+viewer-URL, panel-size, peer-count, and reviewed end-to-end/governance
+policy-digest facts. It forces raw evidence,
+commit/reveal payload, decision, transaction, ledger, response body, signed URL,
+session token, private juror data, and watermark secret inclusion flags to
+`false`, prevalidates the generated artifact with
+`check_sorafs_moderation_panel_rollout_evidence.py`, and writes the JSON
+atomically without following output symlinks. Example argfiles are checked in
+for the appeal-intake anchor and commit/reveal tally evidence:
+
+```sh
+python3 scripts/build_sorafs_moderation_panel_canary.py \
+  @scripts/examples/sorafs_moderation_panel_appeal_intake_canary.args.example
+
+python3 scripts/build_sorafs_moderation_panel_canary.py \
+  @scripts/examples/sorafs_moderation_panel_commit_reveal_canary.args.example
+```
+
 The checker recognizes `sorafs.moderation_panel.*` SFM-4b rollout schemas for
 appeal intake, sortition roster, evidence viewer, operator workflow, juror
 notifications, commit/reveal, decision publication, settlement integration,
@@ -186,8 +216,14 @@ shares a valid case-bound sortition `case_digest_hex`/`roster_hash_hex` pair,
 and every tally-bound artifact shares a valid roster-bound commit/reveal
 `case_digest_hex`/`roster_hash_hex`/`tally_digest_hex` tuple. Sortition rosters
 that fail appeal-intake binding and commit/reveal runs that fail roster binding
-do not anchor downstream rollout evidence. The
-evidence-viewer canary
+do not anchor downstream rollout evidence.
+Appeal-intake, operator-workflow, commit/reveal, and decision-publication
+artifacts also bind `route_count` to the unique canonical `routes[].name`
+inventory and reject duplicate route entries before promotion can report ready.
+The gate also requires end-to-end panel evidence to carry `policy_digest_hex`,
+publishes those values as `valid_policy_digests`, and requires governance
+approval `policy_digest_hex` to match one of those valid panel policy digests.
+The evidence-viewer canary
 also requires role-scoped manifests, short-lived segment URLs, attested and
 logged sessions, strict CSP and disabled offline mode, watermark overlay and
 metadata hashing, append-only access logging, anomaly events, legal-hold
@@ -227,3 +263,8 @@ The rollout evidence scripts have focused Python coverage in:
 
 - `scripts/tests/check_sorafs_moderation_panel_rollout_evidence_test.py`
 - `scripts/tests/run_sorafs_moderation_panel_rollout_evidence_test.py`
+
+The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
+The shared runner plan guard also rejects non-canonical nested required-kind,
+threshold, external-evidence, evidence-contract, and command-step shapes before
+dry-run output or verifier execution.

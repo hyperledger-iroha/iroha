@@ -106,23 +106,23 @@ fn map_openssl_sm_error(context: &str, err: OpenSslSmError) -> Error {
             "{context}: invalid SM4 nonce length {len} (expected 12 bytes)"
         )),
         OpenSslSmError::InvalidCcmTagLength(len) => Error::Other(format!(
-            "{context}: invalid SM4 CCM tag length {len} (expected 16 bytes)"
+            "{context}: invalid SM4 CCM tag length {len} (expected one of 4, 6, 8, 10, 12, 14, 16 bytes)"
         )),
         OpenSslSmError::InvalidCcmNonceLength(len) => Error::Other(format!(
-            "{context}: invalid SM4 CCM nonce length {len} (expected 12 bytes)"
+            "{context}: invalid SM4 CCM nonce length {len} (expected between 7 and 13 bytes)"
         )),
         OpenSslSmError::InvalidPublicKey(message) | OpenSslSmError::InvalidDistid(message) => {
             Error::Parse(ParseError(format!("{context}: {message}")))
         }
         OpenSslSmError::Sm2NotImplemented => {
-            Error::Other(format!("{context}: SM2 verification path not implemented"))
+            Error::Other(format!("{context}: SM2 unavailable from OpenSSL provider"))
         }
-        OpenSslSmError::Sm4GcmNotImplemented => {
-            Error::Other(format!("{context}: SM4 GCM path not implemented"))
-        }
-        OpenSslSmError::Sm4CcmNotImplemented => {
-            Error::Other(format!("{context}: SM4 CCM path not implemented"))
-        }
+        OpenSslSmError::Sm4GcmNotImplemented => Error::Other(format!(
+            "{context}: SM4 GCM unavailable from OpenSSL provider"
+        )),
+        OpenSslSmError::Sm4CcmNotImplemented => Error::Other(format!(
+            "{context}: SM4 CCM unavailable from OpenSSL provider"
+        )),
     }
 }
 
@@ -245,6 +245,16 @@ impl Sm2PublicKey {
     pub fn from_sec1_bytes(distid: impl AsRef<str>, bytes: &[u8]) -> Result<Self, ParseError> {
         let distid = distid.as_ref();
         validate_distid(distid)?;
+        if !bytes.is_empty() && bytes.iter().all(|byte| *byte == 0) {
+            return Err(ParseError(
+                "invalid SM2 public key: all-zero SEC1 payload".to_owned(),
+            ));
+        }
+        if sec1_uncompressed_public_key_has_zero_coordinate_material(bytes) {
+            return Err(ParseError(
+                "invalid SM2 public key: all-zero SEC1 coordinate payload".to_owned(),
+            ));
+        }
         VerifyingKey::from_sec1_bytes(distid, bytes)
             .map(Self)
             .map_err(|_| ParseError("invalid SM2 public key".to_owned()))
@@ -406,6 +416,12 @@ impl Sm2PublicKey {
     }
 }
 
+fn sec1_uncompressed_public_key_has_zero_coordinate_material(bytes: &[u8]) -> bool {
+    bytes.len() == SM2_PUBLIC_KEY_UNCOMPRESSED_LEN
+        && bytes.first() == Some(&0x04)
+        && bytes[1..].iter().all(|byte| *byte == 0)
+}
+
 impl PartialEq for Sm2PublicKey {
     fn eq(&self, other: &Self) -> bool {
         self.distid() == other.distid() && self.to_sec1_bytes(false) == other.to_sec1_bytes(false)
@@ -432,6 +448,11 @@ impl Sm2PrivateKey {
     pub fn from_bytes(distid: impl Into<String>, secret: &[u8]) -> Result<Self, ParseError> {
         if secret.len() != 32 {
             return Err(ParseError("SM2 private key must be 32 bytes".into()));
+        }
+        if secret.iter().all(|&byte| byte == 0) {
+            return Err(ParseError(
+                "SM2 private key material must not be all zero".into(),
+            ));
         }
         let distid = distid.into();
         validate_distid(&distid)?;
@@ -2192,6 +2213,19 @@ impl Sm4Key {
         aad: &[u8],
         plaintext: &[u8],
     ) -> Result<(Vec<u8>, Vec<u8>), Error> {
+        #[cfg(feature = "sm-ffi-openssl")]
+        match OpenSslSmBackend::sm4_ccm_encrypt(
+            self.0.expose_secret().as_ref(),
+            nonce,
+            aad,
+            plaintext,
+            TAG_LEN,
+        ) {
+            Ok(result) => return Ok(result),
+            Err(OpenSslSmError::Sm4CcmNotImplemented | OpenSslSmError::PreviewDisabled) => {}
+            Err(err) => return Err(map_openssl_sm_error("OpenSSL SM4-CCM encrypt", err)),
+        }
+
         sm4_ccm_compat::encrypt::<TAG_LEN, NONCE_LEN>(
             self.0.expose_secret().as_ref(),
             nonce,
@@ -2230,6 +2264,19 @@ impl Sm4Key {
         ciphertext: &[u8],
         tag: &[u8],
     ) -> Result<Vec<u8>, Error> {
+        #[cfg(feature = "sm-ffi-openssl")]
+        match OpenSslSmBackend::sm4_ccm_decrypt(
+            self.0.expose_secret().as_ref(),
+            nonce,
+            aad,
+            ciphertext,
+            tag,
+        ) {
+            Ok(result) => return Ok(result),
+            Err(OpenSslSmError::Sm4CcmNotImplemented | OpenSslSmError::PreviewDisabled) => {}
+            Err(err) => return Err(map_openssl_sm_error("OpenSSL SM4-CCM decrypt", err)),
+        }
+
         sm4_ccm_compat::decrypt::<TAG_LEN, NONCE_LEN>(
             self.0.expose_secret().as_ref(),
             nonce,
@@ -2554,8 +2601,8 @@ pub mod openssl_provider {
     #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
     #[non_exhaustive]
     pub enum OpenSslProviderError {
-        /// The OpenSSL preview does not implement the requested capability yet.
-        #[error("OpenSSL SM provider support is not implemented yet")]
+        /// The linked OpenSSL provider does not expose the required SM capabilities.
+        #[error("OpenSSL SM provider capability unavailable")]
         NotImplemented,
         /// The OpenSSL preview guard has not been enabled via configuration.
         #[error("OpenSSL SM provider preview is disabled")]
@@ -2565,7 +2612,7 @@ pub mod openssl_provider {
         OpenSslUnavailable(&'static str),
     }
 
-    /// Placeholder provider exposing OpenSSL metadata until the real FFI backend lands.
+    /// Preview provider exposing OpenSSL metadata and SM capability checks.
     #[derive(Debug, Clone, Copy)]
     pub struct OpenSslProvider;
 
@@ -2580,7 +2627,7 @@ pub mod openssl_provider {
         /// The loader enforces the preview guard and validates that the linked OpenSSL build
         /// exposes the SM3 digest, SM2 group, and (when available) the SM4-GCM cipher before
         /// returning success. Deployments lacking these capabilities surface `NotImplemented`
-        /// so callers fall back to the pure-Rust implementation.
+        /// so callers can fall back to the pure-Rust implementation.
         ///
         /// # Errors
         ///
@@ -2668,6 +2715,16 @@ pub mod openssl_provider {
         }
 
         #[test]
+        fn unavailable_capability_error_uses_provider_wording() {
+            let message = OpenSslProviderError::NotImplemented.to_string();
+            assert_eq!(message, "OpenSSL SM provider capability unavailable");
+            assert!(
+                !message.contains("not implemented"),
+                "provider capability errors must not look like unfinished code"
+            );
+        }
+
+        #[test]
         fn load_validates_backend_capabilities_when_enabled() {
             let _guard = PreviewFlagGuard::enable();
             match OpenSslProvider::load() {
@@ -2730,11 +2787,11 @@ pub mod openssl_sm {
         /// Indicates that the linked OpenSSL build does not provide SM2 primitives.
         #[error("SM2 verification via OpenSSL is unavailable")]
         Sm2NotImplemented,
-        /// Stub marker for the unimplemented SM4 GCM flow.
-        #[error("SM4 GCM via OpenSSL is not implemented yet")]
+        /// Indicates that the linked OpenSSL build does not provide SM4-GCM.
+        #[error("SM4 GCM via OpenSSL is unavailable")]
         Sm4GcmNotImplemented,
-        /// Stub marker for the unimplemented SM4 CCM flow.
-        #[error("SM4 CCM via OpenSSL is not implemented yet")]
+        /// Indicates that the linked OpenSSL build does not provide SM4-CCM.
+        #[error("SM4 CCM via OpenSSL is unavailable")]
         Sm4CcmNotImplemented,
         /// Indicates that the provided SM4 GCM tag has an unexpected length.
         #[error("Invalid SM4 GCM tag length: expected 16 bytes, got {0}")]
@@ -2927,8 +2984,26 @@ pub mod openssl_sm {
                 return Err(OpenSslSmError::PreviewDisabled);
             }
             validate_sm4_ccm_params(key, nonce, tag_len)?;
-            let _ = (aad, plaintext);
-            Err(OpenSslSmError::Sm4CcmNotImplemented)
+            let cipher = fetch_sm4_ccm_cipher()?;
+            let mut ctx = CipherCtx::new()?;
+            let cipher_ref: &CipherRef = &cipher;
+            ctx.encrypt_init(Some(cipher_ref), None, None)?;
+            ctx.set_iv_length(nonce.len())?;
+            ctx.set_tag_length(tag_len)?;
+            ctx.encrypt_init(None, Some(key), Some(nonce))?;
+            ctx.set_data_len(plaintext.len())?;
+
+            if !aad.is_empty() {
+                ctx.cipher_update(aad, None)?;
+            }
+
+            let mut ciphertext = Vec::with_capacity(plaintext.len());
+            ctx.cipher_update_vec(plaintext, &mut ciphertext)?;
+            ctx.cipher_final_vec(&mut ciphertext)?;
+
+            let mut tag = vec![0u8; tag_len];
+            ctx.tag(&mut tag)?;
+            Ok((ciphertext, tag))
         }
 
         /// Decrypt data using OpenSSL's SM4-CCM implementation when preview support is enabled.
@@ -2949,8 +3024,22 @@ pub mod openssl_sm {
                 return Err(OpenSslSmError::PreviewDisabled);
             }
             validate_sm4_ccm_params(key, nonce, tag.len())?;
-            let _ = (aad, ciphertext);
-            Err(OpenSslSmError::Sm4CcmNotImplemented)
+            let cipher = fetch_sm4_ccm_cipher()?;
+            let mut ctx = CipherCtx::new()?;
+            let cipher_ref: &CipherRef = &cipher;
+            ctx.decrypt_init(Some(cipher_ref), None, None)?;
+            ctx.set_iv_length(nonce.len())?;
+            ctx.set_tag(tag)?;
+            ctx.decrypt_init(None, Some(key), Some(nonce))?;
+            ctx.set_data_len(ciphertext.len())?;
+
+            if !aad.is_empty() {
+                ctx.cipher_update(aad, None)?;
+            }
+
+            let mut plaintext = Vec::with_capacity(ciphertext.len());
+            ctx.cipher_update_vec(ciphertext, &mut plaintext)?;
+            Ok(plaintext)
         }
 
         /// Verify SM2 signatures via OpenSSL when preview support is enabled.
@@ -3109,6 +3198,61 @@ mod tests {
         fn drop(&mut self) {
             set_intrinsic_policy(self.previous);
         }
+    }
+
+    #[cfg(all(feature = "sm-ffi-openssl", feature = "sm-ccm"))]
+    struct OpenSslPreviewGuard {
+        previous: bool,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    #[cfg(all(feature = "sm-ffi-openssl", feature = "sm-ccm"))]
+    impl OpenSslPreviewGuard {
+        fn set(enabled: bool) -> Self {
+            let lock = test_support::lock_accel_state();
+            let previous = OpenSslProvider::is_enabled();
+            OpenSslProvider::set_preview_enabled(enabled);
+            Self {
+                previous,
+                _lock: lock,
+            }
+        }
+    }
+
+    #[cfg(all(feature = "sm-ffi-openssl", feature = "sm-ccm"))]
+    impl Drop for OpenSslPreviewGuard {
+        fn drop(&mut self) {
+            OpenSslProvider::set_preview_enabled(self.previous);
+        }
+    }
+
+    #[cfg(feature = "sm-ffi-openssl")]
+    #[test]
+    fn openssl_sm4_ccm_error_mapping_describes_ccm_lengths() {
+        assert_eq!(
+            map_openssl_sm_error("OpenSSL SM2 verify", OpenSslSmError::Sm2NotImplemented),
+            Error::Other("OpenSSL SM2 verify: SM2 unavailable from OpenSSL provider".into())
+        );
+        assert_eq!(
+            map_openssl_sm_error(
+                "OpenSSL SM4-CCM encrypt",
+                OpenSslSmError::InvalidCcmTagLength(5),
+            ),
+            Error::Other(
+                "OpenSSL SM4-CCM encrypt: invalid SM4 CCM tag length 5 (expected one of 4, 6, 8, 10, 12, 14, 16 bytes)"
+                    .into(),
+            )
+        );
+        assert_eq!(
+            map_openssl_sm_error(
+                "OpenSSL SM4-CCM decrypt",
+                OpenSslSmError::InvalidCcmNonceLength(6),
+            ),
+            Error::Other(
+                "OpenSSL SM4-CCM decrypt: invalid SM4 CCM nonce length 6 (expected between 7 and 13 bytes)"
+                    .into(),
+            )
+        );
     }
 
     #[test]
@@ -3448,6 +3592,65 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "sm-ffi-openssl", feature = "sm-ccm"))]
+    #[test]
+    fn openssl_sm4_ccm_preview_matches_rfc8998_when_available() {
+        let _guard = OpenSslPreviewGuard::set(true);
+        let key_bytes = hex_to_array::<16>("404142434445464748494a4b4c4d4e4f");
+        let nonce = hex_to_vec("10111213141516");
+        let aad = hex_to_vec("000102030405060708090a0b0c0d0e0f");
+        let plaintext = hex_to_vec("202122232425262728292a2b2c2d2e2f");
+        let expected_ciphertext = hex_to_vec("a9550cebab5f227d9590e8979caafd1f");
+        let expected_tag = hex_to_vec("03a1f305");
+
+        let (ciphertext, tag) =
+            match OpenSslSmBackend::sm4_ccm_encrypt(&key_bytes, &nonce, &aad, &plaintext, 4) {
+                Ok(result) => result,
+                Err(OpenSslSmError::Sm4CcmNotImplemented) => {
+                    eprintln!("skipping OpenSSL SM4-CCM test: provider cipher unavailable");
+                    return;
+                }
+                Err(OpenSslSmError::PreviewDisabled) => {
+                    panic!("OpenSSL SM4-CCM preview disabled despite test guard");
+                }
+                Err(err) => panic!("unexpected OpenSSL SM4-CCM encrypt error: {err:?}"),
+            };
+
+        assert_eq!(ciphertext, expected_ciphertext);
+        assert_eq!(tag, expected_tag);
+        assert_eq!(
+            OpenSslSmBackend::sm4_ccm_decrypt(&key_bytes, &nonce, &aad, &ciphertext, &tag)
+                .expect("OpenSSL SM4-CCM decrypts RFC8998 vector"),
+            plaintext
+        );
+
+        let mut tampered_tag = tag.clone();
+        tampered_tag[0] ^= 0xff;
+        assert!(
+            OpenSslSmBackend::sm4_ccm_decrypt(
+                &key_bytes,
+                &nonce,
+                &aad,
+                &ciphertext,
+                &tampered_tag,
+            )
+            .is_err(),
+            "OpenSSL SM4-CCM must reject modified tags"
+        );
+
+        let key = Sm4Key::new(key_bytes);
+        let (routed_ciphertext, routed_tag) = key
+            .encrypt_ccm(&nonce, &aad, &plaintext, 4)
+            .expect("public SM4-CCM path encrypts with OpenSSL preview or fallback");
+        assert_eq!(routed_ciphertext, expected_ciphertext);
+        assert_eq!(routed_tag, expected_tag);
+        assert_eq!(
+            key.decrypt_ccm(&nonce, &aad, &routed_ciphertext, &routed_tag)
+                .expect("public SM4-CCM path decrypts with OpenSSL preview or fallback"),
+            plaintext
+        );
+    }
+
     #[test]
     fn sm2_signature_roundtrip_and_verify() {
         let private =
@@ -3479,6 +3682,31 @@ mod tests {
         let err =
             Sm2Signature::from_bytes(&zero_s).expect_err("zero s scalar must fail before backend");
         assert!(err.to_string().contains("zero scalar"));
+    }
+
+    #[test]
+    fn sm2_public_key_from_sec1_bytes_rejects_all_zero_material_before_backend() {
+        let all_zero = [0u8; 65];
+        let err = Sm2PublicKey::from_sec1_bytes(Sm2PublicKey::DEFAULT_DISTID, &all_zero)
+            .expect_err("all-zero SM2 SEC1 public key must fail before backend parsing");
+
+        assert!(
+            err.to_string().contains("all-zero"),
+            "unexpected all-zero public key error: {err}"
+        );
+    }
+
+    #[test]
+    fn sm2_public_key_from_sec1_bytes_rejects_zero_coordinate_material_before_backend() {
+        let mut zero_coordinates = [0u8; SM2_PUBLIC_KEY_UNCOMPRESSED_LEN];
+        zero_coordinates[0] = 0x04;
+        let err = Sm2PublicKey::from_sec1_bytes(Sm2PublicKey::DEFAULT_DISTID, &zero_coordinates)
+            .expect_err("zero-coordinate SM2 SEC1 public key must fail before backend parsing");
+
+        assert!(
+            err.to_string().contains("all-zero SEC1 coordinate"),
+            "unexpected zero-coordinate public key error: {err}"
+        );
     }
 
     #[test]
@@ -3599,6 +3827,19 @@ mod tests {
             ),
             Ok(_) => panic!("all-zero SM2 seed material must fail"),
         }
+    }
+
+    #[test]
+    fn sm2_private_key_from_bytes_rejects_all_zero_material() {
+        let err = match Sm2PrivateKey::from_bytes(Sm2PublicKey::DEFAULT_DISTID, &[0u8; 32]) {
+            Ok(_) => panic!("all-zero SM2 private-key material must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected all-zero private-key error: {err}"
+        );
     }
 
     #[test]

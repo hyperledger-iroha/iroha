@@ -69,11 +69,15 @@ public enum OfflineNoteWalletNoteJsonCodec {
             throw OfflineNoteWalletNoteJsonCodecError.invalidField("note_secret_base64")
         }
         let state = try decodeState(try string(object["state"], field: "state"))
+        let assetId = try string(object["asset_id"], field: "asset_id")
+        try validateCanonicalAssetId(assetId)
+        let amount = try string(object["amount"], field: "amount")
+        try validateCanonicalAmount(amount)
         return try OfflineNoteWalletNote(
             chainId: string(object["chain_id"], field: "chain_id"),
             accountId: string(object["account_id"], field: "account_id"),
-            assetId: string(object["asset_id"], field: "asset_id"),
-            amount: string(object["amount"], field: "amount"),
+            assetId: assetId,
+            amount: amount,
             keyCertificate: OfflineNoteDecoding.decodeKeyCertificate(keyCertificateBytes),
             noteCommitment: noteCommitment,
             noteSecret: noteSecret,
@@ -148,16 +152,35 @@ public enum OfflineNoteWalletNoteJsonCodec {
     }
 
     private static func decodeState(_ raw: String) throws -> OfflineNoteWalletNoteState {
-        if let state = OfflineNoteWalletNoteState(rawValue: raw) {
-            return state
-        }
-        switch raw {
-        case "spendPending", "SPEND_PENDING":
-            return .spent
-        case "changePending", "CHANGE_PENDING":
-            return .spendable
-        default:
+        guard let state = OfflineNoteWalletNoteState(rawValue: raw) else {
             throw OfflineNoteWalletNoteJsonCodecError.invalidField("state")
+        }
+        return state
+    }
+
+    private static func validateCanonicalAmount(_ amount: String) throws {
+        do {
+            let canonicalAmount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+            guard amount == canonicalAmount else {
+                throw OfflineNoteWalletNoteJsonCodecError.invalidField("amount")
+            }
+        } catch let error as OfflineNoteWalletNoteJsonCodecError {
+            throw error
+        } catch {
+            throw OfflineNoteWalletNoteJsonCodecError.invalidField("amount")
+        }
+    }
+
+    private static func validateCanonicalAssetId(_ assetId: String) throws {
+        do {
+            let canonicalAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
+            guard assetId == canonicalAssetId else {
+                throw OfflineNoteWalletNoteJsonCodecError.invalidField("asset_id")
+            }
+        } catch let error as OfflineNoteWalletNoteJsonCodecError {
+            throw error
+        } catch {
+            throw OfflineNoteWalletNoteJsonCodecError.invalidField("asset_id")
         }
     }
 

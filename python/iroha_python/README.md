@@ -56,7 +56,7 @@ client = create_torii_client(
 ## Offline readiness
 
 Torii exposes only the Offline readiness endpoint for offline HTTP discovery.
-Classic Offline Note issuance, redemption, and audit transaction paths are
+Retired Offline Note issuance, redemption, and audit transaction paths are
 retired. Kagemusha readiness fields advertise the active offline payment
 implementation.
 
@@ -66,7 +66,7 @@ from iroha_python import ToriiClient
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
 
 readiness = client.get_offline_readiness()
-print("kagemusha", readiness.offline_kagemusha_abi7)
+print("kagemusha", readiness.offline_kagemusha_recursive_compact_available)
 ```
 
 For app-facing offline cash flows, use `iroha_python.offline_cash` to keep the
@@ -150,7 +150,8 @@ reservation and remain reserved ABI-7 state; unavailable compact surfaces raise
 `preferred_kagemusha_offline_spend_mode()` selects
 `recursive_spend_v1` when the native extension reports native bridge ABI 6 or later
 and every required recursive-spend method rejects the malformed availability
-probe, and otherwise falls back to `checked_prefold_v1`:
+probe, and otherwise returns `None` rather than falling back to archived
+checked-prefold fixtures:
 `kagemusha_recursive_spend_init`,
 `kagemusha_recursive_spend_append`,
 `kagemusha_recursive_spend_transition_profile_init`,
@@ -158,7 +159,9 @@ probe, and otherwise falls back to `checked_prefold_v1`:
 the append-boundary helper
 `kagemusha_recursive_spend_lineage_append_boundary`, both lineage-witness
 helpers, `kagemusha_recursive_spend_verify`, and
-`kagemusha_recursive_spend_redeem`.
+`kagemusha_recursive_spend_redeem`. Explicit capability selection must pass both
+`recursive_compact_available` and `recursive_spend_available`; single-argument
+selectors are not shipped.
 
 Transaction helpers expose the same Kagemusha instruction surface without
 asking wallet code to reframe native archives. Use
@@ -222,13 +225,12 @@ PyO3 host returns a `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage
 bundles require a matching active `lineage_verifier_record`, semantic bundles
 must omit it, and unsupported proof attachments are rejected as malformed
 requests rather than soft invalid proof results.
-Decoded verify results expose both
-`lineage_witness_required_for_redeem` and the earlier
-`lineage_witness_required` alias for the same redeem decision.
+Decoded verify results expose only
+`lineage_witness_required_for_redeem` for the redeem decision.
 Reserved-lineage append output is valid only when the previous bundle is
 already Reserved-lineage; semantic previous bundles keep using semantic append
 plus a record-backed lineage witness.
-Typed redeem request builders accept the legacy single
+Typed redeem request builders accept the single-record
 `lineage_verifier_record` path plus `lineage_verifier_records` for additional
 Reserved-lineage verifier records. Use the plural field for multi-profile
 record-backed lineage witnesses, or place every Reserved-lineage verifier

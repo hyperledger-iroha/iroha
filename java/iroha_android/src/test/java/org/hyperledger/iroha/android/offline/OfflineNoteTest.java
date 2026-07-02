@@ -24,6 +24,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import org.hyperledger.iroha.android.SigningException;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
@@ -61,6 +62,9 @@ public final class OfflineNoteTest {
     recursiveProofMetadataRejectsPaddedAndMalformedVerifierKeys();
     commitmentOriginIdsRejectSurroundingWhitespace();
     derivationPreimageIdsRejectSurroundingWhitespace();
+    assetScopeDataspaceIdsRejectNonCanonicalForms();
+    issuedClaimsRejectNonCanonicalAssetIds();
+    issuedClaimsRejectNonCanonicalAmounts();
     offlineNoteDomainsRejectSubstitutionAndPadding();
     instanceValuesMatchRustVectors();
     auditInstanceValuesRejectUnanchoredClaimsAndHiddenOutputs();
@@ -73,11 +77,13 @@ public final class OfflineNoteTest {
     kagemushaNativeAvailabilityRequiresJniEntrypoint();
     kagemushaRecursiveAggregationNativeAvailabilityRequiresJniEntrypoint();
     chainVkOfflineNoteProofWrappersValidateInputs();
+    openVerifyEnvelopeRejectsNonExactPublicInputHashBeforeDecoding();
     nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
     nativeHalo2ProverPerformanceWhenRequested();
     qrFixtureUsesSdkTextPrefix();
     paymentTokenCodecRoundTripsNoritoTextAndQrFrames();
     offlineBearerCashPolicyAndPrefixesUseSingleAppSurface();
+    offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits();
     receiveRequestCodecRoundTripsNoritoTextAndQrFrames();
     receiptAckCodecRoundTripsNoritoTextAndQrFrames();
     receiptAckCodecRejectsNonPositiveAcceptedAtDecode();
@@ -94,14 +100,25 @@ public final class OfflineNoteTest {
     walletAcceptsCanonicalSdkInteropPaymentToken();
     walletRejectsBearerCashCustodyPolicyOverflow();
     walletNoteJsonCodecRoundTripsFixtureNote();
+    walletNoteJsonCodecRejectsNonCanonicalAmount();
+    walletNoteJsonCodecRejectsNonExactCommitmentHex();
+    walletNoteJsonCodecRejectsNonExactIntegerFields();
     walletNoteScopeIdsRejectSurroundingWhitespace();
     walletLoadDerivesCommitmentBeforeIssuerSubmission();
+    walletRejectsNonPositiveLoadAmounts();
+    walletCanonicalizesLoadAndReceiveAmountsAndRejectsMalformedAmounts();
     walletLoadDoesNotBlockIssuerCompletionThread();
     walletLoadCompletesExceptionallyWhenIssuerThrowsSynchronously();
     toriiIssuerClientBodySignsRefillAndRetiresNoteIssue();
+    toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases();
+    toriiIssuerDeviceBindingRejectsWhitespaceNormalizedFields();
+    toriiIssuerClientRejectsMalformedDeviceProofProviderOutput();
     toriiIssuerClientRejectsMalformedCertificateUsageLimits();
+    toriiIssuerClientRejectsMalformedLineageState();
     walletLifecycleBuildsAuditAcceptAndRedeemTransactions();
     walletRejectsAuditWhenRecursiveVerifierFails();
+    walletRejectsPaymentsNeedingMoreThanFourInputs();
+    walletRejectsNonPositiveReceiveAndPaymentAmounts();
     walletRejectsRedeemWhenRecursiveVerifierFails();
     offlineNoteTransactionSubmitterIsRetiredAndKeepsFeeMetadataHelper();
     walletSyncReconcilesPendingSpendChangeAndRedeemStates();
@@ -111,6 +128,7 @@ public final class OfflineNoteTest {
     walletRejectsAdversarialCertificateBindings();
     walletSyncReconcilesFailedAuditAndRedeemOutcomes();
     outcomeIndexResolvesCommittedAndRejectedExplorerInstructions();
+    outcomeProviderRequiresExactEncodedInstructionHex();
     System.out.println("[IrohaAndroid] OfflineNoteTest passed.");
   }
 
@@ -677,6 +695,85 @@ public final class OfflineNoteTest {
         "padded payment-token request id must be rejected");
   }
 
+  private static void assetScopeDataspaceIdsRejectNonCanonicalForms() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final String chainId = string(derivation, "chain_id");
+    final String assetId = string(obj(chain, "issue"), "asset_id");
+    final byte[] hash = filledBytes(32, 0x11);
+    final OfflineNote.CommitmentOrigin.IssuerLoad origin =
+        new OfflineNote.CommitmentOrigin.IssuerLoad(
+            string(derivation, "issuer_load_operation_id"),
+            string(derivation, "issuer_load_lineage_id"),
+            0L);
+
+    new OfflineNote.NoteCommitmentPreimage(
+        chainId, hash, assetId + "#dataspace:0", "1", hash, origin);
+    new OfflineNote.NoteCommitmentPreimage(
+        chainId, hash, assetId + "#dataspace:1", "1", hash, origin);
+
+    for (final String rejected :
+        Arrays.asList(
+            "dataspace:",
+            "dataspace:+1",
+            "dataspace:01",
+            "dataspace:-1",
+            "dataspace:1.0",
+            "DATASPACE:1",
+            "dataspace:9223372036854775808")) {
+      assertThrows(
+          () ->
+              new OfflineNote.NoteCommitmentPreimage(
+                  chainId, hash, assetId + "#" + rejected, "1", hash, origin),
+          "non-canonical dataspace scope should reject: " + rejected);
+    }
+  }
+
+  private static void issuedClaimsRejectNonCanonicalAssetIds() throws Exception {
+    final OfflineNote.IssuedClaim claim = audit(loadFixture()).inputClaims().get(0);
+    final String accountId = accountFromAssetId(claim.assetId());
+    final String alternateAccountId =
+        AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null).address.toI105(1);
+    final String nonCanonicalAssetId =
+        assetDefinitionFromAssetId(claim.assetId()) + "#" + alternateAccountId;
+    assertTrue(
+        !claim.assetId().equals(nonCanonicalAssetId),
+        "alternate account discriminant must produce a distinct asset id");
+    assertEquals(
+        claim.assetId(),
+        OfflineNote.canonicalAssetId(nonCanonicalAssetId),
+        "canonical issued-claim asset id");
+    assertIllegalArgumentContains(
+        () ->
+            new OfflineNote.IssuedClaim(
+                claim.noteCommitment(),
+                claim.keyCertificatePayloadHash(),
+                nonCanonicalAssetId,
+                claim.amount()),
+        "asset_id must be canonical");
+  }
+
+  private static void issuedClaimsRejectNonCanonicalAmounts() throws Exception {
+    final OfflineNote.IssuedClaim claim = audit(loadFixture()).inputClaims().get(0);
+    final String nonCanonicalAmount = "0" + claim.amount();
+    assertTrue(
+        !claim.amount().equals(nonCanonicalAmount),
+        "padded amount must produce a distinct amount string");
+    assertEquals(
+        claim.amount(),
+        OfflineNote.canonicalAmountString(nonCanonicalAmount),
+        "canonical issued-claim amount");
+    assertIllegalArgumentContains(
+        () ->
+            new OfflineNote.IssuedClaim(
+                claim.noteCommitment(),
+                claim.keyCertificatePayloadHash(),
+                claim.assetId(),
+                nonCanonicalAmount),
+        "amount must be canonical");
+  }
+
   private static void offlineNoteDomainsRejectSubstitutionAndPadding() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final OfflineNote.KeyCertificate certificate =
@@ -860,10 +957,25 @@ public final class OfflineNoteTest {
         OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(
             proof.proof().bytes(), hex(proof.publicInputsHash())),
         "Java Offline Halo2 SDK envelope helper verifies public input hash");
+    final String publicInputsHashHex = hex(proof.publicInputsHash());
+    for (final String rejectedHash : nonExactPublicInputHashes(publicInputsHashHex)) {
+      assertTrue(
+          !OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(proof.proof().bytes(), rejectedHash),
+          "Java Offline Halo2 SDK envelope helper rejects non-exact public input hash");
+    }
     assertTrue(
         !OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(
             proof.proof().bytes(), "0000000000000000000000000000000000000000000000000000000000000000"),
         "Java Offline Halo2 SDK envelope helper rejects a wrong public input hash");
+  }
+
+  private static void openVerifyEnvelopeRejectsNonExactPublicInputHashBeforeDecoding() {
+    final String canonicalHash = repeat("ab", 32);
+    for (final String rejectedHash : nonExactPublicInputHashes(canonicalHash)) {
+      assertTrue(
+          !OfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(new byte[0], rejectedHash),
+          "Java Offline Halo2 helper rejects non-exact public input hash before decoding");
+    }
   }
 
   private static void kagemushaRecordBackedNativeProverValidatesInput() {
@@ -963,17 +1075,17 @@ public final class OfflineNoteTest {
             == KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1,
         "recursive compact should be preferred when compact ABI is present");
     assertTrue(
-        KagemushaRecursiveSpendProver.preferredMode(true)
+        KagemushaRecursiveSpendProver.preferredMode(false, true)
             == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
         "recursive Kagemusha spend should be preferred when available");
     assertTrue(
-        KagemushaRecursiveSpendProver.preferredMode(false)
-            == KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1,
-        "checked prefold should remain the compatibility fallback");
-    assertEquals(
-        "checked_prefold_v1",
-        KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1.wireName(),
-        "checked prefold Kagemusha wire mode");
+        KagemushaRecursiveSpendProver.preferredMode(false, false) == null,
+        "no recursive Kagemusha bridge should expose no preferred production mode");
+    for (final KagemushaRecursiveSpendProver.Mode mode : KagemushaRecursiveSpendProver.Mode.values()) {
+      assertTrue(
+          !"checked_prefold_v1".equals(mode.wireName()),
+          "checked-prefold is not a first-release spend mode");
+    }
     assertEquals(
         "recursive_compact_v1",
         KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1.wireName(),
@@ -1526,6 +1638,25 @@ public final class OfflineNoteTest {
         token.tokenIdHex(),
         OfflineBearerCashTextCodec.decodePaymentText(text).tokenIdHex(),
         "Bearer Cash text token id");
+    assertTrue(
+        OfflineBearerCashPayloadKindV1.PAYMENT == OfflineBearerCashTextCodec.payloadKind(text),
+        "payment text payload kind");
+    assertThrows(
+        () -> OfflineNotePaymentTokenCodec.decodeText(" " + text),
+        "leading-whitespace payment token text should reject");
+    assertThrows(
+        () -> OfflineNotePaymentTokenCodec.decodeText(text + "\n"),
+        "trailing-whitespace payment token text should reject");
+    assertThrows(
+        () -> OfflineBearerCashTextCodec.decodePaymentText("\t" + text),
+        "Bearer Cash payment text wrapper should reject leading whitespace");
+    assertTrue(
+        OfflineBearerCashTextCodec.payloadKind(" " + text) == null,
+        "payment payload kind should reject leading whitespace");
+    assertTrue(
+        OfflineBearerCashTextCodec.payloadKind(" wallet-offline-bearer-cash-payment:AAAA")
+            == null,
+        "payment payload kind should reject whitespace-wrapped prefix");
     assertEquals(
         token.tokenIdHex(),
         OfflineNotePaymentTokenCodec.decodeText(string(sdkInterop, "payment_token_text"))
@@ -1643,6 +1774,40 @@ public final class OfflineNoteTest {
         "unknown prefix");
   }
 
+  private static void offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits() {
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(0, 32, 2048, 12288, 20, 8, 40),
+        "maxCustodyHops must be positive");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(Integer.MIN_VALUE, 32, 2048, 12288, 20, 8, 40),
+        "maxCustodyHops must be positive");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(5, 0, 2048, 12288, 20, 8, 40),
+        "maxLineageSteps must be positive");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(5, 32, 0, 12288, 20, 8, 40),
+        "maxSingleQrPayloadBytes must be positive");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(5, 32, 2, 1, 20, 8, 40),
+        "maxStreamPayloadBytes must cover maxSingleQrPayloadBytes");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(5, 32, 2048, 12288, 20, 0, 40),
+        "androidKeyPoolReplenishBelow must be positive");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(5, 32, 2048, 12288, 7, 8, 40),
+        "androidKeyPoolTarget must cover androidKeyPoolReplenishBelow");
+    assertIllegalArgumentContains(
+        () -> new OfflineBearerCashPolicyV1(5, 32, 2048, 12288, 20, 8, 19),
+        "androidKeyPoolCap must cover androidKeyPoolTarget");
+
+    final OfflineBearerCashPolicyV1 policy = OfflineBearerCashPolicyV1.DEFAULT;
+    for (final int payloadByteCount : new int[] {0, -1, Integer.MIN_VALUE}) {
+      assertIllegalArgumentContains(
+          () -> policy.recommendedTransportForPayloadByteCount(payloadByteCount),
+          "payloadByteCount must be positive");
+    }
+  }
+
   private static void receiveRequestCodecRoundTripsNoritoTextAndQrFrames() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final OfflineNoteReceiveRequest request = receiveRequestFixture(fixture);
@@ -1671,6 +1836,19 @@ public final class OfflineNoteTest {
         request.outputCommitmentHex(),
         OfflineNoteReceiveRequestCodec.decodeText(text).outputCommitmentHex(),
         "receive request text output commitment");
+    assertTrue(
+        OfflineBearerCashPayloadKindV1.RECEIVE_REQUEST
+            == OfflineBearerCashTextCodec.payloadKind(text),
+        "receive request text payload kind");
+    assertThrows(
+        () -> OfflineNoteReceiveRequestCodec.decodeText(" " + text),
+        "leading-whitespace receive request text should reject");
+    assertThrows(
+        () -> OfflineBearerCashTextCodec.decodeReceiveRequestText(text + "\n"),
+        "Bearer Cash receive request text wrapper should reject trailing whitespace");
+    assertTrue(
+        OfflineBearerCashTextCodec.payloadKind(text + " ") == null,
+        "receive request payload kind should reject trailing whitespace");
     assertThrows(
         () -> OfflineNoteReceiveRequestCodec.decodeText(text + "="),
         "padded receive request text should reject");
@@ -1731,6 +1909,18 @@ public final class OfflineNoteTest {
         ack.tokenIdHex(),
         OfflineNoteReceiptAckCodec.decodeText(text).tokenIdHex(),
         "receipt ACK text token id");
+    assertTrue(
+        OfflineBearerCashPayloadKindV1.ACK == OfflineBearerCashTextCodec.payloadKind(text),
+        "receipt ACK text payload kind");
+    assertThrows(
+        () -> OfflineNoteReceiptAckCodec.decodeText(" " + text),
+        "leading-whitespace receipt ACK text should reject");
+    assertThrows(
+        () -> OfflineBearerCashTextCodec.decodeAckText(text + "\t"),
+        "Bearer Cash receipt ACK text wrapper should reject trailing whitespace");
+    assertTrue(
+        OfflineBearerCashTextCodec.payloadKind("\n" + text) == null,
+        "receipt ACK payload kind should reject leading newline");
     assertThrows(
         () -> OfflineNoteReceiptAckCodec.decodeText(text + "="),
         "padded receipt ACK text should reject");
@@ -2765,7 +2955,7 @@ public final class OfflineNoteTest {
             string(obj(fixture, "payment_token"), "recipient_account_id"),
             longValue(obj(fixture, "receipt_ack"), "accepted_at_ms"));
     final OfflineNoteNearbyEnvelope.PairingChallenge challenge =
-        new OfflineNoteNearbyEnvelope.PairingChallenge(" nearby_pairing_bird ");
+        new OfflineNoteNearbyEnvelope.PairingChallenge("nearby_pairing_bird");
     final OfflineNoteNearbyEnvelope challengeEnvelope =
         new OfflineNoteNearbyEnvelope(
             OfflineNoteNearbyEnvelope.Kind.RECEIVE_REQUEST,
@@ -2785,6 +2975,29 @@ public final class OfflineNoteTest {
         challenge.equals(
             OfflineNoteNearbyEnvelope.decode(challengeEnvelope.encoded()).pairingChallenge()),
         "challenge pairing roundtrip");
+    final String challengeEnvelopeText =
+        new String(challengeEnvelope.encoded(), StandardCharsets.UTF_8);
+    assertTrue(
+        challengeEnvelopeText.contains("\"pairingChallenge\":\"nearby_pairing_bird\""),
+        "challenge pairing JSON");
+    assertThrows(
+        () ->
+            OfflineNoteNearbyEnvelope.decode(
+                challengeEnvelopeText
+                    .replace(
+                        "\"pairingChallenge\":\"nearby_pairing_bird\"",
+                        "\"pairingChallenge\":\" nearby_pairing_bird\"")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "padded nearby pairing string should fail");
+    assertThrows(
+        () ->
+            OfflineNoteNearbyEnvelope.decode(
+                challengeEnvelopeText
+                    .replace(
+                        "\"pairingChallenge\":\"nearby_pairing_bird\"",
+                        "\"pairingChallenge\":{\"assetName\":\"nearby_pairing_bird \"}")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "padded nearby pairing object should fail");
     assertTrue(paymentEnvelope.kind() == OfflineNoteNearbyEnvelope.Kind.PAYMENT, "payment kind");
     assertEquals(
         receiveRequest.outputCommitmentHex(),
@@ -2806,6 +3019,12 @@ public final class OfflineNoteTest {
     final OfflineNoteNearbyEnvelope.PairingChallenge pairing =
         new OfflineNoteNearbyEnvelope.PairingChallenge("nearby_pairing_mask");
 
+    assertThrows(
+        () -> new OfflineNoteNearbyEnvelope.PairingChallenge(" nearby_pairing_mask"),
+        "padded pairing asset should fail");
+    assertThrows(
+        () -> new OfflineNoteNearbyEnvelope.PairingChallenge("nearby_pairing_mask\n"),
+        "newline-padded pairing asset should fail");
     assertThrows(
         () -> new OfflineNoteNearbyEnvelope.PairingChallenge("nearby_pairing_mask<script>"),
         "invalid pairing asset should fail");
@@ -3065,22 +3284,102 @@ public final class OfflineNoteTest {
 
     final String encoded =
         new String(OfflineNoteWalletNoteJsonCodec.encode(note), StandardCharsets.UTF_8);
-    final OfflineNoteWalletNote migratedSpent =
-        OfflineNoteWalletNoteJsonCodec.decode(
-            encoded.replace("\"state\":\"SPENDABLE\"", "\"state\":\"SPEND_PENDING\"")
-                .getBytes(StandardCharsets.UTF_8));
-    assertEquals(
-        OfflineNoteWalletNoteState.SPENT.name(),
-        migratedSpent.state().name(),
-        "migrated spend pending state");
-    final OfflineNoteWalletNote migratedChange =
-        OfflineNoteWalletNoteJsonCodec.decode(
-            encoded.replace("\"state\":\"SPENDABLE\"", "\"state\":\"CHANGE_PENDING\"")
-                .getBytes(StandardCharsets.UTF_8));
-    assertEquals(
-        OfflineNoteWalletNoteState.SPENDABLE.name(),
-        migratedChange.state().name(),
-        "migrated change pending state");
+    for (final String retiredState :
+        Arrays.asList("spendPending", "SPEND_PENDING", "changePending", "CHANGE_PENDING")) {
+      assertThrows(
+          () ->
+              OfflineNoteWalletNoteJsonCodec.decode(
+                  encoded.replace("\"state\":\"SPENDABLE\"", "\"state\":\"" + retiredState + "\"")
+                      .getBytes(StandardCharsets.UTF_8)),
+          "retired " + retiredState + " wallet-note state should reject");
+    }
+  }
+
+  private static void walletNoteJsonCodecRejectsNonCanonicalAmount() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final OfflineNoteWalletNote note = sourceWalletNote(fixture, senderCertificate);
+    final String encoded =
+        new String(OfflineNoteWalletNoteJsonCodec.encode(note), StandardCharsets.UTF_8);
+    final String canonicalField = "\"amount\":\"" + note.canonicalAmount() + "\"";
+    final String replacementField = "\"amount\":\"0" + note.canonicalAmount() + "\"";
+    assertTrue(encoded.contains(canonicalField), "encoded wallet-note amount must be present");
+    assertIllegalArgumentContains(
+        () ->
+            OfflineNoteWalletNoteJsonCodec.decode(
+                encoded.replace(canonicalField, replacementField).getBytes(StandardCharsets.UTF_8)),
+        "amount must be canonical");
+  }
+
+  private static void walletNoteJsonCodecRejectsNonExactCommitmentHex() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final OfflineNoteWalletNote note = sourceWalletNote(fixture, senderCertificate);
+    final String encoded =
+        new String(OfflineNoteWalletNoteJsonCodec.encode(note), StandardCharsets.UTF_8);
+    final String canonicalCommitment = note.noteCommitmentHex();
+    final String canonicalField = "\"note_commitment_hex\":\"" + canonicalCommitment + "\"";
+    assertTrue(encoded.contains(canonicalField), "encoded note commitment field should be present");
+
+    for (final String nonExactCommitment : nonExactLowerHex32(canonicalCommitment)) {
+      assertThrows(
+          () ->
+              OfflineNoteWalletNoteJsonCodec.decode(
+                  encoded
+                      .replace(
+                          canonicalField,
+                          "\"note_commitment_hex\":\"" + nonExactCommitment + "\"")
+                      .getBytes(StandardCharsets.UTF_8)),
+          "non-exact wallet-note commitment should reject: " + nonExactCommitment);
+    }
+  }
+
+  private static void walletNoteJsonCodecRejectsNonExactIntegerFields() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final OfflineNoteWalletNote note = sourceWalletNote(fixture, senderCertificate);
+    final String encoded =
+        new String(OfflineNoteWalletNoteJsonCodec.encode(note), StandardCharsets.UTF_8);
+    final OfflineNote.CommitmentOrigin.IssuerLoad origin =
+        (OfflineNote.CommitmentOrigin.IssuerLoad) note.origin();
+
+    assertWalletNoteIntegerRejects(
+        encoded, "\"version\":1", "\"version\":\"1\"", "quoted wallet-note version should reject");
+    assertWalletNoteIntegerRejects(
+        encoded, "\"version\":1", "\"version\":1.5", "fractional wallet-note version should reject");
+    assertWalletNoteIntegerRejects(
+        encoded,
+        "\"created_at_ms\":" + note.createdAtMs(),
+        "\"created_at_ms\":\"" + note.createdAtMs() + "\"",
+        "quoted wallet-note created_at_ms should reject");
+    assertWalletNoteIntegerRejects(
+        encoded,
+        "\"updated_at_ms\":" + note.updatedAtMs(),
+        "\"updated_at_ms\":" + note.updatedAtMs() + ".5",
+        "fractional wallet-note updated_at_ms should reject");
+    assertWalletNoteIntegerRejects(
+        encoded,
+        "\"local_revision\":" + origin.localRevision(),
+        "\"local_revision\":9223372036854775808",
+        "overflow wallet-note origin local_revision should reject");
+  }
+
+  private static void assertWalletNoteIntegerRejects(
+      final String encoded,
+      final String canonicalField,
+      final String replacementField,
+      final String message) {
+    assertTrue(
+        encoded.contains(canonicalField),
+        "encoded wallet-note integer field should be present: " + canonicalField);
+    assertThrows(
+        () ->
+            OfflineNoteWalletNoteJsonCodec.decode(
+                encoded.replace(canonicalField, replacementField).getBytes(StandardCharsets.UTF_8)),
+        message);
   }
 
   private static void walletNoteScopeIdsRejectSurroundingWhitespace() throws Exception {
@@ -3178,11 +3477,194 @@ public final class OfflineNoteTest {
         "loaded note state");
   }
 
+  private static void walletRejectsNonPositiveLoadAmounts() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> issue = obj(chain, "issue");
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final OfflineNoteLoadContext loadContext =
+        new OfflineNoteLoadContext(
+            string(derivation, "issuer_load_operation_id"),
+            string(derivation, "issuer_load_lineage_id"),
+            longValue(derivation, "issuer_load_local_revision"),
+            senderCertificate);
+    final RecordingIssuerClient issuerClient = new RecordingIssuerClient(loadContext);
+    final InMemoryOfflineNoteStore store = new InMemoryOfflineNoteStore();
+    final OfflineNoteWallet wallet =
+        new OfflineNoteWallet(
+            string(derivation, "chain_id"),
+            accountFromAssetId(string(issue, "asset_id")),
+            new StaticAttestationProvider(senderCertificate),
+            store,
+            issuerClient,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(Collections.emptyList()),
+            new FixedIdGenerator(string(derivation, "payment_request_id") + "-positive-load"),
+            () -> 1_700_000_012_180L);
+    final String assetDefinitionId = assetDefinitionFromAssetId(string(issue, "asset_id"));
+
+    for (final String invalidAmount : Arrays.asList("0", "-1")) {
+      final Throwable cause =
+          assertFutureFailsWithin(
+              wallet.load(assetDefinitionId, invalidAmount), "nonpositive load should fail");
+      assertTrue(
+          cause instanceof IllegalArgumentException,
+          "nonpositive load should fail with IllegalArgumentException");
+      assertTrue(
+          cause.getMessage().contains("Offline Note payment amount must be positive"),
+          "nonpositive load failure message");
+      assertEquals(0L, issuerClient.prepareLoadCount, "nonpositive load issuer prepare count");
+      assertTrue(issuerClient.lastIssueRequest == null, "nonpositive load issue request");
+      assertEquals(0L, store.listNotes().size(), "nonpositive load note count");
+    }
+  }
+
+  private static void walletCanonicalizesLoadAndReceiveAmountsAndRejectsMalformedAmounts()
+      throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> issue = obj(chain, "issue");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(payment, "sender_key_certificate"));
+    final OfflineNote.KeyCertificate recipientCertificate =
+        certificate(obj(payment, "recipient_key_certificate"));
+    final String chainId = string(derivation, "chain_id");
+    final String assetDefinitionId = assetDefinitionFromAssetId(string(issue, "asset_id"));
+    final OfflineNoteLoadContext loadContext =
+        new OfflineNoteLoadContext(
+            string(derivation, "issuer_load_operation_id"),
+            string(derivation, "issuer_load_lineage_id"),
+            longValue(derivation, "issuer_load_local_revision"),
+            senderCertificate);
+    final RecordingIssuerClient issuerClient = new RecordingIssuerClient(loadContext);
+    final InMemoryOfflineNoteStore loadStore = new InMemoryOfflineNoteStore();
+    final OfflineNoteWallet loadWallet =
+        new OfflineNoteWallet(
+            chainId,
+            accountFromAssetId(string(issue, "asset_id")),
+            new StaticAttestationProvider(senderCertificate),
+            loadStore,
+            issuerClient,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(Collections.singletonList(filledBytes(32, 0x42))),
+            new FixedIdGenerator(string(derivation, "payment_request_id") + "-canonical-load"),
+            () -> 1_700_000_012_181L);
+
+    final OfflineNoteWalletNote loaded = loadWallet.load(assetDefinitionId, "001.2300").get();
+    assertEquals("1.2300", issuerClient.lastPrepareAmount, "canonical load prepare amount");
+    assertEquals("1.2300", issuerClient.lastIssueRequest.amount(), "canonical issue amount");
+    assertEquals("1.2300", loaded.amount(), "canonical loaded note amount");
+    assertEquals("1.2300", loaded.canonicalAmount(), "canonical loaded note amount accessor");
+
+    for (final String invalidAmount : Arrays.asList(" 1", "1\n", "1e3", ".", "")) {
+      final Throwable cause =
+          assertFutureFailsWithin(
+              loadWallet.load(assetDefinitionId, invalidAmount),
+              "malformed load amount should fail");
+      assertTrue(
+          cause instanceof IllegalArgumentException,
+          "malformed load amount should fail with IllegalArgumentException");
+      assertEquals(1L, issuerClient.prepareLoadCount, "malformed load issuer prepare count");
+      assertEquals(1L, loadStore.listNotes().size(), "malformed load note count");
+    }
+
+    final InMemoryOfflineNoteStore receiveStore = new InMemoryOfflineNoteStore();
+    final OfflineNoteWallet receiveWallet =
+        new OfflineNoteWallet(
+            chainId,
+            string(payment, "recipient_account_id"),
+            new StaticAttestationProvider(recipientCertificate),
+            receiveStore,
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(Collections.singletonList(filledBytes(32, 0x43))),
+            new FixedIdGenerator(string(derivation, "payment_request_id") + "-canonical-receive"),
+            () -> 1_700_000_012_182L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
+    final OfflineNoteReceiveRequest receiveRequest =
+        receiveWallet.prepareReceive(assetDefinitionId, "+10");
+    assertEquals("10", receiveRequest.amount(), "canonical receive request amount");
+    assertEquals("10", receiveRequest.canonicalAmount(), "canonical receive request amount accessor");
+    assertEquals("10", receiveStore.listNotes().get(0).amount(), "canonical pending receive amount");
+
+    for (final String nonCanonicalAmount : Arrays.asList("010", "+10")) {
+      assertIllegalArgumentContains(
+          () ->
+              new OfflineNoteReceiveRequest(
+                  receiveRequest.chainId(),
+                  receiveRequest.paymentRequestId() + "-" + nonCanonicalAmount,
+                  receiveRequest.accountId(),
+                  receiveRequest.assetDefinitionId(),
+                  receiveRequest.assetId(),
+                  nonCanonicalAmount,
+                  receiveRequest.keyCertificate(),
+                  receiveRequest.outputCommitment()),
+          "amount must be canonical");
+    }
+    final String alternateAccountId =
+        AccountAddress.parseEncodedIgnoringCurveSupport(receiveRequest.accountId(), null)
+            .address
+            .toI105(1);
+    final String nonCanonicalAssetId =
+        assetDefinitionFromAssetId(receiveRequest.assetId()) + "#" + alternateAccountId;
+    assertTrue(
+        !receiveRequest.assetId().equals(nonCanonicalAssetId),
+        "receive request noncanonical asset id differs");
+    assertEquals(
+        receiveRequest.assetId(),
+        OfflineNote.canonicalAssetId(nonCanonicalAssetId),
+        "receive request noncanonical asset id canonicalizes");
+    assertIllegalArgumentContains(
+        () ->
+            new OfflineNoteReceiveRequest(
+                receiveRequest.chainId(),
+                receiveRequest.paymentRequestId() + "-asset",
+                receiveRequest.accountId(),
+                receiveRequest.assetDefinitionId(),
+                nonCanonicalAssetId,
+                receiveRequest.amount(),
+                receiveRequest.keyCertificate(),
+                receiveRequest.outputCommitment()),
+        "asset_id must be canonical");
+
+    for (final String invalidAmount : Arrays.asList(" 1", "1\n", "1e3", ".", "")) {
+      assertIllegalArgumentContains(
+          () -> receiveWallet.prepareReceive(assetDefinitionId, invalidAmount),
+          "Offline Note payment amount");
+      assertEquals(1L, receiveStore.listNotes().size(), "malformed receive note count");
+      assertIllegalArgumentContains(
+          () ->
+              new OfflineNoteReceiveRequest(
+                  receiveRequest.chainId(),
+                  receiveRequest.paymentRequestId() + "-bad",
+                  receiveRequest.accountId(),
+                  receiveRequest.assetDefinitionId(),
+                  receiveRequest.assetId(),
+                  invalidAmount,
+                  receiveRequest.keyCertificate(),
+                  receiveRequest.outputCommitment()),
+          "Offline Note payment amount");
+    }
+  }
+
   private static void toriiIssuerClientBodySignsRefillAndRetiresNoteIssue()
       throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> certificateJson =
-        obj(obj(fixture, "payment_token"), "sender_key_certificate");
+        currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
     final String accountId = string(certificateJson, "account_id");
     final String assetDefinitionId =
         assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"));
@@ -3195,9 +3677,16 @@ public final class OfflineNoteTest {
     final OfflineNoteIssuerDeviceBinding binding =
         new OfflineNoteIssuerDeviceBinding("device-1", offlinePublicKey, bindingJson);
     final OfflineIssuerExecutor executor =
-        new OfflineIssuerExecutor(certificateJson, " lineage-state-hash ");
+        new OfflineIssuerExecutor(certificateJson, "00".repeat(31) + "04");
     final List<byte[]> signedMessages = new ArrayList<>();
     final long[] nowMs = new long[] {1_700_000_000_000L};
+    final Map<String, String> defaultHeaders = new LinkedHashMap<>();
+    defaultHeaders.put("X-Iroha-Account", "retired-account");
+    defaultHeaders.put("x-iroha-signature", "retired-signature");
+    defaultHeaders.put("X-IROHA-TIMESTAMP-MS", "123");
+    defaultHeaders.put("X-Iroha-Nonce", "retired-nonce");
+    defaultHeaders.put("X-Iroha-Witness", "retired-witness");
+    defaultHeaders.put("X-Client-Trace", "trace-1");
     final ToriiOfflineNoteIssuerClient client =
         new ToriiOfflineNoteIssuerClient(
             new ToriiCanonicalRequestAuth(
@@ -3208,18 +3697,12 @@ public final class OfflineNoteTest {
                 }),
             (chainId, requestAccountId, requestAssetDefinitionId) -> binding,
             (chainId, requestAccountId, requestAssetDefinitionId, operation, lineageId, proofAmount) -> {
-              final Map<String, Object> proof = new LinkedHashMap<>();
-              proof.put("operation", operation);
-              proof.put("lineage_id", lineageId);
-              if (proofAmount != null) {
-                proof.put("amount", proofAmount);
-              }
-              return proof;
+              return deviceProofJson();
             },
             executor,
             URI.create("https://torii.example"),
             java.time.Duration.ofSeconds(15),
-            Map.of(),
+            defaultHeaders,
             List.of(),
             () -> nowMs[0],
             new SequenceIdGenerator(
@@ -3266,6 +3749,9 @@ public final class OfflineNoteTest {
               .noneMatch(name -> name.regionMatches(true, 0, "X-Iroha-", 0, "X-Iroha-".length())),
           "offline issuer body auth must not use X-Iroha headers");
     }
+    assertTrue(
+        List.of("trace-1").equals(executor.requests.get(0).headers().get("X-Client-Trace")),
+        "non-auth default header should survive");
 
     final Map<String, Object> refillBody = executor.requestBody(0);
     assertEquals(accountId, string(refillBody, "account_id"), "refill account id");
@@ -3291,8 +3777,21 @@ public final class OfflineNoteTest {
         "nested-device-signature-is-not-body-auth",
         string(obj(refillBody, "device_binding"), "signature_base64"),
         "nested device proof is preserved");
+    final Map<String, Object> deviceProof = obj(refillBody, "device_proof");
+    assertEquals("android", string(deviceProof, "platform"), "refill device proof platform");
     assertEquals(
-        "setup", string(obj(refillBody, "device_proof"), "operation"), "refill device proof");
+        "attestation-key-1",
+        string(deviceProof, "attestation_key_id"),
+        "refill device proof attestation key");
+    assertEquals(
+        "00".repeat(31) + "ab",
+        string(deviceProof, "challenge_hash_hex"),
+        "refill device proof challenge hash");
+    assertEquals(
+        base64("assertion".getBytes(StandardCharsets.UTF_8)),
+        string(deviceProof, "assertion_base64"),
+        "refill device proof assertion");
+    assertTrue(!deviceProof.containsKey("operation"), "device proof must not preserve provider metadata");
 
     nowMs[0] = 1_700_000_060_001L;
     final OfflineNoteLoadContext refillContext =
@@ -3303,6 +3802,380 @@ public final class OfflineNoteTest {
     assertEquals("", string(secondRefillBody, "local_state_hash"), "second refill local state hash");
   }
 
+  private static void toriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases() {
+    final String offlinePublicKey = "a5".repeat(32);
+    for (final String retiredKey :
+        Arrays.asList("device_public_key", "app_attest_public_key_base64")) {
+      final Map<String, Object> bindingJson = new LinkedHashMap<>();
+      bindingJson.put("device_id", "device-1");
+      bindingJson.put("attestation_key_id", "attestation-key-1");
+      bindingJson.put("offline_public_key", offlinePublicKey);
+      bindingJson.put(retiredKey, base64(filledBytes(65, 2)));
+      assertThrows(
+          () -> new OfflineNoteIssuerDeviceBinding("device-1", offlinePublicKey, bindingJson),
+          "device_binding." + retiredKey + " is retired; use assertion_public_key");
+    }
+  }
+
+  private static void toriiIssuerDeviceBindingRejectsWhitespaceNormalizedFields() {
+    final String offlinePublicKey = "a5".repeat(32);
+    final OfflineNoteIssuerDeviceBinding valid =
+        new OfflineNoteIssuerDeviceBinding(
+            "device-1",
+            offlinePublicKey,
+            issuerDeviceBindingJson("device-1", "attestation-key-1", offlinePublicKey));
+    assertEquals("attestation-key-1", valid.attestationKeyId(), "exact attestation key");
+    assertIllegalArgumentContains(
+        () ->
+            new OfflineNoteIssuerDeviceBinding(
+                " device-1",
+                offlinePublicKey,
+                issuerDeviceBindingJson("device-1", "attestation-key-1", offlinePublicKey)),
+        "deviceId must be exact non-empty text");
+    assertIllegalArgumentContains(
+        () ->
+            new OfflineNoteIssuerDeviceBinding(
+                "device-1",
+                offlinePublicKey + " ",
+                issuerDeviceBindingJson("device-1", "attestation-key-1", offlinePublicKey)),
+        "offlinePublicKey must be exact non-empty text");
+    assertIllegalArgumentContains(
+        () ->
+            new OfflineNoteIssuerDeviceBinding(
+                "device-1",
+                offlinePublicKey,
+                issuerDeviceBindingJson("device-1 ", "attestation-key-1", offlinePublicKey)),
+        "device_binding.device_id must match deviceId");
+    assertIllegalArgumentContains(
+        () ->
+            new OfflineNoteIssuerDeviceBinding(
+                "device-1",
+                offlinePublicKey,
+                issuerDeviceBindingJson("device-1", "attestation-key-1", " " + offlinePublicKey)),
+        "device_binding.offline_public_key must match offlinePublicKey");
+
+    final OfflineNoteIssuerDeviceBinding paddedAttestation =
+        new OfflineNoteIssuerDeviceBinding(
+            "device-1",
+            offlinePublicKey,
+            issuerDeviceBindingJson("device-1", " attestation-key-1", offlinePublicKey));
+    assertIllegalStateContains(
+        () -> paddedAttestation.attestationKeyId(),
+        "device_binding.attestation_key_id must be exact non-empty text");
+    final OfflineNoteIssuerDeviceBinding emptyAttestation =
+        new OfflineNoteIssuerDeviceBinding(
+            "device-1",
+            offlinePublicKey,
+            issuerDeviceBindingJson("device-1", "", offlinePublicKey));
+    assertIllegalStateContains(
+        () -> emptyAttestation.attestationKeyId(),
+        "device_binding.attestation_key_id is required");
+  }
+
+  private static void toriiIssuerClientRejectsMalformedDeviceProofProviderOutput()
+      throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> certificateJson =
+        currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final String accountId = string(certificateJson, "account_id");
+    final String assetDefinitionId =
+        assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"));
+    final String offlinePublicKey = "a5".repeat(32);
+    final OfflineNoteIssuerDeviceBinding binding =
+        new OfflineNoteIssuerDeviceBinding(
+            "device-1",
+            offlinePublicKey,
+            issuerDeviceBindingJson("device-1", "attestation-key-1", offlinePublicKey));
+
+    assertToriiIssuerClientRejectsDeviceProof(
+        null,
+        accountId,
+        assetDefinitionId,
+        binding,
+        certificateJson,
+        "device_proof must be a JSON object");
+
+    Map<String, Object> proof = deviceProofJson();
+    proof.remove("platform");
+    assertToriiIssuerClientRejectsDeviceProof(
+        proof, accountId, assetDefinitionId, binding, certificateJson, "platform is required");
+
+    proof = deviceProofJson();
+    proof.put("operation", "setup");
+    assertToriiIssuerClientRejectsDeviceProof(
+        proof,
+        accountId,
+        assetDefinitionId,
+        binding,
+        certificateJson,
+        "device_proof.operation is not supported");
+
+    for (final String invalidPlatform : List.of("ios-appattest", "android-keymint ", "Android")) {
+      proof = deviceProofJson();
+      proof.put("platform", invalidPlatform);
+      assertToriiIssuerClientRejectsDeviceProof(
+          proof,
+          accountId,
+          assetDefinitionId,
+          binding,
+          certificateJson,
+          "platform must be a supported first-release value");
+    }
+
+    for (final String invalidKeyId : List.of("", " attestation-key-1", "attestation-key-1\n")) {
+      proof = deviceProofJson();
+      proof.put("attestation_key_id", invalidKeyId);
+      assertToriiIssuerClientRejectsDeviceProof(
+          proof,
+          accountId,
+          assetDefinitionId,
+          binding,
+          certificateJson,
+          "attestation_key_id must be an exact non-empty string");
+    }
+
+    for (final String invalidHash :
+        List.of(
+            " " + ("00".repeat(31) + "ab"),
+            ("00".repeat(31) + "ab").toUpperCase(Locale.ROOT),
+            "0x" + ("00".repeat(31) + "ab"),
+            "00".repeat(31) + "a",
+            "g".repeat(64))) {
+      proof = deviceProofJson();
+      proof.put("challenge_hash_hex", invalidHash);
+      assertToriiIssuerClientRejectsDeviceProof(
+          proof,
+          accountId,
+          assetDefinitionId,
+          binding,
+          certificateJson,
+          "challenge_hash_hex must be 32-byte lowercase hex");
+    }
+
+    for (final String invalidAssertion :
+        List.of(
+            "",
+            " " + base64("assertion".getBytes(StandardCharsets.UTF_8)),
+            base64("assertion".getBytes(StandardCharsets.UTF_8)) + "\n",
+            base64(filledBytes(4, 0xff)).replace('/', '_'),
+            base64(filledBytes(1, 0xff)).replace("=", ""))) {
+      proof = deviceProofJson();
+      proof.put("assertion_base64", invalidAssertion);
+      assertToriiIssuerClientRejectsDeviceProof(
+          proof,
+          accountId,
+          assetDefinitionId,
+          binding,
+          certificateJson,
+          "assertion_base64 must be canonical base64");
+    }
+
+    proof = deviceProofJson();
+    proof.put("counter", -1L);
+    assertToriiIssuerClientRejectsDeviceProof(
+        proof,
+        accountId,
+        assetDefinitionId,
+        binding,
+        certificateJson,
+        "counter must be non-negative");
+
+    proof = deviceProofJson();
+    proof.put("counter", "1");
+    assertToriiIssuerClientRejectsDeviceProof(
+        proof, accountId, assetDefinitionId, binding, certificateJson, "counter must be an integer");
+  }
+
+  private static void assertToriiIssuerClientRejectsDeviceProof(
+      final Map<String, Object> deviceProof,
+      final String accountId,
+      final String assetDefinitionId,
+      final OfflineNoteIssuerDeviceBinding binding,
+      final Map<String, Object> certificateJson,
+      final String expectedMessage) {
+    final ToriiOfflineNoteIssuerClient client =
+        new ToriiOfflineNoteIssuerClient(
+            new ToriiCanonicalRequestAuth(accountId, OfflineNoteTest::fakeIssuerSignature),
+            (chainId, requestAccountId, requestAssetDefinitionId) -> binding,
+            (chainId, requestAccountId, requestAssetDefinitionId, operation, lineageId, proofAmount) ->
+                deviceProof,
+            new OfflineIssuerExecutor(certificateJson),
+            URI.create("https://torii.example"),
+            java.time.Duration.ofSeconds(15),
+            Map.of(),
+            List.of(),
+            () -> 1_700_000_000_000L,
+            new SequenceIdGenerator("operation-refill-proof", "auth-refill-proof"));
+
+    assertIllegalStateContains(
+        () -> client.prepareLoad("chain-1", accountId, assetDefinitionId, "5"),
+        expectedMessage);
+  }
+
+  private static void toriiIssuerClientRejectsMalformedLineageState() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> certificateJson =
+        currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+    final String accountId = string(certificateJson, "account_id");
+    final String assetDefinitionId =
+        assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"));
+    final String offlinePublicKey = "a5".repeat(32);
+    final OfflineNoteIssuerDeviceBinding binding =
+        new OfflineNoteIssuerDeviceBinding(
+            "device-1",
+            offlinePublicKey,
+            issuerDeviceBindingJson("device-1", "attestation-key-1", offlinePublicKey));
+
+    assertToriiIssuerClientRejectsLineageState(
+        state -> {
+          state.put("lineage_id", " lineage-1");
+          return state;
+        },
+        accountId,
+        assetDefinitionId,
+        binding,
+        certificateJson,
+        "lineage_id must be an exact non-empty string");
+    assertToriiIssuerClientRejectsLineageState(
+        state -> {
+          state.put("balance", "-1");
+          return state;
+        },
+        accountId,
+        assetDefinitionId,
+        binding,
+        certificateJson,
+        "balance must be a non-negative amount");
+    assertToriiIssuerClientRejectsLineageState(
+        state -> {
+          state.put("server_revision", -1L);
+          return state;
+        },
+        accountId,
+        assetDefinitionId,
+        binding,
+        certificateJson,
+        "server_revision must be non-negative");
+    assertToriiIssuerClientRejectsLineageState(
+        state -> {
+          state.put("server_state_hash", ("00".repeat(31) + "ab").toUpperCase(Locale.ROOT));
+          return state;
+        },
+        accountId,
+        assetDefinitionId,
+        binding,
+        certificateJson,
+        "server_state_hash must be 32-byte lowercase hex");
+    assertToriiIssuerClientRejectsLineageState(
+        state -> {
+          state.put("issuer_signature_base64", base64(filledBytes(63, 6)));
+          return state;
+        },
+        accountId,
+        assetDefinitionId,
+        binding,
+        certificateJson,
+        "issuer_signature_base64 must be 64 bytes");
+    assertToriiIssuerClientRejectsLineageState(
+        state -> {
+          obj(state, "authorization").put("max_tx_value", "-1");
+          return state;
+        },
+        accountId,
+        assetDefinitionId,
+        binding,
+        certificateJson,
+        "max_tx_value must be a non-negative amount");
+    assertToriiIssuerClientRejectsLineageState(
+        state -> {
+          obj(state, "authorization").put("refresh_at_ms", 1_699_999_999_999L);
+          return state;
+        },
+        accountId,
+        assetDefinitionId,
+        binding,
+        certificateJson,
+        "refresh_at_ms must be at or after issued_at_ms");
+    assertToriiIssuerClientRejectsLineageState(
+        state -> {
+          obj(state, "authorization").put("expires_at_ms", 1_700_000_000_000L);
+          return state;
+        },
+        accountId,
+        assetDefinitionId,
+        binding,
+        certificateJson,
+        "expires_at_ms must be after issued_at_ms");
+    assertToriiIssuerClientRejectsLineageState(
+        state -> {
+          obj(state, "authorization").put("issuer_signature_base64", " " + base64(filledBytes(64, 5)));
+          return state;
+        },
+        accountId,
+        assetDefinitionId,
+        binding,
+        certificateJson,
+        "issuer_signature_base64 must be canonical base64");
+    assertToriiIssuerClientRejectsLineageState(
+        state -> {
+          obj(obj(state, "authorization"), "device_binding").put("attestation_key_id", " attestation-key-1");
+          return state;
+        },
+        accountId,
+        assetDefinitionId,
+        binding,
+        certificateJson,
+        "attestation_key_id must be an exact non-empty string");
+  }
+
+  private static void assertToriiIssuerClientRejectsLineageState(
+      final Function<Map<String, Object>, Map<String, Object>> lineageStateMutator,
+      final String accountId,
+      final String assetDefinitionId,
+      final OfflineNoteIssuerDeviceBinding binding,
+      final Map<String, Object> certificateJson,
+      final String expectedMessage) {
+    final ToriiOfflineNoteIssuerClient client =
+        new ToriiOfflineNoteIssuerClient(
+            new ToriiCanonicalRequestAuth(accountId, OfflineNoteTest::fakeIssuerSignature),
+            (chainId, requestAccountId, requestAssetDefinitionId) -> binding,
+            (chainId, requestAccountId, requestAssetDefinitionId, operation, lineageId, proofAmount) ->
+                deviceProofJson(),
+            new OfflineIssuerExecutor(certificateJson, null, lineageStateMutator),
+            URI.create("https://torii.example"),
+            java.time.Duration.ofSeconds(15),
+            Map.of(),
+            List.of(),
+            () -> 1_700_000_000_000L,
+            new SequenceIdGenerator("operation-refill-lineage", "auth-refill-lineage"));
+
+    final Throwable failure =
+        assertFutureFailsWithin(
+            client.prepareLoad("chain-1", accountId, assetDefinitionId, "5"),
+            "malformed lineage_state must reject");
+    final Throwable root = rootCause(failure);
+    assertTrue(
+        root.getMessage() != null && root.getMessage().contains(expectedMessage),
+        "expected lineage_state failure to contain: " + expectedMessage + ", got: " + root);
+  }
+
+  private static Throwable rootCause(final Throwable failure) {
+    Throwable root = failure;
+    while (root.getCause() != null) {
+      root = root.getCause();
+    }
+    return root;
+  }
+
+  private static Map<String, Object> issuerDeviceBindingJson(
+      final Object deviceId, final Object attestationKeyId, final Object offlinePublicKey) {
+    final Map<String, Object> bindingJson = new LinkedHashMap<>();
+    bindingJson.put("device_id", deviceId);
+    bindingJson.put("attestation_key_id", attestationKeyId);
+    bindingJson.put("offline_public_key", offlinePublicKey);
+    return bindingJson;
+  }
+
   private static byte[] fakeIssuerSignature(final byte[] message) {
     final byte[] signature = new byte[64];
     for (int index = 0; index < signature.length; index++) {
@@ -3311,10 +4184,20 @@ public final class OfflineNoteTest {
     return signature;
   }
 
+  private static Map<String, Object> deviceProofJson() {
+    final Map<String, Object> proof = new LinkedHashMap<>();
+    proof.put("platform", "android");
+    proof.put("attestation_key_id", "attestation-key-1");
+    proof.put("challenge_hash_hex", "00".repeat(31) + "ab");
+    proof.put("assertion_base64", base64("assertion".getBytes(StandardCharsets.UTF_8)));
+    proof.put("counter", 1L);
+    return proof;
+  }
+
   private static void toriiIssuerClientRejectsMalformedCertificateUsageLimits() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> baseCertificateJson =
-        obj(obj(fixture, "payment_token"), "sender_key_certificate");
+        currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
     final String accountId = string(baseCertificateJson, "account_id");
     final String assetDefinitionId =
         assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"));
@@ -3338,6 +4221,51 @@ public final class OfflineNoteTest {
       assertToriiIssuerClientRejectsCertificateJson(
           certificateJson, accountId, assetDefinitionId, binding);
     }
+    for (final String invalidScheme :
+        List.of("apple-appattest-counter", "android-keymint-ecdsa-p256-usage-limit")) {
+      final Map<String, Object> certificateJson = new LinkedHashMap<>(baseCertificateJson);
+      certificateJson.put("assertion_scheme", invalidScheme);
+      assertToriiIssuerClientRejectsCertificateJson(
+          certificateJson, accountId, assetDefinitionId, binding);
+    }
+    for (final String invalidAlgorithm : List.of("ecdsa-p256-sha256", "ed25519")) {
+      final Map<String, Object> certificateJson = new LinkedHashMap<>(baseCertificateJson);
+      certificateJson.put("assertion_key_algorithm", invalidAlgorithm);
+      assertToriiIssuerClientRejectsCertificateJson(
+          certificateJson, accountId, assetDefinitionId, binding);
+    }
+    for (final String invalidPlatform :
+        List.of("android", "android-keymint ", "Android-keymint", "ios-appattest-android")) {
+      final Map<String, Object> certificateJson = new LinkedHashMap<>(baseCertificateJson);
+      certificateJson.put("platform", invalidPlatform);
+      certificateJson.put("assertion_scheme", OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME);
+      certificateJson.put(
+          "assertion_key_algorithm", OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM);
+      certificateJson.put("assertion_usage_count_limit", Integer.valueOf(1));
+      assertToriiIssuerClientRejectsCertificateJson(
+          certificateJson, accountId, assetDefinitionId, binding);
+    }
+
+    Map<String, Object> certificateJson = new LinkedHashMap<>(baseCertificateJson);
+    certificateJson.put("public_key", hex(filledBytes(33, 1)));
+    assertToriiIssuerClientRejectsCertificateJson(
+        certificateJson, accountId, assetDefinitionId, binding);
+
+    certificateJson = new LinkedHashMap<>(baseCertificateJson);
+    certificateJson.put(
+        "assertion_public_key", base64(filledBytes(65, 0xff)).replace('/', '_'));
+    assertToriiIssuerClientRejectsCertificateJson(
+        certificateJson, accountId, assetDefinitionId, binding);
+
+    certificateJson = new LinkedHashMap<>(baseCertificateJson);
+    certificateJson.put("issuer_signature_base64", " " + base64(filledBytes(64, 3)));
+    assertToriiIssuerClientRejectsCertificateJson(
+        certificateJson, accountId, assetDefinitionId, binding);
+
+    certificateJson = new LinkedHashMap<>(baseCertificateJson);
+    certificateJson.put("issuer_signature_base64", base64(filledBytes(64, 3)).replace("=", ""));
+    assertToriiIssuerClientRejectsCertificateJson(
+        certificateJson, accountId, assetDefinitionId, binding);
   }
 
   private static void assertToriiIssuerClientRejectsCertificateJson(
@@ -3349,7 +4277,8 @@ public final class OfflineNoteTest {
         new ToriiOfflineNoteIssuerClient(
             new ToriiCanonicalRequestAuth(accountId, OfflineNoteTest::fakeIssuerSignature),
             (chainId, requestAccountId, requestAssetDefinitionId) -> binding,
-            (chainId, requestAccountId, requestAssetDefinitionId, operation, lineageId, proofAmount) -> Map.of(),
+            (chainId, requestAccountId, requestAssetDefinitionId, operation, lineageId, proofAmount) ->
+                deviceProofJson(),
             new OfflineIssuerExecutor(certificateJson),
             URI.create("https://torii.example"),
             java.time.Duration.ofSeconds(15),
@@ -3660,6 +4589,166 @@ public final class OfflineNoteTest {
         senderStore.findNote(hexBytes(string(derivation, "source_note_commitment"))).state().name(),
         "source note state after rejected audit proof");
     assertEquals(1L, senderStore.listNotes().size(), "note count after rejected audit proof");
+  }
+
+  private static void walletRejectsPaymentsNeedingMoreThanFourInputs() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> chainIssue = obj(chain, "issue");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final String chainId = string(derivation, "chain_id");
+    final String assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id"));
+    final String senderAccountId = accountFromAssetId(string(chainIssue, "asset_id"));
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(payment, "sender_key_certificate"));
+    final OfflineNote.KeyCertificate recipientCertificate =
+        certificate(obj(payment, "recipient_key_certificate"));
+    final InMemoryOfflineNoteStore senderStore = new InMemoryOfflineNoteStore();
+    for (int index = 0; index < 5; index++) {
+      senderStore.upsert(
+          issuerSourceWalletNote(
+              chainId,
+              senderAccountId,
+              assetDefinitionId,
+              "1",
+              senderCertificate,
+              filledBytes(32, 0x40 + index),
+              "input-cap-" + index,
+              1_700_000_012_000L + index));
+    }
+    final OfflineNoteWallet senderWallet =
+        new OfflineNoteWallet(
+            chainId,
+            senderAccountId,
+            new StaticAttestationProvider(senderCertificate),
+            senderStore,
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(Collections.emptyList()),
+            new FixedIdGenerator(string(derivation, "payment_request_id") + "-input-cap"),
+            () -> 1_700_000_012_100L,
+            new StaticOwnerCertificateSigner(senderCertificate));
+    final OfflineNoteWallet recipientWallet =
+        new OfflineNoteWallet(
+            chainId,
+            string(payment, "recipient_account_id"),
+            new StaticAttestationProvider(recipientCertificate),
+            new InMemoryOfflineNoteStore(),
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(Collections.singletonList(filledBytes(32, 0x50))),
+            new FixedIdGenerator(string(derivation, "payment_request_id") + "-input-cap"),
+            () -> 1_700_000_012_050L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
+    final OfflineNoteReceiveRequest receiveRequest =
+        recipientWallet.prepareReceive(assetDefinitionId, "5");
+
+    assertIllegalArgumentContains(
+        () -> senderWallet.pay(receiveRequest),
+        "Offline Note payments support at most 4 input notes");
+    assertEquals(5L, senderStore.listNotes().size(), "input-cap note count");
+    long spendableCount = 0;
+    for (final OfflineNoteWalletNote note : senderStore.listNotes()) {
+      if (note.state() == OfflineNoteWalletNoteState.SPENDABLE) {
+        spendableCount++;
+      }
+    }
+    assertEquals(5L, spendableCount, "input-cap spendable note count");
+  }
+
+  private static void walletRejectsNonPositiveReceiveAndPaymentAmounts() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> chainIssue = obj(chain, "issue");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final String chainId = string(derivation, "chain_id");
+    final String assetDefinitionId = assetDefinitionFromAssetId(string(chainIssue, "asset_id"));
+    final String senderAccountId = accountFromAssetId(string(chainIssue, "asset_id"));
+    final OfflineNote.KeyCertificate senderCertificate =
+        certificate(obj(payment, "sender_key_certificate"));
+    final OfflineNote.KeyCertificate recipientCertificate =
+        certificate(obj(payment, "recipient_key_certificate"));
+    final InMemoryOfflineNoteStore recipientStore = new InMemoryOfflineNoteStore();
+    final OfflineNoteWallet recipientWallet =
+        new OfflineNoteWallet(
+            chainId,
+            string(payment, "recipient_account_id"),
+            new StaticAttestationProvider(recipientCertificate),
+            recipientStore,
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(
+                Arrays.asList(filledBytes(32, 0x60), filledBytes(32, 0x61))),
+            new FixedIdGenerator(string(derivation, "payment_request_id") + "-positive-amount"),
+            () -> 1_700_000_012_150L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
+
+    for (final String invalidAmount : Arrays.asList("0", "-1")) {
+      assertIllegalArgumentContains(
+          () -> recipientWallet.prepareReceive(assetDefinitionId, invalidAmount),
+          "Offline Note payment amount must be positive");
+      assertEquals(0L, recipientStore.listNotes().size(), "nonpositive receive note count");
+    }
+
+    final OfflineNoteReceiveRequest receiveRequest =
+        recipientWallet.prepareReceive(assetDefinitionId, "1");
+    final InMemoryOfflineNoteStore senderStore = new InMemoryOfflineNoteStore();
+    senderStore.upsert(
+        issuerSourceWalletNote(
+            chainId,
+            senderAccountId,
+            assetDefinitionId,
+            "2",
+            senderCertificate,
+            filledBytes(32, 0x70),
+            "positive-amount",
+            1_700_000_012_160L));
+    final OfflineNoteWallet senderWallet =
+        new OfflineNoteWallet(
+            chainId,
+            senderAccountId,
+            new StaticAttestationProvider(senderCertificate),
+            senderStore,
+            null,
+            new RecordingTransactionSubmitter(),
+            BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
+            fixtureOwnerCertificateVerifier(fixture),
+            new QueueRandomSource(Collections.emptyList()),
+            new FixedIdGenerator(string(derivation, "payment_request_id") + "-positive-amount"),
+            () -> 1_700_000_012_170L,
+            new StaticOwnerCertificateSigner(senderCertificate));
+
+    for (final String invalidAmount : Arrays.asList("0", "-1")) {
+      assertIllegalArgumentContains(
+          () ->
+              new OfflineNoteReceiveRequest(
+                  receiveRequest.chainId(),
+                  receiveRequest.paymentRequestId() + "-" + invalidAmount,
+                  receiveRequest.accountId(),
+                  receiveRequest.assetDefinitionId(),
+                  receiveRequest.assetId(),
+                  invalidAmount,
+                  receiveRequest.keyCertificate(),
+                  receiveRequest.outputCommitment()),
+          "Offline Note payment amount must be positive");
+      assertEquals(1L, senderStore.listNotes().size(), "nonpositive pay note count");
+      assertEquals(
+          OfflineNoteWalletNoteState.SPENDABLE.name(),
+          senderStore.listNotes().get(0).state().name(),
+          "nonpositive pay note state");
+    }
   }
 
   private static void walletRejectsRedeemWhenRecursiveVerifierFails() throws Exception {
@@ -4538,21 +5627,21 @@ public final class OfflineNoteTest {
             List.of(
                 new OfflineNoteExplorerInstructionOutcome(
                     OfflineNoteOutcomeIndex.KIND_ISSUE,
-                    "Committed",
+                    OfflineNoteOutcomeIndex.STATUS_COMMITTED,
                     "issue-tx",
                     rawInstructionPair(
                         OfflineNote.ISSUE_INSTRUCTION_SCHEMA,
                         wirePayloadBytes(OfflineNote.issueInstruction(issue)))),
                 new OfflineNoteExplorerInstructionOutcome(
                     OfflineNoteOutcomeIndex.KIND_AUDIT,
-                    "Committed",
+                    OfflineNoteOutcomeIndex.STATUS_COMMITTED,
                     "audit-tx",
                     rawInstructionPair(
                         OfflineNote.AUDIT_INSTRUCTION_SCHEMA,
                         wirePayloadBytes(OfflineNote.auditInstruction(audit)))),
                 new OfflineNoteExplorerInstructionOutcome(
                     OfflineNoteOutcomeIndex.KIND_REDEEM,
-                    "Committed",
+                    OfflineNoteOutcomeIndex.STATUS_COMMITTED,
                     "redeem-tx",
                     rawInstructionPair(
                         OfflineNote.REDEEM_INSTRUCTION_SCHEMA,
@@ -4570,6 +5659,44 @@ public final class OfflineNoteTest {
         committed.resolve(redeemPending).state().name(),
         "committed redeem");
 
+    final OfflineNoteOutcomeIndex permissiveCaseDrift =
+        OfflineNoteOutcomeIndex.fromExplorerOutcomes(
+            List.of(
+                new OfflineNoteExplorerInstructionOutcome(
+                    OfflineNoteOutcomeIndex.KIND_ISSUE,
+                    "committed",
+                    "issue-case-drift",
+                    rawInstructionPair(
+                        OfflineNote.ISSUE_INSTRUCTION_SCHEMA,
+                        wirePayloadBytes(OfflineNote.issueInstruction(issue)))),
+                new OfflineNoteExplorerInstructionOutcome(
+                    OfflineNoteOutcomeIndex.KIND_REDEEM.toLowerCase(Locale.ROOT),
+                    OfflineNoteOutcomeIndex.STATUS_COMMITTED,
+                    "redeem-case-drift",
+                    rawInstructionPair(
+                        OfflineNote.REDEEM_INSTRUCTION_SCHEMA,
+                        wirePayloadBytes(OfflineNote.redeemInstruction(redeem))))));
+    assertTrue(permissiveCaseDrift.resolve(issuePending) == null, "lowercase status ignored");
+    assertTrue(permissiveCaseDrift.resolve(redeemPending) == null, "lowercase kind ignored");
+    assertThrows(
+        () ->
+            new OfflineNoteExplorerInstructionOutcome(
+                " " + OfflineNoteOutcomeIndex.KIND_REDEEM,
+                OfflineNoteOutcomeIndex.STATUS_COMMITTED,
+                rawInstructionPair(
+                    OfflineNote.REDEEM_INSTRUCTION_SCHEMA,
+                    wirePayloadBytes(OfflineNote.redeemInstruction(redeem)))),
+        "padded outcome kind should throw");
+    assertThrows(
+        () ->
+            new OfflineNoteExplorerInstructionOutcome(
+                OfflineNoteOutcomeIndex.KIND_REDEEM,
+                OfflineNoteOutcomeIndex.STATUS_COMMITTED + " ",
+                rawInstructionPair(
+                    OfflineNote.REDEEM_INSTRUCTION_SCHEMA,
+                    wirePayloadBytes(OfflineNote.redeemInstruction(redeem)))),
+        "padded outcome status should throw");
+
     final OfflineNoteOutcomeIndex rejected =
         new OfflineNoteOutcomeIndex()
             .recordRejectedIssue(issue, "issue-rejected")
@@ -4583,6 +5710,59 @@ public final class OfflineNoteTest {
         OfflineNoteWalletNoteState.SPENDABLE.name(),
         rejected.resolve(redeemPending).state().name(),
         "rejected redeem");
+  }
+
+  private static void outcomeProviderRequiresExactEncodedInstructionHex() {
+    assertTrue(
+        Arrays.equals(
+            new byte[] {(byte) 0xbe, (byte) 0xef},
+            outcomeProviderEncodedInstruction("beef", false)),
+        "top-level encoded hex");
+    assertTrue(
+        Arrays.equals(
+            new byte[] {(byte) 0xca, (byte) 0xfe},
+            outcomeProviderEncodedInstruction("cafe", true)),
+        "nested encoded hex");
+
+    final Object[][] malformed = {
+      {" beef", false},
+      {"beef\n", false},
+      {"0xbeef", false},
+      {"BEEF", true},
+      {"", true},
+      {"abc", true},
+      {"gg", true}
+    };
+    for (final Object[] payload : malformed) {
+      final String encoded = (String) payload[0];
+      final boolean nested = (Boolean) payload[1];
+      assertThrows(
+          () -> outcomeProviderEncodedInstruction(encoded, nested),
+          "malformed encoded instruction hex should throw: " + encoded);
+    }
+  }
+
+  private static byte[] outcomeProviderEncodedInstruction(
+      final String encoded, final boolean nested) {
+    try {
+      final List<OfflineNoteExplorerInstructionOutcome> outcomes =
+          new ToriiOfflineNoteOutcomeProvider(
+                  new ExplorerOutcomeExecutor(encoded, nested),
+                  URI.create("https://example.test"),
+                  null,
+                  Collections.emptyMap(),
+                  Collections.emptyList(),
+                  25)
+              .listOutcomes()
+              .get(5, TimeUnit.SECONDS);
+      assertEquals(3L, outcomes.size(), "outcome count");
+      return outcomes.get(0).encodedInstruction();
+    } catch (final InterruptedException error) {
+      Thread.currentThread().interrupt();
+      throw new RuntimeException(error);
+    } catch (final ExecutionException | TimeoutException error) {
+      throw new RuntimeException(error);
+    }
   }
 
   private static OfflineNote.Issue issue(final Map<String, Object> fixture) {
@@ -4699,6 +5879,24 @@ public final class OfflineNoteTest {
         nullableInt(json, "assertion_usage_count_limit"),
         bool(json, "one_use"),
         base64Bytes(string(json, "issuer_signature_base64")));
+  }
+
+  private static Map<String, Object> currentIssuerCertificateJson(
+      final Map<String, Object> json) {
+    final Map<String, Object> copy = new LinkedHashMap<>(json);
+    final String platform = string(copy, "platform");
+    if (OfflineNoteV2.ANDROID_KEYMINT_PLATFORM.equals(platform)) {
+      copy.put("assertion_scheme", OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME);
+      copy.put(
+          "assertion_key_algorithm", OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM);
+    } else if (OfflineNoteV2.IOS_APP_ATTEST_PLATFORM.equals(platform)) {
+      copy.put("assertion_scheme", OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME);
+      copy.put("assertion_key_algorithm", OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM);
+    } else {
+      copy.put("assertion_scheme", "unsupported-platform");
+      copy.put("assertion_key_algorithm", "unsupported-platform");
+    }
+    return copy;
   }
 
   private static OfflineNoteCertificateVerifier certificateVerifier(
@@ -5117,6 +6315,37 @@ public final class OfflineNoteTest {
         1_700_000_000_000L);
   }
 
+  private static OfflineNoteWalletNote issuerSourceWalletNote(
+      final String chainId,
+      final String accountId,
+      final String assetDefinitionId,
+      final String amount,
+      final OfflineNote.KeyCertificate certificate,
+      final byte[] noteSecret,
+      final String operationSuffix,
+      final long createdAtMs) {
+    final String assetId = assetDefinitionId + "#" + accountId;
+    final OfflineNote.CommitmentOrigin.IssuerLoad origin =
+        new OfflineNote.CommitmentOrigin.IssuerLoad(
+            "operation-" + operationSuffix, "lineage-" + operationSuffix, 1L);
+    final byte[] noteCommitment =
+        OfflineNote.deriveNoteCommitment(
+            new OfflineNote.NoteCommitmentPreimage(
+                chainId, certificate.payloadHash(), assetId, amount, noteSecret, origin));
+    return new OfflineNoteWalletNote(
+        chainId,
+        accountId,
+        assetId,
+        amount,
+        certificate,
+        noteCommitment,
+        noteSecret,
+        origin,
+        OfflineNoteWalletNoteState.SPENDABLE,
+        createdAtMs,
+        createdAtMs);
+  }
+
   private static final class StaticAttestationProvider implements OfflineNoteAttestationProvider {
     private final OfflineNote.KeyCertificate certificate;
 
@@ -5195,9 +6424,49 @@ public final class OfflineNoteTest {
     }
   }
 
+  private static final class ExplorerOutcomeExecutor implements HttpTransportExecutor {
+    private final String encoded;
+    private final boolean nested;
+
+    private ExplorerOutcomeExecutor(final String encoded, final boolean nested) {
+      this.encoded = encoded;
+      this.nested = nested;
+    }
+
+    @Override
+    public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
+      final Map<String, Object> json = new LinkedHashMap<>();
+      if (nested) {
+        json.put("encoded", encoded);
+      }
+      final Map<String, Object> box = new LinkedHashMap<>();
+      box.put("json", json);
+      if (!nested) {
+        box.put("encoded", encoded);
+      }
+      final Map<String, Object> item = new LinkedHashMap<>();
+      item.put("authority", "authority");
+      item.put("created_at", "2025-01-01T00:00:00Z");
+      item.put("kind", OfflineNoteOutcomeIndex.KIND_ISSUE);
+      item.put("r#box", box);
+      item.put("transaction_hash", "hash");
+      item.put("transaction_status", OfflineNoteOutcomeIndex.STATUS_COMMITTED);
+      item.put("block", 1L);
+      item.put("index", 0L);
+      final Map<String, Object> page = new LinkedHashMap<>();
+      page.put("items", Collections.singletonList(item));
+      return CompletableFuture.completedFuture(
+          TransportResponse.builder()
+              .setStatusCode(200)
+              .setBody(JsonEncoder.encode(page).getBytes(StandardCharsets.UTF_8))
+              .build());
+    }
+  }
+
   private static final class OfflineIssuerExecutor implements HttpTransportExecutor {
     private final Map<String, Object> certificateJson;
     private final String serverStateHash;
+    private final Function<Map<String, Object>, Map<String, Object>> lineageStateMutator;
     private final List<TransportRequest> requests = new ArrayList<>();
 
     private OfflineIssuerExecutor(final Map<String, Object> certificateJson) {
@@ -5206,8 +6475,16 @@ public final class OfflineNoteTest {
 
     private OfflineIssuerExecutor(
         final Map<String, Object> certificateJson, final String serverStateHash) {
+      this(certificateJson, serverStateHash, Function.identity());
+    }
+
+    private OfflineIssuerExecutor(
+        final Map<String, Object> certificateJson,
+        final String serverStateHash,
+        final Function<Map<String, Object>, Map<String, Object>> lineageStateMutator) {
       this.certificateJson = certificateJson;
       this.serverStateHash = serverStateHash;
+      this.lineageStateMutator = lineageStateMutator;
     }
 
     @Override
@@ -5218,14 +6495,14 @@ public final class OfflineNoteTest {
       switch (request.uri().getPath()) {
         case "/v1/offline/v2/keys/refill" -> {
           response.put("operation_id", string(body, "operation_id"));
-          response.put("lineage_state", lineageState(0, "0"));
+          response.put("lineage_state", lineageState(body, 0, "0"));
           response.put("key_certificate", certificateWithExpiry());
           response.put("key_certificates", List.of(certificateWithExpiry()));
         }
         case "/v1/offline/v2/notes/issue" -> {
           response.put("operation_id", string(body, "operation_id"));
           response.put("settlement", Map.of("entry_hash", "settlement-entry-hash"));
-          response.put("lineage_state", lineageState(1, "5"));
+          response.put("lineage_state", lineageState(body, 1, "5"));
           response.put("local_balance", "5");
           response.put("locked_balance", "0");
           response.put("local_revision", 1L);
@@ -5259,20 +6536,38 @@ public final class OfflineNoteTest {
       return copy;
     }
 
-    private Map<String, Object> lineageState(final long revision, final String balance) {
+    private Map<String, Object> lineageState(
+        final Map<String, Object> requestBody, final long revision, final String balance) {
       final Map<String, Object> authorization = new LinkedHashMap<>();
+      authorization.put("authorization_id", "authorization-1");
+      authorization.put("lineage_id", "lineage-1");
+      authorization.put("account_id", string(requestBody, "account_id"));
+      authorization.put("device_id", string(requestBody, "device_id"));
+      authorization.put("offline_public_key", string(requestBody, "offline_public_key"));
+      authorization.put("verdict_id", "verdict-1");
+      authorization.put("max_balance", "1000");
+      authorization.put("max_tx_value", "250");
+      authorization.put("issued_at_ms", 1_700_000_000_000L);
+      authorization.put("refresh_at_ms", 1_700_000_030_000L);
       authorization.put("expires_at_ms", 1_700_000_060_000L);
+      authorization.put("device_binding", obj(requestBody, "device_binding"));
+      authorization.put("issuer_signature_base64", base64(filledBytes(64, 5)));
       final Map<String, Object> state = new LinkedHashMap<>();
       state.put("lineage_id", "lineage-1");
+      state.put("account_id", string(requestBody, "account_id"));
+      state.put("device_id", string(requestBody, "device_id"));
+      state.put("offline_public_key", string(requestBody, "offline_public_key"));
+      state.put("asset_definition_id", string(requestBody, "asset_definition_id"));
       state.put("server_revision", revision);
       state.put("pending_local_revision", revision);
       state.put("balance", balance);
       state.put("locked_balance", "0");
       state.put("authorization", authorization);
-      if (serverStateHash != null) {
-        state.put("server_state_hash", serverStateHash);
-      }
-      return state;
+      state.put(
+          "server_state_hash",
+          serverStateHash == null ? "00".repeat(31) + "04" : serverStateHash);
+      state.put("issuer_signature_base64", base64(filledBytes(64, 6)));
+      return lineageStateMutator.apply(state);
     }
   }
 
@@ -5335,6 +6630,8 @@ public final class OfflineNoteTest {
 
   private static final class RecordingIssuerClient implements OfflineNoteIssuerClient {
     private final OfflineNoteLoadContext loadContext;
+    private long prepareLoadCount;
+    private String lastPrepareAmount;
     private OfflineNoteIssueRequest lastIssueRequest;
 
     private RecordingIssuerClient(final OfflineNoteLoadContext loadContext) {
@@ -5347,6 +6644,8 @@ public final class OfflineNoteTest {
         final String accountId,
         final String assetDefinitionId,
         final String amount) {
+      prepareLoadCount++;
+      lastPrepareAmount = amount;
       return CompletableFuture.completedFuture(loadContext);
     }
 
@@ -5763,6 +7062,36 @@ public final class OfflineNoteTest {
     return builder.toString();
   }
 
+  private static List<String> nonExactPublicInputHashes(final String canonicalHash) {
+    return Arrays.asList(
+        " " + canonicalHash,
+        canonicalHash + "\n",
+        canonicalHash.toUpperCase(Locale.ROOT),
+        "0x" + canonicalHash,
+        canonicalHash.substring(0, canonicalHash.length() - 1),
+        canonicalHash.substring(0, canonicalHash.length() - 2) + "zz",
+        "");
+  }
+
+  private static List<String> nonExactLowerHex32(final String canonicalHex) {
+    return Arrays.asList(
+        " " + canonicalHex,
+        canonicalHex + "\n",
+        canonicalHex.toUpperCase(Locale.ROOT),
+        "0x" + canonicalHex,
+        canonicalHex.substring(0, canonicalHex.length() - 1),
+        canonicalHex.substring(0, canonicalHex.length() - 2) + "zz",
+        "");
+  }
+
+  private static String repeat(final String value, final int count) {
+    final StringBuilder builder = new StringBuilder(value.length() * count);
+    for (int i = 0; i < count; i++) {
+      builder.append(value);
+    }
+    return builder.toString();
+  }
+
   private static byte[] mutatedHeaderFrame(
       final OfflineQrStream.Frame header, final Function<byte[], byte[]> mutator) {
     final byte[] envelope = header.payload();
@@ -5914,6 +7243,19 @@ public final class OfflineNoteTest {
       return;
     }
     throw new AssertionError("expected IllegalArgumentException: " + expectedMessage);
+  }
+
+  private static void assertIllegalStateContains(
+      final Runnable action, final String expectedMessage) {
+    try {
+      action.run();
+    } catch (final IllegalStateException expected) {
+      assertTrue(
+          expected.getMessage().contains(expectedMessage),
+          "expected IllegalStateException to contain: " + expectedMessage);
+      return;
+    }
+    throw new AssertionError("expected IllegalStateException: " + expectedMessage);
   }
 
   private static void assertFutureFails(final CompletableFuture<?> future, final String message) {

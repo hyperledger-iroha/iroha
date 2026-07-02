@@ -136,6 +136,208 @@ def test_dry_run_prints_complete_rollout_plan(tmp_path: Path, capsys) -> None:
     assert "check_sorafs_transparency_rollout_evidence.py" in verifier[1]
 
 
+def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+
+    assert MODULE.validate_plan_json(rendered, plan, args) == []
+
+    assert MODULE.validate_plan_json(["step"], plan, args) == [
+        "transparency rollout runner plan must be an object"
+    ]
+
+    rendered["schema"] = "sorafs.transparency.rollout_evidence_collection_plan.v0"
+    rendered["unexpected"] = True
+    rendered["evidence_contract"] = {}
+    rendered["steps"] = []
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert (
+        "transparency rollout runner plan fields must match the schema-closed contract"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan schema must match the contract"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract must match checker fields"
+        in diagnostics
+    )
+    assert "runner plan steps must match command plan" in diagnostics
+
+
+def test_plan_json_nested_shapes_are_validated(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    rendered["bad\nfield"] = "runtime-only-key-material"
+    rendered["schema"] = "sorafs\ntransparency"
+    rendered["verifier_summary_schema"] = "summary\nschema"
+    rendered["deployment_context"] = {
+        "deployment_id": "bad\ndeployment",
+        "environment": False,
+        "deployment_context_reviewed": False,
+        "bad\nfield": "runtime-only-key-material",
+        "private_key": "runtime-only-key-material",
+    }
+    rendered["evidence_contract"] = {
+        "source_entry": {
+            "schema": "wrong.schema.v1",
+            "required_payload_fields": ["schema", "schema", "bad\nfield"],
+            "raw_payload": True,
+            "bad\nfield": "runtime-only-key-material",
+        },
+        "unknown_kind": {
+            "schema": "sorafs.transparency.unknown.v1",
+            "required_payload_fields": [],
+        },
+        "bad\nkind": "contract-shaped-entry",
+    }
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert "transparency rollout runner plan fields must be canonical strings" in diagnostics
+    assert "transparency rollout runner plan schema must be canonical" in diagnostics
+    assert (
+        "transparency rollout runner plan verifier schema must be canonical"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan deployment_context keys must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan deployment_context fields must match configured fields"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan deployment_context values must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan deployment_context must be reviewed"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan deployment_context must match args"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract keys must be canonical kind names"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract keys must use known kind names"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract must map each kind to a contract object"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract fields must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract fields must be schema and required_payload_fields"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract schemas must match evidence kind"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract required_payload_fields must be non-empty lists"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract required_payload_fields must contain canonical strings"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract required_payload_fields must not contain duplicate fields"
+        in diagnostics
+    )
+    assert (
+        "transparency rollout runner plan evidence_contract required_payload_fields must match checker fields"
+        in diagnostics
+    )
+    assert "unknown_kind" not in diagnostics
+    assert "bad\ndeployment" not in diagnostics
+    assert "bad\nkind" not in diagnostics
+    assert "bad\nfield" not in diagnostics
+    assert "runtime-only-key-material" not in diagnostics
+    assert "private_key" not in diagnostics
+    assert "wrong.schema.v1" not in diagnostics
+
+
+def test_plan_json_deployment_context_must_stay_reviewed(tmp_path: Path) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+    rendered["deployment_context"] = {
+        "deployment_id": "transparency-dev-a",
+        "environment": "dev",
+        "deployment_context_reviewed": True,
+    }
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+
+    assert (
+        "transparency rollout runner plan deployment_context must match args"
+        in errors
+    )
+    assert "transparency-dev-a" not in "\n".join(errors)
+
+    case_dir = tmp_path / "invalid-context"
+    case_dir.mkdir()
+    args = MODULE.parse_args(complete_args(case_dir))
+    args.deployment_id = "transparency-dev-a"
+    args.environment = "dev"
+    plan = MODULE.build_command_plan(args)
+    rendered = MODULE.plan_json(plan, args)
+
+    errors = MODULE.validate_plan_json(rendered, plan, args)
+    diagnostics = "\n".join(errors)
+
+    assert (
+        "deployment_id must not contain non-reviewed deployment markers ['dev']"
+        in diagnostics
+    )
+    assert "environment must be one of" in diagnostics
+    assert "transparency-dev-a" not in diagnostics
+
+
+def test_execution_rejects_plan_validation_drift_before_running(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    ran_plan = False
+
+    def fake_validate_plan_json(rendered, plan, args):
+        return ["transparency rollout runner plan schema must match the contract"]
+
+    def fake_run_plan(plan, out_dir, args):
+        nonlocal ran_plan
+        ran_plan = True
+        return 0
+
+    monkeypatch.setattr(MODULE, "validate_plan_json", fake_validate_plan_json)
+    monkeypatch.setattr(MODULE, "run_plan", fake_run_plan)
+
+    assert MODULE.main(complete_args(tmp_path)) == 2
+
+    assert not ran_plan
+    assert (
+        "transparency rollout runner plan schema must match the contract"
+        in capsys.readouterr().err
+    )
+
+
 def test_response_file_dry_run_prints_complete_rollout_plan(tmp_path: Path, capsys) -> None:
     args_file = write_args_file(tmp_path / "rollout.args", complete_args(tmp_path))
 
@@ -170,7 +372,42 @@ def test_missing_source_kind_fails_before_plan(tmp_path: Path, capsys) -> None:
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "missing --source-entry coverage" in captured.err
+    assert "missing required source-entry coverage" in captured.err
+    assert "feed_source" not in captured.err
+    assert captured.out == ""
+
+
+def test_unknown_source_kind_fails_before_plan_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    source_kind = "source-entry-private-key-placeholder"
+    path = write_payload(tmp_path / "payloads" / "unsupported-source.json")
+    args.extend(["--source-entry", f"{source_kind}={path}"])
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "source-entry supplied for unsupported kind" in captured.err
+    assert source_kind not in captured.err
+    assert str(path) not in captured.err
+    assert captured.out == ""
+
+
+def test_duplicate_source_kind_fails_before_plan_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    duplicate = MODULE.DEFAULT_REQUIRED_SOURCE_KINDS[0]
+    path = write_payload(tmp_path / "payloads" / "duplicate-source.json")
+    args.extend(["--source-entry", f"{duplicate}={path}"])
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "duplicate source-entry kind" in captured.err
+    assert duplicate not in captured.err
+    assert str(path) not in captured.err
     assert captured.out == ""
 
 
@@ -187,6 +424,19 @@ def test_malformed_source_entry_sanitizes_exception_text(
 
     assert "<non-canonical-error>" in errors
     assert bad_message not in "\n".join(errors)
+
+
+def test_malformed_source_entry_does_not_echo_spec(tmp_path: Path) -> None:
+    args = complete_args(tmp_path)
+    bad_spec = "source-entry-private-key-placeholder"
+    source_index = args.index("--source-entry") + 1
+    args[source_index] = bad_spec
+
+    errors = MODULE.validate_inputs(MODULE.parse_args(args))
+
+    diagnostics = "\n".join(errors)
+    assert "--source-entry must use KIND=PATH form" in diagnostics
+    assert bad_spec not in diagnostics
 
 
 def test_generated_artifact_read_error_is_sanitized(
@@ -207,11 +457,31 @@ def test_generated_artifact_read_error_is_sanitized(
         environment="staging",
     )
 
-    assert errors == [
-        f"failed to read generated evidence artifact `{artifact}`: "
-        "<non-canonical-error>"
-    ]
+    assert errors == ["generated evidence artifact cannot be read"]
+    assert str(artifact) not in "\n".join(errors)
     assert bad_message not in "\n".join(errors)
+
+
+def test_generated_artifact_context_conflict_does_not_echo_existing_value(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "artifact.json"
+    existing_value = "deployment-private-key-placeholder"
+    artifact.write_text(
+        json.dumps({"deployment_id": existing_value}),
+        encoding="utf-8",
+    )
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    diagnostics = "\n".join(errors)
+    assert "has conflicting deployment context" in diagnostics
+    assert existing_value not in diagnostics
+    assert str(artifact) not in diagnostics
 
 
 def test_generated_artifact_annotation_marks_reviewed_context(tmp_path: Path) -> None:
@@ -260,6 +530,36 @@ def test_deployment_context_write_uses_no_follow_descriptor_open(
     assert MODULE.deployment_context_write_open_flags() == opened["flags"]
 
 
+def test_deployment_context_write_retries_short_os_write(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = write_payload(tmp_path / "artifact.json")
+    original_write = os.write
+    write_lengths: list[int] = []
+
+    def short_write(fd: int, payload) -> int:
+        chunk = bytes(payload[: max(1, min(5, len(payload)))])
+        written = original_write(fd, chunk)
+        write_lengths.append(written)
+        return written
+
+    monkeypatch.setattr(MODULE.os, "write", short_write)
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == []
+    assert len(write_lengths) > 1
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert payload["deployment_id"] == "transparency-staging-a"
+    assert payload["environment"] == "staging"
+    assert payload["deployment_context_reviewed"] is True
+
+
 def test_deployment_context_write_error_is_sanitized(
     tmp_path: Path,
     monkeypatch,
@@ -282,10 +582,8 @@ def test_deployment_context_write_error_is_sanitized(
         environment="staging",
     )
 
-    assert errors == [
-        f"failed to write deployment context into `{artifact}`: "
-        "<non-canonical-error>"
-    ]
+    assert errors == ["deployment context cannot be written into generated artifact"]
+    assert str(artifact) not in "\n".join(errors)
     assert bad_message not in "\n".join(errors)
 
 
@@ -320,10 +618,8 @@ def test_deployment_context_write_rejects_symlink_swap_before_open(
         environment="staging",
     )
 
-    assert errors == [
-        f"failed to write deployment context into `{artifact}`: "
-        "<non-canonical-error>"
-    ]
+    assert errors == ["deployment context cannot be written into generated artifact"]
+    assert str(artifact) not in "\n".join(errors)
     assert target.read_text(encoding="utf-8") == "old"
     assert bad_message not in "\n".join(errors)
 
@@ -360,9 +656,8 @@ def test_deployment_context_write_rejects_parent_symlink_swap_before_open(
         environment="staging",
     )
 
-    assert errors == [
-        f"deployment-context artifact parent `{parent}` must not be a symlink"
-    ]
+    assert errors == ["deployment-context artifact parent is invalid"]
+    assert str(parent) not in "\n".join(errors)
     assert (target_parent / "artifact.json").read_text(encoding="utf-8") == "{}"
 
 
@@ -375,9 +670,40 @@ def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
-    assert "--proof-token-issuance" in captured.err
-    assert "must exist and be a file" in captured.err
-    assert str(missing) in captured.err
+    assert "input evidence file must exist and be a file" in captured.err
+    assert "--proof-token-issuance" not in captured.err
+    assert str(missing) not in captured.err
+
+
+def test_torii_url_rejects_secret_bearing_url_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    url = "https://torii.example/path?bearer_token=secret"
+    args[args.index("--torii-url") + 1] = url
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "SoraFS runner URL arguments must not contain" in captured.err
+    assert "bearer_token" not in captured.err
+    assert "bearer_token=secret" not in captured.err
+    assert captured.out == ""
+
+
+def test_iroha_arg_rejects_secret_bearing_value_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    args = complete_args(tmp_path)
+    args.extend(["--iroha-arg", "--private-key=/runtime/signing.key"])
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert "SoraFS runner passthrough arguments must not contain" in captured.err
+    assert "private-key" not in captured.err
+    assert "signing.key" not in captured.err
+    assert captured.out == ""
 
 
 def test_unreviewed_deployment_context_fails_before_plan(
@@ -405,3 +731,24 @@ def test_cycle_id_is_required_for_publication_detail(tmp_path: Path, capsys) -> 
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     assert "at least one --cycle-id" in capsys.readouterr().err
+
+
+def test_cycle_id_must_be_lowercase_16_byte_hex(tmp_path: Path, capsys) -> None:
+    bad_cycle_ids = [
+        "AA" * 16,
+        "11" * 15,
+        "g" * 32,
+        "private-key-placeholder",
+    ]
+    for index, bad_cycle_id in enumerate(bad_cycle_ids):
+        case_dir = tmp_path / f"case-{index}"
+        case_dir.mkdir()
+        args = complete_args(case_dir)
+        args[args.index("--cycle-id") + 1] = bad_cycle_id
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert "--cycle-id must be a 16-byte lowercase hex string" in captured.err
+        assert bad_cycle_id not in captured.err
+        assert captured.out == ""

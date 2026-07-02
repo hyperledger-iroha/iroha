@@ -28,6 +28,9 @@ use sorafs_manifest::{
     hybrid_envelope::{HybridPayloadEnvelopeV1, encrypt_payload},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 fn main() {
     if let Err(err) = run() {
         eprintln!("error: {err}");
@@ -361,14 +364,7 @@ fn run() -> Result<(), String> {
     }
 
     let car_stats = if let Some(path) = &opts.car_out {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-            && !parent.exists()
-        {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("failed to create {parent:?}: {err}"))?;
-        }
-        let file = File::create(path).map_err(|err| format!("failed to create {path:?}: {err}"))?;
+        let file = open_output_file(path, "CAR archive")?;
         let mut writer = BufWriter::new(file);
         let stats = match &input_kind {
             InputKind::File(src) => {
@@ -1656,7 +1652,9 @@ fn verify_manifest_signatures_file(
 
         match PublicKey::from_bytes(Algorithm::Ed25519, &signer_bytes) {
             Ok(public_key) => {
-                let signature = Signature::from_bytes(&signature_bytes);
+                let signature = Signature::try_from_bytes(&signature_bytes).map_err(|err| {
+                    format!("invalid council signature material for signer `{signer_hex}`: {err}")
+                })?;
                 signature
                     .verify(&public_key, manifest_digest.as_bytes())
                     .map_err(|err| {
@@ -1748,13 +1746,7 @@ fn write_manifest(path: &Path, bytes: &[u8]) -> Result<(), String> {
             .map_err(|err| format!("failed to write manifest to stdout: {err}"))?;
         return Ok(());
     }
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(|err| format!("failed to create {parent:?}: {err}"))?;
-    }
-    let mut file = File::create(path).map_err(|err| format!("failed to create {path:?}: {err}"))?;
+    let mut file = open_output_file(path, "manifest")?;
     file.write_all(bytes)
         .map_err(|err| format!("failed to write {path:?}: {err}"))
 }
@@ -1766,13 +1758,8 @@ fn write_json(path: &Path, report: &str) -> Result<(), String> {
             .map_err(|err| format!("failed to write JSON to stdout: {err}"))?;
         return Ok(());
     }
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(|err| format!("failed to create {parent:?}: {err}"))?;
-    }
-    fs::write(path, report.as_bytes())
+    let mut file = open_output_file(path, "JSON report")?;
+    file.write_all(report.as_bytes())
         .map_err(|err| format!("failed to write JSON report {path:?}: {err}"))
 }
 
@@ -1783,18 +1770,140 @@ fn write_binary(path: &Path, bytes: &[u8]) -> Result<(), String> {
             .map_err(|err| format!("failed to write binary output to stdout: {err}"))?;
         return Ok(());
     }
+    let mut file = open_output_file(path, "binary output")?;
+    file.write_all(bytes)
+        .map_err(|err| format!("failed to write {path:?}: {err}"))
+}
+
+fn open_output_file(path: &Path, label: &str) -> Result<File, String> {
+    validate_output_path(path)?;
+    ensure_parent_dir(path)?;
+    validate_output_path(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    set_no_follow_flag(&mut options);
+    let file = options
+        .open(path)
+        .map_err(|err| format!("failed to open {label} {path:?}: {err}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect {label} {path:?} after open: {err}"))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "failed to write {label} {path:?}: output must be a regular file"
+        ));
+    }
+    Ok(file)
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
         && !parent.exists()
     {
         fs::create_dir_all(parent).map_err(|err| format!("failed to create {parent:?}: {err}"))?;
     }
-    fs::write(path, bytes).map_err(|err| format!("failed to write {path:?}: {err}"))
+    Ok(())
+}
+
+fn validate_output_path(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(format!("output {path:?} must not be a symlink"));
+            }
+            if metadata.is_dir() {
+                return Err(format!("output {path:?} must not be a directory"));
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(format!("failed to inspect output {path:?}: {err}")),
+    }
+
+    if let Some(parent) = path.parent() {
+        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        return Err(format!("output parent {ancestor:?} must not be a symlink"));
+                    }
+                    if !metadata.is_dir() {
+                        return Err(format!("output parent {ancestor:?} must be a directory"));
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(format!(
+                        "failed to inspect output parent {ancestor:?}: {err}"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_no_follow_flag(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0
 }
 
 #[cfg(test)]
 mod tests {
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use tempfile::{NamedTempFile, TempDir, tempdir};
+
     use super::*;
+
+    fn canonical_tempdir() -> (TempDir, PathBuf) {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().canonicalize().expect("canonical tempdir");
+        (temp, path)
+    }
 
     #[test]
     fn usage_uses_cargo_binary_name() {
@@ -1803,5 +1912,196 @@ mod tests {
         assert!(text.contains("sorafs_manifest_stub <path|->"));
         assert!(text.contains("sorafs_manifest_stub --list-chunker-profiles"));
         assert!(!text.contains("sorafs-manifest-stub"));
+    }
+
+    #[test]
+    fn manifest_signatures_file_rejects_all_zero_signature_material() {
+        let descriptor = chunker_registry::default_descriptor();
+        let profile = format!(
+            "{}.{}@{}",
+            descriptor.namespace, descriptor.name, descriptor.semver
+        );
+        let manifest_digest = Hash::from_bytes([0x33; 32]);
+        let chunk_digest_sha3 = [0x44; 32];
+        let signing_key = SigningKey::from_bytes(&[0xAB; 32]);
+        let signer_bytes = signing_key.verifying_key().to_bytes();
+        let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &signer_bytes)
+            .expect("test signer public key should parse");
+
+        let mut entry = Map::new();
+        entry.insert("algorithm".to_owned(), Value::from("ed25519"));
+        entry.insert("signer".to_owned(), Value::from(to_hex(&signer_bytes)));
+        entry.insert("signature".to_owned(), Value::from(to_hex(&[0u8; 64])));
+        entry.insert(
+            "signer_multihash".to_owned(),
+            Value::from(public_key.to_string()),
+        );
+
+        let mut root = Map::new();
+        root.insert("profile".to_owned(), Value::from(profile.clone()));
+        root.insert(
+            "profile_aliases".to_owned(),
+            Value::Array(vec![Value::from(profile)]),
+        );
+        root.insert("manifest".to_owned(), Value::from("manifest.norito"));
+        root.insert(
+            "manifest_blake3".to_owned(),
+            Value::from(to_hex(manifest_digest.as_bytes())),
+        );
+        root.insert(
+            "chunk_digest_sha3_256".to_owned(),
+            Value::from(to_hex(&chunk_digest_sha3)),
+        );
+        root.insert(
+            "signatures".to_owned(),
+            Value::Array(vec![Value::Object(entry)]),
+        );
+
+        let file = NamedTempFile::new().expect("temp file");
+        let json = to_string_pretty(&Value::Object(root)).expect("signature json");
+        fs::write(file.path(), json).expect("write signature json");
+
+        let err = verify_manifest_signatures_file(
+            file.path(),
+            descriptor,
+            &manifest_digest,
+            chunk_digest_sha3,
+            Some("manifest.norito"),
+        )
+        .expect_err("all-zero signature material must be rejected");
+
+        assert!(err.contains("all zero"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn manifest_signatures_file_rejects_malformed_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let descriptor = chunker_registry::default_descriptor();
+        let profile = format!(
+            "{}.{}@{}",
+            descriptor.namespace, descriptor.name, descriptor.semver
+        );
+        let manifest_digest = Hash::from_bytes([0x33; 32]);
+        let chunk_digest_sha3 = [0x44; 32];
+        let signing_key = SigningKey::from_bytes(&[0xAB; 32]);
+        let signer_bytes = signing_key.verifying_key().to_bytes();
+        let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &signer_bytes)
+            .expect("test signer public key should parse");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut signature = signing_key.sign(manifest_digest.as_bytes()).to_bytes();
+            signature[..32].copy_from_slice(&replacement_r);
+
+            let mut entry = Map::new();
+            entry.insert("algorithm".to_owned(), Value::from("ed25519"));
+            entry.insert("signer".to_owned(), Value::from(to_hex(&signer_bytes)));
+            entry.insert("signature".to_owned(), Value::from(to_hex(&signature)));
+            entry.insert(
+                "signer_multihash".to_owned(),
+                Value::from(public_key.to_string()),
+            );
+
+            let mut root = Map::new();
+            root.insert("profile".to_owned(), Value::from(profile.clone()));
+            root.insert(
+                "profile_aliases".to_owned(),
+                Value::Array(vec![Value::from(profile.clone())]),
+            );
+            root.insert("manifest".to_owned(), Value::from("manifest.norito"));
+            root.insert(
+                "manifest_blake3".to_owned(),
+                Value::from(to_hex(manifest_digest.as_bytes())),
+            );
+            root.insert(
+                "chunk_digest_sha3_256".to_owned(),
+                Value::from(to_hex(&chunk_digest_sha3)),
+            );
+            root.insert(
+                "signatures".to_owned(),
+                Value::Array(vec![Value::Object(entry)]),
+            );
+
+            let file = NamedTempFile::new().expect("temp file");
+            let json = to_string_pretty(&Value::Object(root)).expect("signature json");
+            fs::write(file.path(), json).expect("write signature json");
+
+            let err = verify_manifest_signatures_file(
+                file.path(),
+                descriptor,
+                &manifest_digest,
+                chunk_digest_sha3,
+                Some("manifest.norito"),
+            )
+            .expect_err("malformed signature R must fail verification");
+
+            assert!(
+                err.contains("failed to verify council signature"),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn write_manifest_creates_parent_and_writes_all_bytes() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let output_path = temp_path.join("nested").join("manifest.to");
+
+        write_manifest(&output_path, b"sorafs-manifest").expect("write manifest");
+
+        assert_eq!(
+            fs::read(&output_path).expect("read manifest"),
+            b"sorafs-manifest"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_json_rejects_symlink_output() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let target_path = temp_path.join("target.json");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let output_path = temp_path.join("report.json");
+        std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
+
+        let err = write_json(&output_path, "changed\n").expect_err("reject symlink output");
+
+        assert!(
+            err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_binary_rejects_symlink_parent() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let real_dir = temp_path.join("real");
+        fs::create_dir(&real_dir).expect("create real dir");
+        let linked_dir = temp_path.join("linked");
+        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
+        let output_path = linked_dir.join("envelope.to");
+
+        let err = write_binary(&output_path, b"changed").expect_err("reject symlink parent");
+
+        assert!(
+            err.contains("parent") && err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !real_dir.join("envelope.to").exists(),
+            "symlink parent should not receive output"
+        );
     }
 }

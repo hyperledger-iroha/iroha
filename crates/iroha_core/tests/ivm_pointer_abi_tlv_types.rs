@@ -44,7 +44,7 @@ fn tlv_envelope(type_id: u16, payload: &[u8]) -> Vec<u8> {
 #[test]
 fn wrong_type_for_asset_def_rejected() {
     // Transfer asset expects (&AccountId, &AccountId, &AssetDefinitionId, amount)
-    let program = program_scall(ivm_sys::SYSCALL_TRANSFER_ASSET);
+    let program = program_scall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED);
     let mut vm = IVM::new(u64::MAX);
     let authority =
         fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");

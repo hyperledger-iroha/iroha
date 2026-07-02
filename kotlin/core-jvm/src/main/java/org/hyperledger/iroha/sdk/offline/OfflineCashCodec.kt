@@ -14,6 +14,29 @@ object OfflineCashCodec {
         return parseNumeric(amount).canonicalString()
     }
 
+    internal fun requireExactNonEmptyText(value: String, field: String): String {
+        require(value.isNotEmpty() && value.trim() == value) {
+            "$field must be an exact non-empty string"
+        }
+        return value
+    }
+
+    internal fun requireOptionalExactNonEmptyText(value: String?, field: String): String? {
+        if (value == null) return null
+        return requireExactNonEmptyText(value, field)
+    }
+
+    internal fun canonicalNonNegativeAmountString(amount: String, field: String): String {
+        require(amount.isNotEmpty() && amount.trim() == amount) {
+            "$field must be an exact amount string"
+        }
+        val canonical = canonicalAmountString(amount)
+        require(!canonical.startsWith("-")) {
+            "$field must be a non-negative amount"
+        }
+        return canonical
+    }
+
     /** Lexicographically sorted `"{transferId}:{localRevision}"` keys for a receipt list. */
     @JvmStatic
     fun receiptKeys(receipts: List<OfflineTransferReceipt>): List<String> =

@@ -34,6 +34,7 @@ DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
 DEPLOYMENT_ID = "transparency-staging-a"
 ENVIRONMENT = "staging"
+GENERATED_AT = 1_800_000_120
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -55,6 +56,7 @@ def source_entry_evidence() -> dict:
     return {
         "schema": "sorafs.transparency.source_entry.canary.v1",
         "status": "passed",
+        "generated_at_unix": GENERATED_AT,
         "deployment_id": DEPLOYMENT_ID,
         "environment": ENVIRONMENT,
         "deployment_context_reviewed": True,
@@ -73,6 +75,7 @@ def publication_evidence(*, publisher_identity: bool = True) -> dict:
     return {
         "schema": "sorafs.transparency.publication_canary.v1",
         "status": "passed" if publisher_identity else "failed",
+        "generated_at_unix": GENERATED_AT,
         "deployment_id": DEPLOYMENT_ID,
         "environment": ENVIRONMENT,
         "deployment_context_reviewed": True,
@@ -114,6 +117,7 @@ def privacy_aggregate_evidence(*, publish_due_count: int = 1) -> dict:
     return {
         "schema": "sorafs.transparency.privacy_aggregate.canary.v1",
         "status": "passed",
+        "generated_at_unix": GENERATED_AT,
         "deployment_id": DEPLOYMENT_ID,
         "environment": ENVIRONMENT,
         "deployment_context_reviewed": True,
@@ -148,6 +152,7 @@ def proof_token_issuance_evidence() -> dict:
     return {
         "schema": "sorafs.transparency.proof_token_issuance.canary.v1",
         "status": "passed",
+        "generated_at_unix": GENERATED_AT,
         "deployment_id": DEPLOYMENT_ID,
         "environment": ENVIRONMENT,
         "deployment_context_reviewed": True,
@@ -174,6 +179,7 @@ def explorer_evidence() -> dict:
     return {
         "schema": "sorafs.transparency.explorer_canary.v1",
         "status": "passed",
+        "generated_at_unix": GENERATED_AT,
         "deployment_id": DEPLOYMENT_ID,
         "environment": ENVIRONMENT,
         "deployment_context_reviewed": True,
@@ -218,6 +224,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["schema"] == "sorafs.transparency.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
+    assert payload["thresholds"] == {"max_evidence_bytes": MODULE.MAX_EVIDENCE_BYTES}
     assert payload["recognized_artifact_count"] == 5
     assert payload["required"]["publication"]["valid"] is True
     assert payload["valid_source_batch_digests"] == [DIGEST]
@@ -240,6 +247,157 @@ def test_missing_required_kind_fails(tmp_path: Path) -> None:
     (tmp_path / "explorer.json").unlink()
 
     assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+
+
+def test_route_count_must_match_unique_routes_for_route_artifacts(
+    tmp_path: Path,
+) -> None:
+    route_artifacts = (
+        ("publication", "publication.json", publication_evidence),
+        ("explorer", "explorer.json", explorer_evidence),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["route_count"] += 1
+        if "passed_route_count" in payload:
+            payload["passed_route_count"] = payload["route_count"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert (
+            MODULE.main(["--evidence-dir", str(root), "--summary-out", str(summary)])
+            == 1
+        )
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_routes_must_not_duplicate_for_route_artifacts(tmp_path: Path) -> None:
+    route_artifacts = (
+        ("publication", "publication.json", publication_evidence),
+        ("explorer", "explorer.json", explorer_evidence),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["routes"].append(dict(payload["routes"][0]))
+        payload["route_count"] = len(payload["routes"])
+        if "passed_route_count" in payload:
+            payload["passed_route_count"] = len(payload["routes"])
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert (
+            MODULE.main(["--evidence-dir", str(root), "--summary-out", str(summary)])
+            == 1
+        )
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "routes must not contain duplicate values" in artifact["errors"]
+        assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_probe_count_must_match_probe_inventory_for_probe_artifacts(
+    tmp_path: Path,
+) -> None:
+    probe_artifacts = (
+        ("source_entry", "source-entry.json", source_entry_evidence),
+        ("privacy_aggregate", "privacy-aggregate.json", privacy_aggregate_evidence),
+        (
+            "proof_token_issuance",
+            "proof-token-issuance.json",
+            proof_token_issuance_evidence,
+        ),
+    )
+    for kind, filename, factory in probe_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["probe_count"] += 1
+        payload["passed_probe_count"] = payload["probe_count"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert (
+            MODULE.main(["--evidence-dir", str(root), "--summary-out", str(summary)])
+            == 1
+        )
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "probe_count must equal probes length" in artifact["errors"]
+
+
+def test_specific_probe_counts_must_match_probe_roles(tmp_path: Path) -> None:
+    role_artifacts = (
+        (
+            "source_entry",
+            "source-entry.json",
+            source_entry_evidence,
+            "source_entry_probe_count",
+            "source_entry probes count",
+        ),
+        (
+            "privacy_aggregate",
+            "privacy-aggregate.json",
+            privacy_aggregate_evidence,
+            "source_event_probe_count",
+            "source_event probes count",
+        ),
+        (
+            "proof_token_issuance",
+            "proof-token-issuance.json",
+            proof_token_issuance_evidence,
+            "issuance_probe_count",
+            "issuance probes count",
+        ),
+    )
+    for kind, filename, factory, count_field, expected_label in role_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload[count_field] += 1
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert (
+            MODULE.main(["--evidence-dir", str(root), "--summary-out", str(summary)])
+            == 1
+        )
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert f"{count_field} must equal {expected_label}" in artifact["errors"]
+
+
+def test_privacy_aggregate_probe_role_counts_must_sum_to_probe_count(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = privacy_aggregate_evidence()
+    payload["source_event_probe_count"] = 2
+    payload["publish_due_probe_count"] = 1
+    write_json(tmp_path / "privacy-aggregate.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)]) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["privacy_aggregate"]["artifacts"][0]
+    assert (
+        "source_event_probe_count plus publish_due_probe_count must equal probe_count"
+        in artifact["errors"]
+    )
 
 
 def test_deployment_context_is_required(tmp_path: Path) -> None:

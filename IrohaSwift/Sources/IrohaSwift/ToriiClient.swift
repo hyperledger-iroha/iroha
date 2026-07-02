@@ -9342,12 +9342,7 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
             && offlineRecursiveNoteProofVerifierKeyId?.name == OfflineNoteConstants.recursiveVerifierName
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case removedOfflineKagemushaAbi7 = "offline_kagemusha_abi7"
-        case removedOfflineKagemushaAbi7Mode = "offline_kagemusha_abi7_mode"
-        case removedOfflineKagemushaAbi7BridgeAbiVersion = "offline_kagemusha_abi7_bridge_abi_version"
-        case removedOfflineKagemushaAbi7CircuitId = "offline_kagemusha_abi7_circuit_id"
-        case removedOfflineKagemushaAbi7Artifacts = "offline_kagemusha_abi7_artifacts"
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case offlineKagemushaRecursiveCompactAvailable = "offline_kagemusha_recursive_compact_available"
         case offlineKagemushaRecursiveCompactMode = "offline_kagemusha_recursive_compact_mode"
         case offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
@@ -9366,6 +9361,19 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
         case offlineSyncOptional = "offline_sync_optional"
     }
 
+    private struct ReadinessField: CodingKey {
+        let stringValue: String
+        let intValue: Int? = nil
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+        }
+
+        init?(intValue: Int) {
+            nil
+        }
+    }
+
     private struct KagemushaReadinessFamily {
         let available: Bool
         let mode: String
@@ -9375,8 +9383,8 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
+        try Self.rejectUnknownFields(in: decoder.container(keyedBy: ReadinessField.self))
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        try Self.rejectRemovedAbi7Fields(in: container)
         let hasRecursiveCompactFamily = Self.containsAny(
             container,
             keys: [
@@ -9431,20 +9439,15 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
         keys.contains { container.contains($0) }
     }
 
-    private static func rejectRemovedAbi7Fields(
-        in container: KeyedDecodingContainer<CodingKeys>
+    private static func rejectUnknownFields(
+        in container: KeyedDecodingContainer<ReadinessField>
     ) throws {
-        for key in [
-            CodingKeys.removedOfflineKagemushaAbi7,
-            .removedOfflineKagemushaAbi7Mode,
-            .removedOfflineKagemushaAbi7BridgeAbiVersion,
-            .removedOfflineKagemushaAbi7CircuitId,
-            .removedOfflineKagemushaAbi7Artifacts
-        ] where container.contains(key) {
+        let allowedFields = Set(CodingKeys.allCases.map(\.stringValue))
+        for key in container.allKeys where !allowedFields.contains(key.stringValue) {
             throw DecodingError.dataCorruptedError(
                 forKey: key,
                 in: container,
-                debugDescription: "\(key.stringValue) is not supported; use offline_kagemusha_recursive_compact_*"
+                debugDescription: "\(key.stringValue) is not a supported offline readiness field"
             )
         }
     }
@@ -11280,38 +11283,47 @@ public struct ToriiMultisigAccountSelector: Encodable, Sendable, Equatable {
 }
 
 public struct ToriiMultisigProposeInstruction: Encodable, Sendable, Equatable {
-    public let json: ToriiJSONValue
+    private enum Payload: Sendable, Equatable {
+        case json(ToriiJSONValue)
+        case nativeBase64(String)
+    }
+
+    private let payload: Payload
 
     public init(json: ToriiJSONValue) throws {
         guard case .object = json else {
             throw ToriiClientError.invalidPayload(
-                "multisig propose JSON instructions must be structured InstructionBox objects. Use proposeMultisig(noritoBody:) for a native application/x-norito MultisigProposeDto body."
+                "multisig propose JSON instructions must be structured InstructionBox objects or native InstructionBox base64 strings."
             )
         }
-        self.json = json
+        self.payload = .json(json)
     }
 
     public init(object: [String: ToriiJSONValue]) throws {
         try self.init(json: .object(object))
     }
 
-    @available(*, deprecated, message: "Per-instruction Norito blobs are not a Torii request format. Send a whole application/x-norito MultisigProposeDto body with proposeMultisig(noritoBody:).")
     public init(noritoInstructionBoxBytes: Data) throws {
-        throw ToriiClientError.invalidPayload(
-            "per-instruction Norito blobs are not supported inside JSON multisig proposals; send a whole application/x-norito MultisigProposeDto body with proposeMultisig(noritoBody:)."
-        )
+        guard !noritoInstructionBoxBytes.isEmpty else {
+            throw ToriiClientError.invalidPayload("noritoInstructionBoxBytes must be non-empty.")
+        }
+        try self.init(base64: noritoInstructionBoxBytes.base64EncodedString())
     }
 
-    @available(*, deprecated, message: "Per-instruction Norito blobs are not a Torii request format. Send a whole application/x-norito MultisigProposeDto body with proposeMultisig(noritoBody:).")
     public init(base64: String) throws {
-        throw ToriiClientError.invalidPayload(
-            "per-instruction Norito blobs are not supported inside JSON multisig proposals; send a whole application/x-norito MultisigProposeDto body with proposeMultisig(noritoBody:)."
+        self.payload = .nativeBase64(
+            try ToriiRequestValidation.normalizedBase64(base64, field: "instruction base64")
         )
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        try container.encode(json)
+        switch payload {
+        case let .json(json):
+            try container.encode(json)
+        case let .nativeBase64(base64):
+            try container.encode(base64)
+        }
     }
 }
 
@@ -11322,9 +11334,11 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
     public var signatureB64: String?
     public var creationTimeMs: UInt64?
     public var feeSponsor: String?
+    public var memo: String?
     public var validationFeePolicyVersion: UInt64?
     public var validationFeePolicyHash: String?
     public var validationFeeInstructionIndex: UInt64?
+    public var validationFeeTransferEntryIndex: UInt64?
     public var instructions: [ToriiMultisigProposeInstruction]
 
     public init(selector: ToriiMultisigAccountSelector,
@@ -11333,9 +11347,11 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 signatureB64: String? = nil,
                 creationTimeMs: UInt64? = nil,
                 feeSponsor: String? = nil,
+                memo: String? = nil,
                 validationFeePolicyVersion: UInt64? = nil,
                 validationFeePolicyHash: String? = nil,
                 validationFeeInstructionIndex: UInt64? = nil,
+                validationFeeTransferEntryIndex: UInt64? = nil,
                 instructions: [ToriiMultisigProposeInstruction]) {
         self.selector = selector
         self.signerAccountId = signerAccountId
@@ -11343,9 +11359,11 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         self.signatureB64 = signatureB64
         self.creationTimeMs = creationTimeMs
         self.feeSponsor = feeSponsor
+        self.memo = memo
         self.validationFeePolicyVersion = validationFeePolicyVersion
         self.validationFeePolicyHash = validationFeePolicyHash
         self.validationFeeInstructionIndex = validationFeeInstructionIndex
+        self.validationFeeTransferEntryIndex = validationFeeTransferEntryIndex
         self.instructions = instructions
     }
 
@@ -11355,12 +11373,27 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 signatureB64: String? = nil,
                 creationTimeMs: UInt64? = nil,
                 feeSponsor: String? = nil,
+                memo: String? = nil,
                 validationFeePolicyVersion: UInt64? = nil,
                 validationFeePolicyHash: String? = nil,
                 validationFeeInstructionIndex: UInt64? = nil,
+                validationFeeTransferEntryIndex: UInt64? = nil,
                 noritoInstructionBoxBytes: [Data]) throws {
-        throw ToriiClientError.invalidPayload(
-            "per-instruction Norito blobs are not supported inside JSON multisig proposals; send a whole application/x-norito MultisigProposeDto body with proposeMultisig(noritoBody:)."
+        try self.init(
+            selector: selector,
+            signerAccountId: signerAccountId,
+            publicKeyHex: publicKeyHex,
+            signatureB64: signatureB64,
+            creationTimeMs: creationTimeMs,
+            feeSponsor: feeSponsor,
+            memo: memo,
+            validationFeePolicyVersion: validationFeePolicyVersion,
+            validationFeePolicyHash: validationFeePolicyHash,
+            validationFeeInstructionIndex: validationFeeInstructionIndex,
+            validationFeeTransferEntryIndex: validationFeeTransferEntryIndex,
+            instructions: noritoInstructionBoxBytes.map {
+                try ToriiMultisigProposeInstruction(noritoInstructionBoxBytes: $0)
+            }
         )
     }
 
@@ -11372,9 +11405,11 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         case signatureB64 = "signature_b64"
         case creationTimeMs = "creation_time_ms"
         case feeSponsor = "fee_sponsor"
+        case memo
         case validationFeePolicyVersion = "validation_fee_policy_version"
         case validationFeePolicyHash = "validation_fee_policy_hash"
         case validationFeeInstructionIndex = "validation_fee_instruction_index"
+        case validationFeeTransferEntryIndex = "validation_fee_transfer_entry_index"
         case instructions
     }
 
@@ -11391,6 +11426,7 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         let normalizedFeeSponsor = try feeSponsor.map {
             try normalizeToriiAccountIdQueryValue($0, field: "fee_sponsor")
         }
+        let normalizedMemo = try ToriiRequestValidation.normalizedOptionalNonEmpty(memo, field: "memo")
         let normalizedValidationFeePolicyVersion = validationFeePolicyVersion.map { String($0) }
         let normalizedValidationFeePolicyHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
             validationFeePolicyHash,
@@ -11406,6 +11442,16 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
                 "validation_fee_instruction_index requires validation fee policy metadata."
             )
         }
+        if normalizedValidationFeePolicyVersion == nil && validationFeeTransferEntryIndex != nil {
+            throw ToriiClientError.invalidPayload(
+                "validation_fee_transfer_entry_index requires validation fee policy metadata."
+            )
+        }
+        if validationFeeTransferEntryIndex != nil && validationFeeInstructionIndex == nil {
+            throw ToriiClientError.invalidPayload(
+                "validation_fee_transfer_entry_index requires validation_fee_instruction_index."
+            )
+        }
         guard !instructions.isEmpty else {
             throw ToriiClientError.invalidPayload("instructions must not be empty.")
         }
@@ -11418,9 +11464,11 @@ public struct ToriiMultisigProposeRequest: Encodable, Sendable {
         try container.encodeIfPresent(normalizedSignatureB64, forKey: .signatureB64)
         try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
         try container.encodeIfPresent(normalizedFeeSponsor, forKey: .feeSponsor)
+        try container.encodeIfPresent(normalizedMemo, forKey: .memo)
         try container.encodeIfPresent(normalizedValidationFeePolicyVersion, forKey: .validationFeePolicyVersion)
         try container.encodeIfPresent(normalizedValidationFeePolicyHash, forKey: .validationFeePolicyHash)
         try container.encodeIfPresent(validationFeeInstructionIndex.map(String.init), forKey: .validationFeeInstructionIndex)
+        try container.encodeIfPresent(validationFeeTransferEntryIndex.map(String.init), forKey: .validationFeeTransferEntryIndex)
         try container.encode(instructions, forKey: .instructions)
     }
 }

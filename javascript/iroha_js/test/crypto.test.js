@@ -8,6 +8,13 @@ import {
   privateKeyMultihash,
   publicKeyFromPrivate,
   publicKeyMultihash,
+  normalizeRecoveryPhrase,
+  validateRecoveryPhrase,
+  generateRecoveryPhrase,
+  entropyToRecoveryPhrase,
+  recoveryPhraseToEntropy,
+  deriveEd25519SeedFromRecoveryPhrase,
+  ed25519SeedToRecoveryPhrase,
   sign,
   signEd25519,
   supportedCryptoAlgorithms,
@@ -126,6 +133,50 @@ test("invalid key lengths throw helpful errors", () => {
   const mismatched = Buffer.concat([privateKey, Buffer.alloc(32, 0x00)]);
   assert.throws(() => publicKeyFromPrivate(mismatched), /mismatched public key/);
   assert.throws(() => verifyEd25519(MESSAGE, Buffer.alloc(64), Buffer.alloc(10)), /public key must be 32 bytes/);
+});
+
+test("recovery phrase helpers export Ed25519 seeds as reversible 24-word phrases", () => {
+  const seed = Buffer.from(Array.from({ length: 32 }, (_, index) => index));
+  const { publicKey } = generateKeyPair({ seed });
+  const recovery = ed25519SeedToRecoveryPhrase(Buffer.concat([seed, publicKey]));
+
+  assert.equal(recovery.wordCount, 24);
+  assert.equal(recovery.words.length, 24);
+  assert.equal(recovery.phrase, recovery.words.join(" "));
+  assert.equal(validateRecoveryPhrase(recovery.phrase), true);
+  assert.deepEqual(recoveryPhraseToEntropy(recovery.phrase), seed);
+  assert.deepEqual(deriveEd25519SeedFromRecoveryPhrase(recovery.phrase), seed);
+  assert.deepEqual(normalizeRecoveryPhrase(`  ${recovery.phrase.toUpperCase().replaceAll(" ", "  ")}  `), recovery);
+});
+
+test("recovery phrase helpers generate and derive 12-word phrases", () => {
+  const recovery = generateRecoveryPhrase(12);
+  const entropy = recoveryPhraseToEntropy(recovery.phrase);
+  const seed = deriveEd25519SeedFromRecoveryPhrase(recovery.phrase);
+
+  assert.equal(recovery.wordCount, 12);
+  assert.equal(recovery.words.length, 12);
+  assert.equal(entropy.length, 16);
+  assert.equal(seed.length, 32);
+  assert.notDeepEqual(seed, entropy);
+  assert.equal(validateRecoveryPhrase(recovery.phrase), true);
+});
+
+test("recovery phrase helpers reject malformed phrases and entropy", () => {
+  const entropy = Buffer.alloc(16, 7);
+  const recovery = entropyToRecoveryPhrase(entropy);
+  const tamperedWords = [...recovery.words];
+  tamperedWords[0] = "abandon";
+  const tampered = tamperedWords.join(" ");
+
+  assert.equal(recovery.wordCount, 12);
+  assert.deepEqual(recoveryPhraseToEntropy(recovery.phrase), entropy);
+  assert.equal(validateRecoveryPhrase(tampered), false);
+  assert.throws(() => normalizeRecoveryPhrase(tampered), /checksum or word list/);
+  assert.throws(() => normalizeRecoveryPhrase("abandon ".repeat(11)), /12 or 24 words/);
+  assert.throws(() => entropyToRecoveryPhrase(Buffer.alloc(20)), /16 or 32 bytes/);
+  assert.throws(() => generateRecoveryPhrase(15), /12 or 24/);
+  assert.throws(() => ed25519SeedToRecoveryPhrase(Buffer.alloc(31)), /32-byte seed or 64-byte seed\+public/);
 });
 
 test("crypto algorithm labels cover Rust signing algorithms", () => {

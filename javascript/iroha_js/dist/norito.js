@@ -640,6 +640,13 @@ export function noritoEncodeMultisigProposeRequest(request) {
           "MultisigProposeDto.validation_fee_instruction_index",
         ),
       ],
+      [
+        encodeOptionValue(
+          validationFeeMetadata.transferEntryIndex,
+          encodeNoritoStringValue,
+          "MultisigProposeDto.validation_fee_transfer_entry_index",
+        ),
+      ],
     ]),
   );
   return frameNoritoPayload(payload, MULTISIG_PROPOSE_DTO_SCHEMA_HASH, COMPACT_LEN_FLAG);
@@ -650,9 +657,12 @@ function normalizeMultisigProposeValidationFeeMetadata(request) {
   const policyHash = request.validation_fee_policy_hash ?? request.validationFeePolicyHash ?? null;
   const instructionIndex =
     request.validation_fee_instruction_index ?? request.validationFeeInstructionIndex ?? null;
+  const transferEntryIndex =
+    request.validation_fee_transfer_entry_index ?? request.validationFeeTransferEntryIndex ?? null;
   const hasPolicyVersion = policyVersion !== null && policyVersion !== undefined;
   const hasPolicyHash = policyHash !== null && policyHash !== undefined;
   const hasInstructionIndex = instructionIndex !== null && instructionIndex !== undefined;
+  const hasTransferEntryIndex = transferEntryIndex !== null && transferEntryIndex !== undefined;
   if (hasPolicyVersion !== hasPolicyHash) {
     throw new TypeError(
       "MultisigProposeDto.validation_fee_policy_version and validation_fee_policy_hash must be provided together",
@@ -663,8 +673,18 @@ function normalizeMultisigProposeValidationFeeMetadata(request) {
       "MultisigProposeDto.validation_fee_instruction_index requires validation fee policy metadata",
     );
   }
+  if (!hasPolicyVersion && hasTransferEntryIndex) {
+    throw new TypeError(
+      "MultisigProposeDto.validation_fee_transfer_entry_index requires validation fee policy metadata",
+    );
+  }
+  if (hasTransferEntryIndex && !hasInstructionIndex) {
+    throw new TypeError(
+      "MultisigProposeDto.validation_fee_transfer_entry_index requires validation_fee_instruction_index",
+    );
+  }
   if (!hasPolicyVersion) {
-    return { policyVersion: null, policyHash: null, instructionIndex: null };
+    return { policyVersion: null, policyHash: null, instructionIndex: null, transferEntryIndex: null };
   }
   return {
     policyVersion: normalizeU64Input(
@@ -679,6 +699,12 @@ function normalizeMultisigProposeValidationFeeMetadata(request) {
       ? normalizeU64Input(
           instructionIndex,
           "MultisigProposeDto.validation_fee_instruction_index",
+        ).toString()
+      : null,
+    transferEntryIndex: hasTransferEntryIndex
+      ? normalizeU64Input(
+          transferEntryIndex,
+          "MultisigProposeDto.validation_fee_transfer_entry_index",
         ).toString()
       : null,
   };

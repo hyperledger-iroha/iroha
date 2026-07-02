@@ -7,10 +7,18 @@ use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, Pi
 use sorafs_node::{NodeHandle, NodeStorageError, config::StorageConfig, store::StorageError};
 use tempfile::TempDir;
 
+fn storage_data_dir(temp_dir: &TempDir) -> PathBuf {
+    temp_dir
+        .path()
+        .canonicalize()
+        .expect("canonical temp dir")
+        .join("storage")
+}
+
 fn storage_config(temp_dir: &TempDir) -> StorageConfig {
     StorageConfig::builder()
         .enabled(true)
-        .data_dir(temp_dir.path().join("storage"))
+        .data_dir(storage_data_dir(temp_dir))
         .build()
 }
 
@@ -61,7 +69,7 @@ fn pin_fetch_roundtrip() {
 #[test]
 fn pin_survives_restart() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
-    let data_dir: PathBuf = temp_dir.path().join("storage");
+    let data_dir = storage_data_dir(&temp_dir);
     let base_config = StorageConfig::builder()
         .enabled(true)
         .data_dir(data_dir.clone())
@@ -85,7 +93,7 @@ fn pin_quota_rejection() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let config = StorageConfig::builder()
         .enabled(true)
-        .data_dir(temp_dir.path().join("storage"))
+        .data_dir(storage_data_dir(&temp_dir))
         .max_pins(1)
         .build();
     let handle = NodeHandle::new(config);

@@ -31,11 +31,12 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_fingerprint import artifact_fingerprint  # noqa: E402
 from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
     build_evidence_artifact,
     count_evidence_artifacts,
+    recognized_evidence_artifacts,
     count_evidence_files,
     evidence_gate_status,
-    evidence_artifact_detail,
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_artifact_schema,
@@ -70,6 +71,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     require_sum_equal,
     require_zero_count,
 )
@@ -90,6 +92,7 @@ DEFAULT_MAX_LEDGER_AGE_SECS = 7 * 24 * 60 * 60
 DEFAULT_MAX_LIFECYCLE_LAG_SECS = 15 * 60
 DEFAULT_MAX_ROUTE_LATENCY_MS = 1_500
 DEFAULT_MAX_BAKE_AGE_SECS = 14 * 24 * 60 * 60
+DEFAULT_MAX_EVIDENCE_AGE_SECS = 14 * 24 * 60 * 60
 HEX64_LEN = 64
 
 REQUIRED_STORAGE_CLASSES = ("hot", "warm", "archive")
@@ -189,6 +192,7 @@ LEDGER_BOUND_KINDS = (
 COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
     "schema",
     "status",
+    "generated_at_unix",
     "deployment_id",
     "environment",
     "deployment_context_reviewed",
@@ -223,7 +227,6 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "policy_digest_hex",
         "matrix_digest_hex",
         "ledger_digest_hex",
-        "generated_at_unix",
         "ledger_count",
         "instruction_count",
         "rent_transfer_present",
@@ -404,12 +407,26 @@ class ValidationOptions:
 
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "schema",
+    "generated_at_unix",
+    "deployment_id",
+    "environment",
+    "deployment_context_reviewed",
+    "bake_id",
     "policy_digest_hex",
     "matrix_digest_hex",
     "ledger_digest_hex",
+    "started_at_unix",
+    "completed_at_unix",
+    "provider_count",
 )
 PROVIDER_BAKE_FIELDS: tuple[str, ...] = (
     "bake_id",
+    "deployment_id",
+    "environment",
+    "policy_digest_hex",
+    "matrix_digest_hex",
+    "ledger_digest_hex",
     "started_at_unix",
     "completed_at_unix",
     "provider_count",
@@ -475,6 +492,23 @@ def validate_route_records(
             )
 
 
+def validate_route_inventory(
+    payload: dict[str, Any],
+    required_routes: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    require_count_equal(payload, "route_count", "passed_route_count", errors)
+    require_string_coverage(payload, "routes", "name", required_routes, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+
+
 def validate_policy_config(payload: dict[str, Any], errors: list[str]) -> None:
     require_policy_digest(payload, errors)
     require_positive_int(payload, "policy_version", errors)
@@ -534,8 +568,7 @@ def validate_lifecycle_service(
     options: ValidationOptions,
 ) -> None:
     require_policy_matrix_ledger_binding(payload, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_LIFECYCLE_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_LIFECYCLE_ROUTES, errors)
     require_maximum_number(
         payload,
         "max_lifecycle_lag_seconds",
@@ -556,8 +589,7 @@ def validate_signed_routes(
     options: ValidationOptions,
 ) -> None:
     require_policy_matrix_ledger_binding(payload, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_SIGNED_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_SIGNED_ROUTES, errors)
     require_maximum_number(
         payload,
         "max_route_latency_ms",
@@ -796,7 +828,7 @@ def validate_evidence_payload(
     payload: dict[str, Any],
     options: ValidationOptions,
 ) -> tuple[str | None, list[str]]:
-    return validate_standard_evidence_payload(
+    kind_name, errors = validate_standard_evidence_payload(
         payload,
         SCHEMA_TO_KIND,
         "SoraFS SFM-6 rollout artifact",
@@ -807,6 +839,15 @@ def validate_evidence_payload(
         ),
         require_reviewed_deployment_context=True,
     )
+    if kind_name is not None and kind_name != "ledger_digest":
+        require_recent_timestamp(
+            payload,
+            "generated_at_unix",
+            errors,
+            now_unix=options.now_unix,
+            max_age_secs=DEFAULT_MAX_EVIDENCE_AGE_SECS,
+        )
+    return kind_name, errors
 
 
 def digest_binding(
@@ -863,7 +904,7 @@ def build_summary(
             )
             continue
         artifact = build_evidence_artifact(
-            path,
+            archive_artifact_path_label(path, evidence_dirs),
             digest,
             payload,
             validation_errors,
@@ -871,7 +912,6 @@ def build_summary(
         )
         if kind_name == "provider_bake":
             bake = artifact_fingerprint(payload, PROVIDER_BAKE_FIELDS)
-            artifact["bake"] = bake
             if evidence_artifact_is_valid(artifact):
                 valid_provider_bakes.append(bake)
         if evidence_artifact_is_valid(artifact):
@@ -1003,13 +1043,6 @@ def build_summary(
         ),
     )
 
-    valid_provider_bakes = [
-        bake
-        for artifact in artifacts_by_kind["provider_bake"]
-        for bake in [evidence_artifact_detail(artifact, "bake")]
-        if evidence_artifact_is_valid(artifact) and bake
-    ]
-
     required = build_required_evidence_summary(
         required_kinds,
         artifacts_by_kind,
@@ -1030,6 +1063,7 @@ def build_summary(
         },
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
+        "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_policy_digests": sorted(valid_policy_digests),
         "valid_policy_matrix_bindings": [
             {

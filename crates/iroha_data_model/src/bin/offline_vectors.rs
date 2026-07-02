@@ -69,6 +69,12 @@ const PAYMENT_TOKEN_ENVELOPE_VERSION: u64 = 2;
 const OFFLINE_BEARER_CASH_RECEIVE_PREFIX: &str = "wallet-offline-bearer-cash-receive:";
 const OFFLINE_BEARER_CASH_PAYMENT_PREFIX: &str = "wallet-offline-bearer-cash-payment:";
 const OFFLINE_BEARER_CASH_ACK_PREFIX: &str = "wallet-offline-bearer-cash-ack:";
+const OFFLINE_KEY_CERTIFICATE_PLACEHOLDER_SIGNATURE: [u8; 64] = [0xA6; 64];
+
+fn offline_key_certificate_placeholder_signature() -> Signature {
+    Signature::try_from_bytes(&OFFLINE_KEY_CERTIFICATE_PLACEHOLDER_SIGNATURE)
+        .expect("Offline vector key-certificate placeholder signature is non-empty and nonzero")
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let check_only = env::args().any(|arg| arg == "--check");
@@ -755,20 +761,25 @@ fn signed_certificate(
     let public_key = public_key.to_vec();
     let assertion_signing_key = p256_assertion_signing_key(platform, key_id, device_id);
     let assertion_public_key = p256_assertion_public_key(&assertion_signing_key);
-    let (assertion_scheme, assertion_key_algorithm, assertion_usage_count_limit) =
-        if platform == "android-keymint" || platform == "android" {
-            (
-                "android-keymint-ecdsa-p256-usage-limit".to_owned(),
-                "ecdsa-p256-sha256".to_owned(),
-                Some(1),
+    let (assertion_scheme, assertion_key_algorithm, assertion_usage_count_limit) = match platform {
+        "android-keymint" => (
+            "android-keymint-ecdsa-p256-usage-limit".to_owned(),
+            "ecdsa-p256-sha256".to_owned(),
+            Some(1),
+        ),
+        "ios-appattest" => (
+            "apple-appattest-counter".to_owned(),
+            "app-attest-p256".to_owned(),
+            None,
+        ),
+        unsupported => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("unsupported Offline fixture certificate platform: {unsupported}"),
             )
-        } else {
-            (
-                "apple-appattest-counter".to_owned(),
-                "app-attest-p256".to_owned(),
-                None,
-            )
-        };
+            .into());
+        }
+    };
     let unsigned_certificate = OfflineNoteKeyCertificate {
         version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
         platform: platform.to_owned(),
@@ -781,7 +792,7 @@ fn signed_certificate(
         assertion_public_key: assertion_public_key.clone(),
         assertion_usage_count_limit,
         one_use: true,
-        issuer_signature: Signature::from_bytes(&[0_u8; 64]),
+        issuer_signature: offline_key_certificate_placeholder_signature(),
     };
     let signing_bytes = unsigned_certificate.signing_bytes()?;
     let issuer_signature = sign_offline_certificate_payload(issuer_key_pair, &signing_bytes)?;
@@ -1493,6 +1504,43 @@ mod tests {
         verifying_key
             .verify(challenge, &signature)
             .expect("Android assertion verifies against certificate key");
+    }
+
+    #[test]
+    fn signed_certificate_rejects_noncanonical_platform_aliases() {
+        let issuer_key_pair =
+            fixed_ed25519_keypair("issuer", 0x11).expect("fixed issuer key derives");
+        let note_key_pair =
+            fixed_ed25519_keypair("sender note", 0x31).expect("fixed note key derives");
+        let account_id = AccountId::new(note_key_pair.public_key().clone());
+
+        for platform in ["android", "ios-app-attest", "browser-webauthn"] {
+            let Err(error) = signed_certificate(
+                &issuer_key_pair,
+                &note_key_pair,
+                &account_id,
+                platform,
+                SENDER_KEY_ID,
+                SENDER_DEVICE_ID,
+            ) else {
+                panic!("noncanonical platform alias {platform} must fail closed");
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported Offline fixture certificate platform"),
+                "unexpected error for {platform}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsigned_certificate_placeholder_signature_is_checked_nonzero() {
+        let signature = offline_key_certificate_placeholder_signature();
+        let payload = signature.payload();
+
+        assert_eq!(payload, OFFLINE_KEY_CERTIFICATE_PLACEHOLDER_SIGNATURE);
+        assert!(!payload.iter().all(|byte| *byte == 0));
     }
 
     #[test]

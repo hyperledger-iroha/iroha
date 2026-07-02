@@ -2,10 +2,13 @@
 // Unit tests for the TAIRA XOR TRON deployment helper's offline validation
 // paths. These tests do not contact TRON and must never broadcast.
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { secp256k1 } from "../javascript/iroha_js/node_modules/@noble/curves/secp256k1.js";
 import { sha256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha256.js";
 import {
@@ -26,6 +29,7 @@ import {
   buildTairaXorRouteManifestDraft,
   bytesToHex,
   compileTairaBurnRecordContract,
+  deployCommand,
   estimateDeploymentFunding,
   generateDeployer,
   hexToBytes,
@@ -44,6 +48,10 @@ import {
   verifySignedTransactionPayload,
 } from "./sccp_tron_taira_xor_deploy.mjs";
 
+const execFileAsync = promisify(execFile);
+const TRON_SCRIPT_PATH = fileURLToPath(
+  new URL("./sccp_tron_taira_xor_deploy.mjs", import.meta.url),
+);
 const privateKey = new Uint8Array(32).fill(7);
 const deployerAddress = tronAddressFromPrivateKey(privateKey);
 const routeAddresses = {
@@ -67,6 +75,25 @@ const requiredPostDeployChecks = [
   "Run scripts/sccp_tron_source_bridge_evidence.py for source bridge config evidence",
   "Run scripts/sccp_tron_live_evidence.py for live verifier/source/canary evidence",
 ];
+const malformedBooleanOptionValues = Object.freeze([
+  " TRUE",
+  "true ",
+  "false ",
+  "TRUE",
+  "False",
+  "1",
+  "0",
+  "yes",
+  "on",
+  "",
+  null,
+  true,
+  false,
+  1,
+  0,
+  new String("true"),
+  Object.freeze({ toString: () => "true" }),
+]);
 
 const mockTransaction = (ownerAddress = deployerAddress.base58, rawData = [1, 2, 3, 4]) => {
   const rawBytes = Uint8Array.from(rawData);
@@ -119,6 +146,21 @@ const writeJson = async (path, value, mode) => {
   if (mode) {
     await chmod(path, mode);
   }
+};
+
+const defineThrowingAccessors = (record, keys) => {
+  let reads = 0;
+  for (const key of keys) {
+    Object.defineProperty(record, key, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        reads += 1;
+        throw new Error(`${key} accessor must not be read`);
+      },
+    });
+  }
+  return () => reads;
 };
 
 const deployerSecretRecord = () => ({
@@ -686,6 +728,92 @@ test("signed transaction artifacts are route scoped and metadata bound before br
   );
 });
 
+test("TRON transaction commands reject output path collisions before writing artifacts", async () => {
+  await withTempDir(async (dir) => {
+    const secretPath = join(dir, "deployer.secret.json");
+    const unsignedPath = join(dir, "unsigned-transaction.json");
+    const signedPath = join(dir, "signed-transaction.json");
+    const transaction = mockTransaction();
+    const unsignedArtifact = buildUnsignedTransactionArtifact(
+      {
+        stepKey: "token_set_bridge",
+        stepKind: "trigger",
+        deployerAddress,
+        transaction,
+      },
+      new Date("2026-06-01T00:00:00.000Z"),
+    );
+    await writeDeployerSecret(secretPath);
+    const secretText = await readFile(secretPath, "utf8");
+    const unsignedText = `${JSON.stringify(unsignedArtifact, null, 2)}\n`;
+    await writeFile(unsignedPath, unsignedText);
+
+    const signOutputCollisionArgs = (outPath) => [
+      TRON_SCRIPT_PATH,
+      "sign-transaction",
+      "--secret",
+      secretPath,
+      "--transaction",
+      unsignedPath,
+      "--out",
+      outPath,
+    ];
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, signOutputCollisionArgs(unsignedPath)),
+      (error) => {
+        assert.match(
+          `${error.message}\n${error.stderr ?? ""}`,
+          /--out must not be the same path as --transaction/u,
+        );
+        return true;
+      },
+    );
+    assert.equal(await readFile(secretPath, "utf8"), secretText);
+    assert.equal(await readFile(unsignedPath, "utf8"), unsignedText);
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, signOutputCollisionArgs(secretPath)),
+      (error) => {
+        assert.match(
+          `${error.message}\n${error.stderr ?? ""}`,
+          /--out must not be the same path as --secret/u,
+        );
+        return true;
+      },
+    );
+    assert.equal(await readFile(secretPath, "utf8"), secretText);
+    assert.equal(await readFile(unsignedPath, "utf8"), unsignedText);
+
+    const signed = signTransactionPayload(transaction, { privateKey, address: deployerAddress });
+    const signedArtifact = buildSignedTransactionArtifact(
+      signed,
+      new Date("2026-06-01T00:00:00.000Z"),
+    );
+    const signedText = `${JSON.stringify(signedArtifact, null, 2)}\n`;
+    await writeFile(signedPath, signedText);
+    await assert.rejects(
+      () =>
+        execFileAsync(process.execPath, [
+          TRON_SCRIPT_PATH,
+          "broadcast",
+          "--transaction",
+          signedPath,
+          "--out",
+          signedPath,
+        ]),
+      (error) => {
+        assert.match(
+          `${error.message}\n${error.stderr ?? ""}`,
+          /--out must not be the same path as --transaction/u,
+        );
+        return true;
+      },
+    );
+    assert.equal(await readFile(signedPath, "utf8"), signedText);
+  });
+});
+
 test("signed transaction verification rejects forged or ambiguous signatures", () => {
   const transaction = mockTransaction();
   const signed = signTransactionPayload(transaction, { privateKey, address: deployerAddress });
@@ -867,11 +995,10 @@ test("generate-deployer writes restrictive secret files and refuses accidental o
 
 test("TRON deploy operator booleans reject malformed option values", async () => {
   await withTempDir(async (dir) => {
-    const malformedValues = [" TRUE", "true ", "TRUE", "1", "yes", "on", true, false, 1, 0];
     const originalConsoleLog = console.log;
     console.log = () => {};
     try {
-      for (const [index, value] of malformedValues.entries()) {
+      for (const [index, value] of malformedBooleanOptionValues.entries()) {
         await assert.rejects(
           () =>
             generateDeployer({
@@ -879,6 +1006,16 @@ test("TRON deploy operator booleans reject malformed option values", async () =>
               force: value,
             }),
           /--force must be true or false/u,
+        );
+      }
+      for (const value of malformedBooleanOptionValues) {
+        await assert.rejects(
+          () =>
+            deployCommand({
+              verifier: join(dir, "missing-verifier.json"),
+              broadcast: value,
+            }),
+          /--broadcast must be true or false/u,
         );
       }
     } finally {
@@ -891,7 +1028,7 @@ test("TRON deploy operator booleans reject malformed option values", async () =>
       "require-verifier",
       "require-optional-packages",
     ]) {
-      for (const value of malformedValues) {
+      for (const value of malformedBooleanOptionValues) {
         await assert.rejects(
           () =>
             buildDeploymentDoctorReport(
@@ -907,6 +1044,41 @@ test("TRON deploy operator booleans reject malformed option values", async () =>
         );
       }
     }
+  });
+});
+
+test("TRON deploy command rejects output path collisions before reading operator inputs", async () => {
+  await withTempDir(async (dir) => {
+    const verifierPath = join(dir, "verifier.json");
+    const secretPath = join(dir, "deployer.secret.json");
+    const verifierText = "sentinel:tron-verifier-material\n";
+    const secretText = "sentinel:tron-deployer-secret\n";
+    await writeFile(verifierPath, verifierText);
+    await writeFile(secretPath, secretText);
+
+    await assert.rejects(
+      () =>
+        deployCommand({
+          verifier: verifierPath,
+          secret: secretPath,
+          out: verifierPath,
+        }),
+      /--out must not be the same path as --verifier/u,
+    );
+    assert.equal(await readFile(verifierPath, "utf8"), verifierText);
+    assert.equal(await readFile(secretPath, "utf8"), secretText);
+
+    await assert.rejects(
+      () =>
+        deployCommand({
+          verifier: verifierPath,
+          secret: secretPath,
+          out: secretPath,
+        }),
+      /--out must not be the same path as --secret/u,
+    );
+    assert.equal(await readFile(verifierPath, "utf8"), verifierText);
+    assert.equal(await readFile(secretPath, "utf8"), secretText);
   });
 });
 
@@ -1499,7 +1671,7 @@ test("TRON route-config rejects malformed allow-unready option values", async ()
       "confirm-mainnet": "taira_tron_xor",
     });
 
-    for (const value of [" TRUE", "true ", "TRUE", true, false, 1, 0]) {
+    for (const value of malformedBooleanOptionValues) {
       assert.throws(
         () => buildTairaXorRouteConfigToml(manifest, { "allow-unready": value }),
         /--allow-unready must be true or false/u,
@@ -1514,6 +1686,179 @@ test("TRON route-config rejects malformed allow-unready option values", async ()
         /--allow-unready must be true or false/u,
       );
     }
+  });
+});
+
+test("TRON route-config CLI rejects malformed allow-unready before writing artifacts", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const manifestPath = join(dir, "route.manifest.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+    await writeJson(manifestPath, manifest, 0o644);
+    const malformedCliBooleans = malformedBooleanOptionValues.filter(
+      (value) => typeof value === "string" && value !== "",
+    );
+
+    for (const [index, value] of malformedCliBooleans.entries()) {
+      const out = join(dir, `route-${index}.toml`);
+      const sentinel = `sentinel:tron-route-config:${index}\n`;
+      await writeFile(out, sentinel);
+      await assert.rejects(
+        () =>
+          execFileAsync(process.execPath, [
+            TRON_SCRIPT_PATH,
+            "route-config",
+            "--manifest",
+            manifestPath,
+            "--out",
+            out,
+            "--allow-unready",
+            value,
+          ]),
+        (error) => {
+          assert.match(`${error.message}\n${error.stderr ?? ""}`, /--allow-unready must be true or false/u);
+          return true;
+        },
+      );
+      assert.equal(await readFile(out, "utf8"), sentinel);
+    }
+  });
+});
+
+test("TRON route-config CLI rejects route output path collisions with inputs before writing artifacts", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const manifestPath = join(dir, "route.manifest.json");
+    const baseConfigPath = join(dir, "base.toml");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+    const manifestText = `${JSON.stringify(manifest, null, 2)}\n`;
+    const baseConfigText = [
+      "[network]",
+      'address = "127.0.0.1:1337"',
+      'operator_marker = "tron-base-config-input-must-survive"',
+      "",
+      "[torii]",
+      'address = "127.0.0.1:8080"',
+      "",
+    ].join("\n");
+    await writeFile(manifestPath, manifestText);
+    await writeFile(baseConfigPath, baseConfigText);
+
+    const routeOutputCollisionArgs = (outPath) => [
+      TRON_SCRIPT_PATH,
+      "route-config",
+      "--manifest",
+      manifestPath,
+      "--base-config",
+      baseConfigPath,
+      "--out",
+      outPath,
+    ];
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, routeOutputCollisionArgs(manifestPath)),
+      (error) => {
+        assert.match(
+          `${error.message}\n${error.stderr ?? ""}`,
+          /--out must not be the same path as --manifest/u,
+        );
+        return true;
+      },
+    );
+    assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+    assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigText);
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, routeOutputCollisionArgs(baseConfigPath)),
+      (error) => {
+        assert.match(
+          `${error.message}\n${error.stderr ?? ""}`,
+          /--out must not be the same path as --base-config/u,
+        );
+        return true;
+      },
+    );
+    assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+    assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigText);
+  });
+});
+
+test("TRON route-config CLI rejects route output path collisions before reading inputs", async () => {
+  await withTempDir(async (dir) => {
+    const manifestPath = join(dir, "malformed-route.manifest.json");
+    const baseConfigPath = join(dir, "base.toml");
+    const manifestSentinel = "{ sentinel:tron-route-config-malformed-manifest\n";
+    const baseConfigSentinel = "sentinel:tron-route-config-base-input\n";
+    await writeFile(manifestPath, manifestSentinel);
+    await writeFile(baseConfigPath, baseConfigSentinel);
+
+    const routeOutputCollisionArgs = (outPath) => [
+      TRON_SCRIPT_PATH,
+      "route-config",
+      "--manifest",
+      manifestPath,
+      "--base-config",
+      baseConfigPath,
+      "--out",
+      outPath,
+    ];
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, routeOutputCollisionArgs(manifestPath)),
+      (error) => {
+        assert.match(
+          `${error.message}\n${error.stderr ?? ""}`,
+          /--out must not be the same path as --manifest/u,
+        );
+        return true;
+      },
+    );
+    assert.equal(await readFile(manifestPath, "utf8"), manifestSentinel);
+    assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigSentinel);
+
+    await assert.rejects(
+      () => execFileAsync(process.execPath, routeOutputCollisionArgs(baseConfigPath)),
+      (error) => {
+        assert.match(
+          `${error.message}\n${error.stderr ?? ""}`,
+          /--out must not be the same path as --base-config/u,
+        );
+        return true;
+      },
+    );
+    assert.equal(await readFile(manifestPath, "utf8"), manifestSentinel);
+    assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigSentinel);
   });
 });
 
@@ -1578,7 +1923,7 @@ test("TRON route-manifest readiness booleans reject malformed option values", as
       "vk-name": "taira_xor_burn_record_v1",
     };
 
-    for (const value of [" TRUE", "true ", "TRUE", "1", "yes", "on", true, false, 1, 0]) {
+    for (const value of malformedBooleanOptionValues) {
       await assert.rejects(
         () =>
           buildTairaXorRouteManifestDraft({
@@ -1596,6 +1941,135 @@ test("TRON route-manifest readiness booleans reject malformed option values", as
         /--live-readback-checked must be true or false/u,
       );
     }
+  });
+});
+
+test("TRON route-manifest CLI readiness booleans reject malformed option values before writing artifacts", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const baseArgs = [
+      "route-manifest",
+      "--evidence",
+      evidencePath,
+      "--taira-contract",
+      contractPath,
+      "--verifier",
+      verifierPath,
+      "--verifier-code-hash",
+      routeHash("deployed-verifier-code"),
+      "--settlement-asset-definition-id",
+      "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "--vk-backend",
+      "halo2/ipa",
+      "--vk-name",
+      "taira_xor_burn_record_v1",
+    ];
+    const malformedCliBooleans = malformedBooleanOptionValues.filter(
+      (value) => typeof value === "string" && value !== "",
+    );
+    const readinessCases = [
+      {
+        flag: "production-ready",
+        expected: /--production-ready must be true or false/u,
+      },
+      {
+        flag: "live-readback-checked",
+        expected: /--live-readback-checked must be true or false/u,
+      },
+    ];
+
+    for (const { flag, expected } of readinessCases) {
+      for (const [index, value] of malformedCliBooleans.entries()) {
+        const out = join(dir, `${flag}-${index}.route.manifest.json`);
+        const sentinel = `sentinel:${flag}:${index}\n`;
+        await writeFile(out, sentinel);
+        await assert.rejects(
+          () =>
+            execFileAsync(process.execPath, [
+              TRON_SCRIPT_PATH,
+              ...baseArgs,
+              `--${flag}`,
+              value,
+              "--out",
+              out,
+            ]),
+          (error) => {
+            assert.match(`${error.message}\n${error.stderr ?? ""}`, expected);
+            return true;
+          },
+        );
+        assert.equal(await readFile(out, "utf8"), sentinel);
+      }
+    }
+  });
+});
+
+test("TRON route-manifest CLI rejects output path collisions with inputs before writing artifacts", async () => {
+  await withTempDir(async (dir) => {
+    const evidencePath = join(dir, "deployment.evidence.json");
+    const contractPath = join(dir, "burn-record.contract.json");
+    const verifierPath = join(dir, "verifier.json");
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const inputTexts = new Map([
+      [evidencePath, "sentinel:deployment-evidence\n"],
+      [contractPath, "sentinel:burn-record-contract\n"],
+      [verifierPath, "sentinel:verifier-material\n"],
+      [liveEvidencePath, "sentinel:live-evidence\n"],
+    ]);
+    for (const [path, text] of inputTexts.entries()) {
+      await writeFile(path, text);
+    }
+
+    const baseArgs = [
+      TRON_SCRIPT_PATH,
+      "route-manifest",
+      "--evidence",
+      evidencePath,
+      "--taira-contract",
+      contractPath,
+      "--verifier",
+      verifierPath,
+      "--live-evidence",
+      liveEvidencePath,
+      "--verifier-code-hash",
+      routeHash("deployed-verifier-code"),
+      "--settlement-asset-definition-id",
+      "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "--vk-backend",
+      "halo2/ipa",
+      "--vk-name",
+      "taira_xor_burn_record_v1",
+    ];
+
+    const assertCollisionRejected = async (outPath, expected) => {
+      await assert.rejects(
+        () => execFileAsync(process.execPath, [...baseArgs, "--out", outPath]),
+        (error) => {
+          assert.match(`${error.message}\n${error.stderr ?? ""}`, expected);
+          return true;
+        },
+      );
+      for (const [path, text] of inputTexts.entries()) {
+        assert.equal(await readFile(path, "utf8"), text);
+      }
+    };
+
+    await assertCollisionRejected(
+      evidencePath,
+      /--out must not be the same path as --evidence/u,
+    );
+    await assertCollisionRejected(
+      contractPath,
+      /--out must not be the same path as --taira-contract/u,
+    );
+    await assertCollisionRejected(
+      verifierPath,
+      /--out must not be the same path as --verifier/u,
+    );
+    await assertCollisionRejected(
+      liveEvidencePath,
+      /--out must not be the same path as --live-evidence/u,
+    );
   });
 });
 
@@ -1664,8 +2138,20 @@ test("TRON route-config refuses production-ready manifests with handoff placehol
 
     const cases = [
       [
-        { operatorNote: "TODO replace verifier material before launch" },
+        { operatorNote: "placeholder verifier material must be replaced before launch" },
         /placeholder handoff material.*route manifest\.operatorNote/u,
+      ],
+      [
+        { operatorChecklist: ["to-do verifier handoff before launch"] },
+        /placeholder handoff material.*route manifest\.operatorChecklist\[0\]/u,
+      ],
+      [
+        { operatorChecklist: ["to_do verifier handoff before launch"] },
+        /placeholder handoff material.*route manifest\.operatorChecklist\[0\]/u,
+      ],
+      [
+        { operatorChecklist: ["to do verifier handoff before launch"] },
+        /placeholder handoff material.*route manifest\.operatorChecklist\[0\]/u,
       ],
       [
         {
@@ -1677,11 +2163,27 @@ test("TRON route-config refuses production-ready manifests with handoff placehol
       ],
       [
         {
+          postDeployLiveEvidence: {
+            launchChecklist: ["replace_before_production verifier evidence"],
+          },
+        },
+        /placeholder handoff material.*route manifest\.postDeployLiveEvidence\.launchChecklist\[0\]/u,
+      ],
+      [
+        {
           destinationRollout: {
             replaceMeVerifierKeyHash: routeHash("replace-me-key"),
           },
         },
         /placeholder handoff material.*route manifest\.destinationRollout\.replaceMeVerifierKeyHash/u,
+      ],
+      [
+        {
+          destinationRollout: {
+            your_verifier_material: routeHash("your-verifier-material"),
+          },
+        },
+        /placeholder handoff material.*route manifest\.destinationRollout\.your_verifier_material/u,
       ],
     ];
 
@@ -1737,7 +2239,7 @@ test("TRON route-config permits placeholder-looking tokens in opaque route-manif
       "live-readback-checked": "true",
       "confirm-mainnet": "taira_tron_xor",
     });
-    const opaqueArtifactB64 = `${"A".repeat(96)}todo`;
+    const opaqueArtifactB64 = `${"A".repeat(96)}mock`;
     const opaqueArtifactBytes = Buffer.from(opaqueArtifactB64, "base64");
     assert.equal(opaqueArtifactBytes.toString("base64"), opaqueArtifactB64);
     const opaqueAddress = "TStubyr4QyoSNizHf6kPxHYxNnJNLVBJgT";
@@ -2193,6 +2695,133 @@ test("TRON route-config rejects duplicate route manifest aliases", async () => {
         () => buildTairaXorRouteConfigToml(patchedManifest),
         pattern,
       );
+    }
+  });
+});
+
+test("TRON route-config ignores accessor-backed route manifest aliases", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+    const cloneManifest = () => JSON.parse(JSON.stringify(manifest));
+    const patchedManifest = cloneManifest();
+    const readCounts = [
+      defineThrowingAccessors(patchedManifest, [
+        "version",
+        "route_id",
+        "production_ready",
+        "post_deploy_readback_checked",
+        "post_deploy_live_evidence",
+        "destination_rollout",
+        "destination_binding",
+        "taira_xor_burn_record",
+        "network_id_hex",
+        "taira_xor_token_address",
+        "disabled_reason",
+      ]),
+      defineThrowingAccessors(patchedManifest.destinationRollout, [
+        "version",
+        "source_domain",
+        "target_domain",
+        "verifier_backend",
+        "proof_family",
+        "verifier_code_hash",
+        "verifier_key_hash",
+        "destination_network_id",
+        "verifier_identity",
+        "destination_binding_key",
+        "destination_binding_hash",
+      ]),
+      defineThrowingAccessors(patchedManifest.destinationBinding, [
+        "version",
+        "source_domain",
+        "target_domain",
+        "network_id_hex",
+        "destination_binding_key",
+        "binding_hash",
+      ]),
+      defineThrowingAccessors(patchedManifest.tairaXorBurnRecord, [
+        "vk_ref",
+        "artifact_b64",
+        "artifact_sha256",
+        "settlement_asset_definition_id",
+        "gas_limit",
+        "code_hash",
+      ]),
+      defineThrowingAccessors(patchedManifest.settlement, [
+        "route_id",
+        "asset_key",
+        "submit_path",
+        "contract_address",
+        "contract_alias",
+      ]),
+      defineThrowingAccessors(patchedManifest.postDeployLiveEvidence, [
+        "full_toml_ready",
+        "source_bridge_config_hash",
+        "source_event_transaction_id",
+        "route_canary_evidence_hash",
+        "route_canary_transaction_id",
+        "offline_full_toml_sha256",
+        "post_deploy_production_blockers",
+        "full_toml_production_blockers",
+        "source_event_transaction_production_blockers",
+        "route_canary_production_blockers",
+      ]),
+    ];
+
+    const toml = buildTairaXorRouteConfigToml(patchedManifest);
+    assert.match(toml, /route_id = "taira_tron_xor"/u);
+    assert.equal(
+      readCounts.reduce((sum, readCount) => sum + readCount(), 0),
+      0,
+    );
+
+    for (const [label, mutate, pattern] of [
+      [
+        "schema",
+        (candidate) => defineThrowingAccessors(candidate, ["schema"]),
+        /route manifest schema is required/u,
+      ],
+      [
+        "chain",
+        (candidate) => defineThrowingAccessors(candidate, ["chain"]),
+        /route manifest chain is required/u,
+      ],
+      [
+        "settlement mode",
+        (candidate) => defineThrowingAccessors(candidate.settlement, ["mode"]),
+        /route manifest settlement\.mode is required/u,
+      ],
+      [
+        "vkRef backend",
+        (candidate) =>
+          defineThrowingAccessors(candidate.tairaXorBurnRecord.vkRef, ["backend"]),
+        /route manifest tairaXorBurnRecord\.vkRef\.backend is required/u,
+      ],
+    ]) {
+      const candidate = cloneManifest();
+      const readCount = mutate(candidate);
+      assert.throws(
+        () => buildTairaXorRouteConfigToml(candidate),
+        pattern,
+        label,
+      );
+      assert.equal(readCount(), 0, label);
     }
   });
 });

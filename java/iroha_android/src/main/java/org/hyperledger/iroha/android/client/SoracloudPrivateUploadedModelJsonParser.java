@@ -148,7 +148,7 @@ public final class SoracloudPrivateUploadedModelJsonParser {
 
   private static String requiredString(final Object value, final String path) {
     final String string = optionalString(value);
-    if (string == null || string.isBlank()) {
+    if (string == null || string.trim().isEmpty()) {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
     return string.trim();

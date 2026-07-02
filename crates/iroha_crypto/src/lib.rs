@@ -730,6 +730,18 @@ pub fn ed25519_parse_public_key(payload: &[u8]) -> Result<Ed25519ParsedPublicKey
         .map_err(Error::from)
 }
 
+/// Parse raw Ed25519 signature bytes for admission before storing them as an opaque signature.
+///
+/// # Errors
+/// Returns [`Error::BadSignature`] if the payload length is invalid or the
+/// signature `R` component is malformed, non-canonical, or small-order.
+/// Returns [`Error::Parse`] if the payload is empty or all zero.
+pub fn ed25519_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
+    let signature = Signature::try_from_bytes(payload).map_err(Error::from)?;
+    signature::ed25519::Ed25519Sha512::parse_signature(payload)?;
+    Ok(signature)
+}
+
 /// Deterministic Ed25519 batch verification wrapper (per-signature).
 /// The `seed32` parameter is reserved for API compatibility and is ignored.
 /// # Errors
@@ -1562,7 +1574,9 @@ pub fn pqc_verify_aggregate(
     public_keys: &[&[u8]],
 ) -> Result<(), Error> {
     // ML-DSA has no standard aggregate signature; fall back to per-signature checks.
-    if !(messages.len() == signatures.len() && signatures.len() == public_keys.len()) {
+    if messages.is_empty()
+        || !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+    {
         return Err(Error::BadSignature);
     }
     for ((m, s), pk) in messages
@@ -2162,12 +2176,9 @@ impl MlDsaSecretKey {
 
     fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
         use pqcrypto_traits::sign::SecretKey as _;
-        if bytes.len() == pqcrypto_mldsa::mldsa65::secret_key_bytes() && is_all_zero_material(bytes)
-        {
-            return Err(ParseError(
-                "invalid ML-DSA secret key: all-zero material".to_string(),
-            ));
-        }
+
+        soranet_pq::validate_mldsa_secret_key(soranet_pq::MlDsaSuite::MlDsa65, bytes)
+            .map_err(|err| ParseError(err.to_string()))?;
         let mut inner = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(bytes)
             .map_err(|err| ParseError(err.to_string()))?;
         let secret = Self::new(&inner);
@@ -3066,6 +3077,45 @@ mod tests {
     }
 
     #[test]
+    fn ed25519_parse_signature_rejects_inert_or_malformed_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let key_pair = checked_seed_keypair(&[0x31; 32], Algorithm::Ed25519);
+        let signature = checked_signature(key_pair.private_key(), b"ed25519 parse signature");
+        ed25519_parse_signature(signature.payload()).expect("valid Ed25519 signature parses");
+
+        let err = ed25519_parse_signature(&[0u8; 64])
+            .expect_err("all-zero Ed25519 signature material must fail admission");
+        assert!(
+            matches!(err, Error::Parse(ref parse) if parse.to_string().contains("all zero")),
+            "unexpected all-zero signature error: {err:?}"
+        );
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = signature.payload().to_vec();
+            malformed[..32].copy_from_slice(&replacement_r);
+            let err = ed25519_parse_signature(&malformed)
+                .expect_err("malformed Ed25519 signature R must fail admission");
+            assert_eq!(
+                err,
+                Error::BadSignature,
+                "{label} R should fail as a bad Ed25519 signature"
+            );
+        }
+    }
+
+    #[test]
     fn session_key_from_zeroizing_vec_preserves_payload_and_zeroizes_on_drop() {
         let _test_guard = session_key_zeroization_test_guard();
         __debug_clear_last_zeroized_session_key();
@@ -3633,8 +3683,30 @@ mod tests {
         let err = PrivateKey::from_bytes(Algorithm::MlDsa, &all_zero)
             .expect_err("all-zero ML-DSA private key material must fail closed");
 
+        let rendered = err.to_string();
         assert!(
-            err.to_string().contains("all-zero material"),
+            rendered.contains("all-zero material") || rendered.contains("all zero"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn ml_dsa_private_key_parse_uses_strict_secret_validator_for_component_drift() {
+        use crate::mldsa_seed::mldsa65 as seeded;
+
+        let (_, private) = seeded::keypair_from_seed(b"iroha:ml-dsa:strict-secret-parse")
+            .expect("seeded ML-DSA keypair");
+        let mut private_bytes = private.to_bytes().1;
+        let last = private_bytes
+            .last_mut()
+            .expect("ML-DSA secret key has at least one byte");
+        *last ^= 0x01;
+
+        let err = PrivateKey::from_bytes(Algorithm::MlDsa, &private_bytes)
+            .expect_err("strict ML-DSA secret-key validation must reject component drift");
+
+        assert!(
+            err.to_string().contains("internally inconsistent"),
             "unexpected error: {err:?}"
         );
     }
@@ -3668,6 +3740,16 @@ mod tests {
             err.to_string().contains("all-zero material"),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn pqc_verify_aggregate_rejects_empty_input() {
+        let empty: [&[u8]; 0] = [];
+
+        let err = pqc_verify_aggregate(&empty, &empty, &empty)
+            .expect_err("empty ML-DSA aggregate verification must fail closed");
+
+        assert_eq!(err, Error::BadSignature);
     }
 
     #[test]

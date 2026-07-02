@@ -47,6 +47,137 @@ pub mod retention;
 pub mod token;
 pub mod validation;
 
+/// Decode a fixed-width Ed25519 signature after rejecting inert or malformed `R` payloads.
+pub(crate) fn checked_ed25519_signature_from_bytes(
+    signature: &[u8; ed25519_dalek::SIGNATURE_LENGTH],
+) -> Result<ed25519_dalek::Signature, String> {
+    if inert_bytes(signature) {
+        return Err("signature payload must not be all zero".to_owned());
+    }
+    let r_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = signature
+        [..ed25519_dalek::PUBLIC_KEY_LENGTH]
+        .try_into()
+        .map_err(|_| "signature R bytes have invalid length".to_owned())?;
+    if !ed25519_compressed_y_is_canonical(&r_bytes) {
+        return Err("signature R is not a canonical Ed25519 point".to_owned());
+    }
+    let r_point = ed25519_dalek::VerifyingKey::from_bytes(&r_bytes)
+        .map_err(|err| format!("signature R is not a canonical Ed25519 point: {err}"))?;
+    if r_point.is_weak() {
+        return Err("signature R is small-order (weak); rejected".to_owned());
+    }
+    Ok(ed25519_dalek::Signature::from_bytes(signature))
+}
+
+/// Decode a fixed-width Ed25519 verifying key after rejecting inert or weak keys.
+pub(crate) fn checked_ed25519_verifying_key_from_bytes(
+    public_key: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
+) -> Result<ed25519_dalek::VerifyingKey, String> {
+    if inert_bytes(public_key) {
+        return Err("public key material must not be all zero".to_owned());
+    }
+    if !ed25519_compressed_y_is_canonical(public_key) {
+        return Err("public key is not a canonical Ed25519 point".to_owned());
+    }
+    let verifying_key =
+        ed25519_dalek::VerifyingKey::from_bytes(public_key).map_err(|err| err.to_string())?;
+    if verifying_key.is_weak() {
+        return Err("public key is small-order (weak); rejected".to_owned());
+    }
+    Ok(verifying_key)
+}
+
+pub(crate) fn inert_bytes(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && bytes.iter().all(|byte| *byte == 0)
+}
+
+fn ed25519_compressed_y_is_canonical(bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]) -> bool {
+    const ED25519_FIELD_MODULUS_LE: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    let mut y = *bytes;
+    y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
+    for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
+        match y[idx].cmp(&ED25519_FIELD_MODULUS_LE[idx]) {
+            std::cmp::Ordering::Less => return true,
+            std::cmp::Ordering::Greater => return false,
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod checked_ed25519_signature_tests {
+    use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, SigningKey};
+
+    const ED25519_SMALL_ORDER_POINT: [u8; PUBLIC_KEY_LENGTH] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const ED25519_NON_CANONICAL_IDENTITY: [u8; PUBLIC_KEY_LENGTH] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    #[test]
+    fn checked_ed25519_signature_rejects_all_zero_signature_material() {
+        let err = super::checked_ed25519_signature_from_bytes(&[0; SIGNATURE_LENGTH])
+            .expect_err("all-zero signature material must fail");
+        assert!(err.contains("all zero"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn checked_ed25519_signature_rejects_noncanonical_or_small_order_r() {
+        use ed25519_dalek::Signer as _;
+
+        let signing_key = SigningKey::from_bytes(&[0x42; 32]);
+        let mut signature = signing_key.sign(b"sorafs-manifest-invalid-r").to_bytes();
+
+        signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&ED25519_SMALL_ORDER_POINT);
+        let err = super::checked_ed25519_signature_from_bytes(&signature)
+            .expect_err("small-order signature R must fail");
+        assert!(err.contains("small-order"), "unexpected error: {err}");
+
+        signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&ED25519_NON_CANONICAL_IDENTITY);
+        let err = super::checked_ed25519_signature_from_bytes(&signature)
+            .expect_err("noncanonical signature R must fail");
+        assert!(err.contains("not a canonical"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn checked_ed25519_verifying_key_rejects_all_zero_public_key_material() {
+        let err = super::checked_ed25519_verifying_key_from_bytes(&[0; PUBLIC_KEY_LENGTH])
+            .expect_err("all-zero public key material must fail");
+        assert!(err.contains("all zero"));
+
+        let err = super::checked_ed25519_verifying_key_from_bytes(&ED25519_SMALL_ORDER_POINT)
+            .expect_err("small-order public key material must fail");
+        assert!(err.contains("small-order"), "unexpected error: {err}");
+
+        let err = super::checked_ed25519_verifying_key_from_bytes(&ED25519_NON_CANONICAL_IDENTITY)
+            .expect_err("noncanonical public key material must fail");
+        assert!(err.contains("not a canonical"), "unexpected error: {err}");
+
+        let signing_key = SigningKey::from_bytes(&[0x41; 32]);
+        let public_key = signing_key.verifying_key().to_bytes();
+        super::checked_ed25519_verifying_key_from_bytes(&public_key)
+            .expect("valid Ed25519 public key must pass");
+    }
+
+    #[test]
+    fn inert_bytes_requires_non_empty_all_zero_material() {
+        assert!(!super::inert_bytes(&[]));
+        assert!(super::inert_bytes(&[0, 0, 0]));
+        assert!(!super::inert_bytes(&[0, 1, 0]));
+    }
+}
+
 pub use capacity::{
     AssignmentError, CAPACITY_DECLARATION_VERSION_V1, CAPACITY_DISPUTE_VERSION_V1,
     CAPACITY_TELEMETRY_VERSION_V1, CapacityDeclarationV1, CapacityDeclarationValidationError,

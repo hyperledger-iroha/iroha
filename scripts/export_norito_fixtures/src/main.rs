@@ -383,9 +383,10 @@ fn encode_signed_envelope(
     payload_bytes: &[u8],
     attachments_field: Option<&[u8]>,
     multisig_field: Option<&[u8]>,
-) -> Vec<u8> {
+) -> Result<Vec<u8>> {
     let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let signature = Signature::from_bytes(signature_bytes);
+    let signature = Signature::try_from_bytes(signature_bytes)
+        .context("failed to admit fixture signature bytes")?;
     let signature_of = SignatureOf::<TransactionPayload>::from_signature(signature);
     let signature_field = TransactionSignature(signature_of).encode();
     let attachments_field = attachments_field.map(Vec::from).unwrap_or_else(|| vec![0]);
@@ -399,7 +400,7 @@ fn encode_signed_envelope(
     out.extend_from_slice(&attachments_field);
     norito::core::write_len_to_vec(&mut out, multisig_field.len() as u64);
     out.extend_from_slice(&multisig_field);
-    out
+    Ok(out)
 }
 
 fn reencode_signed_with_payload(
@@ -411,12 +412,12 @@ fn reencode_signed_with_payload(
     let payload_hash = Hash::new(payload_bytes);
     let signature = Signature::try_new(keypair.private_key(), payload_hash.as_ref())
         .context("failed to sign re-encoded fixture payload hash")?;
-    Ok(encode_signed_envelope(
+    encode_signed_envelope(
         signature.payload(),
         payload_bytes,
         Some(&fields.attachments_field),
         Some(&fields.multisig_field),
-    ))
+    )
 }
 
 impl RawPayload {
@@ -1239,13 +1240,25 @@ mod tests {
 
     #[test]
     fn decode_signed_envelope_fields_rejects_trailing_bytes() {
-        let mut envelope = encode_signed_envelope(&[7; 64], &[1, 2, 3], None, None);
+        let mut envelope = encode_signed_envelope(&[7; 64], &[1, 2, 3], None, None)
+            .expect("nonzero signature fixture envelope");
         envelope.push(0);
 
         let err =
             decode_signed_envelope_fields(&envelope).expect_err("trailing bytes must be rejected");
         assert!(
             err.to_string().contains("trailing bytes"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn encode_signed_envelope_rejects_all_zero_signature_material() {
+        let err = encode_signed_envelope(&[0u8; 64], &[1, 2, 3], None, None)
+            .expect_err("all-zero fixture signature must be rejected");
+        assert!(
+            err.to_string()
+                .contains("failed to admit fixture signature bytes"),
             "unexpected error: {err}"
         );
     }

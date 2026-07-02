@@ -330,7 +330,6 @@ public enum OfflineNoteDecoding {
         try decodeInstructionModel(
             data,
             instructionTypeName: OfflineNoteV2TypeNames.issueInstruction,
-            compatibleInstructionTypeNames: [OfflineNoteV2TypeNames.issueInstructionAlias],
             decodeHeader: decodeIssueV2,
             decodeBare: decodeIssueV2Fields
         )
@@ -340,7 +339,6 @@ public enum OfflineNoteDecoding {
         try decodeInstructionModel(
             data,
             instructionTypeName: OfflineNoteV2TypeNames.redeemInstruction,
-            compatibleInstructionTypeNames: [OfflineNoteV2TypeNames.redeemInstructionAlias],
             decodeHeader: decodeRedeemV2,
             decodeBare: decodeRedeemV2Fields
         )
@@ -350,7 +348,6 @@ public enum OfflineNoteDecoding {
         try decodeInstructionModel(
             data,
             instructionTypeName: OfflineNoteV2TypeNames.auditInstruction,
-            compatibleInstructionTypeNames: [OfflineNoteV2TypeNames.auditInstructionAlias],
             decodeHeader: decodeAuditV2,
             decodeBare: decodeAuditV2Fields
         )
@@ -460,11 +457,10 @@ public enum OfflineNoteDecoding {
     private static func decodeInstructionModel<T>(
         _ data: Data,
         instructionTypeName: String,
-        compatibleInstructionTypeNames: [String] = [],
         decodeHeader: (Data) throws -> T,
         decodeBare: (inout OfflineNoritoReader) throws -> T
     ) throws -> T {
-        let instructionTypeNames = [instructionTypeName] + compatibleInstructionTypeNames
+        let instructionTypeNames = [instructionTypeName]
         let wirePayload = try extractInstructionWirePayload(data, expectedWireNames: instructionTypeNames)
         let modelPayload = try decodeInstructionWrapper(wirePayload, typeNames: instructionTypeNames)
         if isNoritoFrame(modelPayload) {
@@ -1121,9 +1117,8 @@ extension OfflineNorito {
                 maxSplits: 1,
                 omittingEmptySubsequences: false
             ).dropFirst().first,
-            scope.lowercased().hasPrefix("dataspace:"),
-            !rawDataspace.isEmpty,
-            let parsedDataspaceId = UInt64(rawDataspace) else {
+            scope.hasPrefix("dataspace:"),
+            let parsedDataspaceId = parseCanonicalDataspaceId(rawDataspace) else {
                 return nil
             }
             dataspaceId = parsedDataspaceId
@@ -1133,6 +1128,18 @@ extension OfflineNorito {
             accountId: accountId,
             dataspaceId: dataspaceId
         )
+    }
+
+    private static func parseCanonicalDataspaceId(_ raw: Substring) -> UInt64? {
+        let text = String(raw)
+        guard !text.isEmpty,
+              (text == "0" || !text.hasPrefix("0")),
+              text.unicodeScalars.allSatisfy({ scalar in
+                  scalar.value >= 48 && scalar.value <= 57
+              }) else {
+            return nil
+        }
+        return UInt64(text)
     }
 
     static func decodeString(_ data: Data) throws -> String {

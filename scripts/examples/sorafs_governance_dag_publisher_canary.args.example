@@ -1,0 +1,25 @@
+# Reviewed publisher-service canary inputs for the SF-12 Governance DAG gate.
+--kind publisher_service
+--out artifacts/sorafs_governance_dag/publisher-service-canary.json
+--deployment-id sorafs-governance-dag-prod-20260701
+--environment production
+--generated-at-unix 1800100000
+--now-unix 1800100000
+--public-head-cid-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--pin-lag-seconds 60
+--head-age-seconds 120
+--block-count 8
+--payload-kind deal-settlement
+--payload-kind repair-audit
+--payload-kind reconciliation
+--payload-kind reputation-snapshot
+--payload-kind moderation-ballot-event
+--payload-kind appeal-finance-report
+--payload-kind appeal-finance-settlement-receipt
+--payload-kind orderbook-settlement-receipt
+--verified-claim dag_builder_daemonized
+--verified-claim ipfs_cluster_pinning_enabled
+--verified-claim ipns_head_publication_enabled
+--verified-claim signed_head_verified
+--verified-claim parent_chain_verified
+--verified-claim car_segments_pinned

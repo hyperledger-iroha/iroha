@@ -1631,7 +1631,6 @@ fn block_sync_selected_apply_pending_commit_qc_observed(
 
 #[derive(Clone, Copy, Debug)]
 struct BlockSyncSelectedApplySparseRecovery {
-    block_known_before: bool,
     block_known_after_creation: bool,
     next_height: bool,
     block_signer_count: usize,
@@ -1644,8 +1643,7 @@ struct BlockSyncSelectedApplySparseRecovery {
 fn block_sync_selected_apply_sparse_next_height_payload_recovered(
     input: BlockSyncSelectedApplySparseRecovery,
 ) -> bool {
-    !input.block_known_before
-        && input.block_known_after_creation
+    input.block_known_after_creation
         && input.next_height
         && input.block_signer_count < input.commit_quorum
         && !input.incoming_qc_usable
@@ -5248,6 +5246,28 @@ impl Actor {
                         block_signers,
                         "accepted signed-quorum block sync fallback as commit evidence for known block"
                     );
+                } else if exact_contiguous_frontier {
+                    let recovery_targets = self.known_block_commit_qc_recovery_targets(
+                        block_hash,
+                        block_height,
+                        block_view,
+                        &[],
+                    );
+                    let requested = self.maybe_request_known_block_commit_qc_recovery(
+                        block_hash,
+                        block_height,
+                        block_view,
+                        &recovery_targets,
+                        None,
+                        "block_sync_update_fast_path_known_payload_missing_commit_qc",
+                    );
+                    debug!(
+                        height = block_height,
+                        view = block_view,
+                        block = %block_hash,
+                        requested,
+                        "checked known exact-frontier payload for missing commit-QC recovery"
+                    );
                 }
                 return Ok(());
             }
@@ -6331,6 +6351,12 @@ impl Actor {
             });
             (cert.clone(), checkpoint, selection.stake_snapshot.clone())
         });
+        if !block_known {
+            if let Some((cert, checkpoint, stake_snapshot)) = commit_roster_record.as_ref() {
+                self.state
+                    .record_commit_roster_hint(cert, checkpoint, stake_snapshot.clone());
+            }
+        }
         if block_known {
             if let Some((cert, checkpoint, stake_snapshot)) = commit_roster_record.as_ref() {
                 self.state
@@ -6902,6 +6928,41 @@ impl Actor {
         );
         let invalid_qc_present = had_incoming_qc && !incoming_qc_validated && !qc_evidence_present;
         let block_quorum_met = block_signer_count >= commit_quorum;
+        let known_exact_frontier_payload_needs_commit_qc = block_known_locally
+            && exact_contiguous_frontier
+            && !qc_evidence_present
+            && !commit_cert_present
+            && !checkpoint_present
+            && !has_commit_votes;
+        if known_exact_frontier_payload_needs_commit_qc {
+            let request_active_before = self
+                .pending
+                .missing_commit_qc_requests
+                .contains_key(&block_hash);
+            let requested_known_commit_qc = if request_active_before {
+                true
+            } else {
+                let recovery_targets = self.known_block_commit_qc_recovery_targets(
+                    block_hash,
+                    block_height,
+                    block_view,
+                    topology.as_ref(),
+                );
+                self.maybe_request_known_block_commit_qc_recovery(
+                    block_hash,
+                    block_height,
+                    block_view,
+                    &recovery_targets,
+                    None,
+                    "block_sync_update_known_payload_missing_commit_qc",
+                )
+            };
+            requested_missing_block |= requested_known_commit_qc
+                || self
+                    .pending
+                    .missing_commit_qc_requests
+                    .contains_key(&block_hash);
+        }
         if block_sync_selected_qc_should_drop_invalid_payload(
             invalid_qc_present,
             block_quorum_met,
@@ -6949,15 +7010,33 @@ impl Actor {
             commit_quorum,
             requested_missing_block,
         ) {
-            if self.maybe_request_pending_block_for_missing_qc(
-                block_hash,
-                block_height,
-                block_view,
-                block_signer_count,
-                commit_quorum,
-                &block_signers,
-                &topology,
-            ) {
+            let requested_commit_qc_recovery = if block_known_locally {
+                let recovery_targets = self.known_block_commit_qc_recovery_targets(
+                    block_hash,
+                    block_height,
+                    block_view,
+                    topology.as_ref(),
+                );
+                self.maybe_request_known_block_commit_qc_recovery(
+                    block_hash,
+                    block_height,
+                    block_view,
+                    &recovery_targets,
+                    None,
+                    "block_sync_update_known_payload_missing_commit_qc",
+                )
+            } else {
+                self.maybe_request_pending_block_for_missing_qc(
+                    block_hash,
+                    block_height,
+                    block_view,
+                    block_signer_count,
+                    commit_quorum,
+                    &block_signers,
+                    &topology,
+                )
+            };
+            if requested_commit_qc_recovery {
                 if block_sync_selected_quorum_should_defer_npos_vote_only(
                     matches!(consensus_mode, ConsensusMode::Npos),
                     vote_only_frontier_update,
@@ -7216,7 +7295,6 @@ impl Actor {
         let recovered_sparse_next_height_payload =
             block_sync_selected_apply_sparse_next_height_payload_recovered(
                 BlockSyncSelectedApplySparseRecovery {
-                    block_known_before: block_known,
                     block_known_after_creation,
                     next_height: block_height == local_height.saturating_add(1),
                     block_signer_count,
@@ -8753,6 +8831,11 @@ impl Actor {
                 response.view,
                 "block_body_response_payload_ready",
             );
+            self.retry_rbc_progress_after_block_created_hydration((
+                response.block_hash,
+                response.height,
+                response.view,
+            ));
         }
         let materialized_at = Instant::now();
         if body_materialized
@@ -10843,6 +10926,7 @@ mod allow_uncertified_block_sync_roster_tests {
             vote_roster_cached: bool,
             checkpoint_recorded: bool,
             commit_roster_prepared: bool,
+            commit_roster_hinted: bool,
             commit_roster_persisted: bool,
             commit_roster_checkpoint_kind: CommitRosterCheckpointKind,
             commit_roster_stake_included: bool,
@@ -10880,6 +10964,7 @@ mod allow_uncertified_block_sync_roster_tests {
             vote_roster_cached: true,
             checkpoint_recorded: false,
             commit_roster_prepared: false,
+            commit_roster_hinted: false,
             commit_roster_persisted: false,
             commit_roster_checkpoint_kind: CommitRosterCheckpointKind::None,
             commit_roster_stake_included: false,
@@ -11256,6 +11341,7 @@ mod allow_uncertified_block_sync_roster_tests {
                 expected: Decision {
                     checkpoint_recorded: true,
                     commit_roster_prepared: true,
+                    commit_roster_hinted: true,
                     process_votes: false,
                     candidate_qc_source: CandidateSource::Later,
                     clear_missing_block: false,
@@ -11312,6 +11398,7 @@ mod allow_uncertified_block_sync_roster_tests {
                 None if case.block_known => CandidateSource::None,
                 None => CandidateSource::Later,
             };
+            let commit_roster_hinted = !case.block_known && case.selection_commit_qc;
             let commit_roster_persisted = case.block_known && case.selection_commit_qc;
             let commit_roster_checkpoint_kind = if !commit_roster_persisted {
                 CommitRosterCheckpointKind::None
@@ -11341,6 +11428,7 @@ mod allow_uncertified_block_sync_roster_tests {
                 vote_roster_cached: true,
                 checkpoint_recorded: case.selection_checkpoint,
                 commit_roster_prepared: case.selection_commit_qc,
+                commit_roster_hinted,
                 commit_roster_persisted,
                 commit_roster_checkpoint_kind,
                 commit_roster_stake_included: commit_roster_persisted && case.selection_stake,
@@ -11394,6 +11482,7 @@ mod allow_uncertified_block_sync_roster_tests {
             vote_roster_cached: bool,
             checkpoint_recorded: bool,
             commit_roster_prepared: bool,
+            commit_roster_hinted: bool,
             commit_roster_persisted: bool,
             commit_roster_checkpoint_kind: CommitRosterCheckpointKind,
             commit_roster_stake_included: bool,
@@ -11431,6 +11520,7 @@ mod allow_uncertified_block_sync_roster_tests {
             vote_roster_cached: true,
             checkpoint_recorded: false,
             commit_roster_prepared: false,
+            commit_roster_hinted: false,
             commit_roster_persisted: false,
             commit_roster_checkpoint_kind: CommitRosterCheckpointKind::None,
             commit_roster_stake_included: false,
@@ -11495,6 +11585,7 @@ mod allow_uncertified_block_sync_roster_tests {
                 expected: Decision {
                     checkpoint_recorded: true,
                     commit_roster_prepared: true,
+                    commit_roster_hinted: true,
                     process_votes: false,
                     candidate_qc_source: CandidateSource::Later,
                     clear_missing_block: false,
@@ -11675,6 +11766,7 @@ mod allow_uncertified_block_sync_roster_tests {
                 CandidateSource::Later
             };
             let commit_roster_prepared = case.selection_commit_qc;
+            let commit_roster_hinted = !case.block_known && commit_roster_prepared;
             let commit_roster_persisted = case.block_known && commit_roster_prepared;
             let commit_roster_checkpoint_kind = if !commit_roster_persisted {
                 CommitRosterCheckpointKind::None
@@ -11700,6 +11792,7 @@ mod allow_uncertified_block_sync_roster_tests {
                 vote_roster_cached: true,
                 checkpoint_recorded: case.selection_checkpoint,
                 commit_roster_prepared,
+                commit_roster_hinted,
                 commit_roster_persisted,
                 commit_roster_checkpoint_kind,
                 commit_roster_stake_included: commit_roster_persisted && case.selection_stake,
@@ -12970,10 +13063,6 @@ mod allow_uncertified_block_sync_roster_tests {
             )
         }
 
-        fn block_known_before(candidate: Candidate) -> bool {
-            matches!(candidate, Candidate::SparseKnownBefore)
-        }
-
         fn block_known_after(candidate: Candidate) -> bool {
             !matches!(
                 candidate,
@@ -13083,8 +13172,7 @@ mod allow_uncertified_block_sync_roster_tests {
                 && missing_commit_qc_repair_active(candidate);
             let spec_pending_commit_qc_observed = spec_signed_quorum_commit_repair_active
                 && pending_block_matches_non_invalid(candidate);
-            let spec_sparse_next_height_payload_recovered = !block_known_before(candidate)
-                && block_known_after(candidate)
+            let spec_sparse_next_height_payload_recovered = block_known_after(candidate)
                 && next_height(candidate)
                 && block_signer_below_commit_quorum(candidate)
                 && !incoming_qc_usable(candidate)
@@ -13195,7 +13283,6 @@ mod allow_uncertified_block_sync_roster_tests {
             let sparse_next_height_payload_recovered =
                 block_sync_selected_apply_sparse_next_height_payload_recovered(
                     BlockSyncSelectedApplySparseRecovery {
-                        block_known_before: block_known_before(candidate),
                         block_known_after_creation: block_known_after(candidate),
                         next_height: next_height(candidate),
                         block_signer_count,

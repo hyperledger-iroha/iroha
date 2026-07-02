@@ -904,12 +904,18 @@ def _sign_ed25519(private_key_path: Path, payload: bytes, errors: list[str]) -> 
         errors.append("private key must be a regular file")
         return None
     try:
-        link_count = private_key_path.stat().st_nlink
+        private_key_stat = private_key_path.stat()
     except OSError:
         errors.append("private key hardlink metadata could not be read")
         return None
-    if link_count > 1:
+    if private_key_stat.st_nlink > 1:
         errors.append("private key must not be hardlinked")
+        return None
+    if private_key_stat.st_size > device_lab.MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES:
+        errors.append(
+            "private key must be no more than "
+            f"{device_lab.MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES} bytes"
+        )
         return None
     openssl = device_lab._require_openssl(errors)
     if openssl is None:
@@ -947,6 +953,7 @@ def _sign_ed25519(private_key_path: Path, payload: bytes, errors: list[str]) -> 
                     check=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
+                    env=device_lab._openssl_child_env(),
                 )
             except subprocess.CalledProcessError:
                 errors.append("private key must be a valid OpenSSL Ed25519 private key")

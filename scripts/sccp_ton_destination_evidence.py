@@ -20,6 +20,11 @@ from pathlib import Path
 from typing import Iterable, NamedTuple
 from urllib.parse import unquote
 
+try:
+    from scripts.path_safety import first_symlinked_existing_path_component
+except ModuleNotFoundError:  # pragma: no cover - direct script execution
+    from path_safety import first_symlinked_existing_path_component
+
 
 SCCP_DOMAIN_SORA = 0
 SCCP_DOMAIN_TON = 4
@@ -87,6 +92,11 @@ def parse_hex_bytes(
 ) -> bytes:
     """Parse a fixed-width hex value."""
 
+    if type(nonzero) is not bool:
+        raise ValueError("TON destination fixed hex nonzero must be a boolean")
+
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -94,7 +104,7 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -104,6 +114,8 @@ def parse_hex_bytes(
 def parse_code_boc_hex(value: str, *, label: str) -> bytes:
     """Parse non-empty TON code BoC bytes from hex text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be hex")
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -113,7 +125,7 @@ def parse_code_boc_hex(value: str, *, label: str) -> bytes:
         raise argparse.ArgumentTypeError(f"{label} must have an even hex length")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
@@ -123,6 +135,8 @@ def parse_code_boc_hex(value: str, *, label: str) -> bytes:
 def parse_code_boc_base64(value: str, *, label: str) -> bytes:
     """Parse non-empty TON code BoC bytes from base64 or base64url text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be base64 or base64url")
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = value
@@ -132,7 +146,7 @@ def parse_code_boc_base64(value: str, *, label: str) -> bytes:
         raw = base64.b64decode(text, validate=True)
         if base64.b64encode(raw).decode("ascii") != text:
             raise argparse.ArgumentTypeError(f"{label} must be canonical base64")
-    except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
         if any(symbol not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_=" for symbol in text):
             raise argparse.ArgumentTypeError(
                 f"{label} must be base64 or base64url"
@@ -140,7 +154,7 @@ def parse_code_boc_base64(value: str, *, label: str) -> bytes:
         padded = text + ("=" * ((4 - len(text) % 4) % 4))
         try:
             raw = base64.urlsafe_b64decode(padded)
-        except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):
             raise argparse.ArgumentTypeError(
                 f"{label} must be base64 or base64url"
             ) from None
@@ -154,14 +168,31 @@ def parse_code_boc_base64(value: str, *, label: str) -> bytes:
     return raw
 
 
+def _reject_code_boc_file_symlink_path(path: Path) -> None:
+    if first_symlinked_existing_path_component(path) is not None:
+        raise argparse.ArgumentTypeError("code BoC file must not be a symlink")
+
+
+def _read_code_boc_file(path: Path, *, label: str) -> bytes:
+    try:
+        _reject_code_boc_file_symlink_path(path)
+    except (OSError, argparse.ArgumentTypeError):
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    if not path.is_file():
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    try:
+        return path.read_bytes()
+    except OSError:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+
+
 def parse_code_boc_file(value: str, *, label: str) -> bytes:
     """Parse non-empty TON code BoC bytes from a raw, hex, or base64 file."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read")
     path = Path(value).expanduser()
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    raw = _read_code_boc_file(path, label=label)
     if not raw:
         raise argparse.ArgumentTypeError(f"{label} file must not be empty")
     if raw.startswith(TON_BOC_MAGIC):
@@ -182,6 +213,8 @@ def parse_code_boc_file(value: str, *, label: str) -> bytes:
 def parse_positive_decimal_text(value: str, *, label: str) -> str:
     """Parse a positive decimal value and preserve canonical text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be a positive decimal")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must be a positive decimal")
     text = value
@@ -199,6 +232,8 @@ def parse_positive_decimal_text(value: str, *, label: str) -> str:
 def parse_account_status(value: str, *, label: str) -> str:
     """Parse a live TON verifier account status for production evidence."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be active")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     if value != "active":
@@ -230,6 +265,8 @@ def _parse_canonical_i32_decimal(value: str, *, label: str) -> int:
 def normalize_ton_raw_address(value: str, *, label: str) -> str:
     """Validate a TON raw address and return its canonical text unchanged."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be workchain:account_hex")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = value
@@ -259,6 +296,9 @@ def _require_fixed_bytes(
     byte_length: int,
     nonzero: bool = True,
 ) -> bytes:
+    if type(nonzero) is not bool:
+        raise ValueError("TON destination fixed bytes nonzero must be a boolean")
+
     if not isinstance(value, (bytes, bytearray)):
         raise ValueError(f"{label} must be {byte_length} bytes")
     raw = bytes(value)
@@ -966,7 +1006,7 @@ def ton_route_canary_evidence_hash(
         byte_length=32,
     )
     if not isinstance(last_transaction_lt, str):
-        raise ValueError("last_transaction_lt must be a positive decimal")
+        raise ValueError("last_transaction_lt must be a positive decimal") from None
     try:
         last_transaction_lt = parse_positive_decimal_text(
             last_transaction_lt,
@@ -1466,6 +1506,8 @@ def _json_summary(
     destination_binding_hash: bytes,
     expected_matches: bool,
 ) -> dict[str, object]:
+    if type(expected_matches) is not bool:
+        raise ValueError("TON destination JSON expected_matches must be a boolean")
     apply_verifier_code_boc_hash(args)
     _require_destination_evidence(args)
     expected_hash = ton_destination_binding_hash()
@@ -1541,6 +1583,14 @@ def _json_summary(
             args,
             destination_binding_hash,
         )
+        account_metadata_ready = _toml_account_metadata_ready(args)
+        if type(account_metadata_ready) is not bool:
+            raise ValueError("TON destination account metadata readiness must be a boolean")
+        code_boc_root_ready = _code_boc_root_metadata_ready(args)
+        if type(code_boc_root_ready) is not bool:
+            raise ValueError(
+                "TON destination code BoC root readiness must be a boolean"
+            )
         summary.update(
             {
                 "source_verifier_material_hash": _hex(
@@ -1556,8 +1606,7 @@ def _json_summary(
                 ),
                 "expected_route_allowlist_hash_matches": True,
                 "toml_ready": (
-                    expected_matches and _toml_account_metadata_ready(args)
-                    and _code_boc_root_metadata_ready(args)
+                    expected_matches and account_metadata_ready and code_boc_root_ready
                 ),
             }
         )
@@ -1568,7 +1617,6 @@ def _json_summary(
         )
         if route_canary is not None:
             summary["route_canary"] = route_canary
-            summary["toml_ready"] = bool(summary["toml_ready"])
         else:
             summary["toml_ready"] = False
     return summary
@@ -1769,13 +1817,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded

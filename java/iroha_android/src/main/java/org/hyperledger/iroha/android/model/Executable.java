@@ -50,7 +50,7 @@ public final class Executable {
   /** Returns the instruction list. Typed payloads are hydrated when bindings are available. */
   public List<InstructionBox> instructions() {
     if (!isInstructions()) {
-      return List.of();
+      return Collections.emptyList();
     }
     return instructions;
   }

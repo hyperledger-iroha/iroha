@@ -27,13 +27,21 @@ public final class OfflineNoteReceiveRequest {
     this.paymentRequestId = paymentRequestId;
     this.accountId = accountId;
     this.assetDefinitionId = assetDefinitionId;
-    this.assetId = assetId;
-    this.amount = amount;
+    final String canonicalAssetId = OfflineNote.canonicalAssetId(assetId);
+    if (!assetId.equals(canonicalAssetId)) {
+      throw new IllegalArgumentException("asset_id must be canonical");
+    }
+    this.assetId = canonicalAssetId;
+    final String canonicalAmount = OfflineNoteWallet.canonicalPositivePaymentAmountString(amount);
+    if (!amount.equals(canonicalAmount)) {
+      throw new IllegalArgumentException("amount must be canonical");
+    }
+    this.amount = canonicalAmount;
     this.keyCertificate = keyCertificate;
     this.outputCommitment = Arrays.copyOf(outputCommitment, outputCommitment.length);
     this.canonicalAmount =
         new OfflineNote.AuditOutputClaim(
-                this.outputCommitment, keyCertificate, assetId, amount)
+                this.outputCommitment, keyCertificate, assetId, this.amount)
             .canonicalAmount();
   }
 

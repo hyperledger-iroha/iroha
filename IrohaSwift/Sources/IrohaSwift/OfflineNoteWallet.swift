@@ -4,6 +4,8 @@ import CryptoKit
 import Security
 #endif
 
+/// Archived classic Offline Note wallet/model helpers kept as fixture-only
+/// inputs; production offline payments use Kagemusha.
 public enum OfflineNoteWalletNoteState: String, Sendable {
     case spendable
     case issuePending
@@ -100,8 +102,21 @@ public struct OfflineNoteWalletNote: Equatable, Sendable {
         try OfflineNoteValidation.validateRandomBytes(noteSecret, field: "note_secret")
         self.chainId = checkedChainId
         self.accountId = checkedAccountId
-        self.assetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
-        self.amount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+        let canonicalAssetId: String
+        do {
+            canonicalAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
+        } catch {
+            throw OfflineNoteWalletError.invalidField("asset_id")
+        }
+        guard assetId == canonicalAssetId else {
+            throw OfflineNoteWalletError.invalidField("asset_id")
+        }
+        let canonicalAmount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+        guard amount == canonicalAmount else {
+            throw OfflineNoteWalletError.invalidField("amount")
+        }
+        self.assetId = canonicalAssetId
+        self.amount = canonicalAmount
         self.keyCertificate = keyCertificate
         self.noteCommitment = noteCommitment
         self.noteSecret = noteSecret
@@ -524,8 +539,21 @@ public struct OfflineNoteReceiveRequest: Equatable, Sendable {
         self.paymentRequestId = paymentRequestId
         self.accountId = accountId
         self.assetDefinitionId = assetDefinitionId
-        self.assetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
-        self.amount = try OfflineNorito.parseCanonicalNumeric(amount).canonicalString
+        let canonicalAssetId: String
+        do {
+            canonicalAssetId = try OfflineNorito.canonicalAssetIdLiteral(assetId)
+        } catch {
+            throw OfflineNoteWalletError.invalidField("asset_id")
+        }
+        guard assetId == canonicalAssetId else {
+            throw OfflineNoteWalletError.invalidField("asset_id")
+        }
+        let canonicalAmount = try Self.canonicalPositiveAmountString(amount)
+        guard amount == canonicalAmount else {
+            throw OfflineNoteWalletError.invalidField("amount")
+        }
+        self.assetId = canonicalAssetId
+        self.amount = canonicalAmount
         self.keyCertificate = keyCertificate
         self.outputCommitment = outputCommitment
         _ = try OfflineNoteAuditOutputClaim(
@@ -538,6 +566,14 @@ public struct OfflineNoteReceiveRequest: Equatable, Sendable {
 
     public var outputCommitmentHex: String {
         outputCommitment.hexLowercased()
+    }
+
+    private static func canonicalPositiveAmountString(_ amount: String) throws -> String {
+        let parsed = try OfflineNorito.parseCanonicalNumeric(amount)
+        guard !parsed.isNegative && parsed.digits != "0" else {
+            throw OfflineNoteWalletError.invalidField("amount")
+        }
+        return parsed.canonicalString
     }
 }
 
@@ -555,6 +591,8 @@ public enum OfflineNoteReceiveRequestCodecError: Error, LocalizedError, Equatabl
     }
 }
 
+/// Archived classic Offline Note receive-request codec kept for fixture-only
+/// decoding; production offline payments use Kagemusha.
 public enum OfflineNoteReceiveRequestCodec {
     public static let type = "offline_receive_request"
     public static let textPrefix = "wallet-offline-bearer-cash-receive:"
@@ -624,11 +662,10 @@ public enum OfflineNoteReceiveRequestCodec {
     }
 
     public static func decodeText(_ text: String) throws -> OfflineNoteReceiveRequest {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix(textPrefix) else {
+        guard text.hasPrefix(textPrefix) else {
             throw OfflineNoteReceiveRequestCodecError.invalidPrefix
         }
-        guard let payload = base64UrlDecode(String(trimmed.dropFirst(textPrefix.count))) else {
+        guard let payload = base64UrlDecode(String(text.dropFirst(textPrefix.count))) else {
             throw OfflineNoteReceiveRequestCodecError.invalidField("payload")
         }
         return try decodeNorito(payload)
@@ -699,7 +736,7 @@ public enum OfflineNoteReceiveRequestCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard !value.isEmpty,
               !value.contains("="),
               value.unicodeScalars.allSatisfy({ scalar in
                   let byte = scalar.value
@@ -787,6 +824,8 @@ public enum OfflineNotePaymentTokenCodecError: Error, LocalizedError, Equatable 
     }
 }
 
+/// Archived classic Offline Note payment-token codec kept as fixture-only
+/// inputs; production offline payments use Kagemusha.
 public enum OfflineNotePaymentTokenCodec {
     public static let type = "offline_payment_token"
     public static let textPrefix = "wallet-offline-bearer-cash-payment:"
@@ -861,11 +900,10 @@ public enum OfflineNotePaymentTokenCodec {
     }
 
     public static func decodeText(_ text: String) throws -> OfflineNotePaymentToken {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix(textPrefix) else {
+        guard text.hasPrefix(textPrefix) else {
             throw OfflineNotePaymentTokenCodecError.invalidPrefix
         }
-        guard let payload = base64UrlDecode(String(trimmed.dropFirst(textPrefix.count))) else {
+        guard let payload = base64UrlDecode(String(text.dropFirst(textPrefix.count))) else {
             throw OfflineNotePaymentTokenCodecError.invalidField("payload")
         }
         return try decodeNorito(payload)
@@ -967,7 +1005,7 @@ public enum OfflineNotePaymentTokenCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard !value.isEmpty,
               !value.contains("="),
               value.unicodeScalars.allSatisfy({ scalar in
                   let byte = scalar.value
@@ -1138,11 +1176,10 @@ public enum OfflineNoteReceiptAckCodec {
     }
 
     public static func decodeText(_ text: String) throws -> OfflineNoteReceiptAck {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix(textPrefix) else {
+        guard text.hasPrefix(textPrefix) else {
             throw OfflineNoteReceiptAckCodecError.invalidPrefix
         }
-        guard let payload = base64UrlDecode(String(trimmed.dropFirst(textPrefix.count))) else {
+        guard let payload = base64UrlDecode(String(text.dropFirst(textPrefix.count))) else {
             throw OfflineNoteReceiptAckCodecError.invalidField("payload")
         }
         return try decodeNorito(payload)
@@ -1205,7 +1242,7 @@ public enum OfflineNoteReceiptAckCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard !value.isEmpty,
               !value.contains("="),
               value.unicodeScalars.allSatisfy({ scalar in
                   let byte = scalar.value
@@ -1256,7 +1293,16 @@ public struct OfflineNoteExplorerInstructionOutcome: Equatable, Sendable {
     public init(kind: String,
                 transactionStatus: String,
                 transactionHashHex: String? = nil,
-                encodedInstruction: Data) {
+                encodedInstruction: Data) throws {
+        guard isExactNonEmptyOutcomeField(kind) else {
+            throw OfflineNotePaymentTokenCodecError.invalidField("kind")
+        }
+        guard isExactNonEmptyOutcomeField(transactionStatus) else {
+            throw OfflineNotePaymentTokenCodecError.invalidField("transactionStatus")
+        }
+        guard !encodedInstruction.isEmpty else {
+            throw OfflineNotePaymentTokenCodecError.invalidField("encodedInstruction")
+        }
         self.kind = kind
         self.transactionStatus = transactionStatus
         self.transactionHashHex = transactionHashHex
@@ -1264,17 +1310,22 @@ public struct OfflineNoteExplorerInstructionOutcome: Equatable, Sendable {
     }
 }
 
+private func isExactNonEmptyOutcomeField(_ value: String) -> Bool {
+    !value.isEmpty && value.trimmingCharacters(in: .whitespacesAndNewlines) == value
+}
+
 public protocol OfflineNoteOutcomeProvider {
     func listOutcomes() async throws -> [OfflineNoteExplorerInstructionOutcome]
 }
 
-/// Retired classic Offline Note outcome names retained for historical
-/// compatibility fixture indexing; production offline payments use Kagemusha
-/// flows.
+/// Retired classic Offline Note outcome names kept for historical fixture-only
+/// indexing; production offline payments use Kagemusha flows.
 public final class OfflineNoteOutcomeIndex: @unchecked Sendable {
     public static let kindIssue = "IssueOfflineNote"
     public static let kindRedeem = "RedeemOfflineNote"
     public static let kindAudit = "AuditOfflineNote"
+    public static let statusCommitted = "Committed"
+    public static let statusRejected = "Rejected"
 
     private struct OutcomeHit {
         let transactionHashHex: String?
@@ -1370,25 +1421,24 @@ public final class OfflineNoteOutcomeIndex: @unchecked Sendable {
     public static func fromExplorerOutcomes(_ outcomes: [OfflineNoteExplorerInstructionOutcome]) throws -> OfflineNoteOutcomeIndex {
         let index = OfflineNoteOutcomeIndex()
         for outcome in outcomes {
-            let status = outcome.transactionStatus.lowercased()
-            let committed = status == "committed"
-            let rejected = status == "rejected"
+            let committed = outcome.transactionStatus == statusCommitted
+            let rejected = outcome.transactionStatus == statusRejected
             guard committed || rejected else { continue }
-            if outcome.kind.caseInsensitiveCompare(kindIssue) == .orderedSame {
+            if outcome.kind == kindIssue {
                 let issue = try OfflineNoteDecoding.decodeIssueInstruction(outcome.encodedInstruction)
                 if committed {
                     index.recordCommittedIssue(issue, transactionHashHex: outcome.transactionHashHex)
                 } else {
                     index.recordRejectedIssue(issue, transactionHashHex: outcome.transactionHashHex)
                 }
-            } else if outcome.kind.caseInsensitiveCompare(kindAudit) == .orderedSame {
+            } else if outcome.kind == kindAudit {
                 let audit = try OfflineNoteDecoding.decodeAuditInstruction(outcome.encodedInstruction)
                 if committed {
                     index.recordCommittedAudit(audit, transactionHashHex: outcome.transactionHashHex)
                 } else {
                     index.recordRejectedAudit(audit, transactionHashHex: outcome.transactionHashHex)
                 }
-            } else if outcome.kind.caseInsensitiveCompare(kindRedeem) == .orderedSame {
+            } else if outcome.kind == kindRedeem {
                 let redemption = try OfflineNoteDecoding.decodeRedeemInstruction(outcome.encodedInstruction)
                 if committed {
                     index.recordCommittedRedeem(redemption, transactionHashHex: outcome.transactionHashHex)
@@ -1442,7 +1492,7 @@ public final class ToriiOfflineNoteOutcomeProvider: OfflineNoteOutcomeProvider {
             guard let bytes = Data(hexString: encoded), !bytes.isEmpty else {
                 throw OfflineNotePaymentTokenCodecError.invalidField("encoded")
             }
-            return OfflineNoteExplorerInstructionOutcome(
+            return try OfflineNoteExplorerInstructionOutcome(
                 kind: item.kind,
                 transactionStatus: item.transactionStatus,
                 transactionHashHex: item.transactionHash,
@@ -1452,24 +1502,29 @@ public final class ToriiOfflineNoteOutcomeProvider: OfflineNoteOutcomeProvider {
     }
 
     private func encodedInstructionHex(from box: ToriiExplorerInstructionBox) throws -> String {
-        if let encoded = box.encoded?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !encoded.isEmpty {
-            return stripHexPrefix(encoded)
+        if let encoded = box.encoded {
+            return try exactEncodedInstructionHex(encoded)
         }
         if let nested = box.json["encoded"],
-           case let .string(encoded) = nested,
-           !encoded.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return stripHexPrefix(encoded)
+           case let .string(encoded) = nested {
+            return try exactEncodedInstructionHex(encoded)
         }
         throw OfflineNotePaymentTokenCodecError.invalidField("encoded")
     }
 
-    private func stripHexPrefix(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.lowercased().hasPrefix("0x") {
-            return String(trimmed.dropFirst(2))
+    private func exactEncodedInstructionHex(_ value: String) throws -> String {
+        guard Self.isExactLowercaseHex(value) else {
+            throw OfflineNotePaymentTokenCodecError.invalidField("encoded")
         }
-        return trimmed
+        return value
+    }
+
+    private static func isExactLowercaseHex(_ value: String) -> Bool {
+        !value.isEmpty &&
+            value.count.isMultiple(of: 2) &&
+            value.unicodeScalars.allSatisfy { scalar in
+                (48...57).contains(scalar.value) || (97...102).contains(scalar.value)
+            }
     }
 }
 
@@ -1614,6 +1669,7 @@ public final class OfflineNoteWallet {
         guard let issuerClient else {
             throw OfflineNoteWalletError.missingIssuerClient
         }
+        let canonicalAmount = try canonicalPositivePaymentAmountString(amount)
         let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)
         // Pass the full `name#domain` assetDefinitionId to Torii — the
         // internal `assetId` is the SDK's 2-part `name#account` form
@@ -1625,7 +1681,7 @@ public final class OfflineNoteWallet {
             chainId: chainId,
             accountId: accountId,
             assetDefinitionId: assetDefinitionId,
-            amount: amount
+            amount: canonicalAmount
         )
         try requireTrustedIssuerCertificate(context.keyCertificate, expectedAccountId: accountId)
         let noteSecret = try random32()
@@ -1637,7 +1693,7 @@ public final class OfflineNoteWallet {
         let commitment = try deriveNoteCommitment(
             keyCertificate: context.keyCertificate,
             assetId: assetId,
-            amount: amount,
+            amount: canonicalAmount,
             noteSecret: noteSecret,
             origin: origin
         )
@@ -1646,7 +1702,7 @@ public final class OfflineNoteWallet {
             accountId: accountId,
             assetDefinitionId: assetDefinitionId,
             assetId: assetId,
-            amount: amount,
+            amount: canonicalAmount,
             loadContext: context,
             noteCommitment: commitment
         )
@@ -1661,7 +1717,7 @@ public final class OfflineNoteWallet {
             chainId: chainId,
             accountId: accountId,
             assetId: assetId,
-            amount: amount,
+            amount: canonicalAmount,
             keyCertificate: issuedCertificate,
             noteCommitment: commitment,
             noteSecret: noteSecret,
@@ -1675,6 +1731,7 @@ public final class OfflineNoteWallet {
     }
 
     public func prepareReceive(assetDefinitionId: String, amount: String) throws -> OfflineNoteReceiveRequest {
+        let canonicalAmount = try canonicalPositivePaymentAmountString(amount)
         let paymentRequestId = idGenerator.nextId(prefix: "payment-request")
         // Receive output certs must be owner-self-signed (chain #5589); mint a fresh
         // one on demand rather than reusing the issuer-attested attestation cert.
@@ -1689,7 +1746,7 @@ public final class OfflineNoteWallet {
         let commitment = try deriveNoteCommitment(
             keyCertificate: keyCertificate,
             assetId: assetId,
-            amount: amount,
+            amount: canonicalAmount,
             noteSecret: noteSecret,
             origin: origin
         )
@@ -1698,7 +1755,7 @@ public final class OfflineNoteWallet {
             chainId: chainId,
             accountId: accountId,
             assetId: assetId,
-            amount: amount,
+            amount: canonicalAmount,
             keyCertificate: keyCertificate,
             noteCommitment: commitment,
             noteSecret: noteSecret,
@@ -1717,7 +1774,7 @@ public final class OfflineNoteWallet {
             // `name#account` form and would drop the domain otherwise.
             assetDefinitionId: assetDefinitionId,
             assetId: assetId,
-            amount: note.amount,
+            amount: canonicalAmount,
             keyCertificate: keyCertificate,
             outputCommitment: commitment
         )
@@ -1730,7 +1787,7 @@ public final class OfflineNoteWallet {
         try requireTrustedOwnerCertificate(receiveRequest.keyCertificate, expectedAccountId: receiveRequest.accountId)
         try rejectReusedReceiveRequest(receiveRequest.paymentRequestId)
         let createdAtMs = clock()
-        let requestedAmount = try OfflineNorito.parseCanonicalNumeric(receiveRequest.amount)
+        let requestedAmount = try requirePositivePaymentAmount(receiveRequest.amount)
         let selected = try selectSpendableNotes(
             assetDefinitionId: receiveRequest.assetDefinitionId,
             requestedAmount: requestedAmount
@@ -2269,6 +2326,18 @@ public final class OfflineNoteWallet {
             throw OfflineNoteWalletError.randomLength(expected: 32, actual: bytes.count)
         }
         return bytes
+    }
+
+    private func requirePositivePaymentAmount(_ amount: String) throws -> OfflineCanonicalNumeric {
+        let parsed = try OfflineNorito.parseCanonicalNumeric(amount)
+        guard !parsed.isNegative && parsed.digits != "0" else {
+            throw OfflineNoteWalletError.invalidField("amount")
+        }
+        return parsed
+    }
+
+    private func canonicalPositivePaymentAmountString(_ amount: String) throws -> String {
+        try requirePositivePaymentAmount(amount).canonicalString
     }
 }
 

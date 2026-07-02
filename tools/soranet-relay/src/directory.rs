@@ -24,6 +24,7 @@ use soranet_pq::{
 };
 use thiserror::Error;
 
+use crate::checked_ed25519_verifying_key_from_bytes;
 use crate::guard::{
     GuardPinningProof, GuardPinningProofValidationError, verify_guard_pinning_proof,
 };
@@ -260,6 +261,8 @@ pub enum DirectoryBuildError {
         #[source]
         source: ed25519_dalek::SignatureError,
     },
+    #[error("issuer {label} contained invalid Ed25519 public key material: {reason}")]
+    InvalidIssuerEd25519Material { label: String, reason: String },
     #[error("issuer {label} fingerprint could not be computed: {source}")]
     IssuerFingerprint {
         label: String,
@@ -338,6 +341,8 @@ pub enum DirectoryRotateError {
         #[source]
         source: ed25519_dalek::SignatureError,
     },
+    #[error("issuer public key has invalid material: {reason}")]
+    InvalidIssuerKeyMaterial { reason: String },
     #[error("certificate decode failed at index {index}: {source}")]
     CertificateDecode {
         index: usize,
@@ -684,8 +689,8 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
     )?;
 
     let issuer = &snapshot.issuers[0];
-    let verifying_key = VerifyingKey::from_bytes(&issuer.ed25519_public)
-        .map_err(|source| DirectoryRotateError::InvalidIssuerKey { source })?;
+    let verifying_key = checked_ed25519_verifying_key_from_bytes(&issuer.ed25519_public)
+        .map_err(|reason| DirectoryRotateError::InvalidIssuerKeyMaterial { reason })?;
 
     let mut parsed_bundles: Vec<RelayCertificateBundleV2> =
         Vec::with_capacity(snapshot.relays.len());
@@ -799,8 +804,8 @@ fn summarize_snapshot(
         HashMap::with_capacity(snapshot.issuers.len());
 
     for issuer in &snapshot.issuers {
-        let verifying_key = VerifyingKey::from_bytes(&issuer.ed25519_public)
-            .map_err(|source| DirectoryRotateError::InvalidIssuerKey { source })?;
+        let verifying_key = checked_ed25519_verifying_key_from_bytes(&issuer.ed25519_public)
+            .map_err(|reason| DirectoryRotateError::InvalidIssuerKeyMaterial { reason })?;
         issuer_records.insert(
             issuer.fingerprint,
             (verifying_key, issuer.mldsa65_public.clone()),
@@ -869,12 +874,13 @@ fn load_issuers(
             .label
             .clone()
             .unwrap_or_else(|| "<unknown issuer>".to_string());
-        let verifying_key = VerifyingKey::from_bytes(&ed_bytes).map_err(|source| {
-            DirectoryBuildError::InvalidIssuerEd25519 {
-                label: label_display.clone(),
-                source,
-            }
-        })?;
+        let verifying_key =
+            checked_ed25519_verifying_key_from_bytes(&ed_bytes).map_err(|reason| {
+                DirectoryBuildError::InvalidIssuerEd25519Material {
+                    label: label_display.clone(),
+                    reason,
+                }
+            })?;
         let mldsa_public =
             decode_mldsa_bytes(config.mldsa_hex.as_deref(), phase, label_display.clone())?;
         let fingerprint =
@@ -1173,6 +1179,48 @@ mod tests {
     use super::*;
     use crate::guard::{GuardDirectoryEntry, persist_guard_pinning_proof};
 
+    const SMALL_ORDER_ED25519_POINT: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    #[test]
+    fn build_snapshot_rejects_all_zero_issuer_ed25519_key_material() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("directory.json");
+        let config = DirectoryBuildConfig {
+            directory_hash_hex: None,
+            published_at_unix: None,
+            valid_after_unix: None,
+            valid_until_unix: None,
+            validation_phase: Some("phase1_allow_single".to_string()),
+            issuers: vec![IssuerConfig {
+                label: Some("zero-issuer".to_string()),
+                ed25519_hex: hex::encode([0u8; 32]),
+                mldsa_hex: None,
+            }],
+            bundles: vec![BundleConfig {
+                path: PathBuf::from("unused.cbor"),
+            }],
+            guard_pinning_proofs_dir: None,
+            guard_pinning_proofs: Vec::new(),
+        };
+        write_directory_config(&config_path, &config);
+
+        let err = build_snapshot_from_config(&config_path)
+            .expect_err("all-zero issuer key must fail before certificate reads");
+        match err {
+            DirectoryBuildError::InvalidIssuerEd25519Material { label, reason } => {
+                assert_eq!(label, "zero-issuer");
+                assert!(
+                    reason.contains("all zero"),
+                    "unexpected issuer key material error: {reason}"
+                );
+            }
+            other => panic!("unexpected directory build error: {other:?}"),
+        }
+    }
+
     #[test]
     fn build_snapshot_from_config_roundtrip() {
         let issuer_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
@@ -1230,6 +1278,43 @@ mod tests {
             bundle.metadata.issuers[0].fingerprint_hex,
             hex::encode(fingerprint)
         );
+    }
+
+    #[test]
+    fn build_snapshot_rejects_small_order_issuer_ed25519_key_material() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("directory.json");
+        let config = DirectoryBuildConfig {
+            directory_hash_hex: None,
+            published_at_unix: None,
+            valid_after_unix: None,
+            valid_until_unix: None,
+            validation_phase: Some("phase1_allow_single".to_string()),
+            issuers: vec![IssuerConfig {
+                label: Some("weak-issuer".to_string()),
+                ed25519_hex: hex::encode(SMALL_ORDER_ED25519_POINT),
+                mldsa_hex: None,
+            }],
+            bundles: vec![BundleConfig {
+                path: PathBuf::from("unused.cbor"),
+            }],
+            guard_pinning_proofs_dir: None,
+            guard_pinning_proofs: Vec::new(),
+        };
+        write_directory_config(&config_path, &config);
+
+        let err = build_snapshot_from_config(&config_path)
+            .expect_err("weak issuer key must fail before certificate reads");
+        match err {
+            DirectoryBuildError::InvalidIssuerEd25519Material { label, reason } => {
+                assert_eq!(label, "weak-issuer");
+                assert!(
+                    reason.contains("small-order"),
+                    "unexpected issuer key material error: {reason}"
+                );
+            }
+            other => panic!("unexpected directory build error: {other:?}"),
+        }
     }
 
     #[test]

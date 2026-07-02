@@ -17,7 +17,10 @@ commands; `cargo xtask sorafs-reserve-matrix` emits quote matrices; and
 dashboards and Alertmanager rules. `scripts/check_sorafs_reserve_rent_rollout_evidence.py`
 now provides the fail-closed rollout evidence gate for staged SFM-6 promotion
 packets, and `scripts/run_sorafs_reserve_rent_rollout_evidence.py` provides the
-matching reviewed evidence collection planner/runner. `sorafs_node` now also
+matching reviewed evidence collection planner/runner. The checker exports its
+required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the
+collection planner dry-run JSON includes the checker-backed `evidence_contract`
+map for selected required kinds. `sorafs_node` now also
 ships a local reserve lifecycle and movement runtime that stores provider
 summaries, derives ledger and lifecycle projections from the shared quote math,
 keeps sequenced lifecycle events for replay, and records idempotent local
@@ -467,6 +470,32 @@ python3 scripts/run_sorafs_reserve_rent_rollout_evidence.py \
   --dry-run
 ```
 
+When an operator has reviewed the underlying production facts, use
+`scripts/build_sorafs_reserve_rent_canary.py` as the payload-free SFM-6 reserve/rent canary builder
+for the individual evidence artifacts consumed by the gate. The builder covers
+every current evidence kind, requires explicit
+`--verified-claim` input for positive safety claims, complete lifecycle route,
+signed route, quote-matrix, and metrics coverage where applicable, shared
+policy/matrix/ledger digest bindings, and threshold-bounded lag/latency facts.
+It forces raw reserve payload, ledger, transfer instruction, response body,
+appeal payload, and provider-bake payload inclusion flags to `false`,
+prevalidates the generated artifact with
+`check_sorafs_reserve_rent_rollout_evidence.py`, and writes the JSON atomically
+without following output symlinks. Valid provider-bake artifacts surface the
+reviewed `policy_digest_hex`, `matrix_digest_hex`, and `ledger_digest_hex`
+inside `valid_provider_bakes`, so the final production-readiness gate can
+validate the staged bake against the same policy/matrix/ledger tuple that the
+rollout checker accepted. Example argfiles are checked in for the policy-config
+anchor and provider-bake evidence:
+
+```bash
+python3 scripts/build_sorafs_reserve_rent_canary.py \
+  @scripts/examples/sorafs_reserve_rent_policy_config_canary.args.example
+
+python3 scripts/build_sorafs_reserve_rent_canary.py \
+  @scripts/examples/sorafs_reserve_rent_provider_bake_canary.args.example
+```
+
 The checker recognizes `sorafs.reserve.*` SFM-6 rollout schemas for policy
 configuration, quote matrix, ledger digest, lifecycle service, signed routes,
 reserve movements, credit-line accrual, appeal policy, metrics/alerts, provider
@@ -477,7 +506,10 @@ bake timestamps are fresh, lifecycle lag and signed-route latency remain under
 the configured thresholds, provider-bake artifacts prove the config-backed
 reserve lifecycle scheduler canary ran recently enough before bake completion,
 advanced defaulting providers, synced gateway compliance, and preserved
-orderbook rejection, reserve-movement artifacts prove live chain submission
+orderbook rejection, lifecycle-service and signed-route artifacts bind
+`route_count` to the unique canonical `routes[].name` inventories and reject
+duplicate route entries before promotion can report ready, reserve-movement
+artifacts prove live chain submission
 coverage, submitted transaction-hash readback, automatic finality polling,
 confirmed-status polling, timeout rejection, submitted, confirmed, and
 rejected custody evidence plus confirmed-balance readback and
@@ -494,7 +526,7 @@ governance artifacts all carry the same payload-free
 governance packet must also be bound to `iroha_config`. Tuple binding failures
 are recorded on the offending artifact before required-kind validity is
 computed, so the JSON summary matches the fail-closed rollout decision. The
-collection planner's dry-run JSON also includes an `evidence_contract` map so
+collection planner's dry-run JSON also includes the checker-backed `evidence_contract` map so
 operators can inspect the exact required fields for each requested evidence
 kind before collecting or submitting live artifacts.
 
@@ -611,3 +643,6 @@ or reserve top-up transfers.
 ## Rollout Status
 - Done: deterministic policy formulas, JSON/Norito payloads, quote/ledger/lifecycle CLI helpers, signed reserve top-up/withdrawal/status/movement/custody/credit-line/appeal/policy CLI commands, local lifecycle/credit projection, local accepted-appeal lifecycle overrides, already-effective lifecycle-policy provider reprojection, signed local lifecycle advancement, config-backed reserve lifecycle scheduler automation, reserve-adjusted reputation snapshot publication, local orderbook reserve-lifecycle ask admission, reserve lifecycle, lifecycle-policy, and rejected movement-custody gateway compliance denylist sync, local `sorafs_node` provider-summary, lifecycle-event, credit-line, appeal, lifecycle-policy, and movement-ledger runtime with separate local and chain-confirmed balance projections, signed Torii lifecycle, local movement/readback, custody-status, credit-line, appeal, lifecycle-policy, and lifecycle-advance routes, matrix generation, ledger digest conversion, dashboards, alert rules, fail-closed rollout evidence gate with scheduled lifecycle canary provider-bake checks, live chain submission/finality-poll reserve-movement evidence checks, custody/finality reserve-movement checks, live credit-line account-state evidence checks, downstream governance compliance evidence checks, and dry-run evidence-contract export, collection planner, operator argfile templates, and focused tests for those local paths.
 - Remaining: live chain custody submission and automatic finality polling for signed movement intents, live account mutation for local credit-line state, broader downstream compliance application evidence for governance source entries, and staged provider bake evidence, including live scheduled lifecycle canaries, that passes the rollout gate.
+
+The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
+It also rejects malformed nested required-kind, threshold, external-evidence, and checker-backed evidence-contract shapes before live SFM-6 rollout evidence can be submitted.

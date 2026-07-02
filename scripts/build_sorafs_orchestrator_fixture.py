@@ -46,6 +46,17 @@ def write_open_flags() -> int:
     return flags
 
 
+def write_all(fd: int, chunk: bytes) -> None:
+    """Write every byte to a fixture descriptor, including after short writes."""
+
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write orchestrator fixture output")
+        view = view[written:]
+
+
 def validate_fixture_path(path: Path, label: str) -> None:
     """Reject symlinked fixture paths and parent chains before I/O."""
 
@@ -177,6 +188,7 @@ def build_telemetry(providers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "failure_rate_ewma": 0.02 * float(idx),
                 "token_health": 0.9,
                 "staking_weight": 1.0,
+                "reputation_score_bps": 10_000,
                 "penalty": False,
                 "last_updated_unix": FIXTURE_NOW_UNIX_SECS - 120,
             }
@@ -212,14 +224,11 @@ def build_options() -> Dict[str, Any]:
 
 def write_json(path: Path, payload: Any) -> None:
     validate_fixture_path(path, "orchestrator fixture output")
+    rendered = (json.dumps(payload, indent=2, allow_nan=False) + "\n").encode("utf-8")
     fd = -1
     try:
         fd = os.open(path, write_open_flags(), 0o666)
-        handle = os.fdopen(fd, "w", encoding="utf-8")
-        fd = -1
-        with handle:
-            json.dump(payload, handle, indent=2)
-            handle.write("\n")
+        write_all(fd, rendered)
     finally:
         if fd >= 0:
             os.close(fd)

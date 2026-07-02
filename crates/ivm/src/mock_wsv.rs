@@ -2628,6 +2628,19 @@ impl WsvHost {
         }
     }
 
+    fn decode_dataspace_reg(&self, vm: &IVM, reg: usize) -> Result<DataSpaceId, VMError> {
+        let v = vm.register(reg);
+        match vm.memory.validate_tlv(v) {
+            Ok(tlv) => {
+                if tlv.type_id != PointerType::DataSpaceId {
+                    return Err(VMError::NoritoInvalid);
+                }
+                decode_from_bytes::<DataSpaceId>(tlv.payload).map_err(|_| VMError::DecodeError)
+            }
+            Err(_) => self.decode_tlv_from_code(vm, v, PointerType::DataSpaceId),
+        }
+    }
+
     fn ensure_unsigned_scale0(numeric: Numeric) -> Result<Numeric, VMError> {
         if numeric.scale() != 0 || numeric.mantissa().is_negative() {
             return Err(VMError::AssertionFailed);
@@ -6119,35 +6132,42 @@ impl IVMHost for WsvHost {
                     Err(VMError::PermissionDenied)
                 }
             }
-            syscalls::SYSCALL_TRANSFER_ASSET => {
+            syscalls::SYSCALL_TRANSFER_V1 => {
                 if self.fastpq_batch_entries.is_some() {
                     self.push_fastpq_batch_entry(vm)
                 } else {
-                    let from_id = self.decode_canonical_account_reg(vm, 10)?;
-                    let to_id = self.decode_canonical_account_reg(vm, 11)?;
-                    let asset_id = self.decode_asset_reg(vm, 12)?;
-                    let amount = self.decode_numeric_reg(vm, 13)?;
-                    if MockWorldStateView::account_subject(&from_id)
-                        != MockWorldStateView::account_subject(&self.caller)
-                        && !self.allow_contract_runtime_asset_transfer_bypass
-                    {
-                        let token = PermissionToken::TransferAsset(asset_id.clone());
-                        if !self.wsv.has_permission(&self.caller, &token) {
-                            return Err(VMError::PermissionDenied);
-                        }
+                    Err(VMError::PermissionDenied)
+                }
+            }
+            syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
+                if self.fastpq_batch_entries.is_some() {
+                    return Err(VMError::PermissionDenied);
+                }
+                let from_id = self.decode_canonical_account_reg(vm, 10)?;
+                let to_id = self.decode_canonical_account_reg(vm, 11)?;
+                let asset_id = self.decode_asset_reg(vm, 12)?;
+                let amount = self.decode_numeric_reg(vm, 13)?;
+                let _dataspace_id = self.decode_dataspace_reg(vm, 14)?;
+                if MockWorldStateView::account_subject(&from_id)
+                    != MockWorldStateView::account_subject(&self.caller)
+                    && !self.allow_contract_runtime_asset_transfer_bypass
+                {
+                    let token = PermissionToken::TransferAsset(asset_id.clone());
+                    if !self.wsv.has_permission(&self.caller, &token) {
+                        return Err(VMError::PermissionDenied);
                     }
-                    if self.wsv.transfer_with_permission_bypass(
-                        &self.caller,
-                        from_id,
-                        to_id,
-                        asset_id,
-                        amount,
-                        self.allow_contract_runtime_asset_transfer_bypass,
-                    ) {
-                        Ok(Self::mutation_gas(0))
-                    } else {
-                        Err(VMError::PermissionDenied)
-                    }
+                }
+                if self.wsv.transfer_with_permission_bypass(
+                    &self.caller,
+                    from_id,
+                    to_id,
+                    asset_id,
+                    amount,
+                    self.allow_contract_runtime_asset_transfer_bypass,
+                ) {
+                    Ok(Self::mutation_gas(0))
+                } else {
+                    Err(VMError::PermissionDenied)
                 }
             }
             syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN => self.begin_fastpq_batch(),
@@ -7886,7 +7906,7 @@ mod tests_null_decode {
             .expect("alloc amount");
         vm.set_register(13, amount_ptr);
         assert_eq!(
-            host.syscall(syscalls::SYSCALL_TRANSFER_ASSET, &mut vm),
+            host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm),
             Ok(WsvHost::mutation_gas(0))
         );
         assert_eq!(

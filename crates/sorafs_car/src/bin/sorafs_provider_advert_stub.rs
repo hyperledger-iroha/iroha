@@ -1,14 +1,16 @@
 //! CLI helper for constructing SoraFS provider advertisements.
 use std::{
-    env,
-    fs::{self, File},
+    env, fs,
     io::{self, Write},
     path::{Path, PathBuf},
     process,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use ed25519_dalek::{Signature as DalekSignature, Signer, SigningKey, VerifyingKey};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
+use ed25519_dalek::{Signer, SigningKey};
 use norito::json::{Map, Value, to_string_pretty};
 use sorafs_car::{ProfileId, chunker_registry};
 use sorafs_manifest::{
@@ -1186,13 +1188,7 @@ fn write_bytes(path: &PathBuf, bytes: &[u8]) -> Result<(), String> {
     if path.as_path() == Path::new("-") {
         return Err("binary outputs (advert/public key/signature) do not support '-'".into());
     }
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-        && !parent.exists()
-    {
-        fs::create_dir_all(parent).map_err(|err| format!("failed to create {parent:?}: {err}"))?;
-    }
-    let mut file = File::create(path).map_err(|err| format!("failed to create {path:?}: {err}"))?;
+    let mut file = open_output_file(path.as_path(), "binary output")?;
     file.write_all(bytes)
         .map_err(|err| format!("failed to write {path:?}: {err}"))
 }
@@ -1205,6 +1201,123 @@ fn write_text(path: &PathBuf, text: &str) -> Result<bool, String> {
         return Ok(true);
     }
     write_bytes(path, text.as_bytes()).map(|_| false)
+}
+
+fn open_output_file(path: &Path, label: &str) -> Result<fs::File, String> {
+    validate_output_path(path)?;
+    ensure_parent_dir(path)?;
+    validate_output_path(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    set_no_follow_flag(&mut options);
+    let file = options
+        .open(path)
+        .map_err(|err| format!("failed to open {label} {path:?}: {err}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect {label} {path:?} after open: {err}"))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "failed to write {label} {path:?}: output must be a regular file"
+        ));
+    }
+    Ok(file)
+}
+
+fn ensure_parent_dir(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent).map_err(|err| format!("failed to create {parent:?}: {err}"))?;
+    }
+    Ok(())
+}
+
+fn validate_output_path(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(format!("output {path:?} must not be a symlink"));
+            }
+            if metadata.is_dir() {
+                return Err(format!("output {path:?} must not be a directory"));
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(format!("failed to inspect output {path:?}: {err}")),
+    }
+
+    if let Some(parent) = path.parent() {
+        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        return Err(format!("output parent {ancestor:?} must not be a symlink"));
+                    }
+                    if !metadata.is_dir() {
+                        return Err(format!("output parent {ancestor:?} must be a directory"));
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(format!(
+                        "failed to inspect output parent {ancestor:?}: {err}"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_no_follow_flag(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0
 }
 
 fn capability_name(cap: CapabilityType) -> &'static str {
@@ -1241,31 +1354,7 @@ fn parse_signing_key(bytes: &[u8]) -> Result<SigningKey, String> {
 }
 
 fn verify_advert_signature(advert: &ProviderAdvertV1) -> Result<(), String> {
-    match advert.signature.algorithm {
-        SignatureAlgorithm::Ed25519 => {
-            if advert.signature.public_key.len() != 32 {
-                return Err("ed25519 public key must be 32 bytes".into());
-            }
-            if advert.signature.signature.len() != 64 {
-                return Err("ed25519 signature must be 64 bytes".into());
-            }
-            let mut pk = [0u8; 32];
-            pk.copy_from_slice(&advert.signature.public_key);
-            let verifying_key = VerifyingKey::from_bytes(&pk)
-                .map_err(|err| format!("invalid ed25519 public key: {err}"))?;
-
-            let mut sig_bytes = [0u8; 64];
-            sig_bytes.copy_from_slice(&advert.signature.signature);
-            let signature = DalekSignature::from_bytes(&sig_bytes);
-
-            let body_bytes = norito::to_bytes(&advert.body)
-                .map_err(|err| format!("encode advert body: {err}"))?;
-            verifying_key
-                .verify_strict(&body_bytes, &signature)
-                .map_err(|_| "ed25519 signature validation failed".to_string())
-        }
-        other => Err(format!("unsupported signature algorithm: {other:?}")),
-    }
+    advert.verify_signature().map_err(|err| err.to_string())
 }
 
 fn endpoint_kind_name(kind: EndpointKind) -> &'static str {
@@ -1320,6 +1409,63 @@ fn current_unix_time() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn write_bytes_creates_parent_and_writes_all_bytes() {
+        let temp = tempdir().expect("tempdir");
+        let temp_path = temp.path().canonicalize().expect("canonical tempdir");
+        let output_path = temp_path.join("nested").join("advert.to");
+
+        write_bytes(&output_path, b"provider-advert").expect("write bytes");
+
+        assert_eq!(
+            fs::read(&output_path).expect("read output"),
+            b"provider-advert"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_text_rejects_symlink_output() {
+        let temp = tempdir().expect("tempdir");
+        let temp_path = temp.path().canonicalize().expect("canonical tempdir");
+        let target_path = temp_path.join("target.json");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let output_path = temp_path.join("report.json");
+        std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
+
+        let err = write_text(&output_path, "changed\n").expect_err("reject symlink output");
+
+        assert!(
+            err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_bytes_rejects_symlink_parent() {
+        let temp = tempdir().expect("tempdir");
+        let temp_path = temp.path().canonicalize().expect("canonical tempdir");
+        let real_dir = temp_path.join("real");
+        fs::create_dir(&real_dir).expect("create real dir");
+        let linked_dir = temp_path.join("linked");
+        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
+        let output_path = linked_dir.join("advert.to");
+
+        let err = write_bytes(&output_path, b"changed").expect_err("reject symlink parent");
+
+        assert!(
+            err.contains("parent") && err.contains("must not be a symlink"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !real_dir.join("advert.to").exists(),
+            "symlink parent should not receive output"
+        );
+    }
 
     #[test]
     fn parse_range_capability_success() {
@@ -1369,6 +1515,96 @@ mod tests {
             err.contains("invalid transport hint"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn verify_advert_signature_rejects_all_zero_signature_material() {
+        let opts = EmitOptions {
+            profile_handle: Some("sorafs.sf1@1.0.0".into()),
+            provider_id: Some([0x11; 32]),
+            stake_pool_id: Some([0x22; 32]),
+            stake_amount: Some(1_000_000),
+            availability: Some(AvailabilityTier::Hot),
+            max_latency_ms: Some(500),
+            max_streams: Some(5),
+            capabilities: vec![CapabilityTlv {
+                cap_type: CapabilityType::ToriiGateway,
+                payload: Vec::new(),
+            }],
+            endpoints: vec![AdvertEndpoint {
+                kind: EndpointKind::Torii,
+                host_pattern: "localhost".into(),
+                metadata: Vec::new(),
+            }],
+            topics: vec![RendezvousTopic {
+                topic: "sorafs.zero-signature.primary".into(),
+                region: "global".into(),
+            }],
+            issued_at: Some(1_700_000_000),
+            signing_key_hex: Some(vec![0xAB; 32]),
+            ..EmitOptions::default()
+        };
+        let mut advert = build_advert(&opts).expect("advert builds");
+        advert.signature.signature.fill(0);
+
+        let err = verify_advert_signature(&advert)
+            .expect_err("all-zero signature material must be rejected");
+
+        assert!(err.contains("all zero"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn verify_advert_signature_rejects_malformed_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let opts = EmitOptions {
+            profile_handle: Some("sorafs.sf1@1.0.0".into()),
+            provider_id: Some([0x11; 32]),
+            stake_pool_id: Some([0x22; 32]),
+            stake_amount: Some(1_000_000),
+            availability: Some(AvailabilityTier::Hot),
+            max_latency_ms: Some(500),
+            max_streams: Some(5),
+            capabilities: vec![CapabilityTlv {
+                cap_type: CapabilityType::ToriiGateway,
+                payload: Vec::new(),
+            }],
+            endpoints: vec![AdvertEndpoint {
+                kind: EndpointKind::Torii,
+                host_pattern: "localhost".into(),
+                metadata: Vec::new(),
+            }],
+            topics: vec![RendezvousTopic {
+                topic: "sorafs.invalid-r.primary".into(),
+                region: "global".into(),
+            }],
+            issued_at: Some(1_700_000_000),
+            signing_key_hex: Some(vec![0xAB; 32]),
+            ..EmitOptions::default()
+        };
+
+        for (label, replacement_r, expected) in [
+            ("small-order", SMALL_ORDER_R, "small-order"),
+            ("noncanonical", NONCANONICAL_R, "not a canonical"),
+        ] {
+            let mut advert = build_advert(&opts).expect("advert builds");
+            advert.signature.signature[..32].copy_from_slice(&replacement_r);
+
+            let err = verify_advert_signature(&advert)
+                .expect_err("malformed signature R must be rejected");
+
+            assert!(
+                err.contains(expected),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

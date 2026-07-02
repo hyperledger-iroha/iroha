@@ -11,6 +11,7 @@ public final class OfflineJournalTest {
 
   public static void main(final String[] args) throws Exception {
     appendAndCommitCycle();
+    pendingEntriesSortTxIdsUnsigned();
     duplicatePendingRejected();
     markMissingEntryFails();
     System.out.println("[IrohaAndroid] OfflineJournalTest passed.");
@@ -38,6 +39,29 @@ public final class OfflineJournalTest {
       // Re-open to ensure persisted journal can be read without integrity errors.
       try (OfflineJournal reopened = new OfflineJournal(file, key)) {
         assert reopened.pendingEntries().isEmpty() : "reopened journal should have no pending";
+      }
+    } finally {
+      Files.deleteIfExists(file);
+    }
+  }
+
+  private static void pendingEntriesSortTxIdsUnsigned() throws Exception {
+    final Path file = Files.createTempFile("offline_journal_sort", ".bin");
+    try {
+      final OfflineJournalKey key =
+          OfflineJournalKey.derive("sort-seed".getBytes(StandardCharsets.UTF_8));
+      final byte[] smallest = txIdWithFirstByte(0x00);
+      final byte[] middle = txIdWithFirstByte(0x80);
+      final byte[] largest = txIdWithFirstByte(0xFF);
+      try (OfflineJournal journal = new OfflineJournal(file, key)) {
+        journal.appendPending(largest, new byte[] {0x03});
+        journal.appendPending(smallest, new byte[] {0x01});
+        journal.appendPending(middle, new byte[] {0x02});
+
+        final java.util.List<OfflineJournalEntry> pending = journal.pendingEntries();
+        assert Arrays.equals(smallest, pending.get(0).txId()) : "smallest tx_id order mismatch";
+        assert Arrays.equals(middle, pending.get(1).txId()) : "middle tx_id order mismatch";
+        assert Arrays.equals(largest, pending.get(2).txId()) : "largest tx_id order mismatch";
       }
     } finally {
       Files.deleteIfExists(file);
@@ -85,5 +109,11 @@ public final class OfflineJournalTest {
     } finally {
       Files.deleteIfExists(file);
     }
+  }
+
+  private static byte[] txIdWithFirstByte(final int firstByte) {
+    final byte[] txId = new byte[32];
+    txId[0] = (byte) firstByte;
+    return txId;
   }
 }

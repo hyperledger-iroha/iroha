@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_chunk_range.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7f22f6f23f1845733aa8145ac594cee529534dc76f74427cd455d84857cedc6d
+source_hash: ad6f50f19b1098353fed40bb8b9e722d8f2487d72789f12321a6356e4c6a077b
 source_last_modified: "2025-11-02T14:56:07.845819+00:00"
 translation_last_reviewed: "2026-01-30"
 ---

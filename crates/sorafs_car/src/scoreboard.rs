@@ -8,7 +8,8 @@
 
 use std::{
     collections::HashMap,
-    fs, io,
+    fs,
+    io::{self, Write},
     num::{NonZeroU32, NonZeroUsize},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -20,6 +21,9 @@ use crate::{
     CarBuildPlan, ChunkFetchSpec,
     multi_fetch::{CapabilityMismatch, FetchProvider, ProviderMetadata, provider_can_serve_chunk},
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 /// Default cap (in milliseconds) applied when normalising latency scores.
 const DEFAULT_LATENCY_CAP_MS: u32 = 5_000;
@@ -242,14 +246,11 @@ impl Scoreboard {
         path: impl AsRef<Path>,
         metadata: Option<Value>,
     ) -> io::Result<()> {
+        let path = path.as_ref();
         let value = self.to_json_value(metadata);
-        let json = to_string_pretty(&value).map_err(io::Error::other)?;
-        if let Some(parent) = path.as_ref().parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, format!("{json}\n"))
+        let mut json = to_string_pretty(&value).map_err(io::Error::other)?;
+        json.push('\n');
+        write_output_bytes(path, "scoreboard", json.as_bytes())
     }
 
     fn to_json_value(&self, metadata: Option<Value>) -> Value {
@@ -309,6 +310,167 @@ impl std::fmt::Display for IneligibilityReason {
             }
         }
     }
+}
+
+fn write_output_bytes(path: &Path, label: &str, bytes: &[u8]) -> io::Result<()> {
+    let mut file = open_output_file(path, label)?;
+    file.write_all(bytes)
+}
+
+fn open_output_file(path: &Path, label: &str) -> io::Result<fs::File> {
+    validate_output_path(path)?;
+    ensure_parent_dir(path)?;
+    validate_output_path(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    set_no_follow_flag(&mut options);
+    let file = options.open(path).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("failed to open {label} `{}`: {err}", path.display()),
+        )
+    })?;
+    let metadata = file.metadata().map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "failed to inspect {label} `{}` after open: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(io::Error::other(format!(
+            "failed to write {label} `{}`: output must be a regular file",
+            path.display()
+        )));
+    }
+    Ok(file)
+}
+
+fn ensure_parent_dir(path: &Path) -> io::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent).map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!(
+                    "failed to create output parent `{}`: {err}",
+                    parent.display()
+                ),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_output_path(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(io::Error::other(format!(
+                    "output `{}` must not be a symlink",
+                    path.display()
+                )));
+            }
+            if metadata.is_dir() {
+                return Err(io::Error::other(format!(
+                    "output `{}` must not be a directory",
+                    path.display()
+                )));
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(io::Error::new(
+                err.kind(),
+                format!("failed to inspect output `{}`: {err}", path.display()),
+            ));
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() {
+                        return Err(io::Error::other(format!(
+                            "output parent `{}` must not be a symlink",
+                            ancestor.display()
+                        )));
+                    }
+                    if !metadata.is_dir() {
+                        return Err(io::Error::other(format!(
+                            "output parent `{}` must be a directory",
+                            ancestor.display()
+                        )));
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!(
+                            "failed to inspect output parent `{}`: {err}",
+                            ancestor.display()
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_no_follow_flag(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0
 }
 
 /// Build a scoreboard for the supplied manifest and provider metadata.
@@ -554,9 +716,16 @@ mod tests {
     use blake3::Hash;
     use norito::json::Value;
     use sorafs_chunker::ChunkProfile;
+    use tempfile::{TempDir, tempdir};
 
     use super::*;
     use crate::multi_fetch::{RangeCapability, StreamBudget};
+
+    fn canonical_tempdir() -> (TempDir, PathBuf) {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().canonicalize().expect("canonical tempdir");
+        (temp, path)
+    }
 
     fn plan_with_chunk(length: u32) -> CarBuildPlan {
         CarBuildPlan {
@@ -688,9 +857,10 @@ mod tests {
         let plan = plan_with_chunk(1_024);
         let providers = vec![base_metadata("provider-a")];
         let telemetry = TelemetrySnapshot::default();
-        let tmp = tempfile::tempdir().expect("tempdir");
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let scoreboard_path = tmp_path.join("scoreboard.json");
         let config = ScoreboardConfig {
-            persist_path: Some(tmp.path().join("scoreboard.json")),
+            persist_path: Some(scoreboard_path.clone()),
             now_unix_secs: 1_000,
             ..ScoreboardConfig::default()
         };
@@ -699,12 +869,76 @@ mod tests {
             build_scoreboard(&plan, &providers, &telemetry, &config).expect("build scoreboard");
         assert_eq!(scoreboard.entries().len(), 1);
 
-        let persisted =
-            std::fs::read_to_string(tmp.path().join("scoreboard.json")).expect("read scoreboard");
+        let persisted = std::fs::read_to_string(scoreboard_path).expect("read scoreboard");
         let value: Value = norito::json::from_str(&persisted).expect("parse scoreboard json");
         assert!(
             value.get("entries").is_some(),
             "entries missing in persisted json"
+        );
+    }
+
+    #[test]
+    fn scoreboard_persist_creates_nested_parent() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let scoreboard_path = tmp_path.join("nested").join("scoreboard.json");
+        let scoreboard = Scoreboard::new(Vec::new());
+
+        scoreboard
+            .persist_to_path(&scoreboard_path, None)
+            .expect("persist scoreboard");
+
+        let persisted = fs::read_to_string(scoreboard_path).expect("read scoreboard");
+        assert!(
+            persisted.contains("\"entries\""),
+            "scoreboard JSON missing entries: {persisted}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoreboard_persist_rejects_symlink_output() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let target_path = tmp_path.join("target.json");
+        fs::write(&target_path, b"unchanged\n").expect("write target");
+        let scoreboard_path = tmp_path.join("scoreboard.json");
+        std::os::unix::fs::symlink(&target_path, &scoreboard_path).expect("create symlink");
+        let scoreboard = Scoreboard::new(Vec::new());
+
+        let err = scoreboard
+            .persist_to_path(&scoreboard_path, None)
+            .expect_err("reject symlink output");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoreboard_persist_rejects_symlink_parent() {
+        let (_tmp, tmp_path) = canonical_tempdir();
+        let real_dir = tmp_path.join("real");
+        fs::create_dir(&real_dir).expect("create real dir");
+        let linked_dir = tmp_path.join("linked");
+        std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
+        let scoreboard_path = linked_dir.join("scoreboard.json");
+        let scoreboard = Scoreboard::new(Vec::new());
+
+        let err = scoreboard
+            .persist_to_path(&scoreboard_path, None)
+            .expect_err("reject symlink parent");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("parent") && message.contains("must not be a symlink"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !real_dir.join("scoreboard.json").exists(),
+            "symlink parent should not receive output"
         );
     }
 

@@ -20,17 +20,22 @@ import org.hyperledger.iroha.sdk.client.PlatformHttpTransportExecutor
 import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 
+private val RETIRED_ASSERTION_PUBLIC_KEY_ALIAS_FIELDS = setOf(
+    "device_public_key",
+    "app_attest_public_key_base64",
+)
+
 /** Device-binding material required by the Torii Offline Note issuer endpoints. */
 class OfflineNoteIssuerDeviceBinding(
     val deviceId: String,
     val offlinePublicKey: String,
     deviceBinding: Map<String, Any?>,
 ) {
-    private val _deviceBinding = deepCopyObject(deviceBinding)
+    private val _deviceBinding = deepCopyObject(rejectRetiredDeviceBindingAliases(deviceBinding))
 
     init {
-        require(deviceId.trim().isNotEmpty()) { "deviceId must not be blank" }
-        require(offlinePublicKey.trim().isNotEmpty()) { "offlinePublicKey must not be blank" }
+        require(isExactNonEmptyText(deviceId)) { "deviceId must be exact non-empty text" }
+        require(isExactNonEmptyText(offlinePublicKey)) { "offlinePublicKey must be exact non-empty text" }
         (_deviceBinding["device_id"] as? String)?.let {
             require(it == deviceId) { "device_binding.device_id must match deviceId" }
         }
@@ -41,13 +46,30 @@ class OfflineNoteIssuerDeviceBinding(
         }
     }
 
-    fun attestationKeyId(): String =
-        (_deviceBinding["attestation_key_id"] as? String)
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
+    fun attestationKeyId(): String {
+        val keyId = (_deviceBinding["attestation_key_id"] as? String)
             ?: throw IllegalStateException("device_binding.attestation_key_id is required")
+        if (keyId.isEmpty()) {
+            throw IllegalStateException("device_binding.attestation_key_id is required")
+        }
+        if (!isExactNonEmptyText(keyId)) {
+            throw IllegalStateException("device_binding.attestation_key_id must be exact non-empty text")
+        }
+        return keyId
+    }
 
     fun deviceBinding(): Map<String, Any?> = deepCopyObject(_deviceBinding)
+}
+
+private fun isExactNonEmptyText(value: String): Boolean = value.isNotEmpty() && value == value.trim()
+
+private fun rejectRetiredDeviceBindingAliases(deviceBinding: Map<String, Any?>): Map<String, Any?> {
+    for (retiredKey in RETIRED_ASSERTION_PUBLIC_KEY_ALIAS_FIELDS) {
+        require(!deviceBinding.containsKey(retiredKey)) {
+            "device_binding.$retiredKey is retired; use assertion_public_key"
+        }
+    }
+    return deviceBinding
 }
 
 /** Supplies the current issuer device binding and attestation receipt. */
@@ -72,7 +94,7 @@ class ToriiOfflineNoteIssuerClient @JvmOverloads constructor(
     private val nonceGenerator: OfflineNoteIdGenerator = UuidOfflineNoteIdGenerator(),
 ) : OfflineNoteIssuerClient {
     private val defaultHeaders: Map<String, String> =
-        Collections.unmodifiableMap(LinkedHashMap(defaultHeaders))
+        Collections.unmodifiableMap(stripRetiredCanonicalBodyAuthHeaders(defaultHeaders))
     private val observers: List<ClientObserver> = observers.toList()
     private val pendingLoads = LinkedHashMap<String, PendingLoad>()
     private val lineageStates = LinkedHashMap<String, StoredLineageState>()
@@ -293,6 +315,25 @@ class ToriiOfflineNoteIssuerClient @JvmOverloads constructor(
         const val RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE: String =
             "Classic Offline Note issue transactions are retired; use Kagemusha online-to-offline top-up flows."
         private const val KEYS_REFILL_PATH = "/v1/offline/v2/keys/refill"
+        private const val HEADER_WITNESS = "X-Iroha-Witness"
+
+        private val RETIRED_CANONICAL_BODY_AUTH_HEADERS = setOf(
+            CanonicalRequestSigner.HEADER_ACCOUNT,
+            CanonicalRequestSigner.HEADER_SIGNATURE,
+            CanonicalRequestSigner.HEADER_TIMESTAMP_MS,
+            CanonicalRequestSigner.HEADER_NONCE,
+            HEADER_WITNESS,
+        )
+
+        private fun stripRetiredCanonicalBodyAuthHeaders(headers: Map<String, String>): LinkedHashMap<String, String> {
+            val filtered = LinkedHashMap<String, String>()
+            for ((key, value) in headers) {
+                if (RETIRED_CANONICAL_BODY_AUTH_HEADERS.none { it.equals(key, ignoreCase = true) }) {
+                    filtered[key] = value
+                }
+            }
+            return filtered
+        }
     }
 }
 
@@ -303,13 +344,13 @@ private fun parseKeyCertificate(value: Map<String, Any?>): OfflineNote.KeyCertif
         keyId = requiredString(value, "key_id"),
         deviceId = requiredString(value, "device_id"),
         accountId = requiredString(value, "account_id"),
-        publicKey = decodeBase64(requiredString(value, "public_key"), "public_key"),
-        assertionScheme = requiredString(value, "assertion_scheme"),
-        assertionKeyAlgorithm = requiredString(value, "assertion_key_algorithm"),
-        assertionPublicKey = decodeBase64(requiredString(value, "assertion_public_key"), "assertion_public_key"),
+        publicKey = decodeExactBase64(requiredString(value, "public_key"), "public_key"),
+        assertionScheme = requiredAssertionScheme(value),
+        assertionKeyAlgorithm = requiredAssertionKeyAlgorithm(value),
+        assertionPublicKey = decodeExactBase64(requiredString(value, "assertion_public_key"), "assertion_public_key"),
         assertionUsageCountLimit = optionalAssertionUsageCountLimit(value["assertion_usage_count_limit"]),
         oneUse = requiredBoolean(value, "one_use"),
-        issuerSignature = decodeBase64(requiredString(value, "issuer_signature_base64"), "issuer_signature_base64"),
+        issuerSignature = decodeExactBase64(requiredString(value, "issuer_signature_base64"), "issuer_signature_base64"),
     )
 
 private fun parseJson(payload: ByteArray): Any? =
@@ -359,6 +400,28 @@ private fun optionalAssertionUsageCountLimit(value: Any?): Int? {
     return 1
 }
 
+private fun requiredAssertionScheme(value: Map<String, Any?>): String {
+    val scheme = requiredString(value, "assertion_scheme")
+    val expected = when (requiredString(value, "platform")) {
+        OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME
+        OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_SCHEME
+        else -> throw IllegalStateException("platform must be a supported first-release value")
+    }
+    require(scheme == expected) { "assertion_scheme must be $expected" }
+    return scheme
+}
+
+private fun requiredAssertionKeyAlgorithm(value: Map<String, Any?>): String {
+    val algorithm = requiredString(value, "assertion_key_algorithm")
+    val expected = when (requiredString(value, "platform")) {
+        OfflineNoteV2.ANDROID_KEYMINT_PLATFORM -> OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM
+        OfflineNoteV2.IOS_APP_ATTEST_PLATFORM -> OfflineNoteV2.IOS_APP_ATTEST_ASSERTION_KEY_ALGORITHM
+        else -> throw IllegalStateException("platform must be a supported first-release value")
+    }
+    require(algorithm == expected) { "assertion_key_algorithm must be $expected" }
+    return algorithm
+}
+
 private fun optionalLong(value: Any?): Long? = when (value) {
     null -> null
     is Long -> value
@@ -374,12 +437,18 @@ private fun optionalLong(value: Any?): Long? = when (value) {
     else -> throw IllegalStateException("value must be an integer")
 }
 
-private fun decodeBase64(value: String, field: String): ByteArray =
+private fun decodeExactBase64(value: String, field: String): ByteArray {
     try {
-        Base64.getDecoder().decode(value)
+        require(value.isNotEmpty() && value == value.trim()) { "$field must be canonical base64" }
+        val decoded = Base64.getDecoder().decode(value)
+        require(decoded.isNotEmpty() && Base64.getEncoder().encodeToString(decoded) == value) {
+            "$field must be canonical base64"
+        }
+        return decoded
     } catch (ex: IllegalArgumentException) {
-        throw IllegalStateException("$field must be base64", ex)
+        throw IllegalStateException("$field must be canonical base64", ex)
     }
+}
 
 private fun hexToBytes(value: String, field: String): ByteArray {
     require(value.length == 64) { "$field must be 64 lowercase hex characters" }

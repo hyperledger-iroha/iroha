@@ -437,6 +437,9 @@ pub struct AppPlanArgs {
     /// Hex-encoded private key for signing
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
+    /// Optional transaction time-to-live in milliseconds for bundle deploy and init transactions.
+    #[arg(long)]
+    pub transaction_ttl_ms: Option<u64>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -449,6 +452,9 @@ pub struct AppDeployArgs {
     /// Hex-encoded private key for signing
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
+    /// Optional transaction time-to-live in milliseconds for bundle deploy and init transactions.
+    #[arg(long)]
+    pub transaction_ttl_ms: Option<u64>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -461,6 +467,9 @@ pub struct AppResumeArgs {
     /// Hex-encoded private key for signing
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
+    /// Optional transaction time-to-live in milliseconds for bundle deploy and init transactions.
+    #[arg(long)]
+    pub transaction_ttl_ms: Option<u64>,
 }
 
 fn default_contract_artifact_path(manifest_path: &Path, contract_name: &str) -> Result<PathBuf> {
@@ -878,6 +887,7 @@ fn wrap_contract_bundle_request(
     bundle: norito::json::Value,
     authority: &AccountId,
     private_key: &PrivateKey,
+    transaction_ttl_ms: Option<u64>,
 ) -> Result<norito::json::Value> {
     let mut object = bundle
         .as_object()
@@ -890,6 +900,9 @@ fn wrap_contract_bundle_request(
             private_key.clone(),
         ))?,
     );
+    if let Some(transaction_ttl_ms) = transaction_ttl_ms {
+        object.insert("transaction_ttl_ms".to_owned(), transaction_ttl_ms.into());
+    }
     Ok(norito::json::Value::Object(object))
 }
 
@@ -924,7 +937,12 @@ impl Run for AppPlanArgs {
         let bundle = build_contract_app_bundle(&self.manifest.manifest)?;
         let (authority, private_key) =
             resolve_contract_app_authority(context, &self.authority, &self.private_key)?;
-        let request = wrap_contract_bundle_request(bundle, &authority, &private_key)?;
+        let request = wrap_contract_bundle_request(
+            bundle,
+            &authority,
+            &private_key,
+            self.transaction_ttl_ms,
+        )?;
         let client: Client = context.client_from_config();
         let response = client.post_contract_deploy_bundle_json(&request, true)?;
         context.print_data(&response)?;
@@ -937,7 +955,12 @@ impl Run for AppDeployArgs {
         let bundle = build_contract_app_bundle(&self.manifest.manifest)?;
         let (authority, private_key) =
             resolve_contract_app_authority(context, &self.authority, &self.private_key)?;
-        let request = wrap_contract_bundle_request(bundle, &authority, &private_key)?;
+        let request = wrap_contract_bundle_request(
+            bundle,
+            &authority,
+            &private_key,
+            self.transaction_ttl_ms,
+        )?;
         let client: Client = context.client_from_config();
         let response = client.post_contract_deploy_bundle_json(&request, false)?;
         context.print_data(&response)?;
@@ -950,7 +973,12 @@ impl Run for AppResumeArgs {
         let bundle = build_contract_app_bundle(&self.manifest.manifest)?;
         let (authority, private_key) =
             resolve_contract_app_authority(context, &self.authority, &self.private_key)?;
-        let request = wrap_contract_bundle_request(bundle, &authority, &private_key)?;
+        let request = wrap_contract_bundle_request(
+            bundle,
+            &authority,
+            &private_key,
+            self.transaction_ttl_ms,
+        )?;
         let client: Client = context.client_from_config();
         let response = client.post_contract_deploy_bundle_json(&request, false)?;
         context.print_data(&response)?;
@@ -1101,6 +1129,7 @@ impl DevDeployArgs {
                 },
                 authority: self.authority,
                 private_key: self.private_key,
+                transaction_ttl_ms: None,
             }
             .run(context),
             DevDeployAction::Resume => AppResumeArgs {
@@ -1109,6 +1138,7 @@ impl DevDeployArgs {
                 },
                 authority: self.authority,
                 private_key: self.private_key,
+                transaction_ttl_ms: None,
             }
             .run(context),
         }

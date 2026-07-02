@@ -52,13 +52,13 @@ class OfflineToriiClientReadinessTest {
     }
 
     @Test
-    fun readinessParsesAbi7Aliases() {
-        val readiness = readinessFromBody(abi7AliasReadinessBody())
-        assertEquals(true, readiness.offlineKagemushaRecursiveCompactAvailable)
-        assertEquals("recursive_compact_v1", readiness.offlineKagemushaRecursiveCompactMode)
-        assertEquals(7, readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion)
-        assertEquals("kagemusha-recursive-compact-v1", readiness.offlineKagemushaRecursiveCompactCircuitId)
-        assertEquals(true, readiness.offlineKagemushaRecursiveCompactArtifactsAvailable)
+    fun readinessRejectsRemovedAbi7Aliases() {
+        for ((field, message) in removedAbi7ReadinessFieldCases()) {
+            assertReadinessFails(
+                canonicalReadinessBody(extra = "\"$field\": true,"),
+                message,
+            )
+        }
     }
 
     @Test
@@ -85,6 +85,10 @@ class OfflineToriiClientReadinessTest {
     private fun malformedCanonicalBodies(): List<Pair<String, String>> = listOf(
         canonicalReadinessBody(compactAvailable = "\"true\"") to
             "offline_kagemusha_recursive_compact_available must be a boolean",
+        canonicalReadinessBody(extra = "\"offline_note\": \"true\",") to
+            "offline_note must be a boolean",
+        canonicalReadinessBody(extra = "\"offline_sync_optional\": 1,") to
+            "offline_sync_optional must be a boolean",
         canonicalReadinessBody(compactMode = "\" recursive_compact_v1\"") to
             "offline_kagemusha_recursive_compact_mode must be an exact non-empty string",
         canonicalReadinessBody(compactBridge = "\"007\"") to
@@ -99,6 +103,19 @@ class OfflineToriiClientReadinessTest {
             "offline_kagemusha_recursive_compact_circuit_id must be an exact non-empty string",
         canonicalReadinessBody(compactArtifacts = "\"true\"") to
             "offline_kagemusha_recursive_compact_artifacts_available must be a boolean",
+    )
+
+    private fun removedAbi7ReadinessFieldCases(): List<Pair<String, String>> = listOf(
+        "offline_kagemusha_abi7" to
+            "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*",
+        "offline_kagemusha_abi7_mode" to
+            "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*",
+        "offline_kagemusha_abi7_bridge_abi_version" to
+            "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*",
+        "offline_kagemusha_abi7_circuit_id" to
+            "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*",
+        "offline_kagemusha_abi7_artifacts" to
+            "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*",
     )
 
     private fun canonicalReadinessBody(
@@ -117,17 +134,6 @@ class OfflineToriiClientReadinessTest {
           "offline_kagemusha_recursive_compact_required_native_bridge_abi_version": $compactBridge,
           "offline_kagemusha_recursive_compact_circuit_id": $compactCircuit,
           "offline_kagemusha_recursive_compact_artifacts_available": $compactArtifacts
-        }
-    """.trimIndent()
-
-    private fun abi7AliasReadinessBody(): String = """
-        {
-          "offline_telemetry": true,
-          "offline_kagemusha_abi7": true,
-          "offline_kagemusha_abi7_mode": "recursive_compact_v1",
-          "offline_kagemusha_abi7_bridge_abi_version": 7,
-          "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
-          "offline_kagemusha_abi7_artifacts": true
         }
     """.trimIndent()
 

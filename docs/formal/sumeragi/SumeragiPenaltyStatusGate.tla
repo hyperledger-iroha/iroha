@@ -305,9 +305,12 @@ PenaltyStatusSafetyAnchors ==
   /\ PenaltyCounterMutationAnchors
   /\ PenaltyProjectionAnchors
 
-PenaltyStatusExactness ==
-  /\ \A candidate \in Candidates:
+PenaltyStatusActionsMatchSpec ==
+  \A candidate \in Candidates:
     ImplementationActions(candidate) = SpecActions(candidate)
+
+PenaltyStatusExactness ==
+  /\ PenaltyStatusActionsMatchSpec
   /\ PenaltyStatusSafetyAnchors
 
 PenaltyStatusCorrectnessEnvelope ==

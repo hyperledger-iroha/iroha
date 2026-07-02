@@ -67,8 +67,8 @@ seiyaku IrohaSwap {
     assert(minted > 0, "zero lp");
 
     // Move tokens into the pool account.
-    transfer_asset(provider, pool_account, asset_a, amount_a);
-    transfer_asset(provider, pool_account, asset_b, amount_b);
+    transfer_asset(provider, pool_account, asset_a, amount_a, dataspace_id("0"));
+    transfer_asset(provider, pool_account, asset_b, amount_b, dataspace_id("0"));
     // Mint LP tokens to the provider.
     mint_asset(provider, lp_asset, minted);
 
@@ -100,8 +100,8 @@ seiyaku IrohaSwap {
     assert(amount_b > 0, "zero out b");
 
     burn_asset(provider, lp_asset, lp_amount);
-    transfer_asset(pool_account, provider, asset_a, amount_a);
-    transfer_asset(pool_account, provider, asset_b, amount_b);
+    transfer_asset(pool_account, provider, asset_a, amount_a, dataspace_id("0"));
+    transfer_asset(pool_account, provider, asset_b, amount_b, dataspace_id("0"));
 
     ReserveA[pool] = reserve_a - amount_a;
     ReserveB[pool] = reserve_b - amount_b;
@@ -139,13 +139,13 @@ seiyaku IrohaSwap {
     if (is_a_in) {
       ReserveA[pool] = reserve_in + amount_in;
       ReserveB[pool] = reserve_out - out;
-      transfer_asset(trader, pool_account, asset_a, amount_in);
-      transfer_asset(pool_account, trader, asset_b, out);
+      transfer_asset(trader, pool_account, asset_a, amount_in, dataspace_id("0"));
+      transfer_asset(pool_account, trader, asset_b, out, dataspace_id("0"));
     } else {
       ReserveB[pool] = reserve_in + amount_in;
       ReserveA[pool] = reserve_out - out;
-      transfer_asset(trader, pool_account, asset_b, amount_in);
-      transfer_asset(pool_account, trader, asset_a, out);
+      transfer_asset(trader, pool_account, asset_b, amount_in, dataspace_id("0"));
+      transfer_asset(pool_account, trader, asset_a, out, dataspace_id("0"));
     }
 
     return out;

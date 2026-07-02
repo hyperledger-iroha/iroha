@@ -31,6 +31,10 @@ use std::{
     time::Duration,
 };
 
+use blake2::{
+    Blake2bVar,
+    digest::{Update, VariableOutput},
+};
 use error_stack::{Report, ResultExt};
 use iroha_config_base::{
     ParameterId, ParameterOrigin, ReadConfig, WithOrigin,
@@ -219,12 +223,12 @@ use iroha_data_model::{
     jurisdiction::JdgSignatureScheme,
     name::{self, Name},
     nexus::{
-        AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
-        LaneConfig, LaneId, LaneStorageProfile, LaneVisibility, UniversalAccountId,
+        AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
+        DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId, LaneStorageProfile, LaneVisibility,
+        UniversalAccountId,
     },
     peer::{Peer, PeerId},
     role::RoleId,
-    smart_contract::{ContractAddress, ContractAlias},
     sorafs::{pin_registry::StorageClass as SorafsStorageClass, pricing::PricingScheduleRecord},
     taikai::TaikaiAvailabilityClass,
 };
@@ -242,6 +246,12 @@ use crate::{
     parameters::{actual, defaults},
     snapshot::Mode as SnapshotMode,
 };
+
+type DataSpaceCatalogBuild = (
+    DataSpaceCatalog,
+    BTreeMap<DataSpaceId, String>,
+    BTreeMap<DataSpaceId, Name>,
+);
 
 /// P2P relay role configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2523,6 +2533,12 @@ pub struct Concurrency {
         default = "defaults::concurrency::PROVER_STACK_BYTES"
     )]
     pub prover_stack_bytes: usize,
+    /// Stack size (bytes) for Sumeragi helper threads.
+    #[config(
+        env = "CONCURRENCY_SUMERAGI_STACK_BYTES",
+        default = "defaults::concurrency::SUMERAGI_STACK_BYTES"
+    )]
+    pub sumeragi_stack_bytes: usize,
     /// Guest stack size (bytes) for IVM instances.
     #[config(
         env = "CONCURRENCY_GUEST_STACK_BYTES",
@@ -2546,6 +2562,7 @@ impl Concurrency {
             rayon_global_threads: self.rayon_global_threads,
             scheduler_stack_bytes: self.scheduler_stack_bytes,
             prover_stack_bytes: self.prover_stack_bytes,
+            sumeragi_stack_bytes: self.sumeragi_stack_bytes,
             guest_stack_bytes: self.guest_stack_bytes,
             gas_to_stack_multiplier: self.gas_to_stack_multiplier,
         }
@@ -4443,12 +4460,13 @@ impl SccpRouteBrowserProverManifestRef {
 
     fn parse(self, role: &str, strict_hashes: bool) -> actual::SccpRouteBrowserProverManifestRef {
         let module_url = Self::parse_module_url(role, &self.module_url);
-        let module_specifier = self
-            .module_specifier
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
+        let module_specifier = self.module_specifier.map(|value| {
+            assert!(
+                !value.is_empty() && value.trim() == value,
+                "SCCP route manifest {role} browser prover module_specifier must be a non-empty canonical string"
+            );
+            value
+        });
         let expected_exports = self
             .expected_exports
             .into_iter()
@@ -4538,6 +4556,8 @@ pub struct SccpRouteManifest {
     pub sccp_tron_source_bridge_address: Option<String>,
     /// Generic destination verifier contract address.
     pub destination_verifier_address: Option<String>,
+    /// TON verifier internal message value in nanoTON.
+    pub ton_finalize_message_value_nano: Option<String>,
     /// Generic verifier contract address.
     pub verifier_address: Option<String>,
     /// BSC destination verifier contract address.
@@ -4564,6 +4584,12 @@ pub struct SccpRouteManifest {
     pub native_evm_prover_bundle_hash: Option<String>,
     /// Optional canonical native EVM prover bundle JSON.
     pub native_evm_prover_bundle: Option<iroha_primitives::json::Json>,
+    /// Optional source verifier material used to verify counterparty-to-TAIRA messages.
+    pub source_verifier_material: Option<iroha_primitives::json::Json>,
+    /// Optional source adapter engine deployment evidence used by counterparty-to-TAIRA proofs.
+    pub source_adapter_engine_deployment: Option<iroha_primitives::json::Json>,
+    /// Optional source adapter engine descriptor used by counterparty-to-TAIRA proofs.
+    pub source_adapter_engine: Option<iroha_primitives::json::Json>,
     /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
     pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
     /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
@@ -4613,10 +4639,17 @@ pub struct SccpRouteManifest {
 impl SccpRouteManifest {
     const SORA_COUNTERPARTY_DOMAIN: u32 = 0;
     const BSC_COUNTERPARTY_DOMAIN: u32 = 2;
+    const TON_COUNTERPARTY_DOMAIN: u32 = 4;
     const TRON_COUNTERPARTY_DOMAIN: u32 = 5;
+    const TON_DESTINATION_BINDING_PREFIX_V1: &'static [u8] = b"sccp:destination:binding:v1";
     const TRON_DESTINATION_BINDING_LABEL: &'static [u8] = b"iroha:sccp:tron-destination-binding:v1";
     const TRON_GROTH16_BACKEND: &'static str = "tron-groth16-bn254-v1";
     const SCCP_PROOF_FAMILY_STARK_FRI: &'static str = "stark-fri-v1";
+    const TON_CONTRACT_BACKEND: &'static str = "ton-contract-v1";
+    const TON_TESTNET_NETWORK: &'static str = "testnet";
+    const TON_TESTNET_CHAIN: &'static str = "ton-testnet";
+    const TON_TESTNET_CHAIN_ID_HEX: &'static str =
+        "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd";
     const TRON_MAINNET_NETWORK: &'static str = "mainnet";
     const TRON_MAINNET_CHAIN: &'static str = "tron-mainnet";
     const TRON_MAINNET_CHAIN_ID_HEX: &'static str = "0x2b6653dc";
@@ -4629,7 +4662,9 @@ impl SccpRouteManifest {
     const TRON_BASE58_ALPHABET: &'static [u8; 58] =
         b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
     const TRON_TAIRA_XOR_ROUTE_ID: &'static str = "taira_tron_xor";
+    const TON_TAIRA_XOR_ROUTE_ID: &'static str = "taira_ton_xor";
     const TAIRA_XOR_ASSET_KEY: &'static str = "xor";
+    const TON_VERIFIER_TARGET: &'static str = "TonContract";
     const TRON_VERIFIER_TARGET: &'static str = "TronContract";
     const TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID: &'static str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
     const TAIRA_BURN_RECORD_VK_BACKEND: &'static str = "halo2/ipa";
@@ -4666,6 +4701,15 @@ impl SccpRouteManifest {
                     .iter()
                     .all(|byte| byte.is_ascii_digit() || matches!(*byte, b'a'..=b'f')),
             "SCCP TRON route manifest chain_id_hex must be a 0x-prefixed hex value using canonical lowercase spelling"
+        );
+        value.to_owned()
+    }
+
+    fn normalize_ton_chain_id_hex(value: &str) -> String {
+        assert!(
+            value == Self::TON_TESTNET_CHAIN_ID_HEX,
+            "SCCP TON route manifest chain_id_hex must be TON testnet {}",
+            Self::TON_TESTNET_CHAIN_ID_HEX
         );
         value.to_owned()
     }
@@ -4768,6 +4812,42 @@ impl SccpRouteManifest {
         assert!(
             Self::encode_tron_base58(&decoded) == value,
             "SCCP TRON route manifest {field} must be canonical Base58Check"
+        );
+        value.to_owned()
+    }
+
+    fn normalize_ton_raw_address(field: &str, value: &str) -> String {
+        assert!(
+            value.trim() == value && !value.is_empty(),
+            "SCCP TON route manifest {field} must be a canonical TON raw address"
+        );
+        let Some((workchain, account_hex)) = value.split_once(':') else {
+            panic!(
+                "SCCP TON route manifest {field} must be a canonical TON raw address in workchain:account_hex form"
+            );
+        };
+        assert!(
+            workchain == "0",
+            "SCCP TON route manifest {field} must be a TON basechain raw address"
+        );
+        assert!(
+            account_hex.len() == 64 && Self::is_canonical_lower_hex_body(account_hex.as_bytes()),
+            "SCCP TON route manifest {field} must be a canonical TON raw address in workchain:account_hex form"
+        );
+        assert!(
+            account_hex.as_bytes().iter().any(|byte| *byte != b'0'),
+            "SCCP TON route manifest {field} must be non-zero"
+        );
+        value.to_owned()
+    }
+
+    fn normalize_positive_decimal_string(field: &str, value: &str) -> String {
+        assert!(
+            !value.is_empty()
+                && value.trim() == value
+                && value.as_bytes()[0] != b'0'
+                && value.as_bytes().iter().all(u8::is_ascii_digit),
+            "SCCP route manifest {field} must be a positive integer decimal string"
         );
         value.to_owned()
     }
@@ -4986,6 +5066,140 @@ impl SccpRouteManifest {
         payload.extend_from_slice(&Self::hex32_bytes("verifier_key_hash", verifier_key_hash));
 
         format!("0x{}", hex::encode(keccak256(payload)))
+    }
+
+    fn push_u8(out: &mut Vec<u8>, value: u8) {
+        out.push(value);
+    }
+
+    fn push_u32(out: &mut Vec<u8>, value: u32) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_vec(out: &mut Vec<u8>, value: &[u8]) {
+        Self::push_u32(
+            out,
+            u32::try_from(value.len()).expect("SCCP vector length fits into u32"),
+        );
+        out.extend_from_slice(value);
+    }
+
+    fn prefixed_blake2b_hex(prefix: &[u8], payload: &[u8]) -> String {
+        let mut hasher = Blake2bVar::new(32).expect("fixed hash length");
+        hasher.update(prefix);
+        hasher.update(payload);
+        let mut out = [0_u8; 32];
+        hasher
+            .finalize_variable(&mut out)
+            .expect("fixed hash length");
+        format!("0x{}", hex::encode(out))
+    }
+
+    fn expected_ton_destination_binding_key() -> String {
+        format!(
+            "sccp:{}:{}:{}:{}:{}",
+            Self::SORA_COUNTERPARTY_DOMAIN,
+            Self::TON_COUNTERPARTY_DOMAIN,
+            "ton",
+            Self::TON_CONTRACT_BACKEND,
+            3
+        )
+    }
+
+    fn expected_ton_destination_binding_hash() -> String {
+        let mut payload = Vec::new();
+        Self::push_u8(&mut payload, 1);
+        Self::push_u32(&mut payload, Self::SORA_COUNTERPARTY_DOMAIN);
+        Self::push_u32(&mut payload, Self::TON_COUNTERPARTY_DOMAIN);
+        Self::push_u8(&mut payload, 1);
+        Self::push_u8(&mut payload, 1);
+        Self::push_u8(&mut payload, 3);
+        Self::push_u8(&mut payload, 3);
+        Self::push_vec(
+            &mut payload,
+            Self::expected_ton_destination_binding_key().as_bytes(),
+        );
+        Self::push_vec(
+            &mut payload,
+            b"iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+        );
+        Self::push_vec(&mut payload, Self::SCCP_PROOF_FAMILY_STARK_FRI.as_bytes());
+        Self::push_vec(&mut payload, Self::TON_CONTRACT_BACKEND.as_bytes());
+        Self::prefixed_blake2b_hex(Self::TON_DESTINATION_BINDING_PREFIX_V1, &payload)
+    }
+
+    fn validate_ton_production_metadata(
+        &self,
+        chain_id_hex: &str,
+        network_id_hex: &str,
+        destination_binding_hash: &str,
+    ) {
+        assert!(
+            self.route_id == Self::TON_TAIRA_XOR_ROUTE_ID,
+            "SCCP TON route manifest production_ready requires route_id = {}",
+            Self::TON_TAIRA_XOR_ROUTE_ID
+        );
+        assert!(
+            self.asset_key == Self::TAIRA_XOR_ASSET_KEY,
+            "SCCP TON route manifest production_ready requires asset_key = {}",
+            Self::TAIRA_XOR_ASSET_KEY
+        );
+        assert!(
+            self.tron_network == Self::TON_TESTNET_NETWORK,
+            "SCCP TON route manifest production_ready requires tron_network = {}",
+            Self::TON_TESTNET_NETWORK
+        );
+        assert!(
+            self.chain == Self::TON_TESTNET_CHAIN,
+            "SCCP TON route manifest production_ready requires chain = {}",
+            Self::TON_TESTNET_CHAIN
+        );
+        assert!(
+            chain_id_hex == Self::TON_TESTNET_CHAIN_ID_HEX,
+            "SCCP TON route manifest production_ready requires chain_id_hex = {}",
+            Self::TON_TESTNET_CHAIN_ID_HEX
+        );
+        assert!(
+            self.verifier_target == Self::TON_VERIFIER_TARGET,
+            "SCCP TON route manifest production_ready requires verifier_target = {}",
+            Self::TON_VERIFIER_TARGET
+        );
+        assert!(
+            network_id_hex == Self::TON_TESTNET_CHAIN_ID_HEX,
+            "SCCP TON route manifest production_ready requires network_id_hex = {}",
+            Self::TON_TESTNET_CHAIN_ID_HEX
+        );
+        let expected_destination_binding_key = Self::expected_ton_destination_binding_key();
+        assert!(
+            self.destination_binding_key == expected_destination_binding_key,
+            "SCCP TON route manifest production_ready requires destination_binding_key = {expected_destination_binding_key}"
+        );
+        let expected_destination_binding_hash = Self::expected_ton_destination_binding_hash();
+        assert!(
+            destination_binding_hash == expected_destination_binding_hash,
+            "SCCP TON route manifest production_ready requires destination_binding_hash = {expected_destination_binding_hash}"
+        );
+        assert!(
+            self.taira_burn_record_settlement_asset_definition_id
+                == Self::TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID,
+            "SCCP TON route manifest production_ready requires taira_burn_record_settlement_asset_definition_id = {}",
+            Self::TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID
+        );
+        assert!(
+            self.taira_burn_record_vk_backend == Self::TAIRA_BURN_RECORD_VK_BACKEND,
+            "SCCP TON route manifest production_ready requires taira_burn_record_vk_backend = {}",
+            Self::TAIRA_BURN_RECORD_VK_BACKEND
+        );
+        assert!(
+            self.taira_burn_record_vk_name == Self::TAIRA_BURN_RECORD_VK_NAME,
+            "SCCP TON route manifest production_ready requires taira_burn_record_vk_name = {}",
+            Self::TAIRA_BURN_RECORD_VK_NAME
+        );
+        assert!(
+            self.taira_burn_record_gas_limit == Self::TAIRA_BURN_RECORD_GAS_LIMIT,
+            "SCCP TON route manifest production_ready requires taira_burn_record_gas_limit = {}",
+            Self::TAIRA_BURN_RECORD_GAS_LIMIT
+        );
     }
 
     fn validate_tron_production_metadata(
@@ -5314,10 +5528,13 @@ impl SccpRouteManifest {
     /// Parse and validate a user-level SCCP route manifest into the runtime form.
     pub fn parse(self) -> actual::SccpRouteManifest {
         let is_bsc_route = self.counterparty_domain == Self::BSC_COUNTERPARTY_DOMAIN;
+        let is_ton_route = self.counterparty_domain == Self::TON_COUNTERPARTY_DOMAIN;
         let is_tron_route = self.counterparty_domain == Self::TRON_COUNTERPARTY_DOMAIN;
-        let strict_route_hashes = is_bsc_route || is_tron_route;
+        let strict_route_hashes = is_bsc_route || is_ton_route || is_tron_route;
         let chain_id_hex = if is_bsc_route {
             Self::normalize_bsc_chain_id_hex(&self.chain_id_hex)
+        } else if is_ton_route {
+            Self::normalize_ton_chain_id_hex(&self.chain_id_hex)
         } else if is_tron_route {
             Self::normalize_tron_chain_id_hex(&self.chain_id_hex)
         } else {
@@ -5353,6 +5570,13 @@ impl SccpRouteManifest {
                 Self::BSC_EVM_COUNTERPARTY_ACCOUNT_CODEC,
             )
             .or(Some(Self::BSC_EVM_COUNTERPARTY_ACCOUNT_CODEC))
+        } else if is_ton_route {
+            Self::normalize_counterparty_account_codec(
+                "counterparty_account_codec",
+                self.counterparty_account_codec,
+                4,
+            )
+            .or(Some(4))
         } else {
             self.counterparty_account_codec
         };
@@ -5363,6 +5587,13 @@ impl SccpRouteManifest {
                 Self::BSC_EVM_COUNTERPARTY_ACCOUNT_CODEC_KEY,
             )
             .or_else(|| Some(Self::BSC_EVM_COUNTERPARTY_ACCOUNT_CODEC_KEY.to_owned()))
+        } else if is_ton_route {
+            Self::normalize_counterparty_account_codec_key(
+                "counterparty_account_codec_key",
+                self.counterparty_account_codec_key.as_deref(),
+                "ton_raw",
+            )
+            .or_else(|| Some("ton_raw".to_owned()))
         } else {
             self.counterparty_account_codec_key
                 .as_deref()
@@ -5377,6 +5608,11 @@ impl SccpRouteManifest {
         };
         let taira_xor_token_address = if is_bsc_route {
             Self::normalize_evm_address("taira_xor_token_address", &self.taira_xor_token_address)
+        } else if is_ton_route {
+            Self::normalize_ton_raw_address(
+                "taira_xor_token_address",
+                &self.taira_xor_token_address,
+            )
         } else if is_tron_route {
             Self::normalize_tron_base58_address(
                 "taira_xor_token_address",
@@ -5387,6 +5623,11 @@ impl SccpRouteManifest {
         };
         let taira_xor_bridge_address = if is_bsc_route {
             Self::normalize_evm_address("taira_xor_bridge_address", &self.taira_xor_bridge_address)
+        } else if is_ton_route {
+            Self::normalize_ton_raw_address(
+                "taira_xor_bridge_address",
+                &self.taira_xor_bridge_address,
+            )
         } else if is_tron_route {
             Self::normalize_tron_base58_address(
                 "taira_xor_bridge_address",
@@ -5593,6 +5834,115 @@ impl SccpRouteManifest {
                 );
             }
         }
+        if let Some(deployment_hash) = deployment_evidence_sha256.as_deref() {
+            for (label, value) in [
+                ("verifier_code_hash", verifier_code_hash.as_str()),
+                ("verifier_key_hash", verifier_key_hash.as_str()),
+                (
+                    "destination_binding_hash",
+                    destination_binding_hash.as_str(),
+                ),
+            ] {
+                assert!(
+                    !deployment_hash.trim().eq_ignore_ascii_case(value.trim()),
+                    "SCCP route manifest deployment_evidence_sha256 must not equal {label}"
+                );
+            }
+            for (label, value) in [
+                ("proof_artifact_hash", proof_artifact_hash.as_deref()),
+                ("proving_key_hash", proving_key_hash.as_deref()),
+            ] {
+                if let Some(value) = value {
+                    assert!(
+                        !deployment_hash.trim().eq_ignore_ascii_case(value.trim()),
+                        "SCCP route manifest deployment_evidence_sha256 must not equal {label}"
+                    );
+                }
+            }
+        }
+        for (label, value, previous_label, previous_value) in [
+            (
+                "post_deploy_route_canary_evidence_hash",
+                post_deploy_route_canary_evidence_hash.as_deref(),
+                "post_deploy_source_bridge_config_hash",
+                post_deploy_source_bridge_config_hash.as_deref(),
+            ),
+            (
+                "post_deploy_route_canary_transaction_id",
+                post_deploy_route_canary_transaction_id.as_deref(),
+                "post_deploy_source_event_transaction_id",
+                post_deploy_source_event_transaction_id.as_deref(),
+            ),
+        ] {
+            if let (Some(value), Some(previous_value)) = (value, previous_value) {
+                assert!(
+                    !value.trim().eq_ignore_ascii_case(previous_value.trim()),
+                    "SCCP route manifest {label} must not equal {previous_label}"
+                );
+            }
+        }
+        if is_bsc_route || is_ton_route {
+            let mut route_hash_roles = Vec::<(&str, &str)>::new();
+            route_hash_roles.extend([
+                ("verifier_code_hash", verifier_code_hash.as_str()),
+                ("verifier_key_hash", verifier_key_hash.as_str()),
+                (
+                    "destination_binding_hash",
+                    destination_binding_hash.as_str(),
+                ),
+            ]);
+            for (label, value) in [
+                ("proof_artifact_hash", proof_artifact_hash.as_deref()),
+                ("proving_key_hash", proving_key_hash.as_deref()),
+                (
+                    "deployment_evidence_sha256",
+                    deployment_evidence_sha256.as_deref(),
+                ),
+                (
+                    "native_evm_prover_bundle_hash",
+                    native_evm_prover_bundle_hash.as_deref(),
+                ),
+            ] {
+                if let Some(value) = value {
+                    route_hash_roles.push((label, value));
+                }
+            }
+            for (label, reference) in [
+                (
+                    "destination_browser_prover",
+                    destination_browser_prover.as_ref(),
+                ),
+                ("source_browser_prover", source_browser_prover.as_ref()),
+            ] {
+                if let Some(reference) = reference {
+                    route_hash_roles.extend([
+                        (
+                            if label == "destination_browser_prover" {
+                                "destination_browser_prover.module_hash"
+                            } else {
+                                "source_browser_prover.module_hash"
+                            },
+                            reference.module_hash.as_str(),
+                        ),
+                        (
+                            if label == "destination_browser_prover" {
+                                "destination_browser_prover.manifest_hash"
+                            } else {
+                                "source_browser_prover.manifest_hash"
+                            },
+                            reference.manifest_hash.as_str(),
+                        ),
+                    ]);
+                }
+            }
+            let mut seen_route_hashes = BTreeMap::<String, &str>::new();
+            for (label, value) in route_hash_roles {
+                let normalized = value.trim().to_ascii_lowercase();
+                if let Some(previous_label) = seen_route_hashes.insert(normalized, label) {
+                    panic!("SCCP route manifest {label} must not equal {previous_label}");
+                }
+            }
+        }
         assert!(
             !(self.production_ready && uses_diagnostic_verifier_key_hash),
             "SCCP BSC route manifest production_ready cannot be true with diagnostic verifier material"
@@ -5614,6 +5964,16 @@ impl SccpRouteManifest {
         assert!(
             !(self.production_ready && is_bsc_route && self.native_evm_prover_bundle.is_none()),
             "SCCP BSC route manifest production_ready requires native_evm_prover_bundle"
+        );
+        assert!(
+            !(self.production_ready && is_bsc_route && self.source_verifier_material.is_none()),
+            "SCCP BSC route manifest production_ready requires source_verifier_material"
+        );
+        assert!(
+            !(self.production_ready
+                && is_bsc_route
+                && self.source_adapter_engine_deployment.is_none()),
+            "SCCP BSC route manifest production_ready requires source_adapter_engine_deployment"
         );
         assert!(
             !(self.production_ready
@@ -5648,11 +6008,86 @@ impl SccpRouteManifest {
             !(self.production_ready && is_bsc_route && deployment_evidence_sha256.is_none()),
             "SCCP BSC route manifest production_ready requires deployment_evidence_sha256"
         );
-        let trim_address_aliases = !(is_bsc_route || is_tron_route);
+        assert!(
+            !(self.production_ready
+                && self.route_id == Self::TON_TAIRA_XOR_ROUTE_ID
+                && !is_ton_route),
+            "SCCP TON route manifest production_ready requires counterparty_domain = {}",
+            Self::TON_COUNTERPARTY_DOMAIN
+        );
+        assert!(
+            !(self.production_ready
+                && is_ton_route
+                && (proof_artifact_hash.is_none() || proving_key_hash.is_none())),
+            "SCCP TON route manifest production_ready requires proof_artifact_hash and proving_key_hash"
+        );
+        let ton_finalize_message_value_nano = self
+            .ton_finalize_message_value_nano
+            .as_deref()
+            .and_then(|value| {
+                if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(Self::normalize_positive_decimal_string(
+                        "ton_finalize_message_value_nano",
+                        value,
+                    ))
+                }
+            });
+        assert!(
+            !(self.production_ready && is_ton_route && ton_finalize_message_value_nano.is_none()),
+            "SCCP TON route manifest production_ready requires ton_finalize_message_value_nano"
+        );
+        assert!(
+            !(self.production_ready && is_ton_route && self.source_verifier_material.is_none()),
+            "SCCP TON route manifest production_ready requires source_verifier_material"
+        );
+        assert!(
+            !(self.production_ready
+                && is_ton_route
+                && self.source_adapter_engine_deployment.is_none()),
+            "SCCP TON route manifest production_ready requires source_adapter_engine_deployment"
+        );
+        assert!(
+            !(self.production_ready
+                && is_ton_route
+                && (destination_browser_prover.is_none() || source_browser_prover.is_none())),
+            "SCCP TON route manifest production_ready requires destination_browser_prover and source_browser_prover"
+        );
+        if self.production_ready && is_ton_route {
+            let expected_proof_hash = proof_artifact_hash
+                .as_deref()
+                .expect("production TON proof_artifact_hash was required above");
+            for (label, reference) in [
+                (
+                    "destination_browser_prover",
+                    destination_browser_prover.as_ref(),
+                ),
+                ("source_browser_prover", source_browser_prover.as_ref()),
+            ] {
+                let reference =
+                    reference.expect("production TON browser prover was required above");
+                assert!(
+                    reference.bound_route_hash == destination_binding_hash,
+                    "SCCP TON route manifest {label}.bound_route_hash must match destination_binding_hash"
+                );
+                assert!(
+                    reference.bound_proof_hash == expected_proof_hash,
+                    "SCCP TON route manifest {label}.bound_proof_hash must match proof_artifact_hash"
+                );
+            }
+        }
+        assert!(
+            !(self.production_ready && is_ton_route && deployment_evidence_sha256.is_none()),
+            "SCCP TON route manifest production_ready requires deployment_evidence_sha256"
+        );
+        let trim_address_aliases = !(is_bsc_route || is_ton_route || is_tron_route);
         let source_bridge_address = self.source_bridge_address(trim_address_aliases);
         let destination_verifier_address = self.destination_verifier_address(trim_address_aliases);
         let source_bridge_address = if is_bsc_route {
             Self::normalize_evm_address("source bridge address", &source_bridge_address)
+        } else if is_ton_route {
+            Self::normalize_ton_raw_address("source bridge address", &source_bridge_address)
         } else if is_tron_route {
             Self::normalize_tron_base58_address("source bridge address", &source_bridge_address)
         } else {
@@ -5660,6 +6095,11 @@ impl SccpRouteManifest {
         };
         let destination_verifier_address = if is_bsc_route {
             Self::normalize_evm_address(
+                "destination verifier address",
+                &destination_verifier_address,
+            )
+        } else if is_ton_route {
+            Self::normalize_ton_raw_address(
                 "destination verifier address",
                 &destination_verifier_address,
             )
@@ -5671,8 +6111,14 @@ impl SccpRouteManifest {
         } else {
             destination_verifier_address
         };
-        if is_bsc_route || is_tron_route {
-            let route_family = if is_bsc_route { "BSC" } else { "TRON" };
+        if is_bsc_route || is_ton_route || is_tron_route {
+            let route_family = if is_bsc_route {
+                "BSC"
+            } else if is_ton_route {
+                "TON"
+            } else {
+                "TRON"
+            };
             assert!(
                 BTreeSet::from([
                     taira_xor_token_address.as_str(),
@@ -5713,6 +6159,39 @@ impl SccpRouteManifest {
                     (
                         "post_deploy_route_canary_explorer_url",
                         post_deploy_route_canary_explorer_url.as_deref(),
+                    ),
+                    (
+                        "post_deploy_offline_full_toml_sha256",
+                        post_deploy_offline_full_toml_sha256.as_deref(),
+                    ),
+                ],
+            );
+        }
+        if self.production_ready && is_ton_route {
+            self.validate_ton_production_metadata(
+                &chain_id_hex,
+                &network_id_hex,
+                &destination_binding_hash,
+            );
+            Self::validate_post_deploy_evidence(
+                "TON",
+                self.post_deploy_full_toml_ready,
+                &[
+                    (
+                        "post_deploy_source_bridge_config_hash",
+                        post_deploy_source_bridge_config_hash.as_deref(),
+                    ),
+                    (
+                        "post_deploy_source_event_transaction_id",
+                        post_deploy_source_event_transaction_id.as_deref(),
+                    ),
+                    (
+                        "post_deploy_route_canary_evidence_hash",
+                        post_deploy_route_canary_evidence_hash.as_deref(),
+                    ),
+                    (
+                        "post_deploy_route_canary_transaction_id",
+                        post_deploy_route_canary_transaction_id.as_deref(),
                     ),
                     (
                         "post_deploy_offline_full_toml_sha256",
@@ -5798,12 +6277,16 @@ impl SccpRouteManifest {
             taira_xor_bridge_address,
             sccp_tron_source_bridge_address: source_bridge_address,
             tron_verifier_address: destination_verifier_address,
+            ton_finalize_message_value_nano,
             verifier_code_hash,
             verifier_key_hash,
             proof_artifact_hash,
             proving_key_hash,
             native_evm_prover_bundle_hash,
             native_evm_prover_bundle: self.native_evm_prover_bundle,
+            source_verifier_material: self.source_verifier_material,
+            source_adapter_engine_deployment: self.source_adapter_engine_deployment,
+            source_adapter_engine: self.source_adapter_engine,
             destination_browser_prover,
             source_browser_prover,
             deployment_evidence_sha256,
@@ -5835,8 +6318,21 @@ impl SccpRouteManifest {
 mod sccp_route_manifest_user_config_tests {
     use super::{SccpRouteBrowserProverManifestRef, SccpRouteManifest};
 
+    type SccpRouteManifestFixture = fn() -> SccpRouteManifest;
+
     const SOURCE_BRIDGE: &str = "0x3333333333333333333333333333333333333333";
     const VERIFIER: &str = "0x4444444444444444444444444444444444444444";
+
+    fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+        panic.downcast_ref::<String>().map_or_else(
+            || {
+                panic
+                    .downcast_ref::<&str>()
+                    .map_or("unknown panic", |message| *message)
+            },
+            String::as_str,
+        )
+    }
 
     fn browser_prover_ref(role: &str, seed: &str) -> SccpRouteBrowserProverManifestRef {
         let (manifest_seed, route_seed, proof_seed) = match seed {
@@ -5879,6 +6375,7 @@ mod sccp_route_manifest_user_config_tests {
             bsc_source_bridge_address: None,
             sccp_tron_source_bridge_address: None,
             destination_verifier_address: None,
+            ton_finalize_message_value_nano: None,
             verifier_address: None,
             sccp_bsc_destination_verifier_address: Some(VERIFIER.to_owned()),
             bsc_verifier_address: None,
@@ -5895,6 +6392,27 @@ mod sccp_route_manifest_user_config_tests {
                 "schema": "sccp-bsc-native-evm-prover-bundle/v1",
                 "routeId": "taira_bsc_xor",
                 "assetKey": "xor"
+            }))),
+            source_verifier_material: Some(iroha_primitives::json::Json::new(norito::json!({
+                "version": 1,
+                "source_domain": 2,
+                "target_domain": 0,
+                "source_chain": "bsc"
+            }))),
+            source_adapter_engine_deployment: Some(iroha_primitives::json::Json::new(
+                norito::json!({
+                    "version": 1,
+                    "source_domain": 2,
+                    "target_domain": 0,
+                    "source_chain": "bsc",
+                    "deployment_receipt_hash": "0x5151515151515151515151515151515151515151515151515151515151515151"
+                }),
+            )),
+            source_adapter_engine: Some(iroha_primitives::json::Json::new(norito::json!({
+                "version": 1,
+                "source_domain": 2,
+                "target_domain": 0,
+                "source_chain": "bsc"
             }))),
             destination_browser_prover: Some(browser_prover_ref("destination", "60")),
             source_browser_prover: Some(browser_prover_ref("source", "70")),
@@ -5994,6 +6512,7 @@ mod sccp_route_manifest_user_config_tests {
             bsc_source_bridge_address: None,
             sccp_tron_source_bridge_address: Some("TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned()),
             destination_verifier_address: None,
+            ton_finalize_message_value_nano: None,
             verifier_address: None,
             sccp_bsc_destination_verifier_address: None,
             bsc_verifier_address: None,
@@ -6007,6 +6526,9 @@ mod sccp_route_manifest_user_config_tests {
             proving_key_hash: None,
             native_evm_prover_bundle_hash: None,
             native_evm_prover_bundle: None,
+            source_verifier_material: None,
+            source_adapter_engine_deployment: None,
+            source_adapter_engine: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: None,
@@ -6031,6 +6553,114 @@ mod sccp_route_manifest_user_config_tests {
             post_deploy_route_canary_explorer_url: None,
             post_deploy_offline_full_toml_sha256: Some(format!("0x{}", "b5".repeat(32))),
         }
+    }
+
+    fn ton_raw(seed: &str) -> String {
+        format!("0:{}", seed.repeat(32))
+    }
+
+    fn bind_ton_browser_provers_to_route(manifest: &mut SccpRouteManifest) {
+        let route_hash = manifest.destination_binding_hash.clone();
+        let proof_hash = manifest
+            .proof_artifact_hash
+            .clone()
+            .expect("TON route manifest fixture has proof hash");
+        if let Some(reference) = manifest.destination_browser_prover.as_mut() {
+            reference.bound_route_hash = route_hash.clone();
+            reference.bound_proof_hash = proof_hash.clone();
+        }
+        if let Some(reference) = manifest.source_browser_prover.as_mut() {
+            reference.bound_route_hash = route_hash;
+            reference.bound_proof_hash = proof_hash;
+        }
+    }
+
+    fn production_ready_ton_route_manifest() -> SccpRouteManifest {
+        let proof_artifact_hash = format!("0x{}", "cc".repeat(32));
+        let mut manifest = SccpRouteManifest {
+            version: 1,
+            route_id: "taira_ton_xor".to_owned(),
+            asset_key: "xor".to_owned(),
+            tron_network: "testnet".to_owned(),
+            chain: "ton-testnet".to_owned(),
+            chain_id_hex: SccpRouteManifest::TON_TESTNET_CHAIN_ID_HEX.to_owned(),
+            explorer_url: Some("https://testnet.tonscan.org".to_owned()),
+            explorer_host: Some("testnet.tonscan.org".to_owned()),
+            counterparty_account_codec: Some(4),
+            counterparty_account_codec_key: Some("ton_raw".to_owned()),
+            counterparty_domain: 4,
+            verifier_target: "TonContract".to_owned(),
+            production_ready: true,
+            disabled_reason: None,
+            network_id_hex: SccpRouteManifest::TON_TESTNET_CHAIN_ID_HEX.to_owned(),
+            taira_xor_token_address: ton_raw("11"),
+            taira_xor_bridge_address: ton_raw("22"),
+            source_bridge_address: None,
+            sccp_bsc_source_bridge_address: None,
+            bsc_source_bridge_address: None,
+            sccp_tron_source_bridge_address: Some(ton_raw("33")),
+            destination_verifier_address: None,
+            ton_finalize_message_value_nano: Some("100000000".to_owned()),
+            verifier_address: None,
+            sccp_bsc_destination_verifier_address: None,
+            bsc_verifier_address: None,
+            evm_verifier_address: None,
+            tron_verifier_address: Some(ton_raw("44")),
+            verifier_code_hash: format!("0x{}", "ca".repeat(32)),
+            verifier_key_hash: format!("0x{}", "cb".repeat(32)),
+            proof_artifact_hash: Some(proof_artifact_hash.clone()),
+            prover_artifact_hash: Some(proof_artifact_hash),
+            circuit_artifact_hash: None,
+            proving_key_hash: Some(format!("0x{}", "cd".repeat(32))),
+            native_evm_prover_bundle_hash: None,
+            native_evm_prover_bundle: None,
+            source_verifier_material: Some(iroha_primitives::json::Json::new(norito::json!({
+                "version": 1,
+                "source_domain": 4,
+                "target_domain": 0,
+                "source_chain": "ton-testnet"
+            }))),
+            source_adapter_engine_deployment: Some(iroha_primitives::json::Json::new(
+                norito::json!({
+                    "version": 1,
+                    "source_domain": 4,
+                    "target_domain": 0,
+                    "source_chain": "ton-testnet",
+                    "deployment_receipt_hash": "0x5151515151515151515151515151515151515151515151515151515151515151"
+                }),
+            )),
+            source_adapter_engine: Some(iroha_primitives::json::Json::new(norito::json!({
+                "version": 1,
+                "source_domain": 4,
+                "target_domain": 0,
+                "source_chain": "ton-testnet"
+            }))),
+            destination_browser_prover: Some(browser_prover_ref("ton-destination", "60")),
+            source_browser_prover: Some(browser_prover_ref("ton-source", "70")),
+            deployment_evidence_sha256: Some(format!("0x{}", "ce".repeat(32))),
+            destination_binding_key: SccpRouteManifest::expected_ton_destination_binding_key(),
+            destination_binding_hash: SccpRouteManifest::expected_ton_destination_binding_hash(),
+            taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+                .to_owned(),
+            taira_burn_record_contract_artifact_b64: "QUJDREVGRw==".to_owned(),
+            taira_burn_record_artifact_sha256: format!("0x{}", "cf".repeat(32)),
+            taira_burn_record_code_hash: format!("0x{}", "d1".repeat(32)),
+            taira_burn_record_vk_backend: "halo2/ipa".to_owned(),
+            taira_burn_record_vk_name: "taira_xor_burn_record_v1".to_owned(),
+            taira_burn_record_gas_limit: 2_000_000,
+            settlement_contract_address: None,
+            settlement_contract_alias: Some("taira_ton_xor_burn_record".to_owned()),
+            post_deploy_full_toml_ready: Some(true),
+            post_deploy_source_bridge_config_hash: Some(format!("0x{}", "d2".repeat(32))),
+            post_deploy_source_event_transaction_id: Some(format!("0x{}", "d3".repeat(32))),
+            post_deploy_source_event_explorer_url: None,
+            post_deploy_route_canary_evidence_hash: Some(format!("0x{}", "d4".repeat(32))),
+            post_deploy_route_canary_transaction_id: Some(format!("0x{}", "d5".repeat(32))),
+            post_deploy_route_canary_explorer_url: None,
+            post_deploy_offline_full_toml_sha256: Some(format!("0x{}", "d6".repeat(32))),
+        };
+        bind_ton_browser_provers_to_route(&mut manifest);
+        manifest
     }
 
     #[test]
@@ -6223,6 +6853,32 @@ mod sccp_route_manifest_user_config_tests {
     }
 
     #[test]
+    #[should_panic(expected = "module_specifier must be a non-empty canonical string")]
+    fn bsc_browser_prover_rejects_padded_module_specifier() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .module_specifier = Some(" @sora/sccp-bsc-destination-prover ".to_owned());
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "module_specifier must be a non-empty canonical string")]
+    fn bsc_browser_prover_rejects_empty_module_specifier() {
+        let mut manifest = route_manifest();
+        manifest
+            .source_browser_prover
+            .as_mut()
+            .expect("source prover fixture")
+            .module_specifier = Some(String::new());
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
     #[should_panic(expected = "expected_exports must not be empty")]
     fn bsc_browser_prover_rejects_empty_export_list() {
         let mut manifest = route_manifest();
@@ -6338,6 +6994,176 @@ mod sccp_route_manifest_user_config_tests {
         manifest.proving_key_hash = Some(manifest.verifier_key_hash.clone());
 
         let _ = manifest.parse();
+    }
+
+    #[test]
+    fn bsc_route_rejects_deployment_evidence_hash_role_replay() {
+        let baseline = production_ready_route_manifest();
+        let cases = [
+            ("verifier_code_hash", baseline.verifier_code_hash.clone()),
+            ("verifier_key_hash", baseline.verifier_key_hash.clone()),
+            (
+                "destination_binding_hash",
+                baseline.destination_binding_hash.clone(),
+            ),
+            (
+                "proof_artifact_hash",
+                baseline
+                    .proof_artifact_hash
+                    .clone()
+                    .expect("fixture has proof artifact hash"),
+            ),
+            (
+                "proving_key_hash",
+                baseline
+                    .proving_key_hash
+                    .clone()
+                    .expect("fixture has proving key hash"),
+            ),
+        ];
+
+        for (label, replay_hash) in cases {
+            let mut manifest = production_ready_route_manifest();
+            manifest.deployment_evidence_sha256 = Some(replay_hash);
+
+            let panic = std::panic::catch_unwind(|| {
+                let _ = manifest.parse();
+            })
+            .expect_err("deployment evidence hash role replay must be rejected");
+            let message = panic_message(panic.as_ref());
+            assert!(
+                message.contains(&format!(
+                    "deployment_evidence_sha256 must not equal {label}"
+                )),
+                "unexpected panic for {label}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn production_routes_reject_reused_post_deploy_hash_roles() {
+        let cases: [(&str, SccpRouteManifestFixture); 3] = [
+            ("BSC", production_ready_route_manifest),
+            ("TON", production_ready_ton_route_manifest),
+            ("TRON", production_ready_tron_route_manifest),
+        ];
+
+        for (route_family, fixture) in cases {
+            let mut manifest = fixture();
+            manifest.post_deploy_route_canary_evidence_hash =
+                manifest.post_deploy_source_bridge_config_hash.clone();
+            let panic = std::panic::catch_unwind(|| {
+                let _ = manifest.parse();
+            })
+            .expect_err("route canary evidence hash replay must be rejected");
+            let message = panic_message(panic.as_ref());
+            assert!(
+                message.contains(
+                    "post_deploy_route_canary_evidence_hash must not equal \
+                     post_deploy_source_bridge_config_hash"
+                ),
+                "unexpected {route_family} evidence-hash panic: {message}"
+            );
+
+            let mut manifest = fixture();
+            manifest.post_deploy_route_canary_transaction_id =
+                manifest.post_deploy_source_event_transaction_id.clone();
+            manifest.post_deploy_route_canary_explorer_url =
+                manifest.post_deploy_source_event_explorer_url.clone();
+            let panic = std::panic::catch_unwind(|| {
+                let _ = manifest.parse();
+            })
+            .expect_err("route canary transaction id replay must be rejected");
+            let message = panic_message(panic.as_ref());
+            assert!(
+                message.contains(
+                    "post_deploy_route_canary_transaction_id must not equal \
+                     post_deploy_source_event_transaction_id"
+                ),
+                "unexpected {route_family} transaction-id panic: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn bsc_route_rejects_browser_prover_hash_role_replay() {
+        let baseline = production_ready_route_manifest();
+        let destination_module_hash = baseline
+            .destination_browser_prover
+            .as_ref()
+            .expect("fixture has destination browser prover")
+            .module_hash
+            .clone();
+        let cases = [
+            (
+                "destination_browser_prover.module_hash",
+                "verifier_code_hash",
+                baseline.verifier_code_hash.clone(),
+            ),
+            (
+                "destination_browser_prover.manifest_hash",
+                "destination_binding_hash",
+                baseline.destination_binding_hash.clone(),
+            ),
+            (
+                "source_browser_prover.module_hash",
+                "destination_browser_prover.module_hash",
+                destination_module_hash,
+            ),
+            (
+                "source_browser_prover.manifest_hash",
+                "native_evm_prover_bundle_hash",
+                baseline
+                    .native_evm_prover_bundle_hash
+                    .clone()
+                    .expect("fixture has native prover bundle hash"),
+            ),
+        ];
+
+        for (label, previous_label, replay_hash) in cases {
+            let mut manifest = production_ready_route_manifest();
+            match label {
+                "destination_browser_prover.module_hash" => {
+                    manifest
+                        .destination_browser_prover
+                        .as_mut()
+                        .expect("destination prover")
+                        .module_hash = replay_hash;
+                }
+                "destination_browser_prover.manifest_hash" => {
+                    manifest
+                        .destination_browser_prover
+                        .as_mut()
+                        .expect("destination prover")
+                        .manifest_hash = replay_hash;
+                }
+                "source_browser_prover.module_hash" => {
+                    manifest
+                        .source_browser_prover
+                        .as_mut()
+                        .expect("source prover")
+                        .module_hash = replay_hash;
+                }
+                "source_browser_prover.manifest_hash" => {
+                    manifest
+                        .source_browser_prover
+                        .as_mut()
+                        .expect("source prover")
+                        .manifest_hash = replay_hash;
+                }
+                _ => unreachable!("test case labels are exhaustive"),
+            }
+
+            let panic = std::panic::catch_unwind(|| {
+                let _ = manifest.parse();
+            })
+            .expect_err("browser prover hash role replay must be rejected");
+            let message = panic_message(panic.as_ref());
+            assert!(
+                message.contains(&format!("{label} must not equal {previous_label}")),
+                "unexpected panic for {label}: {message}"
+            );
+        }
     }
 
     #[test]
@@ -6489,6 +7315,85 @@ mod sccp_route_manifest_user_config_tests {
     }
 
     #[test]
+    fn production_ready_ton_route_with_post_deploy_evidence_parses() {
+        let manifest = production_ready_ton_route_manifest();
+
+        let actual = manifest.parse();
+
+        assert!(actual.production_ready);
+        assert_eq!(actual.counterparty_domain, 4);
+        assert_eq!(
+            actual.chain_id_hex,
+            SccpRouteManifest::TON_TESTNET_CHAIN_ID_HEX
+        );
+        assert_eq!(
+            actual.network_id_hex,
+            SccpRouteManifest::TON_TESTNET_CHAIN_ID_HEX
+        );
+        assert_eq!(
+            actual.destination_binding_key,
+            "sccp:0:4:ton:ton-contract-v1:3"
+        );
+        assert_eq!(
+            actual.destination_binding_hash,
+            "0x8651c1b818973f92050f69e66e8491e9681d23db1cb37393b9ea15c5e7e02799"
+        );
+        assert_eq!(actual.counterparty_account_codec, Some(4));
+        assert_eq!(
+            actual.counterparty_account_codec_key.as_deref(),
+            Some("ton_raw")
+        );
+        assert_eq!(
+            actual.ton_finalize_message_value_nano.as_deref(),
+            Some("100000000")
+        );
+        assert_eq!(
+            actual.proof_artifact_hash,
+            Some(format!("0x{}", "cc".repeat(32)))
+        );
+        assert_eq!(
+            actual.proving_key_hash,
+            Some(format!("0x{}", "cd".repeat(32)))
+        );
+        assert!(actual.source_verifier_material.is_some());
+        assert!(actual.source_adapter_engine_deployment.is_some());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TON route manifest production_ready requires ton_finalize_message_value_nano"
+    )]
+    fn production_ready_ton_route_requires_finalize_message_value() {
+        let mut manifest = production_ready_ton_route_manifest();
+        manifest.ton_finalize_message_value_nano = None;
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP route manifest ton_finalize_message_value_nano must be a positive integer decimal string"
+    )]
+    fn production_ready_ton_route_rejects_zero_finalize_message_value() {
+        let mut manifest = production_ready_ton_route_manifest();
+        manifest.ton_finalize_message_value_nano = Some("0".to_owned());
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    fn ton_destination_binding_hash_matches_core_vector() {
+        assert_eq!(
+            SccpRouteManifest::expected_ton_destination_binding_key(),
+            "sccp:0:4:ton:ton-contract-v1:3"
+        );
+        assert_eq!(
+            SccpRouteManifest::expected_ton_destination_binding_hash(),
+            "0x8651c1b818973f92050f69e66e8491e9681d23db1cb37393b9ea15c5e7e02799"
+        );
+    }
+
+    #[test]
     #[should_panic(
         expected = "network_id_hex must be a 0x-prefixed 32-byte hex value using canonical lowercase spelling"
     )]
@@ -6575,6 +7480,52 @@ mod sccp_route_manifest_user_config_tests {
     fn tron_route_rejects_whitespace_wrapped_post_deploy_hashes() {
         let mut manifest = production_ready_tron_route_manifest();
         manifest.post_deploy_source_bridge_config_hash = Some(format!(" 0x{} ", "b1".repeat(32)));
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TON route manifest production_ready requires route_id = taira_ton_xor"
+    )]
+    fn production_ready_ton_route_rejects_wrong_route_id() {
+        let mut manifest = production_ready_ton_route_manifest();
+        manifest.route_id = "foreign_ton_xor".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TON route manifest production_ready requires destination_binding_hash = 0x8651c1b818973f92050f69e66e8491e9681d23db1cb37393b9ea15c5e7e02799"
+    )]
+    fn production_ready_ton_route_rejects_wrong_destination_binding_hash() {
+        let mut manifest = production_ready_ton_route_manifest();
+        manifest.destination_binding_hash = format!("0x{}", "ab".repeat(32));
+        bind_ton_browser_provers_to_route(&mut manifest);
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "SCCP TON route manifest chain_id_hex must be TON testnet 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd"
+    )]
+    fn production_ready_ton_route_rejects_wrong_chain_id_hex() {
+        let mut manifest = production_ready_ton_route_manifest();
+        manifest.chain_id_hex =
+            "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc".to_owned();
+
+        let _ = manifest.parse();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "taira_xor_token_address must be a canonical TON raw address in workchain:account_hex form"
+    )]
+    fn ton_route_rejects_malformed_raw_address() {
+        let mut manifest = production_ready_ton_route_manifest();
+        manifest.taira_xor_token_address = "0:ABCDEF".to_owned();
 
         let _ = manifest.parse();
     }
@@ -15068,6 +16019,8 @@ pub struct DataSpaceDescriptor {
     pub fault_tolerance: Option<u32>,
     /// Optional default fee sponsor account literal for this data space.
     pub fee_sponsor_account_id: Option<String>,
+    /// Optional default fee sponsor policy name for this data space.
+    pub fee_sponsor_policy: Option<String>,
 }
 
 /// User-level configuration container for lane manifest registry.
@@ -15308,7 +16261,7 @@ pub struct NexusFees {
     /// Whether sponsored fees are settled by an external public-Nexus reconciler instead of local WSV asset debits.
     #[config(default = "defaults::nexus::fees::EXTERNAL_SETTLEMENT_ENABLED")]
     pub external_settlement_enabled: bool,
-    /// Burn fees at or after this block timestamp; earlier blocks use legacy fee transfer semantics.
+    /// Retained for configuration compatibility; direct Nexus fee settlement burns immediately.
     #[config(default = "defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS")]
     pub burn_from_unix_timestamp_ms: u64,
     /// Fee settlement mode: `direct` or `lane_relay_burn`.
@@ -15317,21 +16270,6 @@ pub struct NexusFees {
     /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
     #[config(default = "Vec::new()")]
     pub successful_claim_fee_exempt_authorities: Vec<String>,
-    /// Contract calls eligible for fee sponsorship.
-    #[config(default = "default_sponsored_contract_operation_allowlist()")]
-    pub sponsored_contract_operation_allowlist: Vec<SponsoredContractOperationAllowlistEntry>,
-}
-
-/// User-level sponsored contract operation allowlist entry.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
-pub struct SponsoredContractOperationAllowlistEntry {
-    /// Contract alias that must match the call target, if set.
-    pub contract_alias: Option<String>,
-    /// Contract address that must match the call target, if set.
-    pub contract_address: Option<String>,
-    /// Contract entrypoints eligible for sponsorship under this target rule.
-    #[config(default = "Vec::new()")]
-    pub entrypoints: Vec<String>,
 }
 
 /// User-level configuration container for shared Hugging Face lease policy.
@@ -15526,94 +16464,8 @@ impl Default for NexusFees {
             burn_from_unix_timestamp_ms: defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS,
             settlement_mode: defaults::nexus::fees::SETTLEMENT_MODE.to_string(),
             successful_claim_fee_exempt_authorities: Vec::new(),
-            sponsored_contract_operation_allowlist: default_sponsored_contract_operation_allowlist(
-            ),
         }
     }
-}
-
-fn default_sponsored_contract_operation_allowlist() -> Vec<SponsoredContractOperationAllowlistEntry>
-{
-    vec![SponsoredContractOperationAllowlistEntry {
-        contract_alias: Some(defaults::nexus::fees::DPN_SPONSORED_CONTRACT_ALIAS.to_owned()),
-        contract_address: None,
-        entrypoints: defaults::nexus::fees::dpn_sponsored_contract_entrypoints(),
-    }]
-}
-
-fn trim_optional_config_string(value: Option<String>) -> Option<String> {
-    value
-        .map(|raw| raw.trim().to_owned())
-        .filter(|raw| !raw.is_empty())
-}
-
-fn parse_sponsored_contract_operation_allowlist(
-    entries: Vec<SponsoredContractOperationAllowlistEntry>,
-    emitter: &mut Emitter<ParseError>,
-) -> Option<Vec<actual::SponsoredContractOperationAllowlistEntry>> {
-    let mut parsed_entries = Vec::with_capacity(entries.len());
-    for (index, entry) in entries.into_iter().enumerate() {
-        let context = format!("nexus.fees.sponsored_contract_operation_allowlist[{index}]");
-        let contract_alias = match trim_optional_config_string(entry.contract_alias) {
-            Some(raw) => match raw.parse::<ContractAlias>() {
-                Ok(parsed) => Some(parsed),
-                Err(err) => {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidNexusConfig)
-                            .attach(format!("{context}.contract_alias is invalid: {err}")),
-                    );
-                    return None;
-                }
-            },
-            None => None,
-        };
-        let contract_address = match trim_optional_config_string(entry.contract_address) {
-            Some(raw) => match raw.parse::<ContractAddress>() {
-                Ok(parsed) => Some(parsed),
-                Err(err) => {
-                    emitter.emit(
-                        Report::new(ParseError::InvalidNexusConfig)
-                            .attach(format!("{context}.contract_address is invalid: {err}")),
-                    );
-                    return None;
-                }
-            },
-            None => None,
-        };
-        if contract_alias.is_none() && contract_address.is_none() {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                "{context} must set contract_alias or contract_address"
-            )));
-            return None;
-        }
-
-        let mut entrypoints = BTreeSet::new();
-        for raw in entry.entrypoints {
-            let entrypoint = raw.trim();
-            if entrypoint.is_empty() {
-                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "{context}.entrypoints must not contain empty values"
-                )));
-                return None;
-            }
-            entrypoints.insert(entrypoint.to_owned());
-        }
-        if entrypoints.is_empty() {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach(format!("{context}.entrypoints must not be empty")),
-            );
-            return None;
-        }
-
-        parsed_entries.push(actual::SponsoredContractOperationAllowlistEntry {
-            contract_alias,
-            contract_address,
-            entrypoints,
-        });
-    }
-
-    Some(parsed_entries)
 }
 
 impl NexusFees {
@@ -15665,11 +16517,6 @@ impl NexusFees {
             );
             return None;
         }
-        let sponsored_contract_operation_allowlist = parse_sponsored_contract_operation_allowlist(
-            self.sponsored_contract_operation_allowlist,
-            emitter,
-        )?;
-
         Some(actual::NexusFees {
             fee_asset_id,
             fee_sink_account_id: self.fee_sink_account_id,
@@ -15691,7 +16538,6 @@ impl NexusFees {
                 .map(|authority| authority.trim().to_string())
                 .filter(|authority| !authority.is_empty())
                 .collect(),
-            sponsored_contract_operation_allowlist,
         })
     }
 }
@@ -15855,127 +16701,6 @@ mod nexus_asset_selector_tests {
     fn nexus_fees_parse_rejects_non_xor_asset_selector() {
         let cfg = NexusFees {
             fee_asset_id: "pkr#paynet".to_owned(),
-            ..NexusFees::default()
-        };
-
-        let mut emitter = Emitter::new();
-        assert!(cfg.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    fn test_contract_address_literal() -> String {
-        let key_pair = checked_nexus_contract_ed25519_key_fixture();
-        let account_id = AccountId::new(key_pair.public_key().clone());
-        ContractAddress::derive(
-            defaults::common::chain_discriminant(),
-            &account_id,
-            42,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("derive test contract address")
-        .to_string()
-    }
-
-    #[test]
-    fn nexus_fees_default_sponsored_allowlist_contains_dpn_entrypoints() {
-        let mut emitter = Emitter::new();
-        let parsed = NexusFees::default()
-            .parse(&mut emitter)
-            .expect("default fees config should parse");
-
-        assert!(emitter.into_result().is_ok());
-        let [entry] = parsed.sponsored_contract_operation_allowlist.as_slice() else {
-            panic!("expected one default sponsored contract allowlist entry");
-        };
-        assert_eq!(
-            entry.contract_alias.as_ref().map(ToString::to_string),
-            Some(defaults::nexus::fees::DPN_SPONSORED_CONTRACT_ALIAS.to_owned())
-        );
-        assert_eq!(entry.contract_address, None);
-        for entrypoint in defaults::nexus::fees::dpn_sponsored_contract_entrypoints() {
-            assert!(
-                entry.entrypoints.contains(&entrypoint),
-                "missing sponsored DPN entrypoint {entrypoint}"
-            );
-        }
-    }
-
-    #[test]
-    fn nexus_fees_parse_accepts_address_scoped_sponsored_operation_rule() {
-        let address = test_contract_address_literal();
-        let cfg = NexusFees {
-            sponsored_contract_operation_allowlist: vec![
-                SponsoredContractOperationAllowlistEntry {
-                    contract_alias: None,
-                    contract_address: Some(address.clone()),
-                    entrypoints: vec!["transfer_dpn".to_owned(), "freeze_dpn".to_owned()],
-                },
-            ],
-            ..NexusFees::default()
-        };
-
-        let mut emitter = Emitter::new();
-        let parsed = cfg.parse(&mut emitter).expect("fees config should parse");
-
-        assert!(emitter.into_result().is_ok());
-        let [entry] = parsed.sponsored_contract_operation_allowlist.as_slice() else {
-            panic!("expected one sponsored contract allowlist entry");
-        };
-        assert_eq!(entry.contract_alias, None);
-        assert_eq!(
-            entry.contract_address.as_ref().map(ToString::to_string),
-            Some(address)
-        );
-        assert!(entry.entrypoints.contains("transfer_dpn"));
-        assert!(entry.entrypoints.contains("freeze_dpn"));
-    }
-
-    #[test]
-    fn nexus_fees_parse_rejects_sponsored_operation_without_contract_target() {
-        let cfg = NexusFees {
-            sponsored_contract_operation_allowlist: vec![
-                SponsoredContractOperationAllowlistEntry {
-                    contract_alias: None,
-                    contract_address: None,
-                    entrypoints: vec!["transfer_dpn".to_owned()],
-                },
-            ],
-            ..NexusFees::default()
-        };
-
-        let mut emitter = Emitter::new();
-        assert!(cfg.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn nexus_fees_parse_rejects_blank_sponsored_entrypoint() {
-        let cfg = NexusFees {
-            sponsored_contract_operation_allowlist: vec![
-                SponsoredContractOperationAllowlistEntry {
-                    contract_alias: Some("dpn_suite::dpn".to_owned()),
-                    contract_address: None,
-                    entrypoints: vec!["transfer_dpn".to_owned(), " ".to_owned()],
-                },
-            ],
-            ..NexusFees::default()
-        };
-
-        let mut emitter = Emitter::new();
-        assert!(cfg.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn nexus_fees_parse_rejects_invalid_sponsored_contract_alias() {
-        let cfg = NexusFees {
-            sponsored_contract_operation_allowlist: vec![
-                SponsoredContractOperationAllowlistEntry {
-                    contract_alias: Some("not a contract alias".to_owned()),
-                    contract_address: None,
-                    entrypoints: vec!["transfer_dpn".to_owned()],
-                },
-            ],
             ..NexusFees::default()
         };
 
@@ -16439,11 +17164,11 @@ impl Autoscale {
         }
 
         if let (Some(min), Some(max)) = (min_lanes, max_lanes) {
-            if min > max {
+            if min >= max {
                 invalid = true;
                 emitter.emit(
                     Report::new(ParseError::InvalidNexusConfig)
-                        .attach("nexus.autoscale.min_lanes must be <= max_lanes"),
+                        .attach("nexus.autoscale.min_lanes must be < max_lanes"),
                 );
             }
             if max.get() > defaults::nexus::autoscale::MAX_LANES {
@@ -17094,7 +17819,7 @@ impl Nexus {
             ..
         } = self;
 
-        let (dataspace_catalog, dataspace_fee_sponsors) =
+        let (dataspace_catalog, dataspace_fee_sponsors, dataspace_fee_sponsor_policies) =
             Self::build_dataspace_catalog(dataspace_catalog, emitter)?;
         let lane_catalog =
             Self::build_lane_catalog(lane_count, lane_catalog, &dataspace_catalog, emitter)?;
@@ -17193,10 +17918,10 @@ impl Nexus {
             let max_lanes = autoscale.max_lanes.get();
             let mut reserved_range_error = false;
             let default_lane = routing_policy.default_lane.as_u32();
-            if default_lane >= min_lanes && default_lane < max_lanes {
+            if default_lane >= min_lanes {
                 reserved_range_error = true;
                 emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
-                    "nexus.routing_policy.default_lane {} is inside reserved autoscale elastic lane id range [{min_lanes}, {max_lanes}); choose a base default lane outside the autoscale range",
+                    "nexus.routing_policy.default_lane {} must be below nexus.autoscale.min_lanes {min_lanes} when autoscale is enabled",
                     routing_policy.default_lane
                 )));
             }
@@ -17228,6 +17953,7 @@ impl Nexus {
             lane_config,
             dataspace_catalog,
             dataspace_fee_sponsors,
+            dataspace_fee_sponsor_policies,
             routing_policy,
             registry,
             governance,
@@ -17404,10 +18130,12 @@ impl Nexus {
                             );
                             lane_errors = true;
                             None
-                        } else if key == AUTOSCALE_META_MANAGED {
+                        } else if key == AUTOSCALE_META_MANAGED
+                            || key == AUTOSCALE_META_CREATED_HEIGHT
+                        {
                             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
                                 format!(
-                                    "lane[{idx}] metadata key `{AUTOSCALE_META_MANAGED}` is reserved for the consensus autoscaler"
+                                    "lane[{idx}] metadata key `{key}` is reserved for the consensus autoscaler"
                                 ),
                             ));
                             lane_errors = true;
@@ -17449,9 +18177,10 @@ impl Nexus {
     fn build_dataspace_catalog(
         descriptors: Vec<DataSpaceDescriptor>,
         emitter: &mut Emitter<ParseError>,
-    ) -> Option<(DataSpaceCatalog, BTreeMap<DataSpaceId, String>)> {
+    ) -> Option<DataSpaceCatalogBuild> {
         let mut dataspace_entries = Vec::new();
         let mut dataspace_fee_sponsors = BTreeMap::new();
+        let mut dataspace_fee_sponsor_policies = BTreeMap::new();
         let mut dataspace_errors = false;
 
         if descriptors.is_empty() {
@@ -17580,8 +18309,35 @@ impl Nexus {
                     manifest_id
                 };
 
-                if let Some(sponsor) = Self::normalize_opt(descriptor.fee_sponsor_account_id) {
-                    dataspace_fee_sponsors.insert(id, sponsor);
+                let sponsor = Self::normalize_opt(descriptor.fee_sponsor_account_id);
+                let policy = Self::normalize_opt(descriptor.fee_sponsor_policy);
+                match (sponsor, policy) {
+                    (Some(sponsor), Some(policy)) => {
+                        let Ok(policy) = Name::from_str(&policy) else {
+                            dataspace_errors = true;
+                            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                                format!("dataspace[{idx}] fee_sponsor_policy is not a valid Name"),
+                            ));
+                            continue;
+                        };
+                        dataspace_fee_sponsors.insert(id, sponsor);
+                        dataspace_fee_sponsor_policies.insert(id, policy);
+                    }
+                    (Some(_), None) => {
+                        dataspace_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "dataspace[{idx}] fee_sponsor_account_id requires fee_sponsor_policy"
+                        )));
+                        continue;
+                    }
+                    (None, Some(_)) => {
+                        dataspace_errors = true;
+                        emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                            "dataspace[{idx}] fee_sponsor_policy requires fee_sponsor_account_id"
+                        )));
+                        continue;
+                    }
+                    (None, None) => {}
                 }
                 dataspace_entries.push(DataSpaceMetadata {
                     id,
@@ -17607,7 +18363,11 @@ impl Nexus {
         }
 
         match DataSpaceCatalog::new(dataspace_entries) {
-            Ok(catalog) => Some((catalog, dataspace_fee_sponsors)),
+            Ok(catalog) => Some((
+                catalog,
+                dataspace_fee_sponsors,
+                dataspace_fee_sponsor_policies,
+            )),
             Err(error) => {
                 emitter.emit(
                     Report::new(ParseError::InvalidNexusConfig)
@@ -24490,10 +25250,35 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         nexus.insert("routing_policy".into(), routing_policy_table(1));
 
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("default lane must stay outside the autoscale elastic range");
+            .expect_err("default lane must be below the autoscale elastic range");
         let report = format!("{error:?}");
         assert!(
-            report.contains("nexus.routing_policy.default_lane 1 is inside reserved autoscale elastic lane id range [1, 3)"),
+            report.contains("nexus.routing_policy.default_lane 1 must be below nexus.autoscale.min_lanes 1 when autoscale is enabled"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn nexus_autoscale_parse_rejects_default_lane_above_elastic_range() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        nexus.insert("enabled".into(), Value::Boolean(true));
+        set_valid_autoscale_defaults(nexus);
+        set_lane_count(nexus, 4);
+        nexus.insert(
+            "lane_catalog".into(),
+            Value::Array(vec![
+                lane_descriptor(0, "default"),
+                lane_descriptor(3, "governance"),
+            ]),
+        );
+        nexus.insert("routing_policy".into(), routing_policy_table(3));
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("high-side default lane must be rejected");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains("nexus.routing_policy.default_lane 3 must be below nexus.autoscale.min_lanes 1 when autoscale is enabled"),
             "{report}"
         );
     }
@@ -24552,6 +25337,41 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert!(
             report.contains(
                 "metadata key `autoscale.managed` is reserved for the consensus autoscaler"
+            ),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn nexus_autoscale_parse_rejects_reserved_created_height_metadata() {
+        let mut table = base_table();
+        let nexus = nexus_table_mut(&mut table);
+        nexus.insert("enabled".into(), Value::Boolean(true));
+        set_valid_autoscale_defaults(nexus);
+        set_lane_count(nexus, 4);
+        let mut default_lane = Table::new();
+        default_lane.insert("index".into(), Value::Integer(0));
+        default_lane.insert("alias".into(), Value::String("default".to_owned()));
+        let mut metadata = Table::new();
+        metadata.insert(
+            "autoscale.created_height".into(),
+            Value::String("42".to_owned()),
+        );
+        default_lane.insert("metadata".into(), Value::Table(metadata));
+        nexus.insert(
+            "lane_catalog".into(),
+            Value::Array(vec![
+                Value::Table(default_lane),
+                lane_descriptor(3, "governance"),
+            ]),
+        );
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("operators must not set reserved autoscale marker metadata");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(
+                "metadata key `autoscale.created_height` is reserved for the consensus autoscaler"
             ),
             "{report}"
         );
@@ -25570,10 +26390,10 @@ initial_delay_seconds = 17
         offline.insert("kagemusha_force_legacy".into(), Value::Boolean(true));
 
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("removed Kagemusha legacy readiness knob must not parse");
+            .expect_err("removed Kagemusha force flag must not parse");
         assert!(
             !error.to_string().is_empty(),
-            "removed Kagemusha legacy readiness knob should produce a parse error"
+            "removed Kagemusha force flag should produce a parse error"
         );
     }
 

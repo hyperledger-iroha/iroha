@@ -164,6 +164,19 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun offlineListParamsRejectsNormalizedVerdictIdHexBeforeDispatch() {
+        val verdictId = "ab".repeat(32)
+        assertEquals(verdictId, OfflineListParams(verdictIdHex = verdictId).toQueryParameters()["verdict_id_hex"])
+
+        for (invalid in listOf(" $verdictId", "$verdictId ", verdictId.uppercase(), "0x$verdictId", "abc", "", "zz")) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                OfflineListParams(verdictIdHex = invalid).toQueryParameters()
+            }
+            assertTrue(error.message?.contains("verdictIdHex") == true)
+        }
+    }
+
+    @Test
     fun identifierHiddenFunctionRequestsCarryOutputOpening() {
         val opening = sampleOpening()
         val request = IdentifierResolveRequest.encrypted("phone#retail", "abcd", opening)
@@ -1061,6 +1074,7 @@ class HttpClientTransportTest {
                 validationFeePolicyVersion = 7,
                 validationFeePolicyHash = "AB".repeat(32),
                 validationFeeInstructionIndex = 1,
+                validationFeeTransferEntryIndex = 2,
             )
         ).join()
 
@@ -1084,6 +1098,7 @@ class HttpClientTransportTest {
         assertEquals("7", payload["validation_fee_policy_version"])
         assertEquals("ab".repeat(32), payload["validation_fee_policy_hash"])
         assertEquals("1", payload["validation_fee_instruction_index"])
+        assertEquals("2", payload["validation_fee_transfer_entry_index"])
         @Suppress("UNCHECKED_CAST")
         val instructions = payload["instructions"] as List<String>
         assertEquals(listOf(Base64.getEncoder().encodeToString(instructionBytes)), instructions)
@@ -1169,6 +1184,28 @@ class HttpClientTransportTest {
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
+                    validationFeeTransferEntryIndex = 2,
+                )
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice",
+                    instructions = listOf(instruction),
+                    validationFeePolicyVersion = 7,
+                    validationFeePolicyHash = "ab".repeat(32),
+                    validationFeeTransferEntryIndex = 2,
+                )
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice",
+                    instructions = listOf(instruction),
                     validationFeePolicyVersion = 7,
                 )
             )
@@ -1182,6 +1219,19 @@ class HttpClientTransportTest {
                     validationFeePolicyVersion = 7,
                     validationFeePolicyHash = "ab".repeat(32),
                     validationFeeInstructionIndex = -1,
+                )
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildMultisigProposePayload(
+                MultisigProposeRequest(
+                    multisigAccountAlias = "cbdc@banka",
+                    signerAccountId = "alice",
+                    instructions = listOf(instruction),
+                    validationFeePolicyVersion = 7,
+                    validationFeePolicyHash = "ab".repeat(32),
+                    validationFeeInstructionIndex = 1,
+                    validationFeeTransferEntryIndex = -2,
                 )
             )
         }

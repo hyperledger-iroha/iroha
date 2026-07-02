@@ -30,11 +30,14 @@ from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
 from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
     build_evidence_artifact,
     count_evidence_artifacts,
+    recognized_evidence_artifacts,
     count_evidence_files,
     evidence_gate_status,
     evidence_artifact_digest_set,
+    evidence_artifact_fingerprint,
     evidence_artifact_is_valid,
     evidence_schema_by_kind,
     init_evidence_artifact_buckets,
@@ -63,6 +66,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     require_string_not_equal,
     record_evidence_digest_mismatch_errors,
     require_sum_equal,
@@ -114,6 +118,7 @@ ROOT_BOUND_KINDS = (
     "governance_approval",
 )
 REVOCATION_BOUND_KINDS = ROOT_BOUND_KINDS
+POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "account_id",
@@ -172,6 +177,7 @@ DEFAULT_REQUIRED_KINDS = tuple(kind.name for kind in EVIDENCE_KINDS)
 COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
     "schema",
     "status",
+    "generated_at_unix",
     "deployment_id",
     "environment",
     "deployment_context_reviewed",
@@ -246,6 +252,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "revoked_proof_rejected",
         "replay_nullifier_rejected",
         "root_binding_verified",
+        "policy_digest_hex",
         "max_verify_latency_ms",
         "max_service_lag_seconds",
         "raw_proofs_included",
@@ -309,8 +316,10 @@ class ValidationOptions:
 
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
+    "generated_at_unix",
     "deployment_id",
     "environment",
+    "deployment_context_reviewed",
     "root_digest_hex",
     "revocation_list_digest_hex",
     "synced_root_digest_hex",
@@ -398,6 +407,14 @@ def validate_revocation_registry(
 
 def validate_enrollment_portal(payload: dict[str, Any], errors: list[str]) -> None:
     require_count_equal(payload, "route_count", "passed_route_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     require_bool_true(payload, "issuer_approval_required", errors)
     require_bool_true(payload, "renewal_flow_verified", errors)
     require_bool_true(payload, "rate_limit_configured", errors)
@@ -442,6 +459,7 @@ def validate_verifier_service(
     require_bool_true(payload, "revoked_proof_rejected", errors)
     require_bool_true(payload, "replay_nullifier_rejected", errors)
     require_bool_true(payload, "root_binding_verified", errors)
+    require_policy_digest(payload, errors)
     require_maximum_int(
         payload,
         "max_verify_latency_ms",
@@ -536,7 +554,7 @@ def validate_evidence_payload(
     payload: dict[str, Any],
     options: ValidationOptions,
 ) -> tuple[str | None, list[str]]:
-    return validate_standard_evidence_payload(
+    kind_name, errors = validate_standard_evidence_payload(
         payload,
         SCHEMA_TO_KIND,
         "SoraFS PoP rollout artifact",
@@ -547,6 +565,9 @@ def validate_evidence_payload(
         ),
         require_reviewed_deployment_context=True,
     )
+    if kind_name is not None:
+        require_positive_int(payload, "generated_at_unix", errors)
+    return kind_name, errors
 
 
 
@@ -564,6 +585,10 @@ def build_summary(
     revocation_registry_artifacts: list[dict[str, Any]] = []
     root_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     revocation_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    policy_candidate_artifacts: list[dict[str, Any]] = []
+    policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_juror_sync_bindings: set[tuple[str, str]] = set()
+    valid_pop_snapshot_digests: set[str] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -586,7 +611,7 @@ def build_summary(
             )
             continue
         artifact = build_evidence_artifact(
-            path,
+            archive_artifact_path_label(path, evidence_dirs),
             digest,
             payload,
             validation_errors,
@@ -600,10 +625,14 @@ def build_summary(
                 commitment_root_artifacts.append(artifact)
             if kind_name == "revocation_registry":
                 revocation_registry_artifacts.append(artifact)
+            if kind_name == "verifier_service":
+                policy_candidate_artifacts.append(artifact)
             if kind_name in ROOT_BOUND_KINDS:
                 root_bound_artifacts.append((kind_name, artifact))
             if kind_name in REVOCATION_BOUND_KINDS:
                 revocation_bound_artifacts.append((kind_name, artifact))
+            if kind_name in POLICY_BOUND_KINDS:
+                policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_validation_errors(path, validation_errors, errors)
 
     issuer_root_digests = evidence_artifact_digest_set(
@@ -730,6 +759,51 @@ def build_summary(
         ),
     )
 
+    valid_policy_digests = evidence_artifact_digest_set(
+        [
+            artifact
+            for artifact in policy_candidate_artifacts
+            if evidence_artifact_is_valid(artifact)
+        ],
+        "policy_digest_hex",
+    )
+
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("verifier_service",) + POLICY_BOUND_KINDS,
+        bound_artifacts=policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must match a valid "
+            "verifier_service policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex must match a valid "
+            "verifier_service policy_digest_hex"
+        ),
+    )
+
+    for artifact in artifacts_by_kind.get("juror_client", []):
+        if not evidence_artifact_is_valid(artifact):
+            continue
+        fingerprint = evidence_artifact_fingerprint(artifact)
+        synced_root = fingerprint.get("synced_root_digest_hex")
+        synced_revocation = fingerprint.get("synced_revocation_list_digest_hex")
+        if isinstance(synced_root, str) and isinstance(synced_revocation, str):
+            valid_juror_sync_bindings.add(
+                (synced_root.lower(), synced_revocation.lower())
+            )
+
+    for artifact in artifacts_by_kind.get("moderation_integration", []):
+        if not evidence_artifact_is_valid(artifact):
+            continue
+        fingerprint = evidence_artifact_fingerprint(artifact)
+        pop_snapshot_digest = fingerprint.get("pop_snapshot_digest_hex")
+        if isinstance(pop_snapshot_digest, str):
+            valid_pop_snapshot_digests.add(pop_snapshot_digest.lower())
+
     required = build_required_evidence_summary(
         required_kinds,
         artifacts_by_kind,
@@ -750,8 +824,18 @@ def build_summary(
         },
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
+        "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
+        "valid_juror_sync_bindings": [
+            {
+                "synced_root_digest_hex": synced_root,
+                "synced_revocation_list_digest_hex": synced_revocation,
+            }
+            for synced_root, synced_revocation in sorted(valid_juror_sync_bindings)
+        ],
+        "valid_pop_snapshot_digests": sorted(valid_pop_snapshot_digests),
         "valid_root_digests": sorted(valid_root_digests),
         "valid_revocation_list_digests": sorted(valid_revocation_digests),
+        "valid_policy_digests": sorted(valid_policy_digests),
         "required": required,
         "errors": errors,
     }

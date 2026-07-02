@@ -1,12 +1,11 @@
 #![cfg(feature = "ivm_zk_tests")]
 use halo2curves::{
     bn256::Fr,
-    ff::{Field, PrimeField},
+    ff::{Field, PrimeField, derive::rand_core::OsRng},
 };
 use ivm::bn254_vec::{
     FieldElem, add, add_scalar, mul, mul_scalar, reduce_wide, sub, sub_scalar, wide_mul,
 };
-use rand_core::OsRng;
 
 fn fr_to_u64(f: Fr) -> u64 {
     let repr = f.to_repr();

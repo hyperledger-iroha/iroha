@@ -33,21 +33,328 @@ static predicates; bare variables and undefined labels must be wrapped in
 concrete predicate obligations before composition.
 Whole-body raw scalar equality exactness definitions such as
 `ActualOutput = SpecOutput` must also be named as concrete predicates and
-composed as direct exactness conjuncts. Whole-body negation or disjunction
-exactness definitions must follow the same rule: name the positive model
-predicate, then compose that predicate directly. Whole-body
+composed as direct exactness conjuncts. Direct raw scalar equality exactness
+conjuncts must be named concrete predicates before composition. Whole-body
+negation or disjunction exactness definitions must follow the same rule: name
+the positive model predicate, then compose that predicate directly. Whole-body
 `ImplementationActions(...) = SpecActions(...)` quantifiers must also be named
 as concrete predicates before exactness composition. Whole-body
 `\A ...: Matches(...)` exactness quantifiers must compose the existing concrete
 matches predicate directly. More generally, checked exactness bodies must not be
-whole-body quantifiers; name the quantified model predicate first.
+whole-body quantifiers; name the quantified model predicate first. Whole-body
+control-flow, implication, or equivalence exactness definitions must name the
+selected model predicate before composing it directly.
 Top-level `ImplementationActions(Case) = SpecActions(Case)` exactness
 conjuncts must also be lifted into named concrete predicates before the
-exactness bundle composes them. Top-level `Matches(Case)` exactness conjuncts
-must follow the same rule: name the concrete matches predicate first, then
-compose that predicate from the exactness bundle. Checked exactness bodies must
+exactness bundle composes them. Action quantifier exactness conjuncts must
+compose named predicates before the exactness bundle composes them. Top-level
+`Matches(Case)` exactness conjuncts must follow the same rule: name the
+concrete matches predicate first, then compose that predicate from the exactness
+bundle. Quantified `Matches` exactness
+conjuncts must compose an existing concrete matches predicate directly. Checked exactness bodies must
 contain direct named zero-arity conjuncts; formula-only `/\` bundles must be
 lifted behind named concrete predicates before exactness composition.
+Quantified formula exactness conjuncts must be lifted behind named model
+predicates before exactness composition.
+Formula equality exactness conjuncts must be lifted behind named model
+predicates before exactness composition.
+Formula equivalence exactness conjuncts must be lifted behind named model
+predicates before exactness composition.
+Parameterized exactness conjuncts must be lifted behind zero-arity wrapper
+predicates before the exactness bundle composes them.
+Parameterized helper call checks parse expression arguments, including comparisons.
+Compound exactness helper operands must not hide expression-argument parameterized helper calls.
+Non-named exactness conjuncts are rejected even when mixed with named
+predicates.
+Named exactness predicates must not hide generic correctness, `TypeInvariant`,
+or nested `*Exactness` identifiers.
+Transitive named exactness predicate chains must not hide generic correctness,
+`TypeInvariant`, or nested `*Exactness` identifiers.
+Transitive exactness predicate chains must not hide repeated helper conjuncts.
+Unary-temporal exactness helper wrappers must not hide repeated helper conjuncts.
+Unary-temporal exactness helper wrappers must not hide single-helper conjunct aliases.
+Literal-gated exactness helper wrappers must not hide single-helper conjunct aliases.
+Literal-gated exactness helper wrappers must not hide zero-arity helper aliases.
+Literal-gated zero-arity helper alias checks recurse through nested identity gates.
+Literal-gated exactness helper wrappers must not hide negated helper operands.
+Literal-gated negated helper operand checks recurse through nested identity gates.
+Compound exactness helper operands must not hide repeated helper conjuncts.
+Helper conjunct repetition checks traverse unary-temporal wrappers.
+Repeated helper same-polarity checks split top-level boolean operands before peeling temporal or negated wrappers.
+Transitive exactness predicate chains must not hide repeated helper operands.
+Helper operand repetition checks traverse unary-temporal wrappers.
+Repeated helper operand checks include chained implication and equivalence operands.
+Transitive exactness predicate chains must not hide contradictory helper operands.
+Transitive exactness predicate chains must not hide excluded-middle helper operands.
+Transitive exactness predicate chains must not hide complementary-equivalence helper operands.
+Complementary-equivalence checks include chained equivalence operands.
+Helper operand polarity checks traverse unary-temporal wrappers.
+Helper operand polarity checks unwrap one-line `LET` helper aliases.
+Transitive exactness predicate chains must not hide undefined helpers.
+Quantified exactness helper formulas must not hide undefined helpers.
+Undefined helper scans preserve quantified binding scope.
+Undefined helper scans preserve unbounded quantified binding scope.
+Undefined helper scans reject relation-bearing quantified binding prefixes.
+Undefined helper scans preserve tuple-pattern quantifier domains.
+Undefined helper scans preserve LET binding scope.
+Undefined helper scans preserve parameterized LET operator scope.
+Undefined helper scans preserve CHOOSE binding scope.
+Undefined helper scans preserve LAMBDA binding scope.
+Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes.
+Undefined helper scans preserve standard TLA set/operator identifiers.
+Undefined helper scans preserve ENABLED/UNCHANGED operand scope.
+Undefined helper scans preserve CASE branch scope.
+Undefined helper scans preserve relation operand scope.
+Undefined helper scans preserve operator-call argument scope.
+Undefined helper scans preserve arithmetic/set infix operand scope.
+Undefined helper scans preserve sequence/function infix operand scope.
+Undefined helper scans preserve explicit set literal element scope.
+Undefined helper scans preserve unary set-operator operand scope.
+Undefined helper scans preserve set-comprehension binding scope.
+Undefined helper scans preserve set-comprehension outer enclosure scope.
+Undefined helper scans preserve function-constructor binding scope.
+Undefined helper scans preserve function-set domain and range scope.
+Function-set scans preserve CASE domain branch arrows.
+Function-set scans preserve record maplet CASE values.
+Function-set scans preserve record set/update CASE values.
+Undefined helper scans preserve record field label scope.
+Undefined helper scans preserve record set field label scope.
+Undefined helper scans preserve record update field label scope.
+Undefined helper scans preserve record selector field label scope.
+Undefined helper scans preserve comma-shared set/function binding scope.
+Undefined helper scans preserve operator parameter scope.
+Quantified exactness helper formulas must not be vacuous.
+Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain, self-membership, or empty-set membership facts.
+Quantified helper restatement checks reject pure top-level boolean compositions.
+Quantified helper restatement checks reject identity-literal gates.
+Quantified helper restatement checks propagate known truth values.
+Quantified formula prefix scans preserve escaped string literal colons.
+Quantified formula prefix scans preserve tuple literal maplet colons.
+Quantified helper formula scans require scoped binding prefixes.
+Quantified bound identifier scans preserve escaped string literal domains.
+Quantified helper bound-domain checks preserve escaped string literal domains.
+Quantified helper bound-domain checks include comma-shared bindings.
+Quantified helper bound-domain checks skip tuple-pattern component domains.
+Quantified helper singleton-domain checks preserve tuple literal elements.
+Quantified helper vacuity checks include unbounded static bodies.
+Line comment scans preserve escaped string literal comment markers.
+Static outer wrapper scans preserve escaped string literal parentheses.
+Semantic identifier scans ignore escaped string literal contents.
+Top-level relation and boolean scans preserve tuple literal operators.
+Top-level relation scans reject whole-body control/action wrappers.
+Top-level boolean scans preserve escaped string literal operators.
+Top-level boolean/equality detector helpers preserve tuple literal operators.
+Top-level keyword scans preserve tuple literal keywords.
+Top-level CASE branch scans preserve tuple literal arms and conditions.
+Top-level keyword and CASE branch scans preserve escaped string literal delimiters.
+Top-level CASE branch scans distinguish unary temporal boxes from arm separators.
+Quantified exactness helper formulas must use their bound identifiers.
+Quantified exactness helper formulas must not duplicate bound identifiers.
+Quantified unused-bound checks include later binding groups.
+Quantified unused-bound checks include unbounded bindings.
+Quantified bound identifier scans include later tuple-pattern binding groups.
+Quantified exactness helper formulas must not select predicates with control flow.
+Quantified exactness helper formulas must not appear below top-level negation operands.
+Quantified exactness helper formulas are checked through boolean operands.
+Negated quantified helper checks unwrap one-line `LET` helper aliases.
+Negated quantified helper checks split top-level boolean operands before peeling negation.
+Quantified helper body checks unwrap one-line `LET` helper aliases.
+Quantified helper body control-flow checks reject non-transparent `LET` bodies.
+Existential quantified exactness helper formulas must not weaken exactness chains.
+Transitive exactness predicate chains must not hide whole-body control-flow predicate-selection helpers.
+Transitive exactness predicate chains must not hide nested control-flow predicate-selection helpers.
+Nested control-flow predicate-selection checks unwrap one-line `LET` branch aliases.
+Control-flow predicate-selection checks unwrap one-line `LET` control aliases.
+Nested control-flow predicate-selection checks include non-branch control operators.
+Unary-temporal exactness helper wrappers must not hide control-flow predicate selection.
+Unary-temporal exactness LET-alias helper wrappers must name concrete model predicates.
+Transitive exactness predicate chains must not hide whole-body raw-predicate boolean-composition helpers.
+Raw-predicate exactness boolean-composition helper operands are checked through top-level negation.
+Raw-predicate exactness boolean-composition helper operands are checked through stacked top-level negation.
+Raw-predicate exactness boolean-composition helper operands are checked through unary-temporal wrappers.
+Raw-predicate exactness boolean-composition helper operands are checked through boolean operands.
+Transitive exactness predicate chains must not hide whole-body parameterized-call boolean-composition helpers.
+Parameterized-call exactness boolean-composition helper operands are checked through top-level negation.
+Parameterized-call exactness boolean-composition helper operands are checked through stacked top-level negation.
+Parameterized-call exactness boolean-composition helper operands are checked through unary-temporal wrappers.
+Parameterized-call exactness boolean-composition helper operands are checked through boolean operands.
+Literal-gated parameterized-call exactness boolean-composition helper operands are checked through identity literals.
+Unary-temporal exactness helper wrappers must not hide parameterized helper calls.
+Transitive exactness predicate chains must not hide whole-body quantified-predicate boolean-composition helpers.
+Quantified-predicate exactness boolean-composition helper operands are checked through top-level negation.
+Quantified-predicate exactness boolean-composition helper operands are checked through stacked top-level negation.
+Quantified-predicate exactness boolean-composition helper operands are checked through unary-temporal wrappers.
+Quantified-predicate exactness boolean-composition helper operands are checked through boolean operands.
+Literal-gated quantified-predicate exactness boolean-composition helper operands are checked through identity literals.
+Exactness boolean-composition checks unwrap one-line `LET` helper aliases.
+Unary-temporal exactness helper wrappers must not hide quantified formulas.
+Static action/set/choice exactness helper wrappers must not hide quantified formulas.
+Static action/set/choice exactness helper wrappers traverse structured operands.
+Structured exactness helper operands must not hide quantified formulas.
+Structured exactness helper operands must not hide control-flow predicate selection.
+Unary-temporal quantified, parameterized-call, and control-flow checks split top-level boolean operands before peeling temporal wrappers.
+Unary-temporal quantified checks unwrap one-line `LET` helper aliases.
+Unary-temporal parameterized-call checks unwrap one-line `LET` helper aliases.
+Transitive exactness predicate chains must not hide literal or alias helpers;
+every helper leaf under a named exactness predicate should remain a concrete
+model predicate.
+Transitive exactness predicate chains must not hide single-helper conjunct aliases.
+Transitive exactness predicate chains must not hide self-equality helpers.
+Transitive exactness predicate chains must not hide self-inequality helpers.
+Unary-temporal self-equality exactness helper wrappers count as self-equality helpers.
+Unary-temporal self-inequality exactness helper wrappers count as self-inequality helpers.
+Static and unary-temporal boolean-only exactness helper wrappers count as
+literal helpers; use concrete model predicates instead of wrapping `TRUE`/`FALSE`.
+Static IF literal exactness helpers count as literal helpers too.
+Constant-relation exactness helpers count as literal helpers too.
+Constant-relation helper checks unwrap one-line `LET`, unary-temporal, and negated wrappers.
+Static temporal literal checks split top-level boolean operands before peeling temporal or negated wrappers.
+Negated unary-temporal boolean-only helper wrappers count as literal helpers too.
+Compound boolean-only temporal helper wrappers count as literal helpers too.
+Compound exactness helper traversal includes disjunction, implication, equivalence, and negation operands.
+Helper reference traversal unwraps one-line `LET` helper aliases.
+Exactness vacuous-helper checks inspect static and structured operands.
+LET helper alias unwrapping preserves static unary result wrappers.
+LET binding scans preserve tuple literal definition bodies.
+LET binding scans preserve escaped string literal definition bodies.
+LET helper alias unwrapping resolves chained one-line bindings.
+LET alias substitution respects later quantified binding groups.
+LET alias substitution respects escaped string literal domain binding groups.
+LET alias substitution preserves escaped string literal result bodies.
+LET helper alias unwrapping substitutes simple chained binding references.
+Temporal literal checks unwrap one-line `LET` helper aliases.
+Non-named correctness-envelope conjuncts are rejected even when mixed with named
+envelope predicates.
+Allowlisted temporal correctness-envelope conjuncts must be non-literal,
+non-self-equality, non-self-inequality, non-alias concrete temporal predicates.
+Allowlisted temporal correctness-envelope conjuncts must be non-self-equality.
+Allowlisted temporal correctness-envelope conjuncts must be non-self-inequality.
+Whole-body control-flow temporal side conjuncts must name the selected concrete
+temporal predicate before composition.
+Whole-body boolean-composition temporal side conjuncts must name the concrete
+temporal predicate before composition.
+Unary-temporal boolean composition over temporal helpers must name concrete
+temporal predicates before composition.
+Transitive allowlisted temporal helper chains must not hide whole-body control-flow predicate-selection helpers.
+Transitive allowlisted temporal helper chains must not hide nested control-flow predicate-selection helpers.
+Unary-temporal temporal helper wrappers must not hide control-flow predicate selection.
+Static action/set/choice temporal helper wrappers must not hide quantified formulas.
+Static action/set/choice temporal helper wrappers traverse structured operands.
+Structured temporal helper operands must not hide quantified formulas.
+Structured temporal helper operands must not hide control-flow predicate selection.
+Unary-temporal temporal LET-alias helper wrappers must name concrete temporal predicates.
+Transitive allowlisted temporal helper chains must not hide whole-body temporal-helper boolean-composition helpers.
+Temporal-helper boolean-composition checks traverse boolean operands.
+Unary-temporal LET-alias temporal side conjuncts must name concrete temporal predicates.
+Unary `[]`/`<>` boolean-only temporal wrappers count as literal temporal helpers
+at every allowlisted temporal helper-chain depth.
+Static IF literal temporal helpers count as literal temporal helpers at every
+allowlisted temporal helper-chain depth.
+Constant-relation temporal helpers count as literal temporal helpers at every
+allowlisted temporal helper-chain depth.
+Negated unary-temporal boolean-only helper wrappers count as literal helpers too.
+Compound boolean-only temporal helper wrappers count as literal helpers too.
+Transitive allowlisted temporal correctness-envelope conjunct chains must not
+hide `TypeInvariant`, generic correctness, or `*Exactness` identifiers.
+Transitive allowlisted temporal helper chains must not hide undefined helpers.
+Quantified temporal helper formulas must not hide undefined helpers.
+Undefined helper scans preserve quantified binding scope.
+Undefined helper scans preserve unbounded quantified binding scope.
+Undefined helper scans reject relation-bearing quantified binding prefixes.
+Undefined helper scans preserve tuple-pattern quantifier domains.
+Undefined helper scans preserve LET binding scope.
+Undefined helper scans preserve parameterized LET operator scope.
+Undefined helper scans preserve CHOOSE binding scope.
+Undefined helper scans preserve LAMBDA binding scope.
+Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes.
+Undefined helper scans preserve standard TLA set/operator identifiers.
+Undefined helper scans preserve ENABLED/UNCHANGED operand scope.
+Undefined helper scans preserve CASE branch scope.
+Undefined helper scans preserve relation operand scope.
+Undefined helper scans preserve operator-call argument scope.
+Undefined helper scans preserve arithmetic/set infix operand scope.
+Undefined helper scans preserve sequence/function infix operand scope.
+Undefined helper scans preserve explicit set literal element scope.
+Undefined helper scans preserve unary set-operator operand scope.
+Undefined helper scans preserve set-comprehension binding scope.
+Undefined helper scans preserve set-comprehension outer enclosure scope.
+Undefined helper scans preserve function-constructor binding scope.
+Undefined helper scans preserve function-set domain and range scope.
+Function-set scans preserve CASE domain branch arrows.
+Function-set scans preserve record maplet CASE values.
+Function-set scans preserve record set/update CASE values.
+Undefined helper scans preserve record field label scope.
+Undefined helper scans preserve record set field label scope.
+Undefined helper scans preserve record update field label scope.
+Undefined helper scans preserve record selector field label scope.
+Undefined helper scans preserve comma-shared set/function binding scope.
+Undefined helper scans preserve operator parameter scope.
+Quantified temporal helper formulas must not be vacuous.
+Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain, self-membership, or empty-set membership facts.
+Quantified helper restatement checks reject pure top-level boolean compositions.
+Quantified helper restatement checks reject identity-literal gates.
+Quantified helper restatement checks propagate known truth values.
+Quantified formula prefix scans preserve escaped string literal colons.
+Quantified formula prefix scans preserve tuple literal maplet colons.
+Quantified helper formula scans require scoped binding prefixes.
+Quantified bound identifier scans preserve escaped string literal domains.
+Quantified helper bound-domain checks preserve escaped string literal domains.
+Quantified helper bound-domain checks include comma-shared bindings.
+Quantified helper bound-domain checks skip tuple-pattern component domains.
+Quantified helper singleton-domain checks preserve tuple literal elements.
+Quantified helper vacuity checks include unbounded static bodies.
+Line comment scans preserve escaped string literal comment markers.
+Static outer wrapper scans preserve escaped string literal parentheses.
+Semantic identifier scans ignore escaped string literal contents.
+Top-level relation and boolean scans preserve tuple literal operators.
+Top-level relation scans reject whole-body control/action wrappers.
+Top-level boolean scans preserve escaped string literal operators.
+Top-level boolean/equality detector helpers preserve tuple literal operators.
+Top-level keyword scans preserve tuple literal keywords.
+Top-level CASE branch scans preserve tuple literal arms and conditions.
+Top-level keyword and CASE branch scans preserve escaped string literal delimiters.
+Top-level CASE branch scans distinguish unary temporal boxes from arm separators.
+Quantified temporal helper formulas must use their bound identifiers.
+Quantified temporal helper formulas must not duplicate bound identifiers.
+Quantified unused-bound checks include later binding groups.
+Quantified unused-bound checks include unbounded bindings.
+Quantified bound identifier scans include later tuple-pattern binding groups.
+Quantified temporal helper formulas must not select predicates with control flow.
+Quantified helper body control-flow checks reject non-transparent `LET` bodies.
+Quantified temporal helper formulas must not appear below top-level negation operands.
+Quantified temporal helper formulas are checked through boolean operands.
+Existential quantified temporal helper formulas must not weaken allowlisted temporal chains.
+Compound temporal helper operands must not hide undefined helpers.
+Transitive allowlisted temporal helper chains must not hide repeated helper conjuncts.
+Allowlisted temporal helper conjunct repetition checks use the same unary-temporal traversal.
+Transitive allowlisted temporal helper chains must not hide repeated helper operands.
+Allowlisted temporal helper operand repetition checks use the same unary-temporal traversal.
+Transitive allowlisted temporal helper chains must not hide contradictory helper operands.
+Transitive allowlisted temporal helper chains must not hide excluded-middle helper operands.
+Transitive allowlisted temporal helper chains must not hide complementary-equivalence helper operands.
+Unary-temporal temporal helper wrappers must not hide repeated helper conjuncts.
+Unary-temporal temporal helper wrappers must not hide single-helper conjunct aliases.
+Literal-gated temporal helper wrappers must not hide single-helper conjunct aliases.
+Literal-gated temporal helper wrappers must not hide zero-arity helper aliases.
+Literal-gated temporal helper wrappers must not hide negated helper operands.
+Compound temporal helper operands must not hide repeated helper conjuncts.
+Transitive allowlisted temporal helper chains must not hide literal or alias helpers;
+temporal exceptions should bottom out in concrete temporal predicates.
+Transitive allowlisted temporal helper chains must not hide single-helper conjunct aliases.
+Transitive allowlisted temporal helper chains must not hide self-equality helpers.
+Transitive allowlisted temporal helper chains must not hide self-inequality helpers.
+Compound `[]`/`<>` temporal helper bodies are traversed for helper references;
+do not hide helper obligations inside temporal conjunction operands.
+Parameterized temporal helper calls must be lifted behind zero-arity predicates.
+Compound temporal helper traversal includes disjunction operands.
+Compound temporal helper traversal includes implication operands.
+Compound temporal helper traversal includes equivalence operands.
+Compound temporal helper traversal includes negation operands.
+Temporal vacuous-helper checks inspect static and structured operands.
+Exactness and correctness-envelope conjunct references must resolve to zero-arity
+operator definitions, including bounded temporal exception helper chains.
+Transitive exactness predicate chains must also resolve through zero-arity
+helper predicates only.
 Correctness envelopes must expose `TypeInvariant`, model `*Exactness`
 operators, and allowlisted temporal side conjuncts as direct top-level `/\`
 conjuncts; nested mentions do not count, and zero-arity envelope conjuncts must
@@ -12793,6 +13100,11 @@ Temporal properties:
   progress evidence shape: idle and init states carry no stale chunk/READY
   counters, chunking stays below full chunk coverage, chunk-complete states have
   no READY votes yet, and partial READY states remain below commit quorum.
+- The aggregate `RbcProgressStateEvidenceAlwaysMatchesEnvelope` theorem composes
+  the full and partial RBC progress evidence predicates plus the live evidence
+  causality envelope, so the lifecycle proof carries both the positive evidence
+  required by initialized/covered/quorum states and the absence, boundedness,
+  and confinement of premature CHUNK/READY counters.
 - `RbcCorruptedDigestNeverValid` proves that once RBC enters the corrupted
   repair path, any retained RBC evidence is paired with an invalidated digest
   until the protocol repairs through RBC INIT.
@@ -12822,15 +13134,16 @@ Temporal properties:
   increase, or reset classifier for the field that moved.
 - The aggregate `RbcProgressMutationAlwaysMatchesLocalClassification` theorem
   composes the already checked RBC state/evidence provenance, local
-  state/evidence classifiers, delivered-entry classifier, corrupted-entry
-  classifier, and corrupted-repair exit classifier. The fast, deep, and
-  TLC-fast configs wire the aggregate alongside those constituent obligations so
-  both the local classifiers and their combined progress-mutation frame stay
-  checked.
+  state/evidence classifiers, startup/defensive boundary envelope,
+  delivered-entry classifier, corrupted-entry classifier, and corrupted-repair
+  exit classifier. The fast, deep, and TLC-fast configs wire the aggregate
+  alongside those constituent obligations so both the local classifiers and
+  their combined progress-mutation frame stay checked.
 - The aggregate `RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope` theorem
-  composes the progress-mutation classifier with the live header/digest, CHUNK,
-  and READY handoff-envelope invariants, so any reachable RBC progress mutation
-  stays tied to the proved evidence-causality envelope.
+  composes the progress-state evidence envelope and progress-mutation classifier
+  with the live header/digest, CHUNK, and READY handoff-envelope invariants, so
+  any reachable RBC progress mutation stays tied to the proved evidence-causality
+  envelope.
 - `RbcHeaderInstallationOnlyByProposalOrInit` proves that RBC header evidence
   can move from absent to present only through an honest proposal starting RBC
   from `Idle` or an explicit RBC INIT repair/recovery step.
@@ -12897,6 +13210,10 @@ Temporal properties:
   is confined to the initial idle state or the explicit corrupted repair state,
   so every non-corrupted RBC progress or delivery state keeps validated digest
   evidence.
+- The aggregate `RbcLiveEvidenceCausalityAlwaysMatchesEnvelope` theorem composes
+  the live RBC header/digest, CHUNK, READY, counter, and invalid-digest
+  causality predicates so the lifecycle proof carries one evidence-causality
+  contract before it reasons about progress mutation or handoff preservation.
 - `RbcWithheldNeverReached` proves that the main Sumeragi model never reaches
   the defensive `Withheld` RBC state from its initial state; `Withheld` remains
   available only to gate repair/recovery branches if a future model explicitly
@@ -12947,6 +13264,11 @@ Temporal properties:
   only be a proposal starting RBC from `Idle` or an explicit RBC INIT repair
   from `Idle`, `Withheld`, or `Corrupted`, with header/digest evidence
   installed and chunk/READY counters reset.
+- The aggregate `RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope` theorem
+  composes the startup boundary (`Idle` exit and `Init` entry) with the
+  defensive `Withheld` exclusion boundary, so the progress-mutation classifier
+  carries both normal session start provenance and unreachable defensive-state
+  constraints.
 - `RbcChunkGateNeverBypassesHeaderDigestEvidence` proves that the live RBC
   CHUNK transition is enabled exactly when the session is in an INIT,
   CHUNKING, or post-GST withheld recovery state carrying header evidence,
@@ -13407,6 +13729,12 @@ Temporal properties:
   finality certificate stack with exact vote/stake witnesses for the current
   view, and closes every post-commit progress, timeout, RBC, and fault gate
   except the pre-GST `GstElapsed` observation surface.
+- `DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysMatchesCertifiedCommitEnvelope`
+  proves that the same finalizing commit-vote branch satisfies the complete
+  delivered-state certified-commit envelope: commit-vote provenance, exact
+  witness installation, delivered RBC evidence preservation, finality
+  certificate stack, committed post-state invariants, and the pre/post-GST gate
+  split all match the delivered finality proof surface.
 - `DeliveredPendingCompleteWaitStatePrepareVoteStepAlwaysSplits` proves that
   an honest prepare vote from the named delivered-pending complete wait state
   preserves delivered RBC evidence and absent commit witnesses, increments the
@@ -13454,11 +13782,27 @@ Temporal properties:
   commit-vote, timeout, NewView, proposal, or GST branch with RBC/fault actions
   closed, while stuttering steps keep the full delivered-pending complete
   wait-state envelope unchanged.
+- `DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCommittedCertifiedEnvelope`
+  proves the committed side of that classifier: any committed post-state from
+  the named delivered-pending complete wait state must be a real `Next` step
+  from the exact finalizing honest or Byzantine commit-vote source and must
+  satisfy the delivered-state certified-commit envelope.
+- `DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesNonCommittedWaitEnvelope`
+  proves the non-committed side of that classifier: every non-final post-state
+  re-enters the named delivered-pending complete wait state with delivered RBC
+  evidence, absent commit artifacts, closed RBC/fault gates, and the exact
+  consensus/GST/timer action surface.
+- `DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteOutcomeEnvelope`
+  proves the complete classifier outcome envelope: every spec step from the
+  named delivered-pending wait state either installs the committed certified
+  envelope with exact commit artifacts or re-enters the non-committed complete
+  wait envelope with commit artifacts absent.
 - The aggregate
   `DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope` theorem
   composes the named delivered-pending complete wait-state closure,
   commit-vote, prepare-vote, timeout/NewView, NewView-vote, proposal, GST,
-  stutter, and branch-classifier obligations into one continuation envelope.
+  stutter, branch-classifier, committed-certified outcome, and non-committed
+  wait-envelope obligations into one complete continuation envelope.
 - The aggregate `RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope`
   theorem composes the full delivered-state lifecycle surface: delivered
   evidence stability, no commit certificate before finality, certified
@@ -13493,15 +13837,19 @@ Temporal properties:
   theorem composes the main consensus safety surface: terminal committed-state
   closure, post-finality stability, timeout/view-change recovery, certified
   finality installation, pre-commit and commit-vote handoffs, finalized
-  certificate/evidence retention, and the full RBC lifecycle envelope.
+  certificate/evidence retention, pending protocol GST preservation, and the
+  full RBC lifecycle envelope.
 - The aggregate `SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`
   theorem composes the full fast/deep state-invariant surface under `[]` with
   the end-to-end temporal safety envelope, giving one checkable consensus-core
   safety theorem for both state facts and handoff/transition obligations.
 - `SumeragiConsensusCoreStateMatchesEnvelope` factors the non-type state-safety
-  obligations behind one named predicate.
-  `SumeragiConsensusCoreStateSafetyEnvelope` composes `TypeInvariant` with that
-  predicate for temporal state-safety checks.
+  obligations behind one named predicate and is used directly by the temporal
+  state-safety check, while `TypeInvariant` stays as a direct
+  correctness-envelope conjunct.
+- `LiveCommitGateCanCommitState` names the live commit-gate commit condition so
+  temporal equivalence helpers do not reach a parameterized `CanCommit(...)`
+  call through allowlisted temporal chains.
 - The aggregate `SumeragiConsensusCoreAlwaysMatchesExactness` composes
   `SumeragiConsensusCoreStateMatchesEnvelope` as a direct exactness conjunct,
   giving the monolithic fast correctness envelope direct `*Exactness` coverage
@@ -30322,59 +30670,385 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   directive. Top-level CFG directives
   must be from the supported TLA+/TLC set; malformed or duplicated
   `CHECK_DEADLOCK` values, unknown directive spellings, and indented
-  directive-like continuation lines are rejected before model checking. Every
+  directive-like continuation lines are rejected before model checking.
+  Malformed supported CFG directive starts are rejected.
+  Directive-prefixed CFG block entries remain valid.
+  Indented no-separator supported CFG directive starts are rejected.
+  Malformed CHECK_DEADLOCK starts are rejected. Every
   CFG
   `SPECIFICATION`, `INIT`, `NEXT`, `CONSTRAINT`, `INVARIANT(S)`, and
   `PROPERTY/PROPERTIES` operator reference must use non-reserved static TLA
   operator-name syntax, must not target the module's `vars` state tuple, be
   defined by the selected `.tla` module, and resolve to a zero-arity operator.
+  Malformed CFG operator-reference directive starts are rejected.
+  Top-level no-separator CFG operator-reference directive starts are rejected.
+  Indented no-separator CFG operator-reference directive starts are rejected.
   Top-level TLA operator
-  definitions are distinguished from scoped `LET` helpers. Top-level operator
-  definitions must use non-reserved static signatures, and malformed, reserved,
-  or duplicate top-level operator definitions and `RECURSIVE` declarations are
-  rejected before model checking. Each `RECURSIVE` declaration must also have a
+  definitions are distinguished from scoped `LET` helpers. TLA operator definitions must be non-LOCAL.
+  Top-level operator definitions must use non-reserved static signatures, and
+  malformed, reserved, or duplicate top-level operator definitions and
+  `RECURSIVE` declarations are rejected before model checking. TLA `RECURSIVE` declaration directives must be top-level.
+  Malformed `RECURSIVE` starts are rejected. Top-level no-separator `RECURSIVE` starts are rejected.
+  Each `RECURSIVE` declaration must also have a
   matching top-level definition with the same arity, so declarations alone
   cannot satisfy CFG proof-target reachability. TLA dependency declarations must
-  use non-reserved static module identifiers (`EXTENDS` lists and `INSTANCE`
-  statements) and non-reserved static named-instance aliases, so dependency
-  resolution cannot silently accept malformed import text. Named `INSTANCE`
-  declarations are tracked as dependencies only and cannot satisfy CFG/TLC
-  proof-target references. Top-level `ASSUME`,
+  be duplicate-free, use non-reserved static module identifiers (`EXTENDS`
+  lists and `INSTANCE` statements), be top-level, appear before declarations and definitions,
+  and be written without `WITH` substitutions. Malformed `EXTENDS`/`INSTANCE` starts are rejected.
+  No-separator `EXTENDS`/`INSTANCE` starts are rejected.
+  INSTANCE declarations must be non-LOCAL.
+  They must use non-reserved static
+  named-instance aliases, so dependency resolution cannot silently accept malformed import text. Malformed named `INSTANCE` aliases are rejected.
+  No-separator named `INSTANCE` aliases are rejected.
+  Named `INSTANCE`
+  aliases must be duplicate-free and disjoint from constants, variables, and
+  top-level proof-target operators. Named `INSTANCE` declarations are tracked
+  as dependencies only and cannot satisfy CFG/TLC proof-target references.
+  Local TLA dependency files are followed transitively and checked with the
+  same module-header, declaration, and assumption/proof guards as runner-selected
+  modules.
+  `ASSUME`,
   `ASSUMPTION`, and `AXIOM`
   directives, plus theorem/proof directives such as `THEOREM`, `PROOF`, and
-  `QED`, are rejected because assumptions or proof text can make model
+  `QED`, are rejected even when indented. Assumption/proof directive starts are rejected even when indented because assumptions or proof text can make model
   checking vacuous or uncheckable before any invariant or property is
-  meaningful. Multi-line
+  meaningful. No-separator assumption/proof directive starts are rejected even when indented.
+  Multi-line
   `INVARIANTS`/`PROPERTIES` blocks must list exactly one operator per
   continuation line and cannot be empty. Behavior directives, static
   `CONSTRAINT` directives, and invariant/property check entries must not be
-  duplicated. Non-bug `_fast.cfg` configs must check a model-specific
-  `*CorrectnessEnvelope` invariant or property, so PR-fast corridors cannot
-  regress to generic `NoBugInvariant`, `Safety`, or `SafetyFast` aliases;
+  duplicated, and the same operator name must not be reused across behavior,
+  constraint, and proof-check roles. Non-bug `_fast.cfg` configs must check a
+  model-specific `*CorrectnessEnvelope` invariant or property, so PR-fast
+  corridors cannot regress to generic `NoBugInvariant`, `Safety`, or
+  `SafetyFast` aliases;
   mutation configs remain exempt even when their bug name ends in `_fast`.
   Those correctness-envelope definitions must compose `TypeInvariant` and a
   model-specific `*Exactness` conjunct, and the envelope body itself must not
   mention generic `NoBugInvariant`/`Safety`/`SafetyFast`. The exactness conjunct
   must have a static definition, must not be literal `TRUE`/`FALSE`, and must
   not directly alias or mention generic
-  `NoBugInvariant`/`Safety`/`SafetyFast`. The same shape rule also applies to
+  `NoBugInvariant`/`Safety`/`SafetyFast`. Transitive exactness predicate chains
+  must not hide repeated helper conjuncts, repeated helper operands,
+  contradictory helper operands, excluded-middle helper operands,
+  complementary-equivalence helper operands, undefined helpers, whole-body
+  control-flow predicate-selection helpers, unary-temporal control-flow
+  predicate-selection wrappers, whole-body raw-predicate boolean-composition
+  helpers, whole-body parameterized-call
+  boolean-composition helpers, unary-temporal parameterized helper calls, whole-body quantified-predicate
+  boolean-composition helpers, literal helpers, self-equality helpers, or alias
+  helpers below their direct conjuncts, including when raw-predicate,
+  parameterized-call, or quantified-predicate helper operands are hidden behind
+  single or stacked top-level negation or unary-temporal wrappers.
+  Undefined-helper scans inside quantified helper formulas must preserve
+  quantified binding scope, so a helper-like name bound by an inner quantifier
+  cannot mask a free helper obligation with the same name in the outer body.
+  Unbounded quantified scopes must be preserved too, so `\A MissingHelper: P`
+  and `\E MissingHelper: P` keep `MissingHelper` local to the quantified body.
+  Those unbounded quantified helpers still participate in vacuity and
+  unused-bound checks, so `\A MissingHelper: TRUE` and
+  `\A MissingHelper: ConcretePredicate` cannot pass as meaningful proof
+  obligations.
+  Relation-bearing quantified prefixes such as
+  `\A MissingHelper \subseteq MissingDomain: P` must not bind
+  `MissingHelper`; their prefix and body operands remain visible to
+  undefined-helper scans.
+  Tuple-pattern quantifier domains must remain visible to undefined-helper
+  scans, so `\A <<x, y>> \in MissingDomain: P(x, y)` still reports
+  `MissingDomain` while `x` and `y` stay local to the quantified body.
+  They must also preserve transparent `LET` binding scope, so a local
+  helper-like alias cannot be reported as an undefined helper while free helper
+  references in its operand or result stay visible. Parameterized local `LET`
+  operator scope is preserved too: the local operator name and its parameters
+  are scoped locally while helper obligations in the operator body, call
+  arguments, and result remain visible. `CHOOSE` binding scope must
+  be preserved the same way, so a helper-like chosen identifier is local while
+  helper references in the choice domain or surrounding body remain visible.
+  `LAMBDA` binding scope is preserved too, so helper-like lambda parameters stay
+  local while helper references in lambda domains, applications, and bodies
+  remain visible.
+  Standard TLA set/operator identifiers such as `STRING`, `BOOLEAN`, `Nat`,
+  `Int`, `Real`, `Seq`, and `Cardinality` are not helper obligations.
+  `ENABLED` and `UNCHANGED` action wrappers must preserve operand scope before
+  tuple and selector scanning, so `ConcreteRecord.MissingField` stays a field
+  selection while free helper obligations inside the wrapped operand remain
+  visible.
+  `CASE` branches must be split before boolean traversal, so branch conditions
+  and results keep nested record, selector, action-wrapper, and tuple scope while
+  free helper obligations inside branches remain visible.
+  Top-level relation operands and direct operator-call arguments must recurse
+  before raw identifier scanning too, so selector field labels and record-field
+  labels inside operands or arguments stay local while missing callees and free
+  helper obligations remain visible.
+  Top-level arithmetic and set infix operands must recurse the same way, so
+  `ConcreteRecord.MissingField + FreeMissing` and
+  `ConcreteRecord.MissingField \cup {FreeMissing}` report the free helper
+  obligation without treating `MissingField` as a helper.
+  Explicit set literals must recurse through their elements, and unary set
+  operators such as `DOMAIN`, `SUBSET`, and `UNION` must recurse through their
+  operands, so nested record labels stay local while element, domain, or operand
+  helper obligations remain visible.
+  Set-comprehension and function-constructor binding scope must likewise keep
+  local helper-like binders out of undefined-helper diagnostics while leaving
+  helper references in their domains and surrounding bodies visible, including
+  comma-shared binders such as `{x, y \in S: P}` and
+  `[x, y \in S |-> e]`. Set-comprehension scope is only applied when the
+  outer braces enclose the whole expression, so adjacent brace expressions split
+  through boolean traversal before local binders are applied. Function-set
+  expressions such as `[S -> T]` must recurse through both domain and range, so
+  nested record labels in range expressions stay local while domain and range
+  helper obligations remain visible. Record-literal and
+  record-set field labels are not helper
+  references, so `[MissingField |-> FreeMissing]` and
+  `[MissingField: FreeMissing]` report the value or domain obligation but not the
+  field label. Record-update field labels are also ignored while the updated
+  record, dynamic selector indexes, and replacement values remain visible.
+  Ordinary record selector field labels are ignored the same way, so
+  `ConcreteRecord.MissingField` does not report `MissingField` while
+  `ConcreteRecord[IndexMissing].MissingField` still reports the dynamic index
+  obligation.
+  Top-level operator parameter scope is also preserved,
+  so a helper-like parameter name cannot be reported as an undefined helper
+  while free helper obligations in the same body remain visible.
+  Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain,
+  self-membership, or empty-set membership facts such as
+  `\A c \in {}: c = ready`, `\A c \in {1}: c = 1`,
+  `\A c \in Cases: c \in Cases`, or `\A c \in Cases: c \in {c}`,
+  and must not use empty-set membership facts
+  such as `\A c \in Cases: c \notin {}`. Pure top-level boolean compositions
+  of those restatements, such as
+  `\A c \in Cases: c \in Cases /\ c \notin {}` or
+  `\A c \in {1}: c = 1 /\ 1 = c`, are vacuous too, as are identity-literal
+  gates such as `\A c \in Cases: TRUE /\ c \in Cases`,
+  `\A c \in {1}: FALSE \/ c = 1`, and
+  `\A c \in {1}: TRUE => c = 1`. Restatement truth values must propagate
+  through boolean operators too, so helpers such as
+  `\A c \in Cases: c \notin Cases => FALSE` and
+  `\A c \in {1}: c # 1 <=> FALSE` remain vacuous. Bound-domain checks must
+  also apply to comma-shared quantifier bindings such as
+  `\A c, d \in Cases: c \in Cases` and
+  `\A c, d \in {1}: c = 1`. Tuple-pattern components are not treated as
+  direct members of the tuple domain, so `\A <<c, d>> \in Pairs: c \in Pairs`
+  is not a restated bound-domain fact. Tuple literals inside explicit singleton
+  domains must remain intact, so `\A t \in {<<1, 2>>}: t = <<1, 2>>` is still
+  a vacuous singleton-domain restatement. Quantified formula prefix scans must
+  preserve escaped string literal colons such as
+  `\A c \in {"left \" : right"}: Predicate(c)` when splitting the quantified
+  prefix from the body. Bound-identifier and bound-domain checks must preserve
+  escaped string literal domains such as `{"left \" : right"}` or
+  `"left \" : right"` so bound names remain visible and string domains cannot
+  collapse to `{ }` and masquerade as empty-domain restatements. Line comment
+  scans must preserve escaped string literal comment markers such as
+  `"left \" \* right"` while still stripping real trailing `\*` comments.
+  Static outer
+  wrapper scans
+  must also ignore escaped string literal parentheses such as
+  `("left \" ) right")` when deciding whether one outer wrapper encloses the
+  full expression. Semantic identifier scans, including control-flow helper
+  branch extraction and direct exactness-envelope pairing, must ignore escaped
+  string literal contents so `"TypeInvariant"`, `"ConcretePredicate"`, and
+  `"UnpairedExactness"` cannot satisfy or trigger model-obligation checks.
+  Top-level relation and boolean scans
+  must not split operators inside tuple literals such as
+  `<<c \in Cases, tail>>` or `<<Left /\ Right, tail>>`, and top-level boolean
+  scans must not split escaped string-literal contents such as
+  `"Left \" /\ Right"`; boolean/equality
+  detector helpers must use the same tuple-aware classification so
+  `<<Left \/ Right, tail>>`, `<<Left => Right, tail>>`, and
+  `<<c = c, tail>>` do not count as top-level operators. Top-level keyword
+  scans must likewise ignore tuple-internal keywords such as
+  `<<left ELSE right, tail>>` and `<<left IN right, tail>>`, plus escaped
+  string-literal delimiters such as `"left \" ELSE right"`. CASE branch
+  scans must also preserve tuple-literal arms and conditions such as
+  `<<CASE nested -> Left [] OTHER -> Right, tail>>`, and must distinguish
+  unary temporal boxes from arm separators in formulas such as
+  `CASE ready -> [] Left [] OTHER -> Right` while preserving escaped
+  string-literal arm delimiters such as `"Left \" [] Right"`. Unused-bound checks must still
+  include tuple components, later binding groups, and later tuple-pattern
+  binding groups, so
+  `\A c \in Cases, d \in Other: Predicate(c)` cannot satisfy a quantified
+  helper obligation while omitting `d`, and
+  `\A c \in Cases, <<d, e>> \in Pairs: Predicate(c, d)` cannot omit `e`.
+  Negated quantified helper checks split top-level boolean operands before
+  peeling negation, so `~Q /\ R` does not mark `R` as negated while
+  `~(Q /\ R)` still marks both quantified operands as negated.
+  Unary-temporal helper wrappers must also not hide inline quantified formulas;
+  unary-temporal quantified, parameterized-call, and control-flow checks split
+  top-level boolean operands before peeling temporal wrappers, so `[]Q /\ R`
+  does not mark `R` as temporal while `[](Q /\ R)` still marks both operands as
+  temporal.
+  name quantified model predicates before composing exactness chains. Repeated
+  helper conjunct checks traverse unary-temporal wrappers and compare
+  same-polarity helper names.
+  Unary-temporal exactness helper wrappers must not hide single-helper conjunct
+  aliases.
+  Literal-gated exactness helper wrappers such as
+  `TRUE => (/\ Helper)`, `FALSE \/ (/\ Helper)`, `TRUE /\ (/\ Helper)`,
+  and `TRUE <=> (/\ Helper)` must not hide single-helper conjunct aliases.
+  Literal-gated exactness helper wrappers such as `TRUE /\ Helper`,
+  `FALSE \/ Helper`, `TRUE => Helper`, and `TRUE <=> Helper` must not hide
+  zero-arity helper aliases. Literal-gated zero-arity helper alias checks
+  recurse through nested identity gates, so `TRUE => TRUE => Helper` and
+  `TRUE <=> TRUE <=> Helper` cannot hide alias-only helper bodies.
+  Literal-gated exactness helper wrappers such as `TRUE /\ ~Helper`,
+  `FALSE \/ ~Helper`, `TRUE => ~Helper`, and `TRUE <=> ~Helper` must not hide
+  negated helper operands. Literal-gated negated helper operand checks recurse
+  through nested identity gates, so `TRUE => TRUE => ~Helper` and
+  `TRUE <=> TRUE <=> ~Helper` cannot hide negated helper operands.
+  Literal-gated negated parameterized-call and quantified-predicate helper
+  operands, such as `TRUE /\ ~ParameterizedCallLeaf` and
+  `TRUE /\ ~QuantifiedLeaf`, are checked through the same identity-literal
+  wrappers before exactness composition.
+  Parameterized helper call checks parse expression arguments, including
+  comparison arguments such as `Predicate(ready = checked)`, before deciding
+  whether a helper call must be lifted behind a zero-arity predicate.
+  Compound exactness helper operands such as
+  `TRUE /\ Predicate(ready = checked)`,
+  `ConcretePredicate /\ Predicate(ready = checked)`,
+  `FALSE \/ Predicate(ready = checked)`,
+  `TRUE => Predicate(ready = checked)`, and
+  `TRUE <=> Predicate(ready = checked)` must not hide expression-argument
+  parameterized helper calls; direct root leaf predicates and existing simple
+  case/literal anchor bundles may still call parameterized helpers before
+  exactness composition.
+  Repeated helper operand checks also traverse unary-temporal wrappers and compare
+  same-polarity helper names. Repeated helper same-polarity checks split
+  top-level boolean operands before peeling temporal or negated wrappers, so
+  `~[] Leaf /\ Leaf` and `~[] Leaf \/ Leaf` are not same-polarity duplicates
+  while `~([] Leaf /\ Leaf)` and `~([] Leaf \/ Leaf)` still expose whole-body
+  duplicate operands. Repeated helper operand checks include chained implication
+  and equivalence operands, so `Leaf => Other => Leaf` and
+  `Leaf <=> Other <=> Leaf` cannot hide repeated helper leaves;
+  complementary-equivalence checks include chained equivalence operands, so
+  `Leaf <=> Other <=> ~Leaf` cannot hide a complementary pair.
+  Unary-temporal exactness `LET`-alias helper
+  wrappers must name concrete model predicates before exactness composition. Static
+  and unary-temporal boolean-only exactness helper wrappers count as literal helpers.
+  Static IF literal exactness helpers such as
+  `IF TRUE THEN TRUE ELSE FALSE` count as literal helpers too.
+  Constant-relation exactness helpers such as `TRUE = TRUE` and `1 \in {1}`
+  count as literal helpers too. Constant-relation helper checks unwrap one-line
+  `LET`, unary-temporal, and negated wrappers, so `[] (TRUE = TRUE)`,
+  `<> (1 \in {1})`, and `~(TRUE = TRUE)` remain vacuous helpers.
+  Quantified helper body control-flow checks reject non-transparent `LET` bodies.
+  Static temporal literal checks split top-level boolean operands before peeling
+  temporal or negated wrappers, so `~[] FALSE /\ FALSE` remains `FALSE` while
+  `~([] FALSE /\ FALSE)` remains `TRUE`.
+  Negated unary-temporal boolean-only helper wrappers count as literal helpers too.
+  Compound boolean-only temporal helper wrappers count as literal helpers too.
+  Temporal literal checks unwrap one-line `LET` helper aliases.
+  LET binding scans preserve tuple literal definition bodies such as
+  `LET selected == <<left == right, tail>> IN selected`, and escaped string
+  literal definition bodies such as `LET selected == "left \" == right" IN selected`.
+  LET helper alias unwrapping resolves chained one-line bindings.
+  LET alias substitution respects later quantified binding groups such as
+  `\A c \in Cases, selected \in Other: Predicate(selected)`, including escaped
+  string literal domain binding groups such as
+  `\A selected \in "left \" : right": Predicate(selected)`, and preserves
+  escaped string literal result bodies such as
+  `LET selected == HiddenLiteral IN "selected \" selected"`.
+  LET helper alias unwrapping substitutes simple chained binding references.
+  Compound exactness helper traversal includes disjunction, implication, equivalence, and negation operands.
+  The same
+  shape rule also applies to
   any direct `*Exactness` invariant/property checked by a non-bug `_fast.cfg`,
   and each direct `*Exactness` check must be composed by a checked correctness
   envelope in the same CFG. The historical legacy-exactness allowlist is empty
-  and should stay empty.
+  and should stay empty. Transitive allowlisted temporal helper chains must not
+  hide repeated helper conjuncts, repeated helper operands, contradictory helper
+  operands, excluded-middle helper operands, complementary-equivalence helper
+  operands, undefined, literal, or alias helpers; temporal exceptions should
+  bottom out in concrete temporal predicates. Repeated temporal helper conjunct
+  checks use the same unary-temporal same-polarity traversal. Repeated temporal helper operand
+  checks use the same unary-temporal same-polarity traversal. Repeated helper
+  same-polarity checks split top-level boolean operands before peeling temporal
+  or negated wrappers. Repeated helper operand checks include chained
+  implication and equivalence operands, and complementary-equivalence checks
+  include chained equivalence operands.
+  Transitive allowlisted temporal helper chains must not hide single-helper
+  conjunct aliases.
+  Unary-temporal temporal helper wrappers must not hide single-helper conjunct
+  aliases.
+  Literal-gated temporal helper wrappers such as
+  `TRUE => (/\ Helper)`, `FALSE \/ (/\ Helper)`, `TRUE /\ (/\ Helper)`,
+  and `TRUE <=> (/\ Helper)` must not hide single-helper conjunct aliases.
+  Literal-gated temporal helper wrappers such as `TRUE /\ Helper`,
+  `FALSE \/ Helper`, `TRUE => Helper`, and `TRUE <=> Helper` must not hide
+  zero-arity helper aliases. Literal-gated zero-arity helper alias checks
+  recurse through nested identity gates.
+  Literal-gated temporal helper wrappers such as `TRUE /\ ~Helper`,
+  `FALSE \/ ~Helper`, `TRUE => ~Helper`, and `TRUE <=> ~Helper` must not hide
+  negated helper operands. Literal-gated negated helper operand checks recurse
+  through nested identity gates.
+  Whole-body control-flow temporal side conjuncts
+  must name the selected concrete temporal predicate before composition.
+  Unary-temporal control-flow temporal helper wrappers must name the selected
+  concrete temporal predicate before composition.
+  Whole-body boolean-composition temporal side conjuncts must name the concrete
+  temporal predicate before composition.
+  Unary-temporal boolean composition over temporal helpers must name concrete
+  temporal predicates before composition.
+  Transitive allowlisted temporal helper chains must not hide whole-body control-flow predicate-selection helpers.
+  Transitive allowlisted temporal helper chains must not hide whole-body temporal-helper boolean-composition helpers.
+  Unary-temporal temporal `LET`-alias helper wrappers must name concrete
+  temporal predicates before allowlisted composition.
+  Unary-temporal LET-alias temporal side conjuncts must name concrete temporal predicates.
+  Unary
+  `[]`/`<>` boolean-only temporal wrappers
+  count as literal temporal helpers at every allowlisted temporal helper-chain
+  depth. Static IF literal temporal helpers such as
+  `IF TRUE THEN TRUE ELSE FALSE` count as literal temporal helpers at every
+  allowlisted temporal helper-chain depth. Constant-relation temporal helpers
+  such as `TRUE = TRUE` and `1 \in {1}` count as literal temporal helpers at
+  every allowlisted temporal helper-chain depth. Static temporal literal checks
+  split top-level boolean operands before peeling temporal or negated wrappers.
+  Negated unary-temporal boolean-only helper wrappers count as literal helpers too.
+  Compound boolean-only temporal helper wrappers count as literal helpers too.
+  Temporal literal checks unwrap one-line `LET` helper aliases.
+  LET binding scans preserve tuple literal definition bodies such as
+  `LET selected == <<left == right, tail>> IN selected`, and escaped string
+  literal definition bodies such as `LET selected == "left \" == right" IN selected`.
+  LET helper alias unwrapping resolves chained one-line bindings.
+  LET alias substitution respects later quantified binding groups such as
+  `\A c \in Cases, selected \in Other: Predicate(selected)`, including escaped
+  string literal domain binding groups such as
+  `\A selected \in "left \" : right": Predicate(selected)`, and preserves
+  escaped string literal result bodies such as
+  `LET selected == HiddenLiteral IN "selected \" selected"`.
+  LET helper alias unwrapping substitutes simple chained binding references.
+  Compound `[]`/`<>` temporal helper bodies are traversed for helper
+  references; do not hide helper obligations inside temporal conjunction
+  operands. Parameterized temporal helper calls must be
+  lifted behind zero-arity predicates. Compound temporal helper traversal
+  includes disjunction operands. Compound temporal helper traversal includes
+  implication operands. Compound temporal helper traversal includes equivalence
+  operands. Compound temporal helper traversal includes negation operands.
   CFG
   constant bindings must also match constants declared by the selected `.tla`
   module, every declared TLA constant must be bound by the CFG, each CFG
   constant-binding line must bind exactly one non-reserved static constant name,
-  malformed `CONSTANTS` block lines and empty `CONSTANT(S)` blocks must fail
-  before model checking, TLA `CONSTANT(S)` declaration lines must be
-  non-reserved static identifier lists, empty TLA declaration blocks and
-  dangling declaration commas are rejected, duplicate TLA constant declarations
-  are rejected, and bindings must not be duplicated. TLA variable declarations
+  malformed `CONSTANTS` block lines, malformed CFG constant binding starts, and
+  empty `CONSTANT(S)` blocks must fail before model checking, TLA
+  `CONSTANT(S)` declaration lines must be
+  non-reserved static identifier lists, and TLA constant and variable declaration directives must be top-level.
+  Malformed CFG constant binding starts are rejected.
+  Top-level no-separator CFG constant binding starts are rejected.
+  Indented no-separator CFG constant binding directive starts are rejected.
+  Malformed TLA constant/variable declaration starts are rejected.
+  Top-level no-separator TLA constant/variable declaration starts are rejected.
+  Top-level no-separator TLA declaration block entries are rejected.
+  Directive-prefixed TLA declaration block entries remain valid.
+  Empty TLA declaration blocks and dangling
+  declaration commas are rejected, duplicate TLA constant declarations are
+  rejected, and bindings must not be duplicated. TLA variable declarations
   must also be non-reserved, static, non-empty, duplicate-free, and match
   exactly one top-level `vars` definition whose full body is one non-reserved
-  static tuple, so temporal specifications cannot omit state
-  variables or include undeclared ones.
+  static tuple, so temporal specifications cannot omit state variables or include
+  undeclared ones. Malformed TLA `vars` tuple starts are rejected.
+  Constants and variables share a single TLA declaration namespace.
+  Declared constants and variables must also remain
+  disjoint from top-level operator definitions and `RECURSIVE` declarations, so
+  proof targets cannot reuse state or configuration names.
   CFG filenames must belong to their selected TLA module by using the module
   stem or a module-stem prefix, preventing runner edits from reusing a
   cross-module config by accident.
@@ -30383,7 +31057,12 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   cannot drift outside the guard.
   Referenced `.tla` files must declare exactly one top-of-file non-reserved
   static TLA module identifier matching their filename and exactly one
-  terminating `====` with no trailing content, and every `EXTENDS` or
+  terminating `====` with no trailing content. Decorative all-`=` separator lines are allowed before that terminator.
+  Decorative all-`=` separator lines must not have trailing content.
+  TLA module headers and terminators must be top-level.
+  Malformed TLA module header starts are rejected.
+  No-separator TLA module header starts are rejected. Malformed TLA terminator starts are rejected.
+  Every `EXTENDS` or
   `INSTANCE` dependency must name either a known TLA standard module or an
   existing local `.tla` file.
   Every Apalache branch must

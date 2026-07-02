@@ -34,6 +34,11 @@ def _default_program_id(module):
     return module._encode_solana_base58(bytes.fromhex("33" * 32))
 
 
+class HostileImportedScalar:
+    def __str__(self):
+        raise AssertionError("secret-token imported Solana metadata was stringified")
+
+
 def load_live_module():
     script_path = (
         Path(__file__).resolve().parents[2] / "scripts" / "sccp_solana_live_evidence.py"
@@ -340,6 +345,56 @@ def test_solana_json_rpc_redacts_transport_and_error_response_details():
         assert "provider error object" not in message
     else:
         raise AssertionError("secret-bearing Solana JSON-RPC error was accepted")
+
+
+def test_solana_json_rpc_rejects_envelope_drift():
+    module = load_live_module()
+
+    cases = (
+        (
+            {"jsonrpc": "2.0", "id": 2, "result": {"context": {"slot": 1}}},
+            "response id",
+            "mismatched Solana JSON-RPC id was accepted",
+        ),
+        (
+            {"jsonrpc": "2.0", "id": "1", "result": {"context": {"slot": 1}}},
+            "response id",
+            "string Solana JSON-RPC id was accepted",
+        ),
+        (
+            {"jsonrpc": "2.0", "id": True, "result": {"context": {"slot": 1}}},
+            "response id",
+            "boolean Solana JSON-RPC id was accepted",
+        ),
+        (
+            {"id": 1, "result": {"context": {"slot": 1}}},
+            "protocol version",
+            "missing Solana JSON-RPC protocol version was accepted",
+        ),
+        (
+            {"jsonrpc": "2.0 ", "id": 1, "result": {"context": {"slot": 1}}},
+            "protocol version",
+            "padded Solana JSON-RPC protocol version was accepted",
+        ),
+    )
+
+    for payload, expected_message, failure in cases:
+        def opener(_request, timeout, payload=payload):
+            assert timeout == 3.0
+            return FakeResponse(payload)
+
+        try:
+            module._json_rpc(
+                "https://solana.example.invalid",
+                "getAccountInfo",
+                [],
+                opener=opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            assert expected_message in str(exc)
+        else:
+            raise AssertionError(failure)
 
 
 def test_solana_live_cli_redacts_top_level_exception_details(monkeypatch, capsys):
@@ -779,6 +834,55 @@ def test_live_solana_direct_api_rejects_forged_live_metadata():
         raise AssertionError("Solana live TOML accepted forged owner metadata")
 
 
+def test_live_solana_evidence_rejects_non_string_imported_metadata_without_stringifying():
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = b"\x7fELFsol"
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    args = _live_args(module, code_hash=code_hash, programdata_address=programdata_address)
+
+    cases = (
+        ("verifier_program_id", "Solana live verifier program id metadata is invalid"),
+        ("programdata_address", "Solana live ProgramData address metadata is invalid"),
+        ("verifier_code_hash", "Solana live verifier code hash metadata is invalid"),
+        (
+            "program_account_data_base64",
+            "Solana Program account data base64 metadata must be present",
+        ),
+        (
+            "programdata_metadata_blake2b256",
+            "programdata_metadata_blake2b256 must be an exact non-empty string",
+        ),
+        (
+            "programdata_metadata_base64",
+            "Solana ProgramData metadata base64 metadata must be present",
+        ),
+        (
+            "programdata_executable_base64",
+            "Solana ProgramData executable base64 metadata must be present",
+        ),
+    )
+    for field, expected_error in cases:
+        live = _live_record(
+            module,
+            program_id=program_id,
+            programdata_address=programdata_address,
+            program_bytes=program_bytes,
+        )
+        live[field] = HostileImportedScalar()
+        try:
+            module._summary(args, live)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_error
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"non-string Solana live {field} metadata was accepted")
+
+
 def test_live_solana_evidence_redacts_imported_parser_failures(monkeypatch):
     """Imported Solana live parser failures must not echo parser payloads."""
 
@@ -972,7 +1076,13 @@ def test_live_solana_metadata_base64_redacts_parser_causes(monkeypatch):
     module = load_live_module()
     live = {"programdata_metadata_base64": "secret-token live metadata base64"}
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         def fail_decode(*_args, exception_type=exception_type, **_kwargs):
             raise exception_type("secret-token live metadata base64")
@@ -1096,6 +1206,61 @@ def test_live_solana_decimal_parsers_reject_noncanonical_text():
             raise AssertionError(f"noncanonical live Solana slot {value!r} was accepted")
 
 
+def test_solana_live_cli_parsers_reject_non_string_values_without_stringification():
+    module = load_live_module()
+
+    class HostileSolanaLiveParserValue:
+        def __str__(self):
+            raise AssertionError("secret-token-solana-live-parser-value stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token-solana-live-parser-value repr leaked")
+
+        def strip(self):
+            raise AssertionError("secret-token-solana-live-parser-value strip called")
+
+        def startswith(self, _prefix):
+            raise AssertionError(
+                "secret-token-solana-live-parser-value startswith called"
+            )
+
+        def isascii(self):
+            raise AssertionError("secret-token-solana-live-parser-value isascii called")
+
+        def isdecimal(self):
+            raise AssertionError("secret-token-solana-live-parser-value isdecimal called")
+
+    hostile = HostileSolanaLiveParserValue()
+    cases = (
+        (
+            lambda value: module._parse_solana_program_id(
+                value,
+                label="verifier program id",
+            ),
+            "verifier program id must be a Solana public key",
+        ),
+        (
+            lambda value: module._parse_hex32(value, label="route allowlist hash"),
+            "route allowlist hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda value: module._parse_positive_u64(
+                value,
+                label="expected programdata slot",
+            ),
+            "expected programdata slot must be a positive u64",
+        ),
+    )
+
+    for parser, expected_message in cases:
+        try:
+            parser(hostile)
+        except module.argparse.ArgumentTypeError as exc:
+            assert str(exc) == expected_message
+        else:
+            raise AssertionError("non-string Solana live parser value was accepted")
+
+
 def test_live_solana_evidence_rejects_zero_programdata_slot():
     module = load_live_module()
     program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
@@ -1185,6 +1350,29 @@ def test_live_solana_evidence_rejects_programdata_program_alias():
         assert "ProgramData account must differ from program id" in str(exc)
     else:
         raise AssertionError("aliased Solana ProgramData account was accepted")
+
+
+def test_live_solana_account_executable_control_rejects_non_booleans():
+    module = load_live_module()
+    account = _account_payload(
+        module,
+        _program_account_data(module, bytes.fromhex("11" * 32)),
+        executable=True,
+    )
+
+    for executable in (1, "true", None):
+        try:
+            module._require_upgradeable_loader_account(
+                account,
+                label="Solana Program account",
+                executable=executable,
+            )
+        except ValueError as exc:
+            assert str(exc) == "Solana live account executable must be a boolean"
+        else:
+            raise AssertionError(
+                "malformed Solana live account executable control was accepted"
+            )
 
 
 def test_live_solana_evidence_rejects_noncanonical_program_account_length():
@@ -1467,6 +1655,34 @@ def test_live_solana_evidence_rejects_programdata_slot_drift():
         assert "--expected-programdata-slot" in str(exc)
     else:
         raise AssertionError("drifted Solana ProgramData slot pin was accepted")
+
+
+def test_live_solana_evidence_rejects_boolean_expected_programdata_slot():
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = bytes.fromhex("7f454c460102030405")
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    live = _live_record(
+        module,
+        program_id=program_id,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
+    args = _live_args(module, code_hash=code_hash, programdata_address=programdata_address)
+    args.expected_programdata_slot = True
+
+    for render in (module._summary, module.render_toml):
+        try:
+            render(args, live)
+        except ValueError as exc:
+            assert str(exc) == "expected ProgramData slot must be a positive decimal"
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "boolean Solana expected ProgramData slot pin was accepted"
+            )
 
 
 def test_live_solana_evidence_requires_live_pins_for_toml():

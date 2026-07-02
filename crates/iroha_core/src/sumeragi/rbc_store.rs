@@ -1575,6 +1575,9 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
         if ready.signature.is_empty() {
             return Err("empty READY signature");
         }
+        if ready.signature.iter().all(|byte| *byte == 0) {
+            return Err("all-zero READY signature");
+        }
         if previous_ready_sender.is_some_and(|previous| ready.sender < previous) {
             return Err("non-canonical READY sender order");
         }
@@ -1600,7 +1603,11 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
 
     if session.delivered {
         match (&session.deliver_sender, &session.deliver_signature) {
-            (Some(_), Some(sig)) if !sig.is_empty() => {}
+            (Some(_), Some(sig)) if !sig.is_empty() => {
+                if sig.iter().all(|byte| *byte == 0) {
+                    return Err("all-zero DELIVER signature");
+                }
+            }
             _ => return Err("delivered flag set without deliver sender/signature"),
         }
     } else if session.deliver_sender.is_some() || session.deliver_signature.is_some() {
@@ -3869,6 +3876,25 @@ mod tests {
             manifest.clone(),
         );
 
+        let mut all_zero_ready_signature =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xBA, 8);
+        all_zero_ready_signature
+            .session_roster
+            .push(test_peer_id(1));
+        all_zero_ready_signature
+            .ready_signatures
+            .push(PersistedReady {
+                sender: 0,
+                signature: vec![0u8; 64],
+            });
+        assert_persisted_session_rejected_and_deleted(
+            "all-zero ready signature",
+            base_key,
+            all_zero_ready_signature,
+            chain_hash,
+            manifest.clone(),
+        );
+
         let mut ready_without_roster =
             persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xB1, 8);
         ready_without_roster.ready_signatures.push(PersistedReady {
@@ -4011,6 +4037,22 @@ mod tests {
             "delivered with empty signature",
             base_key,
             delivered_empty_signature,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut delivered_all_zero_signature =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xBB, 8);
+        delivered_all_zero_signature
+            .session_roster
+            .push(test_peer_id(1));
+        delivered_all_zero_signature.delivered = true;
+        delivered_all_zero_signature.deliver_sender = Some(0);
+        delivered_all_zero_signature.deliver_signature = Some(vec![0u8; 64]);
+        assert_persisted_session_rejected_and_deleted(
+            "delivered with all-zero signature",
+            base_key,
+            delivered_all_zero_signature,
             chain_hash,
             manifest.clone(),
         );

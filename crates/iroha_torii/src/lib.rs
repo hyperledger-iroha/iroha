@@ -1760,9 +1760,9 @@ impl PipelineStatusKind {
             Self::Queued => 0,
             Self::Approved => 1,
             Self::Expired => 2,
-            Self::Committed => 3,
-            Self::Applied => 4,
-            Self::Rejected => 5,
+            Self::Rejected => 3,
+            Self::Committed => 4,
+            Self::Applied => 5,
         }
     }
 
@@ -6221,7 +6221,8 @@ async fn handler_offline_note_readiness(
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
     let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
-    let offline_kagemusha_abi7 = offline.kagemusha_enabled;
+    // Mobile artifact archives are served and gated by Core API, not this readiness endpoint.
+    let offline_kagemusha_recursive_compact_artifacts = false;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry(
@@ -6242,16 +6243,8 @@ async fn handler_offline_note_readiness(
         ),
         json_entry(
             "offline_kagemusha_recursive_compact_artifacts_available",
-            offline_kagemusha_abi7,
+            offline_kagemusha_recursive_compact_artifacts,
         ),
-        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
-        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
-        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
-        json_entry(
-            "offline_kagemusha_abi7_circuit_id",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-        ),
-        json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
     ]))
 }
 
@@ -6262,7 +6255,8 @@ async fn handler_offline_v2_note_readiness(
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
     let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
-    let offline_kagemusha_abi7 = offline.kagemusha_enabled;
+    // Mobile artifact archives are served and gated by Core API, not this readiness endpoint.
+    let offline_kagemusha_recursive_compact_artifacts = false;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry(
@@ -6283,16 +6277,8 @@ async fn handler_offline_v2_note_readiness(
         ),
         json_entry(
             "offline_kagemusha_recursive_compact_artifacts_available",
-            offline_kagemusha_abi7,
+            offline_kagemusha_recursive_compact_artifacts,
         ),
-        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
-        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
-        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
-        json_entry(
-            "offline_kagemusha_abi7_circuit_id",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
-        ),
-        json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
     ]))
 }
 
@@ -12559,6 +12545,50 @@ fn resolve_signed_query_routing_for_app(
     }
 }
 
+fn torii_lane_active_for_routing(
+    app: &AppState,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    lane_id: LaneId,
+) -> bool {
+    !nexus.enabled || app.state.is_lane_active_for_authority(lane_id)
+}
+
+fn torii_active_lane_ids_for_status(
+    app: &AppState,
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> Vec<u32> {
+    let mut lane_ids = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| torii_lane_active_for_routing(app, nexus, lane.id))
+        .map(|lane| lane.id.as_u32())
+        .collect::<Vec<_>>();
+    lane_ids.sort_unstable();
+    lane_ids.dedup();
+    lane_ids
+}
+
+fn torii_autoscale_capacity_lane_ids_for_status(
+    app: &AppState,
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> Vec<u32> {
+    if !nexus.enabled || !nexus.autoscale.enabled {
+        return Vec::new();
+    }
+    let mut lane_ids = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| lane.is_autoscale_managed_elastic())
+        .filter(|lane| torii_lane_active_for_routing(app, nexus, lane.id))
+        .map(|lane| lane.id.as_u32())
+        .collect::<Vec<_>>();
+    lane_ids.sort_unstable();
+    lane_ids.dedup();
+    lane_ids
+}
+
 fn resolve_torii_route_for_dataspace_id(
     app: &AppState,
     dataspace_id: iroha_data_model::nexus::DataSpaceId,
@@ -12569,7 +12599,9 @@ fn resolve_torii_route_for_dataspace_id(
         .lane_catalog
         .lanes()
         .iter()
-        .filter(|lane| lane.dataspace_id == dataspace_id)
+        .filter(|lane| {
+            lane.dataspace_id == dataspace_id && torii_lane_active_for_routing(app, nexus, lane.id)
+        })
         .map(|lane| lane.id)
         .min()
         .or_else(|| {
@@ -12579,7 +12611,9 @@ fn resolve_torii_route_for_dataspace_id(
                     .lanes()
                     .iter()
                     .find(|lane| {
-                        lane.id == LaneId::SINGLE && lane.dataspace_id == DataSpaceId::UNIVERSAL
+                        lane.id == LaneId::SINGLE
+                            && lane.dataspace_id == DataSpaceId::UNIVERSAL
+                            && torii_lane_active_for_routing(app, nexus, lane.id)
                     })
                     .map(|lane| lane.id)
             })?
@@ -13225,7 +13259,7 @@ fn validate_incoming_read_proxy_route(
 ) -> Result<RoutingDecision, Response> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
-    iroha_core::queue::resolve_routing_decision(
+    let resolved = iroha_core::queue::resolve_routing_decision(
         routing_decision,
         &nexus.lane_catalog,
         &nexus.dataspace_catalog,
@@ -13253,7 +13287,31 @@ fn validate_incoming_read_proxy_route(
             HeaderValue::from_static("stale_route"),
         );
         response
-    })
+    })?;
+    if !torii_lane_active_for_routing(app, nexus, resolved.lane_id) {
+        iroha_logger::warn!(
+            request_kind,
+            lane = routing_decision.lane_id.as_u32(),
+            dataspace = routing_decision.dataspace_id.as_u64(),
+            "Torii proxy read route is inactive at receiver authority height"
+        );
+        let mut response = torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            format!(
+                "proxied {request_kind} route lane {} dataspace {} is inactive at receiver authority height",
+                routing_decision.lane_id.as_u32(),
+                routing_decision.dataspace_id.as_u64()
+            ),
+        );
+        insert_routing_headers(&mut response, routing_decision, "proxy");
+        response.headers_mut().insert(
+            HeaderName::from_static("x-iroha-route-unavailable-reason"),
+            HeaderValue::from_static("stale_route"),
+        );
+        return Err(response);
+    }
+    Ok(resolved)
 }
 
 #[cfg(feature = "app_api")]
@@ -13273,6 +13331,17 @@ fn torii_route_for_lane_id(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )));
     };
+    if !torii_lane_active_for_routing(app, nexus, lane_id) {
+        return Err(Error::PushIntoQueue {
+            source: Box::new(queue::Error::UnresolvedRoute {
+                reason: format!(
+                    "lane {} is inactive at the current authority height",
+                    lane_id.as_u32()
+                ),
+            }),
+            backpressure: current_torii_backpressure(app),
+        });
+    }
 
     iroha_core::queue::resolve_routing_decision(
         RoutingDecision::new(lane_id, lane.dataspace_id),
@@ -13307,6 +13376,9 @@ fn torii_restricted_routes(app: &AppState) -> Vec<RoutingDecision> {
     let mut seen_dataspaces = BTreeSet::new();
     let mut routes = Vec::new();
     for lane in nexus.lane_catalog.lanes() {
+        if !torii_lane_active_for_routing(app, nexus, lane.id) {
+            continue;
+        }
         if lane.visibility != iroha_data_model::nexus::LaneVisibility::Restricted {
             continue;
         }
@@ -13439,7 +13511,9 @@ fn torii_public_dataspace_ids(app: &AppState) -> BTreeSet<DataSpaceId> {
     let mut dataspaces = BTreeSet::from([DataSpaceId::UNIVERSAL]);
 
     for lane in nexus.lane_catalog.lanes() {
-        if lane.visibility == iroha_data_model::nexus::LaneVisibility::Public {
+        if lane.visibility == iroha_data_model::nexus::LaneVisibility::Public
+            && torii_lane_active_for_routing(app, nexus, lane.id)
+        {
             dataspaces.insert(lane.dataspace_id);
         }
     }
@@ -13737,6 +13811,9 @@ fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
     let mut routes =
         BTreeMap::<iroha_data_model::nexus::DataSpaceId, iroha_data_model::nexus::LaneId>::new();
     for lane in nexus.lane_catalog.lanes() {
+        if !torii_lane_active_for_routing(app, nexus, lane.id) {
+            continue;
+        }
         routes
             .entry(lane.dataspace_id)
             .and_modify(|current| {
@@ -15027,6 +15104,14 @@ fn merge_query_batch_boxes(
             QueryOutputBatchBox::AnonymousAssetEscrowRecord(mut left),
             QueryOutputBatchBox::AnonymousAssetEscrowRecord(right),
         ) => merge_variant!(left, right, AnonymousAssetEscrowRecord),
+        (
+            QueryOutputBatchBox::FeeSponsorPolicy(mut left),
+            QueryOutputBatchBox::FeeSponsorPolicy(right),
+        ) => merge_variant!(left, right, FeeSponsorPolicy),
+        (
+            QueryOutputBatchBox::FeeSponsorPolicyId(mut left),
+            QueryOutputBatchBox::FeeSponsorPolicyId(right),
+        ) => merge_variant!(left, right, FeeSponsorPolicyId),
         (left, right) => Err(torii_proxy_error_response(
             StatusCode::CONFLICT,
             "query_conflict",
@@ -15148,6 +15233,12 @@ fn canonicalize_query_batch_box(
         }
         QueryOutputBatchBox::AnonymousAssetEscrowRecord(items) => {
             canonicalize_variant!(items, AnonymousAssetEscrowRecord)
+        }
+        QueryOutputBatchBox::FeeSponsorPolicy(items) => {
+            canonicalize_variant!(items, FeeSponsorPolicy)
+        }
+        QueryOutputBatchBox::FeeSponsorPolicyId(items) => {
+            canonicalize_variant!(items, FeeSponsorPolicyId)
         }
     }
 }
@@ -16415,9 +16506,9 @@ fn pipeline_status_payload_rank(
         "Queued" => Ok(0),
         "Approved" => Ok(1),
         "Expired" => Ok(2),
-        "Committed" => Ok(3),
-        "Applied" => Ok(4),
-        "Rejected" => Ok(5),
+        "Rejected" => Ok(3),
+        "Committed" => Ok(4),
+        "Applied" => Ok(5),
         other => Err(torii_internal_json_error(format!(
             "unknown pipeline status kind `{other}` in routed response"
         ))),
@@ -17083,6 +17174,127 @@ mod torii_routed_read_tests {
             .await
             .expect("response body should be readable");
         norito::decode_from_bytes(&body).expect("response body should decode as an error envelope")
+    }
+
+    pub(super) fn configure_corrupt_inactive_autoscale_range_route_for_test(
+        app: &mut SharedAppState,
+    ) -> (LaneId, DataSpaceId) {
+        let inactive_dataspace = DataSpaceId::new(1);
+        let inactive_lane = LaneId::new(1);
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: inactive_lane,
+                    dataspace_id: inactive_dataspace,
+                    alias: "manual-elastic-slot".to_owned(),
+                    visibility: iroha_data_model::nexus::LaneVisibility::Public,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("corrupt lane catalog");
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: inactive_dataspace,
+                alias: "inactive".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            dataspace_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+
+        let app_state = Arc::get_mut(app).expect("unique app state");
+        let state = Arc::get_mut(&mut app_state.state).expect("unique state");
+        {
+            let mut current = state.nexus.write();
+            *current = nexus;
+        }
+        (inactive_lane, inactive_dataspace)
+    }
+
+    #[test]
+    fn torii_route_resolution_rejects_inactive_autoscale_range_lane() {
+        let authority = routed_read_test_account(0x7c);
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let (inactive_lane, inactive_dataspace) =
+            configure_corrupt_inactive_autoscale_range_route_for_test(&mut app);
+
+        assert!(
+            !app.state.is_lane_active_for_authority(inactive_lane),
+            "fixture lane must be inactive for route authority"
+        );
+        let err = resolve_torii_route_for_dataspace_id(app.as_ref(), inactive_dataspace)
+            .expect_err("inactive autoscale-range lane must not resolve as a Torii route");
+        assert!(
+            matches!(
+                err,
+                queue::RoutingResolveError::NoLaneForDataspace { .. }
+                    | queue::RoutingResolveError::LaneDataspaceMismatch { .. }
+            ),
+            "inactive lane routing should fail closed, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn torii_explicit_lane_route_rejects_inactive_autoscale_range_lane() {
+        let authority = routed_read_test_account(0x7e);
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let (inactive_lane, _) =
+            configure_corrupt_inactive_autoscale_range_route_for_test(&mut app);
+
+        let err = torii_route_for_lane_id(app.as_ref(), inactive_lane)
+            .expect_err("explicit lane routing must not expose inactive autoscale-range lanes");
+        let Error::PushIntoQueue { source, .. } = err else {
+            panic!("inactive explicit lane routing should report route unavailability");
+        };
+        assert!(
+            matches!(
+                source.as_ref(),
+                queue::Error::UnresolvedRoute { reason }
+                    if reason.contains("inactive at the current authority height")
+            ),
+            "unexpected inactive lane route error: {source:?}"
+        );
+    }
+
+    #[test]
+    fn torii_fanout_route_discovery_excludes_inactive_autoscale_range_lane() {
+        let authority = routed_read_test_account(0x7d);
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let (inactive_lane, inactive_dataspace) =
+            configure_corrupt_inactive_autoscale_range_route_for_test(&mut app);
+
+        let routes = torii_all_dataspace_routes(app.as_ref());
+        assert!(
+            routes
+                .iter()
+                .all(|route| route.lane_id != inactive_lane
+                    && route.dataspace_id != inactive_dataspace),
+            "fanout route discovery must not expose inactive autoscale-range lanes: {routes:?}"
+        );
+        assert_eq!(
+            routes,
+            vec![RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]
+        );
+        let public_dataspaces = torii_public_dataspace_ids(app.as_ref());
+        assert!(
+            !public_dataspaces.contains(&inactive_dataspace),
+            "public visibility must not include dataspaces whose only public lane is inactive"
+        );
     }
 
     #[test]
@@ -19137,7 +19349,42 @@ mod torii_routed_read_tests {
         assert_eq!(payload.resolved_from, "state");
     }
 
-    fn pipeline_status_hint_response(kind: &str) -> Response {
+    #[tokio::test]
+    async fn merged_pipeline_status_response_prefers_applied_over_cached_rejection() {
+        let response = merged_pipeline_status_response(
+            vec![
+                norito::json!({
+                    "hash": "abc",
+                    "status": {
+                        "kind": "Rejected",
+                        "block_height": null,
+                        "rejection_reason": null
+                    },
+                    "scope": "global",
+                    "resolved_from": "cache"
+                }),
+                norito::json!({
+                    "hash": "abc",
+                    "status": {"kind": "Applied", "block_height": 7},
+                    "scope": "global",
+                    "resolved_from": "state"
+                }),
+            ],
+            "proxy",
+        )
+        .expect("pipeline status fanout should prefer committed success over stale rejection");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: PipelineTransactionStatusResponse =
+            norito::json::from_slice(&body).expect("status payload");
+        assert_eq!(payload.status.kind, "Applied");
+        assert_eq!(payload.resolved_from, "state");
+    }
+
+    fn pipeline_status_hint_response(kind: &str, resolved_from: &str) -> Response {
         crate::utils::respond_with_format(
             PipelineTransactionStatusResponse::new(
                 "abc".to_owned(),
@@ -19147,7 +19394,7 @@ mod torii_routed_read_tests {
                     rejection_reason: None,
                 },
                 "global".to_owned(),
-                "cache".to_owned(),
+                resolved_from.to_owned(),
             ),
             ResponseFormat::Json,
         )
@@ -19156,7 +19403,7 @@ mod torii_routed_read_tests {
     #[tokio::test]
     async fn pipeline_status_hint_ignores_non_terminal_successes() {
         for kind in ["Queued", "Approved", "Committed"] {
-            let response = pipeline_status_hint_response(kind);
+            let response = pipeline_status_hint_response(kind, "cache");
 
             let hinted = pipeline_status_hinted_global_response(response)
                 .await
@@ -19170,14 +19417,30 @@ mod torii_routed_read_tests {
     }
 
     #[tokio::test]
-    async fn pipeline_status_hint_allows_terminal_successes() {
-        for kind in ["Applied", "Rejected", "Expired"] {
-            let response = pipeline_status_hint_response(kind);
+    async fn pipeline_status_hint_ignores_cached_negative_terminal_statuses() {
+        for kind in ["Rejected", "Expired"] {
+            let response = pipeline_status_hint_response(kind, "cache");
+
+            let hinted = pipeline_status_hinted_global_response(response)
+                .await
+                .expect("hint classifier should not fail");
+
+            assert!(
+                hinted.is_none(),
+                "global status must fan out instead of trusting hinted cached {kind}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_hint_allows_authoritative_terminal_statuses() {
+        for (kind, resolved_from) in [("Applied", "cache"), ("Rejected", "state")] {
+            let response = pipeline_status_hint_response(kind, resolved_from);
 
             let hinted = pipeline_status_hinted_global_response(response)
                 .await
                 .expect("hint classifier should not fail")
-                .expect("terminal hinted status may short-circuit");
+                .expect("authoritative hinted status may short-circuit");
             let body = axum::body::to_bytes(hinted.into_body(), usize::MAX)
                 .await
                 .expect("hinted body should be readable");
@@ -19185,6 +19448,7 @@ mod torii_routed_read_tests {
                 norito::json::from_slice(&body).expect("status payload");
 
             assert_eq!(payload.status.kind, kind);
+            assert_eq!(payload.resolved_from, resolved_from);
         }
     }
 
@@ -24821,11 +25085,28 @@ async fn handler_soracloud_status(
     let high_load = backpressure.is_saturated() || queue_active >= high_load_threshold;
 
     let nexus = app.state.nexus_snapshot();
+    let configured_lane_count = u64::from(nexus.lane_catalog.lane_count().get());
+    let declared_lane_count = u64::try_from(nexus.lane_catalog.lanes().len()).unwrap_or(u64::MAX);
+    let active_lane_ids = torii_active_lane_ids_for_status(app.as_ref(), &nexus);
+    let active_lane_count = u64::try_from(active_lane_ids.len()).unwrap_or(u64::MAX);
+    let autoscale_capacity_lane_ids =
+        torii_autoscale_capacity_lane_ids_for_status(app.as_ref(), &nexus);
+    let autoscale_capacity_lane_count =
+        u64::try_from(autoscale_capacity_lane_ids.len()).unwrap_or(u64::MAX);
     let routing = json_object(vec![
         json_entry("nexus_enabled", nexus.enabled),
+        json_entry("configured_lane_count", configured_lane_count),
+        json_entry("lane_count", configured_lane_count),
+        json_entry("declared_lane_count", declared_lane_count),
+        json_entry("active_lane_count", active_lane_count),
+        json_entry("active_lane_ids", json_value(&active_lane_ids)),
         json_entry(
-            "lane_count",
-            u64::try_from(nexus.lane_catalog.lanes().len()).unwrap_or(u64::MAX),
+            "autoscale_capacity_lane_count",
+            autoscale_capacity_lane_count,
+        ),
+        json_entry(
+            "autoscale_capacity_lane_ids",
+            json_value(&autoscale_capacity_lane_ids),
         ),
         json_entry(
             "dataspace_count",
@@ -27696,7 +27977,7 @@ async fn handler_sccp_capabilities(
         crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/capabilities");
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(routing::handle_v1_sccp_capabilities(accept)
+    Ok(routing::handle_v1_sccp_capabilities(&app.state, accept)
         .await?
         .into_response())
 }
@@ -32481,6 +32762,7 @@ async fn handler_post_transaction(
             )));
         }
     }
+    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     if let Some(token) = token_hdr {
         if !app.tx_rate_limiter.allow(token).await {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -32495,7 +32777,6 @@ async fn handler_post_transaction(
             )));
         }
     }
-    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     let transaction_bytes =
         <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
             &transaction,
@@ -32579,6 +32860,7 @@ async fn handler_post_transaction_entrypoint(
             )));
         }
     }
+    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     if let Some(token) = token_hdr {
         if !app.tx_rate_limiter.allow(token).await {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -32596,7 +32878,6 @@ async fn handler_post_transaction_entrypoint(
             )));
         }
     }
-    routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     let accepted_tx = {
         let chain_id = app.chain_id.clone();
         let state = app.state.clone();
@@ -34132,16 +34413,16 @@ fn pipeline_status_terminal_or_state_entry(
 ) -> Option<(PipelineStatusEntry, &'static str)> {
     app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
 
-    if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
-        if entry.kind.is_terminal() {
-            return Some((entry, "cache"));
-        }
-    }
-
     if let Some(entry) = pipeline_status_from_state(app.as_ref(), hash) {
         app.pipeline_status_cache
             .record_entry(hash.clone(), entry.clone());
         return Some((entry, "state"));
+    }
+
+    if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
+        if entry.kind.is_terminal() {
+            return Some((entry, "cache"));
+        }
     }
 
     None
@@ -34241,11 +34522,14 @@ fn execute_pipeline_status_local_read(
 }
 
 #[cfg(feature = "app_api")]
-fn pipeline_status_payload_is_terminal(payload: &PipelineTransactionStatusResponse) -> bool {
-    matches!(
-        payload.status.kind.as_str(),
-        "Applied" | "Rejected" | "Expired"
-    )
+fn pipeline_status_payload_is_authoritative_hint(
+    payload: &PipelineTransactionStatusResponse,
+) -> bool {
+    match payload.status.kind.as_str() {
+        "Applied" => true,
+        "Rejected" | "Expired" => payload.resolved_from == "state",
+        _ => false,
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -34270,7 +34554,7 @@ async fn pipeline_status_hinted_global_response(
             )
         })?;
     let is_terminal = norito::json::from_slice::<PipelineTransactionStatusResponse>(&bytes)
-        .map(|payload| pipeline_status_payload_is_terminal(&payload))
+        .map(|payload| pipeline_status_payload_is_authoritative_hint(&payload))
         .unwrap_or(false);
     let response = Response::from_parts(parts, Body::from(bytes));
 
@@ -45730,6 +46014,14 @@ pub(crate) mod tests_runtime_handlers {
         route_calls
     }
 
+    fn install_single_slot_transaction_queue(app: &mut SharedAppState) {
+        let app_mut = Arc::get_mut(app).expect("unique app state");
+        let mut queue_cfg = iroha_config::parameters::actual::Queue::default();
+        queue_cfg.capacity = NonZeroUsize::new(1).expect("nonzero queue capacity");
+        app_mut.queue = Arc::new(Queue::from_config(queue_cfg, app_mut.events.clone()));
+        app_mut.high_load_tx_threshold = usize::MAX;
+    }
+
     fn transaction_with_invalid_signature_for_test(mut tx: SignedTransaction) -> SignedTransaction {
         let mut signature = tx.signature().payload().payload().to_vec();
         let last = signature
@@ -45815,6 +46107,65 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err,
         };
         assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+            app_mut.fee_policy = FeePolicy::Disabled;
+        }
+        install_single_slot_transaction_queue(&mut app);
+
+        let keypair = checked_torii_test_keypair_from_seed_byte(
+            0xce,
+            Algorithm::Ed25519,
+            "derive queue-before-rate-limit fixture key",
+        );
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "queue-before-rate-1".to_string())])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "queue-before-rate-2".to_string())])
+            .sign(keypair.private_key());
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-token", HeaderValue::from_static("queue-before-rate"));
+
+        let first = super::handler_post_transaction(
+            State(app.clone()),
+            headers.clone(),
+            None,
+            versioned_signed_for_test(&tx1),
+        )
+        .await
+        .expect("first transaction should fill the queue")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+        let err = match super::handler_post_transaction(
+            State(app.clone()),
+            headers,
+            None,
+            versioned_signed_for_test(&tx2),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected queue full before token rate limit"),
+            Err(err) => err,
+        };
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("PRTRY:QUEUE_FULL")
+        );
     }
 
     #[tokio::test]
@@ -46054,6 +46405,74 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err,
         };
         assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_entrypoint_reports_full_queue_before_rate_limit() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+            app_mut.fee_policy = FeePolicy::Disabled;
+        }
+        install_single_slot_transaction_queue(&mut app);
+
+        let keypair = checked_torii_test_keypair_from_seed_byte(
+            0xcf,
+            Algorithm::Ed25519,
+            "derive entrypoint queue-before-rate-limit fixture key",
+        );
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(
+                Level::INFO,
+                "entrypoint-queue-before-rate-1".to_string(),
+            )])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(
+                Level::INFO,
+                "entrypoint-queue-before-rate-2".to_string(),
+            )])
+            .sign(keypair.private_key());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-api-token",
+            HeaderValue::from_static("entrypoint-queue-before-rate"),
+        );
+
+        let first = super::handler_post_transaction_entrypoint(
+            State(app.clone()),
+            headers.clone(),
+            None,
+            versioned_entrypoint_for_test(TransactionEntrypoint::External(tx1)),
+        )
+        .await
+        .expect("first entrypoint should fill the queue")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+        let err = match super::handler_post_transaction_entrypoint(
+            State(app.clone()),
+            headers,
+            None,
+            versioned_entrypoint_for_test(TransactionEntrypoint::External(tx2)),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected queue full before token rate limit"),
+            Err(err) => err,
+        };
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("PRTRY:QUEUE_FULL")
+        );
     }
 
     #[tokio::test]
@@ -46527,13 +46946,7 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn handler_post_transaction_returns_queue_full_only_for_real_capacity_overflow() {
         let mut app = mk_app_state_for_tests();
-        {
-            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-            let mut queue_cfg = iroha_config::parameters::actual::Queue::default();
-            queue_cfg.capacity = NonZeroUsize::new(1).expect("nonzero queue capacity");
-            app_mut.queue = Arc::new(Queue::from_config(queue_cfg, app_mut.events.clone()));
-            app_mut.high_load_tx_threshold = usize::MAX;
-        }
+        install_single_slot_transaction_queue(&mut app);
 
         let keypair = checked_torii_test_keypair_from_seed_byte(
             0xd5,
@@ -50625,28 +51038,30 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[test]
-    fn pipeline_status_merge_prefers_higher_rank() {
+    fn pipeline_status_merge_prefers_committed_success_over_cached_rejection() {
         let now = Instant::now();
-        let mut entry = PipelineStatusEntry::at_time(PipelineStatusKind::Applied, None, None, now);
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
+        let mut entry =
+            PipelineStatusEntry::at_time(PipelineStatusKind::Rejected, None, Some(rejection), now);
         entry.merge_from_event(PipelineStatusEntry::at_time(
-            PipelineStatusKind::Expired,
-            None,
+            PipelineStatusKind::Committed,
+            NonZeroU64::new(7),
             None,
             now + Duration::from_secs(1),
         ));
-        assert_eq!(entry.kind, PipelineStatusKind::Applied);
+        assert_eq!(entry.kind, PipelineStatusKind::Committed);
+        assert_eq!(entry.block_height, NonZeroU64::new(7));
+        assert!(entry.rejection.is_none());
 
-        let height = NonZeroU64::new(7).expect("height");
-        let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
         entry.merge_from_event(PipelineStatusEntry::at_time(
-            PipelineStatusKind::Rejected,
-            Some(height),
-            Some(rejection.clone()),
+            PipelineStatusKind::Applied,
+            NonZeroU64::new(7),
+            None,
             now + Duration::from_secs(2),
         ));
-        assert_eq!(entry.kind, PipelineStatusKind::Rejected);
-        assert_eq!(entry.block_height, Some(height));
-        assert_eq!(entry.rejection, Some(rejection));
+        assert_eq!(entry.kind, PipelineStatusKind::Applied);
+        assert_eq!(entry.block_height, NonZeroU64::new(7));
+        assert!(entry.rejection.is_none());
     }
 
     #[test]
@@ -51877,6 +52292,61 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
+    async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
+        let app = mk_app_state_for_tests();
+        let (block, _) = make_signed_block(1, None);
+        let header = block.header();
+        let tx = block.external_transactions().next().expect("tx");
+        let tx_hash = tx.hash();
+        store_block(&app, block);
+
+        let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
+        app.pipeline_status_cache.record_entry(
+            tx_hash,
+            PipelineStatusEntry::fresh(PipelineStatusKind::Rejected, None, Some(rejection)),
+        );
+
+        let height = header.height();
+        let height_usize = usize::try_from(height.get()).expect("height usize");
+        let height_nz = NonZeroUsize::new(height_usize).expect("height");
+        let mut state_block = app.state.block(header);
+        let tx_hashes: HashSet<_> = [tx_hash].into_iter().collect();
+        state_block.transactions.insert_block(tx_hashes, height_nz);
+        state_block.commit().expect("commit");
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+                scope: None,
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+        assert_eq!(
+            payload
+                .get("status")
+                .and_then(|status| status.get("kind"))
+                .and_then(norito::json::Value::as_str),
+            Some("Applied")
+        );
+        assert_eq!(
+            payload
+                .get("resolved_from")
+                .and_then(norito::json::Value::as_str),
+            Some("state")
+        );
+    }
+
+    #[tokio::test]
     async fn pipeline_status_handler_encodes_rejection_as_base64() {
         let app = mk_app_state_for_tests();
         let (block, _) = make_signed_block(1, None);
@@ -52503,6 +52973,22 @@ pub(crate) mod tests_runtime_handlers {
         height: u64,
         payload: iroha_sccp::SccpPayloadV1,
     ) -> (SharedAppState, [u8; 32]) {
+        let (app, mut message_ids) =
+            app_with_recorded_sccp_messages_for_test(height, vec![payload]);
+        let message_id = message_ids
+            .pop()
+            .expect("single recorded SCCP message id should be returned");
+        (app, message_id)
+    }
+
+    fn app_with_recorded_sccp_messages_for_test(
+        height: u64,
+        payloads: Vec<iroha_sccp::SccpPayloadV1>,
+    ) -> (SharedAppState, Vec<[u8; 32]>) {
+        assert!(
+            !payloads.is_empty(),
+            "recorded SCCP fixture requires at least one payload"
+        );
         let keypair = checked_torii_test_ed25519_keypair(
             0x31,
             "derive Torii recorded SCCP-message fixture key",
@@ -52512,25 +52998,30 @@ pub(crate) mod tests_runtime_handlers {
             .expect("SCCP Nexus finality chain id");
         let app = mk_app_state_for_tests_with_chain_id(chain.clone());
         let authority = AccountId::new(keypair.public_key().clone());
-        let overlay = vec![
-            iroha_data_model::isi::bridge::RecordSccpMessage::new(
-                iroha_sccp::canonical_sccp_payload_bytes(&payload),
-            )
-            .into(),
-        ];
-        let tx = checked_torii_test_transaction(
-            TransactionBuilder::new(chain, authority).with_executable(Executable::IvmProved(
-                IvmProved {
-                    bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
-                    overlay: overlay.into(),
-                    events_commitment: Hash::new(b"events"),
-                    gas_policy_commitment: Hash::new(b"gas"),
-                },
-            )),
-            &keypair,
-            "sign Torii SCCP-message fixture transaction",
-        );
-        let entry_hash = tx.hash_as_entrypoint();
+        let mut txs = Vec::with_capacity(payloads.len());
+        let mut entry_hashes = Vec::with_capacity(payloads.len());
+        for payload in payloads {
+            let overlay = vec![
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                    iroha_sccp::canonical_sccp_payload_bytes(&payload),
+                )
+                .into(),
+            ];
+            let tx = checked_torii_test_transaction(
+                TransactionBuilder::new(chain.clone(), authority.clone()).with_executable(
+                    Executable::IvmProved(IvmProved {
+                        bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+                        overlay: overlay.into(),
+                        events_commitment: Hash::new(b"events"),
+                        gas_policy_commitment: Hash::new(b"gas"),
+                    }),
+                ),
+                &keypair,
+                "sign Torii SCCP-message fixture transaction",
+            );
+            entry_hashes.push(tx.hash_as_entrypoint());
+            txs.push(tx);
+        }
         let header = BlockHeader::new(
             std::num::NonZeroU64::new(height).expect("non-zero height"),
             None,
@@ -52545,13 +53036,13 @@ pub(crate) mod tests_runtime_handlers {
             &header,
             "sign Torii SCCP-message fixture block",
         );
-        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
+        let mut block = SignedBlock::presigned(signature, header, txs);
+        let transaction_results = entry_hashes
+            .iter()
+            .map(|_| TransactionResultInner::Ok(DataTriggerSequence::default()))
+            .collect::<Vec<_>>();
         block
-            .set_transaction_results(
-                Vec::new(),
-                &[entry_hash],
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            )
+            .set_transaction_results(Vec::new(), &entry_hashes, transaction_results)
             .expect("test block entrypoint hash should match payload");
         let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(&block);
         let commitment_root =
@@ -52564,10 +53055,9 @@ pub(crate) mod tests_runtime_handlers {
             .expect("result root");
         let block_hash = block.hash();
         let message_id = messages
-            .first()
-            .expect("recorded message")
-            .commitment
-            .message_id;
+            .iter()
+            .map(|message| message.commitment.message_id)
+            .collect::<Vec<_>>();
         store_block(&app, block);
 
         let (qc, validator_pop) = sample_commit_qc(
@@ -52588,6 +53078,31 @@ pub(crate) mod tests_runtime_handlers {
         );
         state.insert_commit_qc_for_testing(block_hash, qc);
         (app, message_id)
+    }
+
+    fn invalid_non_sora_sccp_message_bundle_value_for_test(
+        payload: iroha_sccp::SccpPayloadV1,
+    ) -> norito::json::Value {
+        assert_ne!(
+            iroha_sccp::sccp_message_source_domain(&payload),
+            iroha_sccp::SCCP_DOMAIN_SORA,
+            "fixture is for inbound non-SORA source messages"
+        );
+        let commitment = iroha_sccp::hub_commitment_from_sccp_payload(&payload);
+        let bundle = iroha_sccp::NexusSccpMessageProofV1 {
+            version: 1,
+            commitment_root: iroha_sccp::commitment_leaf_hash(&commitment),
+            commitment,
+            merkle_proof: iroha_sccp::SccpMerkleProofV1 { steps: Vec::new() },
+            payload,
+            finality_proof: b"invalid-source-chain-proof-envelope".to_vec(),
+        };
+        norito::json::to_value(&bundle).expect("invalid inbound SCCP bundle JSON")
+    }
+
+    fn eth_mainnet_to_sora_sccp_message_bundle_value_for_test(nonce: u64) -> norito::json::Value {
+        let bundle = iroha_sccp::test_fixtures::sample_eth_to_sora_transfer_bundle(nonce);
+        norito::json::to_value(&bundle).expect("valid inbound SCCP bundle JSON")
     }
 
     fn install_evm_da_receipt_signer_for_test(app: &mut SharedAppState) {
@@ -52615,6 +53130,7 @@ pub(crate) mod tests_runtime_handlers {
             tron_network: "nile".to_owned(),
             chain: "tron-nile".to_owned(),
             chain_id_hex: "0xcd8690dc".to_owned(),
+            ton_finalize_message_value_nano: None,
             explorer_url: None,
             explorer_host: None,
             counterparty_account_codec: None,
@@ -52629,12 +53145,16 @@ pub(crate) mod tests_runtime_handlers {
             taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
             sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
             tron_verifier_address: "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ".to_owned(),
+            ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", "11".repeat(32)),
             verifier_key_hash: format!("0x{}", "22".repeat(32)),
             proof_artifact_hash: None,
             proving_key_hash: None,
             native_evm_prover_bundle_hash: None,
             native_evm_prover_bundle: None,
+            source_verifier_material: None,
+            source_adapter_engine_deployment: None,
+            source_adapter_engine: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: None,
@@ -52742,22 +53262,11 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 9,
             sora_asset_id: [0x44; 32],
         });
-        let commitment = iroha_sccp::SccpHubCommitmentV1 {
-            version: 1,
-            kind: iroha_sccp::SccpHubMessageKind::TokenPause,
-            target_domain: iroha_sccp::sccp_message_target_domain(&payload),
-            message_id: iroha_sccp::sccp_message_id(&payload),
-            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
-                &payload,
-            )),
-        };
-        let app = app_with_commit_qc_for_test(1, iroha_sccp::commitment_leaf_hash(&commitment));
-        let bundle = routing::publish_sccp_message_bundle(app.state.as_ref(), 1, payload.clone())
-            .expect("publish");
+        let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload.clone());
 
         let response = routing::handle_v1_sccp_message_bundle(
             app.state.as_ref(),
-            hex::encode(bundle.commitment.message_id),
+            hex::encode(message_id),
             None,
         )
         .await
@@ -52774,7 +53283,54 @@ pub(crate) mod tests_runtime_handlers {
             .expect("json body");
         let decoded: iroha_sccp::NexusSccpMessageProofV1 =
             norito::json::from_slice(&bytes).expect("decode json bundle");
-        assert_eq!(decoded, bundle);
+        assert_eq!(decoded.payload, payload);
+        assert_eq!(decoded.commitment.message_id, message_id);
+        assert!(iroha_sccp::verify_message_bundle_structure(&decoded));
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn sccp_message_bundle_endpoint_rejects_cache_only_sora_origin_bundle() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
+        routing::clear_sccp_bundles_for_tests();
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 13,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let commitment = iroha_sccp::hub_commitment_from_sccp_payload(&payload);
+        let app = app_with_commit_qc_for_test(1, iroha_sccp::commitment_leaf_hash(&commitment));
+        let bundle = routing::publish_sccp_message_bundle(app.state.as_ref(), 1, payload)
+            .expect("cache-only publish should still build the legacy test bundle");
+
+        let err = routing::handle_v1_sccp_message_bundle(
+            app.state.as_ref(),
+            hex::encode(bundle.commitment.message_id),
+            None,
+        )
+        .await
+        .expect_err("SORA-origin SCCP message bundles must be reconstructed from committed blocks");
+        assert!(
+            matches!(
+                err,
+                Error::Query(ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::NotFound
+                ))
+            ),
+            "unexpected error: {err:?}"
+        );
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -52850,6 +53406,146 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(decoded.payload, payload);
         assert_eq!(decoded.commitment.message_id, message_id);
         assert!(iroha_sccp::verify_message_bundle_structure(&decoded));
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn sccp_message_bundle_endpoint_builds_merkle_proof_for_second_message_in_block() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
+        routing::clear_sccp_bundles_for_tests();
+        let first_payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 14,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let second_payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 15,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 88,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x2222222222222222222222222222222222222222".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let (app, message_ids) = app_with_recorded_sccp_messages_for_test(
+            1,
+            vec![first_payload, second_payload.clone()],
+        );
+        let second_message_id = message_ids.get(1).copied().expect("second SCCP message id");
+
+        let response = routing::handle_v1_sccp_message_bundle(
+            app.state.as_ref(),
+            hex::encode(second_message_id),
+            None,
+        )
+        .await
+        .expect("json response");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let decoded: iroha_sccp::NexusSccpMessageProofV1 =
+            norito::json::from_slice(&bytes).expect("decode json bundle");
+
+        assert_eq!(decoded.payload, second_payload);
+        assert_eq!(decoded.commitment.message_id, second_message_id);
+        assert!(
+            !decoded.merkle_proof.steps.is_empty(),
+            "second message in a multi-message block must carry a Merkle branch"
+        );
+        assert_eq!(
+            iroha_sccp::merkle_root_from_commitment(&decoded.commitment, &decoded.merkle_proof),
+            decoded.commitment_root
+        );
+        assert!(iroha_sccp::verify_message_bundle_structure(&decoded));
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn sccp_recent_messages_lists_multi_message_block_newest_first() {
+        let _sccp_guard = sccp_bundle_test_guard().await;
+        routing::clear_sccp_bundles_for_tests();
+        let first_payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 16,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let second_payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 17,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 88,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x2222222222222222222222222222222222222222".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let (app, message_ids) =
+            app_with_recorded_sccp_messages_for_test(1, vec![first_payload, second_payload]);
+
+        let response = routing::handle_v1_sccp_messages_recent(
+            app.state.as_ref(),
+            crate::NoritoQuery(routing::HistoryWindowQuery {
+                from: Some(1),
+                limit: Some(2),
+            }),
+            None,
+        )
+        .await
+        .expect("recent messages response");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let value: Value = norito::json::from_slice(&bytes).expect("decode recent JSON");
+        let items = value["items"].as_array().expect("items array");
+        let second_message_id_hex = hex::encode(message_ids[1]);
+        let first_message_id_hex = hex::encode(message_ids[0]);
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0]["message_id_hex"].as_str(),
+            Some(second_message_id_hex.as_str())
+        );
+        assert_eq!(
+            items[1]["message_id_hex"].as_str(),
+            Some(first_message_id_hex.as_str())
+        );
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -53046,7 +53742,8 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn sccp_capabilities_endpoint_roundtrips_json_and_norito() {
-        let json_response = routing::handle_v1_sccp_capabilities(None)
+        let app = mk_app_state_for_tests();
+        let json_response = routing::handle_v1_sccp_capabilities(app.state.as_ref(), None)
             .await
             .expect("json response");
         assert_eq!(
@@ -53098,9 +53795,10 @@ pub(crate) mod tests_runtime_handlers {
             iroha_sccp::SccpDestinationVerifierPlanV1::TonContractNativeRecursive
         );
 
-        let norito_response = routing::handle_v1_sccp_capabilities(Some(HeaderValue::from_static(
-            crate::utils::NORITO_MIME_TYPE,
-        )))
+        let norito_response = routing::handle_v1_sccp_capabilities(
+            app.state.as_ref(),
+            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
+        )
         .await
         .expect("norito response");
         assert_eq!(
@@ -53536,34 +54234,10 @@ pub(crate) mod tests_runtime_handlers {
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: b"eth:sora:weth".to_vec(),
         });
-        let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let mut app = mk_app_state_for_tests();
         install_evm_da_receipt_signer_for_test(&mut app);
         enable_unready_sccp_transparent_proofs_for_test(&mut app);
-        let bundle_response = match routing::handle_v1_sccp_message_bundle(
-            app.state.as_ref(),
-            hex::encode(message_id),
-            None,
-        )
-        .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                assert!(
-                    query_conversion_message(&err)
-                        .is_some_and(|message| message.contains("source-chain proof envelope")),
-                    "unexpected error: {err:?}"
-                );
-                routing::clear_sccp_bundles_for_tests();
-                return;
-            }
-        };
-        let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
-            .await
-            .expect("bundle body");
-        let bundle_value = norito::json::from_str::<norito::json::Value>(
-            std::str::from_utf8(&bundle_bytes).expect("bundle utf8"),
-        )
-        .expect("bundle value");
+        let bundle_value = invalid_non_sora_sccp_message_bundle_value_for_test(payload);
 
         let authority = checked_torii_test_account_id(
             0x35,
@@ -53602,7 +54276,9 @@ pub(crate) mod tests_runtime_handlers {
             ),
         };
         assert!(query_conversion_message(&err).is_some_and(|message| {
-            message.contains("source-chain proof envelope") || message.contains("proof_bytes_hex")
+            message.contains("source-chain proof envelope")
+                || message.contains("proof_bytes_hex")
+                || message.contains("failed structural verification")
         }));
 
         routing::clear_sccp_bundles_for_tests();
@@ -53712,50 +54388,10 @@ pub(crate) mod tests_runtime_handlers {
             0x37,
             "derive Torii bridge-message disabled-settlement fixture authority",
         );
-        let route_name: Name = "eth:sora:weth".parse().expect("route name");
-        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            nonce: 10,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"weth#eth".to_vec(),
-            amount: 55,
-            sender_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-            sender: b"0x1111111111111111111111111111111111111111".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            recipient: authority.to_string().into_bytes(),
-            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"eth:sora:weth".to_vec(),
-        });
-        let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let route_name: Name = "eth:sora:asset".parse().expect("route name");
+        let mut app = mk_app_state_for_tests();
         install_evm_da_receipt_signer_for_test(&mut app);
-        let bundle_response = match routing::handle_v1_sccp_message_bundle(
-            app.state.as_ref(),
-            hex::encode(message_id),
-            None,
-        )
-        .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                assert!(
-                    query_conversion_message(&err)
-                        .is_some_and(|message| message.contains("source-chain proof envelope")),
-                    "unexpected error: {err:?}"
-                );
-                routing::clear_sccp_bundles_for_tests();
-                return;
-            }
-        };
-        let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
-            .await
-            .expect("bundle body");
-        let bundle_value = norito::json::from_str::<norito::json::Value>(
-            std::str::from_utf8(&bundle_bytes).expect("bundle utf8"),
-        )
-        .expect("bundle value");
+        let bundle_value = eth_mainnet_to_sora_sccp_message_bundle_value_for_test(10);
 
         let err = match routing::handle_post_bridge_message_submit(
             app.chain_id.clone(),
@@ -53796,9 +54432,12 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err,
             Ok(_) => panic!("disabled SCCP lane must reject settlement submit"),
         };
+        let Some(message) = query_conversion_message(&err) else {
+            panic!("unexpected non-conversion bridge submit error: {err}");
+        };
         assert!(
-            query_conversion_message(&err)
-                .is_some_and(|message| message.contains("transparent proof consumption"))
+            message.contains("transparent proof consumption"),
+            "unexpected error: {message}"
         );
 
         routing::clear_sccp_bundles_for_tests();
@@ -53813,50 +54452,9 @@ pub(crate) mod tests_runtime_handlers {
             0x38,
             "derive Torii bridge-message derived-route fixture authority",
         );
-        let route_name: Name = "eth:sora:weth".parse().expect("route name");
-        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            nonce: 10,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"weth#eth".to_vec(),
-            amount: 55,
-            sender_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-            sender: b"0x1111111111111111111111111111111111111111".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            recipient: authority.to_string().into_bytes(),
-            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: route_name.as_ref().as_bytes().to_vec(),
-        });
-        let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let mut app = mk_app_state_for_tests();
         install_evm_da_receipt_signer_for_test(&mut app);
-        let bundle_response = match routing::handle_v1_sccp_message_bundle(
-            app.state.as_ref(),
-            hex::encode(message_id),
-            None,
-        )
-        .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                assert!(
-                    query_conversion_message(&err)
-                        .is_some_and(|message| message.contains("source-chain proof envelope")),
-                    "unexpected error: {err:?}"
-                );
-                routing::clear_sccp_bundles_for_tests();
-                return;
-            }
-        };
-        let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
-            .await
-            .expect("bundle body");
-        let bundle_value = norito::json::from_str::<norito::json::Value>(
-            std::str::from_utf8(&bundle_bytes).expect("bundle utf8"),
-        )
-        .expect("bundle value");
+        let bundle_value = eth_mainnet_to_sora_sccp_message_bundle_value_for_test(10);
 
         let err = match routing::handle_post_bridge_message_submit(
             app.chain_id.clone(),
@@ -53897,9 +54495,12 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err,
             Ok(_) => panic!("disabled SCCP lane must reject derived settlement submit"),
         };
+        let Some(message) = query_conversion_message(&err) else {
+            panic!("unexpected non-conversion bridge submit error: {err}");
+        };
         assert!(
-            query_conversion_message(&err)
-                .is_some_and(|message| message.contains("transparent proof consumption"))
+            message.contains("transparent proof consumption"),
+            "unexpected error: {message}"
         );
 
         routing::clear_sccp_bundles_for_tests();
@@ -58148,6 +58749,140 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
+    async fn authoritative_lane_peers_ignore_future_created_autoscale_manifest_bindings() {
+        let local_keypair =
+            checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
+        let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x5e,
+            "derive authoritative-lane manifest validator fixture key",
+        );
+        let authoritative_peer_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x5f,
+            Algorithm::BlsNormal,
+            "derive authoritative-lane manifest peer fixture key",
+        );
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let authoritative_validator =
+            AccountId::new(authoritative_validator_keypair.public_key().clone());
+        let authoritative_peer_id = PeerId::from(authoritative_peer_keypair.public_key().clone());
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::UNIVERSAL;
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            online_tx
+                .send(std::collections::HashSet::from([
+                    Peer::new(
+                        "127.0.0.1:10001".parse().expect("valid local address"),
+                        local_keypair.public_key().clone(),
+                    ),
+                    Peer::new(
+                        "127.0.0.1:10002"
+                            .parse()
+                            .expect("valid authoritative address"),
+                        authoritative_peer_keypair.public_key().clone(),
+                    ),
+                ]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+
+            let mut autoscale_lane = iroha_data_model::nexus::LaneConfig {
+                id: lane_id,
+                alias: format!("elastic-lane-{}", lane_id.as_u32()),
+                ..iroha_data_model::nexus::LaneConfig::default()
+            };
+            autoscale_lane.metadata.insert(
+                iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+                "true".to_owned(),
+            );
+            autoscale_lane.metadata.insert(
+                iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+                "7".to_owned(),
+            );
+            let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+                NonZeroU32::new(2).expect("non-zero lane count"),
+                vec![
+                    iroha_data_model::nexus::LaneConfig::default(),
+                    autoscale_lane,
+                ],
+            )
+            .expect("autoscale lane catalog");
+            let mut nexus = iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog,
+                ..iroha_config::parameters::actual::Nexus::default()
+            };
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("non-zero min lanes");
+            nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("non-zero max lanes");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            {
+                let mut current = state.nexus.write();
+                *current = nexus.clone();
+            }
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &authoritative_validator,
+                &authoritative_peer_keypair,
+                "authoritative",
+            );
+            {
+                let mut topology = state.commit_topology.block();
+                topology.clear();
+                topology.push(local_peer_id.clone());
+                topology.push(authoritative_peer_id.clone());
+                topology.commit();
+            }
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(
+                    lane_id,
+                    vec![(authoritative_validator, authoritative_peer_id.clone())],
+                )],
+            );
+            state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+                NonZeroU64::new(1).expect("non-zero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            ));
+        }
+
+        let route = RoutingDecision::new(lane_id, dataspace_id);
+        assert!(
+            super::authoritative_lane_peers(app.as_ref(), route)
+                .authoritative
+                .is_empty(),
+            "future-created autoscale manifest bindings must not bypass active-height authority"
+        );
+
+        app.state
+            .update_latest_block_header_cache_for_tests(BlockHeader::new(
+                NonZeroU64::new(7).expect("non-zero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            ));
+        assert_eq!(
+            super::authoritative_lane_peers(app.as_ref(), route).authoritative,
+            vec![authoritative_peer_id],
+            "manifest bindings should become authoritative at the autoscale creation height"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
     async fn manifest_backed_admin_managed_lane_ignores_local_commit_topology_filtering() {
         let local_validator_keypair = checked_torii_test_ed25519_keypair(
             0x5a,
@@ -58559,6 +59294,21 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
     #[tokio::test]
+    async fn incoming_read_proxy_rejects_inactive_autoscale_range_lane_hint() {
+        let mut app = mk_app_state_for_tests();
+        let (inactive_lane, inactive_dataspace) =
+            torii_routed_read_tests::configure_corrupt_inactive_autoscale_range_route_for_test(
+                &mut app,
+            );
+        let route = RoutingDecision::new(inactive_lane, inactive_dataspace);
+
+        let response = incoming_read_proxy_response_for_route(app, route).await;
+
+        assert_incoming_proxy_stale_route_rejection(&response, route);
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
     async fn incoming_verified_query_proxy_rejects_retired_lane_hint() {
         let app = mk_app_state_for_tests();
         let route = RoutingDecision::new(LaneId::new(43), DataSpaceId::UNIVERSAL);
@@ -58574,6 +59324,21 @@ pub(crate) mod tests_runtime_handlers {
         let mut app = mk_app_state_for_tests();
         configure_multiple_dataspace_routes_for_test(&mut app);
         let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
+
+        let response = incoming_verified_query_proxy_response_for_route(app, route).await;
+
+        assert_incoming_proxy_stale_route_rejection(&response, route);
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
+    async fn incoming_verified_query_proxy_rejects_inactive_autoscale_range_lane_hint() {
+        let mut app = mk_app_state_for_tests();
+        let (inactive_lane, inactive_dataspace) =
+            torii_routed_read_tests::configure_corrupt_inactive_autoscale_range_route_for_test(
+                &mut app,
+            );
+        let route = RoutingDecision::new(inactive_lane, inactive_dataspace);
 
         let response = incoming_verified_query_proxy_response_for_route(app, route).await;
 
@@ -60888,6 +61653,8 @@ pub(crate) mod tests_runtime_handlers {
             code_b64: code_b64.clone(),
             contract_alias: "rate-limit::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
+            transaction_ttl_ms: None,
+            gov_manifest_approvers: Vec::new(),
         };
         // Exhaust the exact handler key up front so this regression does not depend
         // on how quickly the first deploy request completes on the current host.
@@ -61076,6 +61843,237 @@ pub(crate) mod tests_runtime_handlers {
                 .and_then(norito::json::Value::as_object)
                 .is_some(),
             "runtime_manager section should be present"
+        );
+    }
+
+    #[tokio::test]
+    async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() {
+        let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
+        let future_lane = LaneId::new(1);
+        let mut future_autoscale_lane = iroha_data_model::nexus::LaneConfig {
+            id: future_lane,
+            alias: "elastic-lane-1".to_owned(),
+            visibility: iroha_data_model::nexus::LaneVisibility::Public,
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        future_autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+            "true".to_owned(),
+        );
+        future_autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            "7".to_owned(),
+        );
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                future_autoscale_lane,
+            ],
+        )
+        .expect("future-created autoscale lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("nonzero max lanes");
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            {
+                let mut current = state.nexus.write();
+                *current = nexus;
+            }
+            state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            ));
+        }
+
+        let response = super::handler_soracloud_status(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("soracloud status should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode JSON response");
+        let routing = payload
+            .get("routing")
+            .and_then(norito::json::Value::as_object)
+            .expect("routing section");
+
+        assert_eq!(
+            routing
+                .get("configured_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            routing
+                .get("lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(2),
+            "legacy lane_count remains the configured lane count"
+        );
+        assert_eq!(
+            routing
+                .get("declared_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(2),
+            "declared lane count reports catalog metadata entries"
+        );
+        assert_eq!(
+            routing
+                .get("active_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1),
+            "future-created autoscale lanes must not count as active"
+        );
+        assert_eq!(
+            routing
+                .get("active_lane_ids")
+                .and_then(norito::json::Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(norito::json::Value::as_u64)
+                        .collect::<Vec<_>>()
+                }),
+            Some(vec![0])
+        );
+        assert_eq!(
+            routing
+                .get("autoscale_capacity_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(0),
+            "future-created autoscale lanes must not count as live capacity"
+        );
+        assert!(
+            routing
+                .get("autoscale_capacity_lane_ids")
+                .and_then(norito::json::Value::as_array)
+                .is_some_and(Vec::is_empty),
+            "future-created autoscale lanes must be absent from capacity ids"
+        );
+    }
+
+    #[tokio::test]
+    async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
+        let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(4).expect("nonzero lane namespace"),
+            vec![iroha_data_model::nexus::LaneConfig::default()],
+        )
+        .expect("sparse lane catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            {
+                let mut current = state.nexus.write();
+                *current = nexus;
+            }
+            state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            ));
+        }
+
+        let response = super::handler_soracloud_status(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("soracloud status should succeed");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect body");
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode JSON response");
+        let routing = payload
+            .get("routing")
+            .and_then(norito::json::Value::as_object)
+            .expect("routing section");
+
+        assert_eq!(
+            routing
+                .get("configured_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(4),
+            "configured count must report the lane namespace size"
+        );
+        assert_eq!(
+            routing
+                .get("lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(4),
+            "legacy lane_count remains the configured namespace count"
+        );
+        assert_eq!(
+            routing
+                .get("declared_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1),
+            "declared count reports only catalog metadata entries"
+        );
+        assert_eq!(
+            routing
+                .get("active_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            routing
+                .get("active_lane_ids")
+                .and_then(norito::json::Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(norito::json::Value::as_u64)
+                        .collect::<Vec<_>>()
+                }),
+            Some(vec![0])
+        );
+        assert_eq!(
+            routing
+                .get("autoscale_capacity_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            routing
+                .get("autoscale_capacity_lane_ids")
+                .and_then(norito::json::Value::as_array)
+                .is_some_and(Vec::is_empty)
         );
     }
 
@@ -61865,6 +62863,8 @@ pub(crate) mod tests_runtime_handlers {
             code_b64,
             contract_alias: "deploy-test::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
+            transaction_ttl_ms: None,
+            gov_manifest_approvers: Vec::new(),
         };
         let resp = super::handler_post_contract_deploy(
             State(app),

@@ -14,9 +14,11 @@ caps into the generated configs:
 - NPoS: `kagami localnet --perf-profile 10k-npos`
 
 These profiles set 1s block/commit timing, `collectors_k`, `redundant_send_r`,
-`block_max_transactions = 10_000`, shorter transaction gossip cadence
-(`transaction_gossip_period_ms = 100`, `transaction_gossip_resend_ticks = 1`),
-and NPoS bootstrap stake. Explicit CLI flags still override individual values.
+the on-chain `block_max_transactions = 10_000`, a bounded runtime proposal cap
+of `sumeragi.block.max_transactions = 256`, a 4MiB localnet P2P frame cap,
+shorter transaction gossip cadence (`transaction_gossip_period_ms = 100`,
+`transaction_gossip_resend_ticks = 1`), and NPoS bootstrap stake. Explicit CLI
+flags still override individual values.
 
 ## 1s Finality SLO Thresholds
 
@@ -54,7 +56,9 @@ Defaults used by the integration test:
 - Submit batch: 512 (`IROHA_THROUGHPUT_SUBMIT_BATCH`)
 - Submit parallelism: 128 (`IROHA_THROUGHPUT_PARALLELISM`)
 - Queue soft limit: 20_000 (`IROHA_THROUGHPUT_QUEUE_SOFT_LIMIT`)
-- Block max transactions: 10_000
+- On-chain block max transactions: 10_000
+- Runtime proposal cap: 256
+- Localnet P2P frame cap: 4 MiB
 - Block/commit time: 1000 ms
 
 ## Required Telemetry/Status Fields
@@ -65,14 +69,27 @@ Defaults used by the integration test:
 - `txs_approved`
 - `commit_time_ms`
 - `sumeragi.tx_queue_depth`
+- `sumeragi.tx_queue_capacity`
+- `sumeragi.tx_queue_retained_bytes`
+- `sumeragi.tx_queue_max_retained_bytes`
 - `sumeragi.tx_queue_saturated`
+- `sumeragi.tx_queue_saturated_by_count`
+- `sumeragi.tx_queue_saturated_by_bytes`
+- `sumeragi.tx_queue_saturated_by_age`
+- `sumeragi.tx_queue_oldest_queued_age_ms`
 
 ### `/v1/sumeragi/status`
 - `view_change_install_total`
 - `pacemaker_backpressure_deferrals_total`
 - `tx_queue_depth`
 - `tx_queue_capacity`
+- `tx_queue_retained_bytes`
+- `tx_queue_max_retained_bytes`
 - `tx_queue_saturated`
+- `tx_queue_saturated_by_count`
+- `tx_queue_saturated_by_bytes`
+- `tx_queue_saturated_by_age`
+- `tx_queue_oldest_queued_age_ms`
 - `commit_qc.height`
 
 ### `/metrics` (Prometheus)

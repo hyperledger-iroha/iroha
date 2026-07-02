@@ -4029,15 +4029,16 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::TransferAsset => {
-            if arg_typed.len() != 4
+            if arg_typed.len() != 5
                 || !(arg_typed[0].ty == Type::AccountId
                     && arg_typed[1].ty == Type::AccountId
                     && arg_typed[2].ty == Type::AssetDefinitionId
-                    && is_int_like(&arg_typed[3].ty))
+                    && is_int_like(&arg_typed[3].ty)
+                    && arg_typed[4].ty == Type::DataSpaceId)
             {
                 return Err(SemanticError {
                     message:
-                        "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric)"
+                        "transfer_asset expects (AccountId, AccountId, AssetDefinitionId, numeric, DataSpaceId)"
                             .into(),
                 });
             }

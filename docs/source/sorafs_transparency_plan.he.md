@@ -4,9 +4,11 @@ direction: rtl
 source: docs/source/sorafs_transparency_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1b3a52b360818291e0a6e4876a6a9372cbe80ec8856504fc4bb7c5823943a1de
-source_last_modified: "2026-06-25T17:05:30+00:00"
-translation_last_reviewed: 2026-06-25
+source_hash: ee8f2ddf5c80dc7f51a20c18a11d6a460f6fd16e39da69442b88ceaa09460f4a
+source_last_modified: "2026-07-01T20:59:26.946931+00:00"
+translation_last_reviewed: 2026-07-02
+title: Transparency Dashboards & Enforcement Receipts
+summary: SFM-4c implementation status for GAR receipts, moderation dashboards, privacy metrics, and remaining transparency ledger services.
 ---
 
 # Transparency Dashboards & Enforcement Receipts
@@ -146,7 +148,14 @@ moderation ledger publication service described by the original plan.
   operator-supplied canary source-event and publish-due payloads through those
   signed routes, records request/response sizes, status, and BLAKE3 hashes, and
   emits `sorafs.transparency.privacy_aggregate.canary.v1` evidence without
-  archiving raw metric arrays, metric names, or response bodies.
+  archiving raw metric arrays, metric names, or response bodies. The rollout
+  gate requires the canary probe array to carry both action labels,
+  `source_event` and `publish_due`, so top-level probe counts cannot stand in
+  for deployed producer and scheduler evidence. Source-entry, privacy-aggregate,
+  and proof-token issuance probe entries must also carry request and response
+  BLAKE3 hashes. Publication and explorer route entries must carry response
+  BLAKE3 hashes, keeping replay evidence payload-free while still binding it to
+  the exact deployed exchanges.
 - `sorafs_node` can publish a validated
   `ModerationLedgerCyclePublicationV1` bundle through the configured local
   Governance DAG filesystem sink. The publisher writes `.to` and `.json`
@@ -220,7 +229,10 @@ moderation ledger publication service described by the original plan.
   unless explicitly waived, checks anchor metadata and verification flags, and
   emits `sorafs.transparency.publication_canary.v1` evidence with status,
   sizes, and BLAKE3 response hashes without archiving publication bodies,
-  source entries, or private payload material.
+  source entries, or private payload material. Publication canaries and the
+  transparency rollout collection runner reject non-lowercase, wrong-length, or
+  otherwise malformed `--cycle-id` values before rendering dry-run command
+  plans or contacting deployed cycle-detail routes.
 - Torii exposes `/v1/sorafs/transparency/explorer` as a local read-only
   explorer snapshot. The endpoint composes the Governance DAG publish-index into
   cycle summaries, proof-token issuance summaries, payload-kind counts, source
@@ -283,30 +295,60 @@ moderation ledger publication service described by the original plan.
   [--summary-out PATH]` validates collected SFM-4c rollout artifacts and emits
   `sorafs.transparency.rollout_evidence_gate.v1` summary JSON. The gate
   requires source-entry, publication, privacy aggregate, proof-token issuance,
-  and explorer canary schemas, requires every included canary to pass, verifies
-  all supported source-entry producer kinds, requires publication list and
+  and explorer canary schemas, requires every included canary to pass, requires
+  reviewed `deployment_id`/`environment` context on every artifact, verifies all
+  supported source-entry producer kinds, requires publication list and
   cycle-detail probes, verifies publication anchor/publisher/verification
-  signals, requires both aggregate source-event and publish-due probes, checks
-  the explorer snapshot/UI/proof-token index routes, and recursively rejects raw
+  signals, requires both action-labeled aggregate source-event and publish-due
+  probes, requires request/response hash binding for probe evidence, requires
+  response hash binding for publication and explorer route evidence, checks the
+  explorer snapshot/UI/proof-token index routes, binds publication and explorer
+  `route_count` to the unique canonical `routes[].name` inventories with
+  duplicate route rejection, keeps probe-based `probe_count` values equal to
+  the `probes[]` inventory length, requires source-entry, source-event,
+  publish-due, and proof-token issuance sub-counts to match the corresponding
+  `probes[]` role inventory, and
+  recursively rejects raw
   payload, request/response body, bearer-token, signed-transaction,
   proof-token frame, private-key, and private digest-key fields. Publication
   evidence must match a valid source-entry `source_batch_digest_hex`, and
   privacy aggregate, proof-token issuance, and explorer evidence must match a
   source-bound publication `cycle_digest_hex`; publication cycles that fail
   source-entry binding do not anchor downstream rollout evidence. The checker
-  supports shell-style `@ARGFILE` inputs for direct replay of reviewed artifact
-  directories.
+  exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`,
+  so dry-run collection plans and downstream automation can inspect the exact
+  evidence contract before live collection. It supports shell-style `@ARGFILE`
+  inputs for direct replay of reviewed artifact directories.
+- `scripts/build_sorafs_transparency_canary.py` is the checked-in
+  payload-free SFM-4c transparency canary builder for reviewed source-entry,
+  publication, privacy-aggregate, proof-token issuance, and explorer rollout
+  artifacts. It requires complete source kind, publication route, privacy action,
+  and explorer route coverage where applicable, enforces reviewed
+  deployment/environment context, source-batch and cycle digest bindings, and
+  validates every generated artifact through the transparency rollout checker
+  before atomically writing JSON without following output symlinks. The source
+  entry and publication response-file examples are
+  `scripts/examples/sorafs_transparency_source_entry_canary.args.example` and
+  `scripts/examples/sorafs_transparency_publication_canary.args.example`.
 - `scripts/run_sorafs_transparency_rollout_evidence.py --torii-url URL
   --out-dir DIR ...` is the operator harness for collecting the required
   source-entry, privacy aggregate, proof-token issuance, publication, and
   explorer canary artifacts and then running the rollout evidence verifier. It
   fails before live submission when required source-entry kinds, privacy
   source-event/publish-due payloads, proof-token issuance payloads, or
-  publication cycle-detail ids are missing, accepts repeated `--iroha-arg ARG`
-  values for runtime-only client config/signing options that must be passed
-  before `sorafs`, accepts shell-style `@ARGFILE` response files for reviewed
-  operator inputs, and `--dry-run` emits the command plan without contacting
-  live services. `scripts/examples/sorafs_transparency_rollout_evidence.args.example`
+  publication cycle-detail ids are missing or not canonical 16-byte lowercase
+  hex strings. It also rejects duplicate or unsupported `--source-entry` kinds
+  before rendering the plan or contacting live services. The runner accepts
+  repeated `--iroha-arg ARG` values for runtime-only
+  client config/signing options that must be passed before `sorafs`, accepts
+  shell-style `@ARGFILE` response files for reviewed operator inputs, requires
+  a reviewed `--deployment-id` plus `--environment`,
+  stamps that context onto generated canary artifacts before verification,
+  validates the schema-closed collection plan, deployment context, evidence
+  contract, and command steps before dry-run output or live canaries, and
+  `--dry-run` emits the command plan plus the checker-backed
+  `evidence_contract` field map without contacting live services.
+  `scripts/examples/sorafs_transparency_rollout_evidence.args.example`
   documents the required source-entry kinds, aggregate probes, proof-token
   issuance probe, cycle id, Torii URL, and runtime-only client-config path
   without storing signing material.
@@ -318,8 +360,9 @@ entry roots, block hashes, inclusion proofs, publication bundles, and
 privacy-safe aggregate payloads that can be converted into ledger entries. The
 local SoraFS node can materialize those bundles into the Governance DAG
 filesystem/CAR pipeline and optional signed runtime DAG blocks, and Torii can
-verify and serve the locally published bundles. The production transparency
-service still needs a live runtime ledger layer that ingests and publishes:
+verify and serve the locally published bundles. The local ledger layer now covers
+bundle materialization and readback; remaining deployed-service work is to wire
+live producer, anchoring, explorer, proof-token, and hardening evidence for:
 
 - moderation action summaries;
 - appeal outcomes and deposit disposition summaries;

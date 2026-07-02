@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use iroha_crypto::{Hash, PublicKey};
+use iroha_data_model::nexus::DataSpaceId;
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::Numeric;
 use ivm::{
@@ -29,6 +30,11 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     let buf = norito::to_bytes(&amount.into()).expect("encode numeric into Norito");
     make_tlv(PointerType::NoritoBytes as u16, &buf)
+}
+
+fn make_dataspace_tlv(dataspace: DataSpaceId) -> Vec<u8> {
+    let buf = norito::to_bytes(&dataspace).expect("encode DataSpaceId into Norito");
+    make_tlv(PointerType::DataSpaceId as u16, &buf)
 }
 
 fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
@@ -126,7 +132,12 @@ fn test_transfer_syscall_permission() {
     let amount_tlv = make_numeric_tlv(10_u64);
     let amount_ptr = vm.alloc_input_tlv(&amount_tlv).expect("alloc amount tlv");
     vm.set_register(13, amount_ptr); // amount
-    let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_ASSET as u8]);
+    let dataspace_tlv = make_dataspace_tlv(DataSpaceId::UNIVERSAL);
+    let dataspace_ptr = vm
+        .alloc_input_tlv(&dataspace_tlv)
+        .expect("alloc dataspace tlv");
+    vm.set_register(14, dataspace_ptr); // dataspace
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_TRANSFER_ASSET_SCOPED as u8]);
     vm.load_program(&prog).unwrap();
     let result = vm.run();
     assert!(matches!(result, Err(VMError::PermissionDenied)));

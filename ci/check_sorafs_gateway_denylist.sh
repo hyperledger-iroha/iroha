@@ -43,6 +43,10 @@ done
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SAMPLE_JSON="${ROOT_DIR}/docs/source/sorafs_gateway_denylist_sample.json"
 
+run_xtask() {
+  cargo run -p xtask --bin xtask --quiet -- "$@"
+}
+
 copy_file_no_follow() {
   local source_file="$1"
   local target_file="$2"
@@ -76,14 +80,18 @@ def validate_path(path: pathlib.Path, path_label: str) -> None:
     if path.is_symlink():
         sys.exit(f"[sorafs-gateway-denylist] {path_label} must not be a symlink: {path}")
     for parent in (path.parent, *path.parent.parents):
-        if parent.is_symlink():
-            sys.exit(
-                f"[sorafs-gateway-denylist] {path_label} parent must not be a symlink: {parent}"
-            )
         if parent.exists() and not parent.is_dir():
             sys.exit(
                 f"[sorafs-gateway-denylist] {path_label} parent must be a directory: {parent}"
             )
+
+def write_all(fd: int, chunk: bytes) -> None:
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("short write")
+        view = view[written:]
 
 def require_regular_file(path: pathlib.Path, path_label: str) -> None:
     validate_path(path, path_label)
@@ -109,7 +117,7 @@ try:
         chunk = os.read(read_fd, 1024 * 1024)
         if not chunk:
             break
-        os.write(write_fd, chunk)
+        write_all(write_fd, chunk)
 finally:
     os.close(read_fd)
     if write_fd >= 0:
@@ -141,8 +149,6 @@ try:
     if path.is_symlink():
         fail(f"{label} must not be a symlink")
     for parent in (path.parent, *path.parent.parents):
-        if parent.is_symlink():
-            fail(f"{label} parent must not be a symlink")
         if parent.exists() and not parent.is_dir():
             fail(f"{label} parent must be a directory")
     path_stat = path.lstat()
@@ -181,10 +187,6 @@ def validate_path(path: pathlib.Path, path_label: str) -> None:
     if path.is_symlink():
         sys.exit(f"[sorafs-gateway-denylist] {path_label} must not be a symlink: {path}")
     for parent in (path.parent, *path.parent.parents):
-        if parent.is_symlink():
-            sys.exit(
-                f"[sorafs-gateway-denylist] {path_label} parent must not be a symlink: {parent}"
-            )
         if parent.exists() and not parent.is_dir():
             sys.exit(
                 f"[sorafs-gateway-denylist] {path_label} parent must be a directory: {parent}"
@@ -240,10 +242,16 @@ def validate_path(path: pathlib.Path, label: str) -> None:
     if path.is_symlink():
         raise SystemExit(f"{label} must not be a symlink: {path}")
     for parent in (path.parent, *path.parent.parents):
-        if parent.is_symlink():
-            raise SystemExit(f"{label} parent must not be a symlink: {parent}")
         if parent.exists() and not parent.is_dir():
             raise SystemExit(f"{label} parent must be a directory: {parent}")
+
+def write_all(fd: int, chunk: bytes) -> None:
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("short write")
+        view = view[written:]
 
 def read_json(path: pathlib.Path):
     validate_path(path, "sample denylist")
@@ -262,12 +270,12 @@ def write_json(path: pathlib.Path, payload) -> None:
     validate_path(path, "old denylist snapshot")
     path.parent.mkdir(parents=True, exist_ok=True)
     validate_path(path, "old denylist snapshot")
+    rendered = (json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n").encode(
+        "utf-8"
+    )
     fd = os.open(path, write_open_flags(), 0o666)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fd = -1
-            json.dump(payload, fh, indent=2)
-            fh.write("\n")
+        write_all(fd, rendered)
     finally:
         if fd >= 0:
             os.close(fd)
@@ -275,21 +283,28 @@ def write_json(path: pathlib.Path, payload) -> None:
 data = read_json(src)
 if len(data) < 2:
     raise SystemExit("sample denylist must contain at least two entries")
-write_json(dst, data[:-1])
+old_only_entry = {
+    "kind": "url",
+    "url": "https://example.invalid/retired/old-only.bin",
+    "reason": "Retired CI denylist diff control",
+    "issued_at": "2025-01-01T00:00:00Z",
+    "expires_at": "2025-04-01T00:00:00Z",
+}
+write_json(dst, [*data[:-1], old_only_entry])
 PY
 
 old_out="${workdir}/bundle_old"
 new_out="${workdir}/bundle_new"
 
 echo "[sorafs-gateway-denylist] packing old denylist snapshot"
-cargo xtask sorafs-gateway denylist pack \
+run_xtask sorafs-gateway denylist pack \
   --input "${old_json}" \
   --out "${old_out}" \
   --label "ci-old" \
   --force >/dev/null
 
 echo "[sorafs-gateway-denylist] packing new denylist snapshot"
-cargo xtask sorafs-gateway denylist pack \
+run_xtask sorafs-gateway denylist pack \
   --input "${new_json}" \
   --out "${new_out}" \
   --label "ci-new" \
@@ -300,7 +315,7 @@ new_bundle="$(first_bundle_json "${new_out}" "new denylist")"
 diff_report="${workdir}/denylist_diff.json"
 
 echo "[sorafs-gateway-denylist] running diff"
-cargo xtask sorafs-gateway denylist diff \
+run_xtask sorafs-gateway denylist diff \
   --old "${old_bundle}" \
   --new "${new_bundle}" \
   --report-json "${diff_report}" >/dev/null
@@ -318,8 +333,6 @@ def validate_path(path: pathlib.Path, label: str) -> None:
     if path.is_symlink():
         raise SystemExit(f"{label} must not be a symlink: {path}")
     for parent in (path.parent, *path.parent.parents):
-        if parent.is_symlink():
-            raise SystemExit(f"{label} parent must not be a symlink: {parent}")
         if parent.exists() and not parent.is_dir():
             raise SystemExit(f"{label} parent must be a directory: {parent}")
 
@@ -343,14 +356,15 @@ PY
 echo "[sorafs-gateway-denylist] diff evidence ok (${diff_report})"
 
 evidence_json="${workdir}/denylist_evidence.json"
-echo "[sorafs-gateway-denylist] generating evidence summary via iroha_cli"
-cargo run -p iroha_cli --quiet -- \
-  sorafs gateway evidence \
-  --denylist "${new_bundle}" \
+echo "[sorafs-gateway-denylist] generating evidence summary via iroha3"
+cargo run -p iroha_cli --bin iroha3 --quiet -- \
+  -c "${ROOT_DIR}/defaults/client.toml" \
+  app sorafs gateway evidence \
+  --denylist "${new_json}" \
   --out "${evidence_json}" \
   --label "ci-denylist" >/dev/null
 
-python3 - <<'PY' "${evidence_json}" "${new_bundle}"
+python3 - <<'PY' "${evidence_json}" "${new_json}"
 import json, os, pathlib, stat, sys
 evidence_path, denylist_path = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 
@@ -361,8 +375,6 @@ def validate_path(path: pathlib.Path, label: str) -> None:
     if path.is_symlink():
         raise SystemExit(f"{label} must not be a symlink: {path}")
     for parent in (path.parent, *path.parent.parents):
-        if parent.is_symlink():
-            raise SystemExit(f"{label} parent must not be a symlink: {parent}")
         if parent.exists() and not parent.is_dir():
             raise SystemExit(f"{label} parent must be a directory: {parent}")
 

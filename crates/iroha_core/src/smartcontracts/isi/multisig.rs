@@ -1465,11 +1465,71 @@ fn execute_propose(
     instruction: &MultisigPropose,
 ) -> Result<(), ValidationFail> {
     let proposer = authority.clone();
-    let multisig_account = resolve_signatory_account(state_transaction, &instruction.account)?;
-    ensure_multisig_account_state_materialized(state_transaction, &multisig_account)?;
-    let home_domain = multisig_home_domain(state_transaction, &multisig_account)?;
+    let multisig_account = match resolve_signatory_account(state_transaction, &instruction.account)
+    {
+        Ok(value) => value,
+        Err(err) => {
+            iroha_logger::error!(
+                proposer = %proposer,
+                requested_multisig_account = %instruction.account,
+                error = ?err,
+                "multisig propose failed to resolve multisig account"
+            );
+            return Err(err);
+        }
+    };
+    if let Err(err) =
+        ensure_multisig_account_state_materialized(state_transaction, &multisig_account)
+    {
+        iroha_logger::error!(
+            proposer = %proposer,
+            multisig_account = %multisig_account,
+            error = ?err,
+            "multisig propose failed to materialize multisig account state"
+        );
+        return Err(err);
+    }
+    let home_domain = match multisig_home_domain(state_transaction, &multisig_account) {
+        Ok(value) => value,
+        Err(err) => {
+            iroha_logger::error!(
+                proposer = %proposer,
+                multisig_account = %multisig_account,
+                error = ?err,
+                "multisig propose failed to load multisig home domain"
+            );
+            return Err(err);
+        }
+    };
     let instructions_hash = HashOf::new(&instruction.instructions);
-    let multisig_spec = multisig_spec(state_transaction, &multisig_account)?;
+    let multisig_spec = match multisig_spec(state_transaction, &multisig_account) {
+        Ok(value) => value,
+        Err(err) => {
+            iroha_logger::error!(
+                proposer = %proposer,
+                multisig_account = %multisig_account,
+                instructions_hash = %instructions_hash,
+                error = ?err,
+                "multisig propose failed to load multisig spec"
+            );
+            return Err(err);
+        }
+    };
+    let home_domain_literal = home_domain
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "-".to_owned());
+    iroha_logger::info!(
+        proposer = %proposer,
+        multisig_account = %multisig_account,
+        instructions_hash = %instructions_hash,
+        instruction_count = instruction.instructions.len(),
+        home_domain = %home_domain_literal,
+        quorum = multisig_spec.quorum.get(),
+        ttl_ms = multisig_spec.transaction_ttl_ms.get(),
+        signatory_count = multisig_spec.signatories.len(),
+        "multisig propose evaluating proposal"
+    );
     let proposer_role = multisig_role_for(home_domain.as_ref(), &proposer);
     let multisig_role = multisig_role_for(home_domain.as_ref(), &multisig_account);
     let is_downward_proposal = state_transaction
@@ -1487,12 +1547,32 @@ fn execute_propose(
         .is_none_or(|override_ttl_ms| override_ttl_ms <= multisig_spec.transaction_ttl_ms);
 
     if !has_not_longer_ttl {
+        iroha_logger::error!(
+            proposer = %proposer,
+            multisig_account = %multisig_account,
+            instructions_hash = %instructions_hash,
+            requested_ttl_ms = ?instruction.transaction_ttl_ms,
+            spec_ttl_ms = multisig_spec.transaction_ttl_ms.get(),
+            "multisig propose rejected because ttl exceeds multisig spec"
+        );
         return Err(ValidationFail::NotPermitted(
             "ttl violates the restriction".to_owned(),
         ));
     }
 
     if !(is_downward_proposal || has_multisig_role || is_signatory || is_self_proposal) {
+        iroha_logger::error!(
+            proposer = %proposer,
+            multisig_account = %multisig_account,
+            instructions_hash = %instructions_hash,
+            proposer_role = ?proposer_role,
+            multisig_role = ?multisig_role,
+            is_downward_proposal,
+            has_multisig_role,
+            is_signatory,
+            is_self_proposal,
+            "multisig propose rejected because proposer is not authorized"
+        );
         return Err(ValidationFail::NotPermitted(
             "not qualified to propose multisig".to_owned(),
         ));
@@ -1500,18 +1580,44 @@ fn execute_propose(
 
     match proposal_state(state_transaction, &multisig_account, &instructions_hash) {
         Ok(existing) if now_ms(state_transaction) < existing.expires_at_ms => {
+            iroha_logger::warn!(
+                proposer = %proposer,
+                multisig_account = %multisig_account,
+                instructions_hash = %instructions_hash,
+                now_ms = now_ms(state_transaction),
+                expires_at_ms = existing.expires_at_ms,
+                "multisig propose rejected as duplicate active proposal"
+            );
             return Err(ValidationFail::NotPermitted(
                 "multisig proposal duplicates".to_owned(),
             ));
         }
         Ok(_) => {}
         Err(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)) => {}
-        Err(err) => return Err(err),
+        Err(err) => {
+            iroha_logger::error!(
+                proposer = %proposer,
+                multisig_account = %multisig_account,
+                instructions_hash = %instructions_hash,
+                error = ?err,
+                "multisig propose failed while checking existing proposal state"
+            );
+            return Err(err);
+        }
     }
 
     let now_ms = now_ms(state_transaction);
     if proposal_state(state_transaction, &multisig_account, &instructions_hash).is_ok() {
-        prune_expired(state_transaction, &multisig_account, &instructions_hash)?;
+        if let Err(err) = prune_expired(state_transaction, &multisig_account, &instructions_hash) {
+            iroha_logger::error!(
+                proposer = %proposer,
+                multisig_account = %multisig_account,
+                instructions_hash = %instructions_hash,
+                error = ?err,
+                "multisig propose failed while pruning expired proposal state"
+            );
+            return Err(err);
+        }
     }
     let expires_at_ms = {
         let ttl_ms = instruction
@@ -1528,30 +1634,102 @@ fn execute_propose(
     );
 
     let approve_me = MultisigApprove::new(multisig_account.clone(), instructions_hash);
-    for signatory in resolved_signatory_accounts(state_transaction, &multisig_spec)? {
-        if is_multisig(state_transaction, &signatory)? {
-            deploy_relayer(
+    let resolved_signatories = match resolved_signatory_accounts(state_transaction, &multisig_spec)
+    {
+        Ok(value) => value,
+        Err(err) => {
+            iroha_logger::error!(
+                proposer = %proposer,
+                multisig_account = %multisig_account,
+                instructions_hash = %instructions_hash,
+                error = ?err,
+                "multisig propose failed to resolve signatory accounts"
+            );
+            return Err(err);
+        }
+    };
+    let resolved_signatory_summary = resolved_signatories
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    iroha_logger::info!(
+        proposer = %proposer,
+        multisig_account = %multisig_account,
+        instructions_hash = %instructions_hash,
+        resolved_signatory_count = resolved_signatories.len(),
+        resolved_signatories = %resolved_signatory_summary,
+        "multisig propose resolved signatory accounts"
+    );
+    for signatory in resolved_signatories {
+        let signatory_is_multisig = match is_multisig(state_transaction, &signatory) {
+            Ok(value) => value,
+            Err(err) => {
+                iroha_logger::error!(
+                    proposer = %proposer,
+                    multisig_account = %multisig_account,
+                    instructions_hash = %instructions_hash,
+                    signatory = %signatory,
+                    error = ?err,
+                    "multisig propose failed while checking signatory multisig state"
+                );
+                return Err(err);
+            }
+        };
+        if signatory_is_multisig
+            && let Err(err) = deploy_relayer(
                 state_transaction,
                 &signatory,
                 &approve_me,
                 now_ms,
                 expires_at_ms,
-            )?;
+            )
+        {
+            iroha_logger::error!(
+                proposer = %proposer,
+                multisig_account = %multisig_account,
+                instructions_hash = %instructions_hash,
+                relayer = %signatory,
+                error = ?err,
+                "multisig propose failed to deploy nested multisig relayer"
+            );
+            return Err(err);
         }
     }
 
-    store_multisig_proposal_state(
-        state_transaction,
-        &MultisigProposalState::new(
-            multisig_account,
-            instructions_hash,
-            proposal_value.instructions,
-            proposal_value.proposed_at_ms,
-            proposal_value.expires_at_ms,
-            proposal_value.approvals,
-            proposal_value.is_relayed,
-        ),
-    )
+    let proposal_state = MultisigProposalState::new(
+        multisig_account,
+        instructions_hash,
+        proposal_value.instructions,
+        proposal_value.proposed_at_ms,
+        proposal_value.expires_at_ms,
+        proposal_value.approvals,
+        proposal_value.is_relayed,
+    );
+    match store_multisig_proposal_state(state_transaction, &proposal_state) {
+        Ok(()) => {
+            iroha_logger::info!(
+                proposer = %proposer,
+                multisig_account = %proposal_state.multisig_account_id,
+                instructions_hash = %proposal_state.instructions_hash,
+                proposed_at_ms = proposal_state.proposed_at_ms,
+                expires_at_ms = proposal_state.expires_at_ms,
+                approvals = proposal_state.approvals.len(),
+                "multisig propose stored proposal state"
+            );
+            Ok(())
+        }
+        Err(err) => {
+            iroha_logger::error!(
+                proposer = %proposer,
+                multisig_account = %proposal_state.multisig_account_id,
+                instructions_hash = %proposal_state.instructions_hash,
+                error = ?err,
+                "multisig propose failed to store proposal state"
+            );
+            Err(err)
+        }
+    }
 }
 
 fn execute_approve(
@@ -1578,7 +1756,16 @@ fn execute_approve(
             "not qualified to approve multisig".to_owned(),
         ));
     }
-    prune_expired(state_transaction, &multisig_account, &instructions_hash)?;
+    if let Err(err) = prune_expired(state_transaction, &multisig_account, &instructions_hash) {
+        iroha_logger::error!(
+            multisig_account = %multisig_account,
+            instructions_hash = %instructions_hash,
+            approver = %authority,
+            error = ?err,
+            "multisig approval proposal lookup failed before approval"
+        );
+        return Err(err);
+    }
 
     let Ok(mut proposal_state) =
         proposal_state(state_transaction, &multisig_account, &instructions_hash)
@@ -1650,19 +1837,32 @@ fn execute_approve(
         }
 
         for instruction in proposal_state.instructions {
+            let instruction_debug = format!("{instruction:?}");
             iroha_logger::info!(
                 multisig_account = %multisig_account,
                 instructions_hash = %instructions_hash,
                 approver = %authority,
-                instruction = ?instruction,
+                instruction = %instruction_debug,
                 "multisig approval executing authenticated instruction"
             );
-            if let Ok(multisig) = MultisigInstructionBox::try_from(&instruction) {
-                execute_multisig_instruction(state_transaction, &multisig_account, multisig)?;
-            } else {
-                instruction
-                    .execute(&multisig_account, state_transaction)
-                    .map_err(ValidationFail::from)?;
+            let execution_result =
+                if let Ok(multisig) = MultisigInstructionBox::try_from(&instruction) {
+                    execute_multisig_instruction(state_transaction, &multisig_account, multisig)
+                } else {
+                    instruction
+                        .execute(&multisig_account, state_transaction)
+                        .map_err(ValidationFail::from)
+                };
+            if let Err(err) = execution_result {
+                iroha_logger::error!(
+                    multisig_account = %multisig_account,
+                    instructions_hash = %instructions_hash,
+                    approver = %authority,
+                    instruction = %instruction_debug,
+                    error = ?err,
+                    "multisig approval authenticated instruction failed"
+                );
+                return Err(err);
             }
             iroha_logger::info!(
                 multisig_account = %multisig_account,
@@ -2369,19 +2569,13 @@ fn reconstruct_multisig_account_state(
         .map_err(map_find_error)?;
 
     let home_domain = if let Some(raw) = account.metadata().get(&home_domain_key()) {
-        norito::json::from_str::<Option<iroha_data_model::domain::DomainId>>(raw.as_ref()).map_err(
-            |err| {
-                ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
-                    "multisig home_domain malformed for `{resolved_account}`: {err}"
-                )))
-            },
-        )?
+        decode_multisig_home_domain_metadata(raw, &resolved_account)?
     } else {
         infer_multisig_home_domain(state_transaction, &resolved_account)?
     };
 
     if let Some(raw) = account.metadata().get(&spec_key()) {
-        let spec = norito::json::from_str::<MultisigSpec>(raw.as_ref()).map_err(|err| {
+        let spec = raw.try_into_any_norito::<MultisigSpec>().map_err(|err| {
             ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
                 "multisig spec malformed for `{resolved_account}`: {err}"
             )))
@@ -2432,6 +2626,25 @@ fn reconstruct_multisig_account_state(
             transaction_ttl_ms,
         },
     )))
+}
+
+fn decode_multisig_home_domain_metadata(
+    raw: &Json,
+    multisig_account: &AccountId,
+) -> Result<Option<iroha_data_model::domain::DomainId>, ValidationFail> {
+    match raw.try_into_any_norito::<Option<iroha_data_model::domain::DomainId>>() {
+        Ok(home_domain) => Ok(home_domain),
+        Err(primary_err) => {
+            let literal = raw.get().trim();
+            iroha_data_model::DomainId::parse_fully_qualified(literal)
+                .map(Some)
+                .map_err(|legacy_err| {
+                    ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
+                        "multisig home_domain malformed for `{multisig_account}`: {primary_err}; legacy literal parse failed: {legacy_err}"
+                    )))
+                })
+        }
+    }
 }
 
 fn infer_multisig_home_domain(
@@ -2699,18 +2912,22 @@ mod tests {
         num::{NonZeroU16, NonZeroU64},
     };
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
-        ChainId, IntoKeyValue,
+        ChainId, IntoKeyValue, Registrable,
         account::{
-            AccountController, AccountId, MultisigMember, MultisigPolicy,
+            Account, AccountController, AccountId, MultisigMember, MultisigPolicy,
             rekey::{AccountAlias, AccountAliasDomain},
         },
+        asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::DomainId,
         events::execute_trigger::ExecuteTriggerEventFilter,
-        isi::{AddSignatory, ExecuteTrigger, Grant, RemoveSignatory, SetAccountQuorum},
-        nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
+        isi::{
+            AddSignatory, ExecuteTrigger, Grant, Mint, RemoveSignatory, SetAccountQuorum,
+            account_alias_lease::AcquireAccountAliasLease, domain_link::SetAccountAliasBinding,
+        },
+        nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, UniversalAccountId},
         permission::Permission,
         prelude::{Domain, InstructionBox, Register},
         transaction::{Executable, IvmBytecode},
@@ -2723,6 +2940,9 @@ mod tests {
         DEFAULT_MULTISIG_TTL_MS, MultisigApprove, MultisigCancel, MultisigPropose,
         MultisigRegister, MultisigSpec,
     };
+    use iroha_executor_data_model::permission::account::{
+        AccountAliasPermissionScope, CanManageAccountAlias, CanRegisterAccount,
+    };
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
 
@@ -2731,6 +2951,7 @@ mod tests {
         executor::Executor,
         kura::Kura,
         query::store::LiveQueryStore,
+        sns::{SnsNamespace, get_name_record, seed_default_namespace_policies},
         state::{State, World},
     };
 
@@ -3075,6 +3296,172 @@ mod tests {
                 })
                 .expect("stored spec must include expected signatory subject");
             assert_eq!(actual_weight, *expected_weight);
+        }
+    }
+
+    #[test]
+    fn multisig_executes_fi_registration_alias_batch_as_multisig_authority() {
+        assert_multisig_executes_fi_registration_alias_batch(false);
+    }
+
+    #[test]
+    fn multisig_executes_fi_registration_alias_batch_with_uaid_account() {
+        assert_multisig_executes_fi_registration_alias_batch(true);
+    }
+
+    fn assert_multisig_executes_fi_registration_alias_batch(include_registration_uaid: bool) {
+        let signer1 = checked_keypair();
+        let signer2 = checked_keypair();
+        let signer1_id = new_account_id(&signer1);
+        let signer2_id = new_account_id(&signer2);
+        let retail_account = new_account_id(&checked_keypair());
+        let sbp = DataSpaceId::new(10);
+        let hbl_domain = DomainId::try_new("hbl", "sbp").expect("hbl.sbp domain");
+        let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+            .parse()
+            .expect("payment asset definition id");
+        let mut world = World::with(
+            [Domain::new(hbl_domain.clone()).build(&signer1_id)],
+            [
+                Account::new(signer1_id.clone()).build(&signer1_id),
+                Account::new(signer2_id.clone()).build(&signer1_id),
+            ],
+            [
+                AssetDefinition::numeric(payment_asset_definition_id.clone())
+                    .with_name("xor".to_owned())
+                    .build(&signer1_id),
+            ],
+        );
+        seed_default_namespace_policies(&mut world);
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("multisig-fi-registration-alias-batch"),
+        );
+        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: sbp,
+                alias: "sbp".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("sbp dataspace catalog");
+        state.nexus.write().fees.fee_asset_id = payment_asset_definition_id.to_string();
+
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
+            quorum: NonZeroU16::new(2).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        };
+        execute_register(
+            &mut state_transaction,
+            &signer1_id,
+            MultisigRegister::with_account(
+                new_account_id(&checked_keypair()),
+                hbl_domain.clone(),
+                spec.clone(),
+            ),
+        )
+        .expect("register multisig");
+        let multisig_id =
+            AccountId::new_multisig(multisig_policy_from_spec(&spec).expect("policy"));
+        state_transaction.world.add_account_permission(
+            &multisig_id,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(sbp),
+            }),
+        );
+        state_transaction.world.add_account_permission(
+            &multisig_id,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(hbl_domain.clone()),
+            }),
+        );
+        state_transaction.world.add_account_permission(
+            &multisig_id,
+            Permission::from(CanRegisterAccount {
+                domain: hbl_domain.clone(),
+            }),
+        );
+        Mint::asset_numeric(
+            1_000_u64,
+            AssetId::of(payment_asset_definition_id.clone(), multisig_id.clone()),
+        )
+        .execute(&signer1_id, &mut state_transaction)
+        .expect("mint payment balance");
+
+        let alias = AccountAlias::new(
+            "clear-orbit-3941".parse().expect("label"),
+            Some(AccountAliasDomain::new("hbl".parse().expect("domain"))),
+            sbp,
+        );
+        let registration_uaid = include_registration_uaid.then(|| {
+            UniversalAccountId::from_hash(Hash::new(
+                b"retail_registration|alias=clear-orbit-3941@hbl.sbp",
+            ))
+        });
+        let registration_account = if let Some(uaid) = registration_uaid {
+            Account::new(retail_account.clone()).with_uaid(Some(uaid))
+        } else {
+            Account::new(retail_account.clone())
+        };
+        let instructions = vec![
+            InstructionBox::from(Register::account(registration_account)),
+            InstructionBox::from(AcquireAccountAliasLease::new(
+                alias.clone(),
+                retail_account.clone(),
+                multisig_id.clone(),
+                1,
+                None,
+            )),
+            InstructionBox::from(SetAccountAliasBinding::bind(
+                retail_account.clone(),
+                alias.clone(),
+                None,
+            )),
+        ];
+        let instructions_hash = HashOf::new(&instructions);
+        state_transaction.tx_call_hash = Some(Hash::prehashed([0xD3; Hash::LENGTH]));
+        execute_propose(
+            &mut state_transaction,
+            &signer1_id,
+            &MultisigPropose::new(multisig_id.clone(), instructions, None),
+        )
+        .expect("signer1 proposes FI registration batch");
+        state_transaction.tx_call_hash = Some(Hash::prehashed([0xD4; Hash::LENGTH]));
+        execute_approve(
+            &mut state_transaction,
+            &signer2_id,
+            &MultisigApprove::new(multisig_id.clone(), instructions_hash),
+        )
+        .expect("signer2 approval executes FI registration batch");
+
+        let lease = get_name_record(
+            state_transaction.world(),
+            &state_transaction.nexus.dataspace_catalog,
+            SnsNamespace::AccountAlias,
+            "clear-orbit-3941@hbl.sbp",
+            0,
+        )
+        .expect("FI alias lease should be active after multisig execution");
+        assert_eq!(lease.owner, retail_account);
+        assert_eq!(
+            state_transaction.world.account_aliases().get(&alias),
+            Some(&retail_account),
+            "FI alias binding should be visible after multisig execution"
+        );
+        if let Some(uaid) = registration_uaid {
+            assert_eq!(
+                state_transaction.world.uaid_accounts.get(&uaid),
+                Some(&retail_account),
+                "UAID should be bound to the registered retail account"
+            );
         }
     }
 
@@ -4729,6 +5116,91 @@ mod tests {
                 .expect("infer home domain"),
             Some(retail_domain),
             "alias inference should preserve the dataspace-qualified home domain",
+        );
+    }
+
+    #[test]
+    fn multisig_state_reconstruction_accepts_legacy_literal_home_domain_metadata() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-legacy-literal-home-domain"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        let domain_id = DomainId::try_new("bsp", "cbsi").expect("parse FI domain");
+        let owner_id = new_account_id(&checked_keypair());
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
+        register_account_in_domain(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &owner_id,
+            "register owner",
+        );
+
+        let signer_id = new_account_id(&checked_keypair());
+        register_account_in_domain(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &signer_id,
+            "register signer",
+        );
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer_id.clone(), 1)]),
+            quorum: NonZeroU16::new(1).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        };
+        execute_register(
+            &mut state_transaction,
+            &owner_id,
+            MultisigRegister::with_account(
+                new_account_id(&checked_keypair()),
+                domain_id.clone(),
+                spec.clone(),
+            ),
+        )
+        .expect("register multisig");
+
+        let registered_multisig_id =
+            AccountId::new_multisig(multisig_policy_from_spec(&spec).expect("policy"));
+        state_transaction
+            .world
+            .smart_contract_state
+            .remove(multisig_account_state_key(&registered_multisig_id));
+        state_transaction
+            .world
+            .accounts
+            .get_mut(&registered_multisig_id)
+            .expect("registered multisig account")
+            .metadata
+            .insert(
+                home_domain_key(),
+                Json::from_string_unchecked(domain_id.to_string()),
+            );
+
+        execute_propose(
+            &mut state_transaction,
+            &signer_id,
+            &MultisigPropose::new(registered_multisig_id.clone(), Vec::new(), None),
+        )
+        .expect("proposal should materialize state from legacy home-domain metadata");
+
+        assert_eq!(
+            multisig_home_domain(&state_transaction, &registered_multisig_id)
+                .expect("home domain should decode after reconstruction"),
+            Some(domain_id),
         );
     }
 

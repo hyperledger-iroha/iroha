@@ -1,10 +1,26 @@
 import { Buffer } from "buffer";
 import { ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
+import {
+  entropyToMnemonic,
+  generateMnemonic,
+  mnemonicToEntropy,
+  validateMnemonic,
+} from "@scure/bip39";
+import { wordlist as englishWordlist } from "@scure/bip39/wordlists/english.js";
 
 const ED25519_SEED_LENGTH = 32;
 const ED25519_PUBLIC_KEY_LENGTH = 32;
 const ED25519_PRIVATE_KEY_LENGTH = 64;
+const RECOVERY_PHRASE_WORD_COUNTS = new Set([12, 24]);
+const RECOVERY_PHRASE_STRENGTH_BITS = new Map([
+  [12, 128],
+  [24, 256],
+]);
+const RECOVERY_ENTROPY_LENGTH_TO_WORD_COUNT = new Map([
+  [16, 12],
+  [32, 24],
+]);
 
 export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
@@ -186,6 +202,7 @@ export function normalizeCryptoAlgorithm(algorithm = CRYPTO_ALGORITHMS.ED25519) 
   return normalized;
 }
 
+
 /**
  * Generate an Ed25519 key pair. Seed material is hashed to 32 bytes when needed.
  * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer, algorithm?: string}} [options]
@@ -257,6 +274,64 @@ export function verifyEd25519(message, signature, publicKey) {
   const signatureBuffer = toBuffer(signature, "signature");
   const publicKeyBuffer = normalizePublicKey(publicKey);
   return ed25519.verify(signatureBuffer, messageBuffer, publicKeyBuffer);
+}
+
+function recoveryPhraseWords(phrase) {
+  if (typeof phrase !== "string") {
+    throw new TypeError("recovery phrase must be a string");
+  }
+  return phrase.normalize("NFKD").trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+export function normalizeRecoveryPhrase(phrase) {
+  const words = recoveryPhraseWords(phrase);
+  const wordCount = words.length;
+  if (!RECOVERY_PHRASE_WORD_COUNTS.has(wordCount)) {
+    throw new Error("recovery phrase must contain 12 or 24 words");
+  }
+  const normalizedPhrase = words.join(" ");
+  if (!validateMnemonic(normalizedPhrase, englishWordlist)) {
+    throw new Error("recovery phrase checksum or word list is invalid");
+  }
+  return { phrase: normalizedPhrase, words, wordCount };
+}
+
+export function validateRecoveryPhrase(phrase) {
+  try {
+    normalizeRecoveryPhrase(phrase);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function generateRecoveryPhrase(wordCount = 24) {
+  const strength = RECOVERY_PHRASE_STRENGTH_BITS.get(wordCount);
+  if (!strength) {
+    throw new Error("recovery phrase word count must be 12 or 24");
+  }
+  return normalizeRecoveryPhrase(generateMnemonic(englishWordlist, strength));
+}
+
+export function entropyToRecoveryPhrase(entropy) {
+  const buffer = toBuffer(entropy, "entropy");
+  if (!RECOVERY_ENTROPY_LENGTH_TO_WORD_COUNT.has(buffer.length)) {
+    throw new Error("recovery phrase entropy must be 16 or 32 bytes");
+  }
+  return normalizeRecoveryPhrase(entropyToMnemonic(buffer, englishWordlist));
+}
+
+export function recoveryPhraseToEntropy(phrase) {
+  const recovery = normalizeRecoveryPhrase(phrase);
+  return Buffer.from(mnemonicToEntropy(recovery.phrase, englishWordlist));
+}
+
+export function deriveEd25519SeedFromRecoveryPhrase(phrase) {
+  return normalizeSeed(recoveryPhraseToEntropy(phrase));
+}
+
+export function ed25519SeedToRecoveryPhrase(privateKey) {
+  return entropyToRecoveryPhrase(extractSeed(privateKey));
 }
 
 export function sign(message, privateKey, options = {}) {
@@ -347,7 +422,6 @@ export function deriveConfidentialNullifierV2() {
 
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
-export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1";
@@ -431,8 +505,8 @@ export function isKagemushaRecursiveCompactUnavailable(error) {
 }
 
 export function preferredKagemushaOfflineSpendMode(
-  recursiveSpendAvailable,
   recursiveCompactAvailable,
+  recursiveSpendAvailable,
 ) {
   if (arguments.length === 0) {
     return preferredKagemushaOfflineSpendModeForCapabilities(
@@ -440,8 +514,13 @@ export function preferredKagemushaOfflineSpendMode(
       isKagemushaRecursiveSpendNativeAvailable(),
     );
   }
+  if (arguments.length !== 2) {
+    throw new TypeError(
+      "preferredKagemushaOfflineSpendMode requires either zero arguments or both recursiveCompactAvailable and recursiveSpendAvailable",
+    );
+  }
   return preferredKagemushaOfflineSpendModeForCapabilities(
-    arguments.length >= 2 ? recursiveCompactAvailable : false,
+    recursiveCompactAvailable,
     recursiveSpendAvailable,
   );
 }
@@ -456,7 +535,7 @@ export function preferredKagemushaOfflineSpendModeForCapabilities(
   if (recursiveSpendAvailable) {
     return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;
   }
-  return KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;
+  return null;
 }
 
 export function canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopCount) {
@@ -478,10 +557,7 @@ export function isKagemushaRecursiveSpendLineageProofCircuitId(proofCircuitId) {
 }
 
 export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(outputProofCircuitId) {
-  return (
-    outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
-    outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
-  );
+  return outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
 }
 
 export function isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(
@@ -979,10 +1055,7 @@ export function canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCo
 
 export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) {
   if (outputProofCircuitId === undefined || outputProofCircuitId === null || outputProofCircuitId === "") {
-    return KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
-  }
-  if (outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1) {
-    return KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
+    return "";
   }
   return outputProofCircuitId;
 }
@@ -990,6 +1063,7 @@ export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outpu
 export function isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) {
   const normalized = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
   return (
+    normalized === "" ||
     normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
     normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
   );
@@ -1017,7 +1091,10 @@ export function canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
     return false;
   }
   const normalized = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
-  if (normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) {
+  if (
+    normalized === "" ||
+    normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+  ) {
     return previousHopCount < KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS;
   }
   if (normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1) {
@@ -1047,9 +1124,11 @@ export function isSupportedKagemushaRecursiveSpendAppendProofTransition(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
   return (
     (previousProofCircuitId === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 &&
-      normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) ||
+      (normalizedOutput === "" ||
+        normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1)) ||
     (isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId) &&
-      (normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
+      (normalizedOutput === "" ||
+        normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
         normalizedOutput === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1))
   );
 }

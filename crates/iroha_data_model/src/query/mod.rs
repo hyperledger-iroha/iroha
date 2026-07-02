@@ -111,6 +111,25 @@ mod signature_tests {
     }
 
     #[test]
+    fn query_signature_try_deserialize_rejects_all_zero_signature_material() {
+        let query_signature = QuerySignature(iroha_crypto::SignatureOf::from_signature(
+            iroha_crypto::Signature::from_bytes(&[0_u8; 64]),
+        ));
+        let encoded = norito::to_bytes(&query_signature).expect("encode invalid query signature");
+        let archived = norito::from_bytes::<QuerySignature>(&encoded)
+            .expect("archive invalid query signature");
+
+        let err =
+            <QuerySignature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived)
+                .expect_err("all-zero query signature must fail closed");
+        let message = err.to_string();
+        assert!(
+            message.contains("all zero"),
+            "unexpected query signature decode error: {message}"
+        );
+    }
+
+    #[test]
     fn query_request_try_sign_matches_compatibility_sign() {
         let key_pair =
             iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
@@ -142,6 +161,24 @@ mod signature_tests {
         signature
             .verify(key_pair.public_key(), &fallible.payload)
             .expect("query signature should verify");
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn query_signature_json_rejects_all_zero_signature_material() {
+        let encoded = json_wrappers::base64_encode(&[0_u8; 64]);
+        let err = norito::json::from_value::<QuerySignature>(norito::json::Value::from(encoded))
+            .expect_err("all-zero query signature JSON must fail closed");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("QuerySignature"),
+            "unexpected query signature JSON error: {message}"
+        );
+        assert!(
+            message.contains("all zero"),
+            "unexpected all-zero query signature JSON error: {message}"
+        );
     }
 }
 
@@ -594,6 +631,8 @@ fn builtin_query_registry() -> &'static QueryRegistry {
             ErasedIterQuery<crate::block::SignedBlock>,
             ErasedIterQuery<crate::block::BlockHeader>,
             ErasedIterQuery<crate::proof::ProofRecord>,
+            ErasedIterQuery<crate::nexus::FeeSponsorPolicy>,
+            ErasedIterQuery<crate::nexus::FeeSponsorPolicyId>,
         ]
     })
 }
@@ -849,6 +888,10 @@ mod model {
         AssetEscrowRecord(Vec<crate::escrow::AssetEscrowRecord>),
         /// Batch of native anonymous asset escrow records.
         AnonymousAssetEscrowRecord(Vec<crate::escrow::AnonymousAssetEscrowRecord>),
+        /// Batch of fee sponsor policies.
+        FeeSponsorPolicy(Vec<crate::nexus::FeeSponsorPolicy>),
+        /// Batch of fee sponsor policy identifiers.
+        FeeSponsorPolicyId(Vec<crate::nexus::FeeSponsorPolicyId>),
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, Constructor, IntoSchema)]
@@ -927,6 +970,8 @@ mod model {
         FindDaPinIntentByLaneEpochSequence(self::da::prelude::FindDaPinIntentByLaneEpochSequence),
         /// Fetch a verified lane relay record by its canonical relay reference.
         FindLaneRelayEnvelopeByRef(self::nexus::prelude::FindLaneRelayEnvelopeByRef),
+        /// Fetch a fee sponsor policy by identifier.
+        FindFeeSponsorPolicyById(self::nexus::prelude::FindFeeSponsorPolicyById),
         /// Fetch the registered owner for a `SoraFS` provider.
         FindSorafsProviderOwner(sorafs::prelude::FindSorafsProviderOwner),
         /// Fetch the active SNS owner for a dataspace alias.
@@ -1013,6 +1058,8 @@ mod model {
         DaPinIntent(crate::da::pin_intent::DaPinIntentWithLocation),
         /// Verified lane relay payload.
         VerifiedLaneRelayRecord(crate::nexus::VerifiedLaneRelayRecord),
+        /// Fee sponsor policy payload.
+        FeeSponsorPolicy(crate::nexus::FeeSponsorPolicy),
         /// Musubi release payload.
         MusubiRelease(crate::musubi::MusubiRelease),
         /// Musubi version list payload.
@@ -1154,6 +1201,8 @@ mod model {
                 try_build!(crate::block::SignedBlock, SignedBlock);
                 try_build!(crate::block::BlockHeader, BlockHeader);
                 try_build!(crate::proof::ProofRecord, ProofRecord);
+                try_build!(crate::nexus::FeeSponsorPolicy, FeeSponsorPolicy);
+                try_build!(crate::nexus::FeeSponsorPolicyId, FeeSponsorPolicyId);
                 try_build!(crate::permission::Permission, Permission);
                 try_build!(crate::oracle::FeedConfig, OracleFeedConfig);
                 try_build!(
@@ -1281,6 +1330,10 @@ mod model {
         AssetEscrowRecord,
         /// Native anonymous asset escrow records.
         AnonymousAssetEscrowRecord,
+        /// Fee sponsor policy records.
+        FeeSponsorPolicy,
+        /// Fee sponsor policy identifier records.
+        FeeSponsorPolicyId,
     }
 
     /// Trait mapping item types to a `QueryItemKind` marker.
@@ -1460,6 +1513,18 @@ mod model {
             QueryItemKind::AnonymousAssetEscrowRecord
         }
     }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for crate::nexus::FeeSponsorPolicy {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::FeeSponsorPolicy
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for crate::nexus::FeeSponsorPolicyId {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::FeeSponsorPolicyId
+        }
+    }
     // Manual schema for QueryWithParams: represent only `params` field.
     impl iroha_schema::TypeId for QueryWithParams {
         fn id() -> String {
@@ -1579,6 +1644,14 @@ mod model {
             let sig = <SignatureOf<QueryRequestWithAuthority> as norito::core::NoritoDeserialize>::deserialize(as_sig);
             QuerySignature(sig)
         }
+
+        fn try_deserialize(
+            archived: &'de norito::core::Archived<Self>,
+        ) -> Result<Self, norito::core::Error> {
+            let as_sig = archived.cast::<SignatureOf<QueryRequestWithAuthority>>();
+            let sig = <SignatureOf<QueryRequestWithAuthority> as norito::core::NoritoDeserialize>::try_deserialize(as_sig)?;
+            Ok(QuerySignature(sig))
+        }
     }
 
     #[cfg(feature = "json")]
@@ -1601,7 +1674,12 @@ mod model {
                     message: String::from("invalid base64 signature payload"),
                 }
             })?;
-            let signature = iroha_crypto::Signature::from_bytes(&bytes);
+            let signature = iroha_crypto::Signature::try_from_bytes(&bytes).map_err(|err| {
+                norito::json::Error::InvalidField {
+                    field: String::from("QuerySignature"),
+                    message: format!("invalid signature payload: {err}"),
+                }
+            })?;
             Ok(QuerySignature(SignatureOf::from_signature(signature)))
         }
     }
@@ -2046,6 +2124,8 @@ impl QueryOutputBatchBox {
             (Self::AnonymousAssetEscrowRecord(v1), Self::AnonymousAssetEscrowRecord(v2)) => {
                 v1.extend(v2)
             }
+            (Self::FeeSponsorPolicy(v1), Self::FeeSponsorPolicy(v2)) => v1.extend(v2),
+            (Self::FeeSponsorPolicyId(v1), Self::FeeSponsorPolicyId(v2)) => v1.extend(v2),
             _ => panic!("Cannot extend different types of IterableQueryOutputBatchBox"),
         }
     }
@@ -2099,6 +2179,8 @@ impl QueryOutputBatchBox {
             Self::DefiOracleAttestation(v) => v.len(),
             Self::AssetEscrowRecord(v) => v.len(),
             Self::AnonymousAssetEscrowRecord(v) => v.len(),
+            Self::FeeSponsorPolicy(v) => v.len(),
+            Self::FeeSponsorPolicyId(v) => v.len(),
         }
     }
 }
@@ -2352,6 +2434,18 @@ mod candidate {
                 archived.cast(),
             );
             candidate.validate().expect("invalid SignedQuery")
+        }
+
+        fn try_deserialize(
+            archived: &'de norito::core::Archived<SignedQuery>,
+        ) -> Result<Self, norito::core::Error> {
+            let candidate =
+                <SignedQueryCandidate as norito::core::NoritoDeserialize>::try_deserialize(
+                    archived.cast(),
+                )?;
+            candidate
+                .validate()
+                .map_err(|msg| norito::core::Error::Message(msg.to_owned()))
         }
     }
 
@@ -2651,6 +2745,47 @@ mod json_roundtrip_tests {
         );
     }
 
+    #[test]
+    fn signed_query_decode_rejects_all_zero_signature_without_decode_panic() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+        let invalid = SignedQuery {
+            signature: QuerySignature(SignatureOf::from_signature(Signature::from_bytes(
+                &[0_u8; 64],
+            ))),
+            payload: signed.payload,
+        };
+        let encoded = norito::to_bytes(&invalid).expect("encode invalid signed query fixture");
+        let archived =
+            norito::from_bytes::<SignedQuery>(&encoded).expect("archive invalid signed query");
+
+        let err =
+            match <SignedQuery as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived) {
+                Ok(_) => panic!("all-zero signed query signature must fail closed"),
+                Err(err) => err,
+            };
+        let message = err.to_string();
+        assert!(
+            message.contains("all zero"),
+            "unexpected signed query decode error: {message}"
+        );
+
+        let err = match SignedQuery::decode_all_versioned(&invalid.encode_versioned()) {
+            Ok(_) => panic!("all-zero signed query signature must be rejected"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("all zero"),
+            "unexpected versioned signed query decode error: {message}"
+        );
+        assert!(
+            !message.contains("panic during decode"),
+            "all-zero signatures should not surface as decode panics: {message}"
+        );
+    }
+
     #[cfg(not(feature = "fast_dsl"))]
     #[test]
     fn signed_query_json_roundtrip_start_non_fastdsl() {
@@ -2845,6 +2980,9 @@ impl_iter_queries! {
     escrow::FindAnonymousAssetEscrowsBySeller => crate::escrow::AnonymousAssetEscrowRecord,
     escrow::FindAnonymousAssetEscrowsByBuyer => crate::escrow::AnonymousAssetEscrowRecord,
     escrow::FindAnonymousAssetEscrowsByStatus => crate::escrow::AnonymousAssetEscrowRecord,
+    nexus::prelude::FindFeeSponsorPolicies => crate::nexus::FeeSponsorPolicy,
+    nexus::prelude::FindFeeSponsorPolicyIds => crate::nexus::FeeSponsorPolicyId,
+    nexus::prelude::FindFeeSponsorPoliciesBySponsor => crate::nexus::FeeSponsorPolicy,
     FindTransactions => CommittedTransaction,
     FindAccountsWithAsset => crate::account::Account,
     FindBlockHeaders => crate::block::BlockHeader,
@@ -2891,6 +3029,7 @@ impl_singular_queries! {
     da::prelude::FindDaPinIntentByAlias => crate::da::pin_intent::DaPinIntentWithLocation,
     da::prelude::FindDaPinIntentByLaneEpochSequence => crate::da::pin_intent::DaPinIntentWithLocation,
     nexus::prelude::FindLaneRelayEnvelopeByRef => crate::nexus::VerifiedLaneRelayRecord,
+    nexus::prelude::FindFeeSponsorPolicyById => crate::nexus::FeeSponsorPolicy,
     sns::prelude::FindDataspaceNameOwnerById => crate::account::AccountId,
     musubi::prelude::FindMusubiReleaseByRef => crate::musubi::MusubiRelease,
     musubi::prelude::FindMusubiPackageVersions => Vec<crate::musubi::MusubiVersion>,
@@ -3752,9 +3891,12 @@ pub mod da {
 }
 
 pub mod nexus {
-    //! Nexus relay query definitions.
+    //! Nexus query definitions.
 
-    use crate::nexus::LaneRelayEnvelopeRef;
+    use crate::{
+        AccountId,
+        nexus::{FeeSponsorPolicyId, LaneRelayEnvelopeRef},
+    };
 
     queries! {
         /// Fetch a verified lane relay by its canonical reference.
@@ -3763,11 +3905,50 @@ pub mod nexus {
             /// Canonical relay reference to look up.
             pub relay_ref: LaneRelayEnvelopeRef,
         }
+
+        /// Find all fee sponsor policies.
+        #[derive(Copy)]
+        pub struct FindFeeSponsorPolicies;
+
+        /// Find all fee sponsor policy identifiers.
+        #[derive(Copy)]
+        pub struct FindFeeSponsorPolicyIds;
+
+        /// Find all fee sponsor policies owned by a sponsor account.
+        #[repr(transparent)]
+        pub struct FindFeeSponsorPoliciesBySponsor {
+            /// Sponsor account identifier.
+            pub sponsor: AccountId,
+        }
+
+        /// Fetch one fee sponsor policy by identifier.
+        #[repr(transparent)]
+        pub struct FindFeeSponsorPolicyById {
+            /// Policy identifier to look up.
+            pub id: FeeSponsorPolicyId,
+        }
+    }
+
+    impl FindFeeSponsorPoliciesBySponsor {
+        /// Return the sponsor account identifier.
+        pub fn sponsor(&self) -> &AccountId {
+            &self.sponsor
+        }
+    }
+
+    impl FindFeeSponsorPolicyById {
+        /// Return the queried policy identifier.
+        pub fn id(&self) -> &FeeSponsorPolicyId {
+            &self.id
+        }
     }
 
     pub mod prelude {
-        //! Prelude re-exports for Nexus relay queries.
-        pub use super::FindLaneRelayEnvelopeByRef;
+        //! Prelude re-exports for Nexus queries.
+        pub use super::{
+            FindFeeSponsorPolicies, FindFeeSponsorPoliciesBySponsor, FindFeeSponsorPolicyById,
+            FindFeeSponsorPolicyIds, FindLaneRelayEnvelopeByRef,
+        };
     }
 }
 

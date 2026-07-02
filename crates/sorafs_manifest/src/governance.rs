@@ -3,9 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use blake3::Hasher;
-use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Verifier, VerifyingKey,
-};
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
@@ -2048,7 +2046,11 @@ pub struct GovernanceLogSignatureV1 {
 
 impl GovernanceLogSignatureV1 {
     fn validate(&self) -> Result<(), GovernanceLogValidationError> {
-        if self.public_key.is_empty() || self.signature.is_empty() {
+        if self.public_key.is_empty()
+            || crate::inert_bytes(&self.public_key)
+            || self.signature.is_empty()
+            || crate::inert_bytes(&self.signature)
+        {
             return Err(GovernanceLogValidationError::InvalidSignature);
         }
         Ok(())
@@ -2218,18 +2220,16 @@ fn verify_ed25519_governance_signature(
 
     let mut public_key = [0u8; PUBLIC_KEY_LENGTH];
     public_key.copy_from_slice(&publisher_signature.public_key);
-    let verifying_key = VerifyingKey::from_bytes(&public_key).map_err(|err| {
-        GovernanceLogSignatureVerificationError::InvalidPublicKey {
-            reason: err.to_string(),
-        }
-    })?;
+    let verifying_key = crate::checked_ed25519_verifying_key_from_bytes(&public_key)
+        .map_err(|err| GovernanceLogSignatureVerificationError::InvalidPublicKey { reason: err })?;
 
     let mut signature = [0u8; SIGNATURE_LENGTH];
     signature.copy_from_slice(&publisher_signature.signature);
-    let signature = DalekSignature::from_bytes(&signature);
+    let signature = crate::checked_ed25519_signature_from_bytes(&signature)
+        .map_err(|reason| GovernanceLogSignatureVerificationError::Verification { reason })?;
 
     verifying_key
-        .verify(payload_bytes, &signature)
+        .verify_strict(payload_bytes, &signature)
         .map_err(
             |err| GovernanceLogSignatureVerificationError::Verification {
                 reason: err.to_string(),
@@ -2247,7 +2247,12 @@ fn verify_mldsa_governance_signature(
                 reason: err.to_string(),
             },
         )?;
-    let signature = IrohaSignature::from_bytes(&publisher_signature.signature);
+    let signature =
+        IrohaSignature::try_from_bytes(&publisher_signature.signature).map_err(|err| {
+            GovernanceLogSignatureVerificationError::Verification {
+                reason: format!("invalid signature material: {err}"),
+            }
+        })?;
     signature.verify(&public_key, payload_bytes).map_err(|err| {
         GovernanceLogSignatureVerificationError::Verification {
             reason: err.to_string(),
@@ -3127,6 +3132,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn governance_signature_validate_rejects_all_zero_material() {
+        let mut signature = GovernanceLogSignatureV1 {
+            algorithm: GovernanceSignatureAlgorithm::Ed25519,
+            public_key: vec![0x11; 32],
+            signature: vec![0; 64],
+        };
+
+        assert!(matches!(
+            signature.validate(),
+            Err(GovernanceLogValidationError::InvalidSignature)
+        ));
+
+        signature.signature = vec![0x22; 64];
+        signature.public_key = vec![0; 32];
+
+        assert!(matches!(
+            signature.validate(),
+            Err(GovernanceLogValidationError::InvalidSignature)
+        ));
+    }
+
     fn sign_governance_block(block: &mut GovernanceDagBlockV1, seed: &[u8; 32]) {
         let signing_key = SigningKey::from_bytes(seed);
         let payload_bytes = block
@@ -3337,6 +3364,23 @@ mod tests {
     }
 
     #[test]
+    fn verify_publisher_signature_rejects_all_zero_ed25519_signature_material() {
+        let seed = [0xA5; 32];
+        let mut node = governance_node_for_signing();
+        sign_governance_node(&mut node, &seed);
+        node.publisher_signature.signature.fill(0);
+
+        let err = node
+            .verify_publisher_signature()
+            .expect_err("all-zero governance node signature must be rejected");
+        assert!(matches!(
+            err,
+            GovernanceLogSignatureVerificationError::Verification { reason }
+                if reason.contains("all zero")
+        ));
+    }
+
+    #[test]
     fn verify_publisher_signature_accepts_dilithium3_signed_node() {
         let seed = [0xB5; 32];
         let mut node = governance_node_for_signing();
@@ -3360,6 +3404,19 @@ mod tests {
     }
 
     #[test]
+    fn verify_publisher_signature_rejects_all_zero_dilithium3_signature_material() {
+        let seed = [0xB5; 32];
+        let mut node = governance_node_for_signing();
+        sign_governance_node_mldsa(&mut node, &seed);
+        node.publisher_signature.signature.fill(0);
+
+        assert!(matches!(
+            node.verify_publisher_signature(),
+            Err(GovernanceLogSignatureVerificationError::Verification { .. })
+        ));
+    }
+
+    #[test]
     fn governance_dag_block_derives_cid_and_verifies_signature() {
         let block = signed_governance_block(None, 0, 1_700_000_400);
 
@@ -3373,6 +3430,21 @@ mod tests {
         block
             .verify_block_signature()
             .expect("block signature verifies");
+    }
+
+    #[test]
+    fn governance_dag_block_rejects_all_zero_signature_material() {
+        let mut block = signed_governance_block(None, 0, 1_700_000_400);
+        block.block_signature.signature.fill(0);
+
+        let err = block
+            .verify_block_signature()
+            .expect_err("all-zero governance block signature must be rejected");
+        assert!(matches!(
+            err,
+            GovernanceLogSignatureVerificationError::Verification { reason }
+                if reason.contains("all zero")
+        ));
     }
 
     #[test]
@@ -3446,6 +3518,23 @@ mod tests {
             .expect("head signature verifies");
         validate_governance_dag_head_against_chain_v1(&head, &blocks)
             .expect("head binds the governance DAG chain");
+    }
+
+    #[test]
+    fn governance_dag_head_rejects_all_zero_signature_material() {
+        let root = signed_governance_block(None, 0, 1_700_000_400);
+        let blocks = vec![root];
+        let mut head = signed_governance_head(&blocks);
+        head.head_signature.signature.fill(0);
+
+        let err = head
+            .verify_head_signature()
+            .expect_err("all-zero governance head signature must be rejected");
+        assert!(matches!(
+            err,
+            GovernanceLogSignatureVerificationError::Verification { reason }
+                if reason.contains("all zero")
+        ));
     }
 
     #[test]

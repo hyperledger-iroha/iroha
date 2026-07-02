@@ -422,6 +422,18 @@ impl From<crate::isi::nexus::RegisterVerifiedNexusFeeBudget> for InstructionBox 
     }
 }
 
+impl From<crate::isi::nexus::UpsertFeeSponsorPolicy> for InstructionBox {
+    fn from(i: crate::isi::nexus::UpsertFeeSponsorPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::nexus::RemoveFeeSponsorPolicy> for InstructionBox {
+    fn from(i: crate::isi::nexus::RemoveFeeSponsorPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::identifier::RegisterIdentifierPolicy> for InstructionBox {
     fn from(i: crate::isi::identifier::RegisterIdentifierPolicy) -> Self {
         InstructionBox(Box::new(i))
@@ -1682,6 +1694,12 @@ fn encoded_instruction_payload(instr: &InstructionBox) -> Option<EncodedInstruct
         payload_header_flags,
         write_framed_payload: entry.frame_write,
     })
+}
+
+/// Return the stable registry wire identifier used to frame an instruction.
+#[must_use]
+pub fn instruction_wire_id(instr: &InstructionBox) -> Option<&'static str> {
+    encoded_instruction_payload(instr).map(|payload| payload.name)
 }
 
 #[cfg(test)]

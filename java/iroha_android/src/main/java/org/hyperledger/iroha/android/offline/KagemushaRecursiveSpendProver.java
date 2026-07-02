@@ -74,7 +74,6 @@ public final class KagemushaRecursiveSpendProver {
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   public enum Mode {
-    CHECKED_PREFOLD_V1("checked_prefold_v1"),
     RECURSIVE_COMPACT_V1("recursive_compact_v1"),
     RECURSIVE_SPEND_V1("recursive_spend_v1");
 
@@ -100,16 +99,12 @@ public final class KagemushaRecursiveSpendProver {
         KagemushaRecursiveCompactPaymentTokenProver.isNativeAvailable(), NATIVE_AVAILABLE);
   }
 
-  public static Mode preferredMode(final boolean recursiveSpendAvailable) {
-    return preferredMode(false, recursiveSpendAvailable);
-  }
-
   public static Mode preferredMode(
       final boolean recursiveCompactAvailable, final boolean recursiveSpendAvailable) {
     if (recursiveCompactAvailable) {
       return Mode.RECURSIVE_COMPACT_V1;
     }
-    return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : Mode.CHECKED_PREFOLD_V1;
+    return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : null;
   }
 
   public static boolean canRedeemWitnessless(final String circuitId, final int hopCount) {
@@ -126,8 +121,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static boolean isLineageAppendOutputCircuitId(final String outputCircuitId) {
-    return RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(outputCircuitId)
-        || RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(outputCircuitId);
+    return RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.equals(outputCircuitId);
   }
 
   public static boolean isSupportedLineageKeyArtifactOpeningLen(final int verifierOpeningLen) {
@@ -571,10 +565,7 @@ public final class KagemushaRecursiveSpendProver {
 
   public static String normalizeAppendOutputCircuitId(final String outputCircuitId) {
     if (outputCircuitId == null || outputCircuitId.isEmpty()) {
-      return RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
-    }
-    if (RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.equals(outputCircuitId)) {
-      return RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
+      return "";
     }
     return outputCircuitId;
   }

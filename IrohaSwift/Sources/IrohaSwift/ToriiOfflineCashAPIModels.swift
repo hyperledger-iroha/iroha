@@ -40,6 +40,52 @@ public enum ToriiOfflineCashOperationKind: String, Codable, Equatable, Sendable 
     case redeem
 }
 
+private enum ToriiOfflineCashAPIModelValidation {
+    static func requireExactNonEmptyText(_ value: String, field: String) throws {
+        guard !value.isEmpty,
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            throw OfflineNotePayloadError.invalidField(field)
+        }
+    }
+
+    static func optionalExactNonEmptyText(_ value: String?, field: String) throws -> String? {
+        guard let value else { return nil }
+        try requireExactNonEmptyText(value, field: field)
+        return value
+    }
+
+    static func canonicalNonNegativeAmount(_ value: String, field: String) throws -> String {
+        let canonical = try ToriiOfflineCashCodec.canonicalAmountString(value)
+        guard !canonical.hasPrefix("-") else {
+            throw OfflineNotePayloadError.invalidField(field)
+        }
+        return canonical
+    }
+
+    static func optionalCanonicalNonNegativeAmount(_ value: String?, field: String) throws -> String? {
+        guard let value else { return nil }
+        return try canonicalNonNegativeAmount(value, field: field)
+    }
+
+    static func requireCanonicalSignatureBase64(_ value: String, field: String) throws {
+        guard let signature = OfflineNoteTextPayloadEncoding.decodeExactBase64(value),
+              signature.count == 64 else {
+            throw OfflineNotePayloadError.invalidField(field)
+        }
+    }
+
+    static func requireEmptyOrHashHex(_ value: String, field: String) throws {
+        guard !value.isEmpty else { return }
+        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(value, field: field)
+    }
+
+    static func optionalHashHex(_ value: String?, field: String) throws -> String? {
+        guard let value else { return nil }
+        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(value, field: field)
+        return value
+    }
+}
+
 public struct ToriiOfflineSettlementProof: Codable, Equatable, Sendable {
     public let operationId: String
     public let kind: ToriiOfflineCashOperationKind
@@ -72,21 +118,52 @@ public struct ToriiOfflineSettlementProof: Codable, Equatable, Sendable {
         noteCommitment: String? = nil,
         issuerSignatureBase64: String
     ) throws {
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            operationId,
+            field: "operation_id"
+        )
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(deviceId, field: "device_id")
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            assetDefinitionId,
+            field: "asset_definition_id"
+        )
+        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(entryHash, field: "entry_hash")
+        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(chainTxHash, field: "chain_tx_hash")
+        try ToriiOfflineCashAPIModelValidation.requireCanonicalSignatureBase64(
+            issuerSignatureBase64,
+            field: "issuer_signature_base64"
+        )
         self.operationId = operationId
         self.kind = kind
         self.accountId = accountId
         self.deviceId = deviceId
         self.assetDefinitionId = assetDefinitionId
-        self.amount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
-        self.preBalance = try ToriiOfflineCashCodec.canonicalAmountString(preBalance)
-        self.postBalance = try ToriiOfflineCashCodec.canonicalAmountString(postBalance)
+        self.amount = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
+            amount,
+            field: "amount"
+        )
+        self.preBalance = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
+            preBalance,
+            field: "pre_balance"
+        )
+        self.postBalance = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
+            postBalance,
+            field: "post_balance"
+        )
         self.entryHash = entryHash
         self.chainTxHash = chainTxHash
         self.blockHeight = blockHeight
         self.issuedAtMs = issuedAtMs
-        self.noteCommitment = noteCommitment?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
+        if let noteCommitment {
+            _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
+                noteCommitment,
+                field: "note_commitment"
+            )
+            self.noteCommitment = noteCommitment
+        } else {
+            self.noteCommitment = nil
+        }
         self.issuerSignatureBase64 = issuerSignatureBase64
     }
 
@@ -133,7 +210,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
     public let accountId: String
     public let deviceId: String
     public let offlinePublicKey: String
-    public var appAttestKeyId: String
+    public var attestationKeyId: String
     public let assetDefinitionId: String
     public let existingLineageId: String?
     public let lineageState: ToriiOfflineCashState?
@@ -148,7 +225,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         accountId: String,
         deviceId: String,
         offlinePublicKey: String,
-        appAttestKeyId: String,
+        attestationKeyId: String,
         assetDefinitionId: String,
         existingLineageId: String?,
         lineageState: ToriiOfflineCashState? = nil,
@@ -157,12 +234,40 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         deviceBinding: ToriiOfflineDeviceBinding,
         keyCertificateBindings: [ToriiOfflineDeviceBinding]? = nil,
         deviceProof: ToriiOfflineDeviceProof
-    ) {
+    ) throws {
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            operationId,
+            field: "operation_id"
+        )
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(deviceId, field: "device_id")
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            offlinePublicKey,
+            field: "offline_public_key"
+        )
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            attestationKeyId,
+            field: "attestation_key_id"
+        )
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            assetDefinitionId,
+            field: "asset_definition_id"
+        )
+        if let existingLineageId {
+            try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+                existingLineageId,
+                field: "existing_lineage_id"
+            )
+        }
+        try ToriiOfflineCashAPIModelValidation.requireEmptyOrHashHex(
+            localStateHash,
+            field: "local_state_hash"
+        )
         self.operationId = operationId
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
-        self.appAttestKeyId = appAttestKeyId
+        self.attestationKeyId = attestationKeyId
         self.assetDefinitionId = assetDefinitionId
         self.existingLineageId = existingLineageId
         self.lineageState = lineageState
@@ -175,24 +280,24 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        operationId = try container.decode(String.self, forKey: .operationId)
-        accountId = try container.decode(String.self, forKey: .accountId)
-        deviceId = try container.decode(String.self, forKey: .deviceId)
-        offlinePublicKey = try container.decode(String.self, forKey: .offlinePublicKey)
-        assetDefinitionId = try container.decode(String.self, forKey: .assetDefinitionId)
-        existingLineageId = try container.decodeIfPresent(String.self, forKey: .existingLineageId)
-        lineageState = try container.decodeIfPresent(ToriiOfflineCashState.self, forKey: .lineageState)
-        localRevision = try container.decode(UInt64.self, forKey: .localRevision)
-        localStateHash = try container.decode(String.self, forKey: .localStateHash)
-        deviceBinding = try container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding)
-        keyCertificateBindings = try container.decodeIfPresent(
-            [ToriiOfflineDeviceBinding].self,
-            forKey: .keyCertificateBindings
-        ) ?? [deviceBinding]
-        deviceProof = try container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof)
-        appAttestKeyId = try container.decodeIfPresent(String.self, forKey: .attestationKeyId)
-            ?? container.decodeIfPresent(String.self, forKey: .appAttestKeyId)
-            ?? deviceBinding.attestationKeyId
+        try self.init(
+            operationId: container.decode(String.self, forKey: .operationId),
+            accountId: container.decode(String.self, forKey: .accountId),
+            deviceId: container.decode(String.self, forKey: .deviceId),
+            offlinePublicKey: container.decode(String.self, forKey: .offlinePublicKey),
+            attestationKeyId: container.decode(String.self, forKey: .attestationKeyId),
+            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
+            existingLineageId: container.decodeIfPresent(String.self, forKey: .existingLineageId),
+            lineageState: container.decodeIfPresent(ToriiOfflineCashState.self, forKey: .lineageState),
+            localRevision: container.decode(UInt64.self, forKey: .localRevision),
+            localStateHash: container.decode(String.self, forKey: .localStateHash),
+            deviceBinding: container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding),
+            keyCertificateBindings: container.decodeIfPresent(
+                [ToriiOfflineDeviceBinding].self,
+                forKey: .keyCertificateBindings
+            ),
+            deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof)
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -201,8 +306,7 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         try container.encode(accountId, forKey: .accountId)
         try container.encode(deviceId, forKey: .deviceId)
         try container.encode(offlinePublicKey, forKey: .offlinePublicKey)
-        try container.encode(appAttestKeyId, forKey: .appAttestKeyId)
-        try container.encode(appAttestKeyId, forKey: .attestationKeyId)
+        try container.encode(attestationKeyId, forKey: .attestationKeyId)
         try container.encode(assetDefinitionId, forKey: .assetDefinitionId)
         try container.encodeIfPresent(existingLineageId, forKey: .existingLineageId)
         try container.encodeIfPresent(lineageState, forKey: .lineageState)
@@ -219,7 +323,6 @@ public struct ToriiOfflineKeyRefillRequest: Codable, Equatable, Sendable {
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
         case attestationKeyId = "attestation_key_id"
-        case appAttestKeyId = "app_attest_key_id"
         case assetDefinitionId = "asset_definition_id"
         case existingLineageId = "existing_lineage_id"
         case lineageState = "lineage_state"
@@ -242,11 +345,30 @@ public struct ToriiOfflineKeyRefillResponse: Codable, Equatable, Sendable {
         lineageState: ToriiOfflineCashState? = nil,
         keyCertificate: OfflineCompactKeyCertificate? = nil,
         keyCertificates: [OfflineCompactKeyCertificate]? = nil
-    ) {
-        self.operationId = operationId
+    ) throws {
+        self.operationId = try ToriiOfflineCashAPIModelValidation.optionalExactNonEmptyText(
+            operationId,
+            field: "operation_id"
+        )
         self.lineageState = lineageState
         self.keyCertificate = keyCertificate
         self.keyCertificates = keyCertificates
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            operationId: container.decodeIfPresent(String.self, forKey: .operationId),
+            lineageState: container.decodeIfPresent(ToriiOfflineCashState.self, forKey: .lineageState),
+            keyCertificate: container.decodeIfPresent(
+                OfflineCompactKeyCertificate.self,
+                forKey: .keyCertificate
+            ),
+            keyCertificates: container.decodeIfPresent(
+                [OfflineCompactKeyCertificate].self,
+                forKey: .keyCertificates
+            )
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -291,21 +413,76 @@ public struct ToriiOfflineNoteIssueSettlementRequest: Codable, Equatable, Sendab
         keyCertificateBindings: [ToriiOfflineDeviceBinding]? = nil,
         deviceProof: ToriiOfflineDeviceProof
     ) throws {
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            operationId,
+            field: "operation_id"
+        )
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(deviceId, field: "device_id")
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            offlinePublicKey,
+            field: "offline_public_key"
+        )
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(lineageId, field: "lineage_id")
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            assetDefinitionId,
+            field: "asset_definition_id"
+        )
+        let canonicalAmount = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
+            amount,
+            field: "amount"
+        )
+        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
+            noteCommitment,
+            field: "note_commitment"
+        )
+        let canonicalLocalBalance = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
+            localBalance,
+            field: "local_balance"
+        )
+        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
+            localStateHash,
+            field: "local_state_hash"
+        )
         self.operationId = operationId
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
         self.lineageId = lineageId
         self.assetDefinitionId = assetDefinitionId
-        self.amount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
-        self.noteCommitment = noteCommitment.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        self.amount = canonicalAmount
+        self.noteCommitment = noteCommitment
         self.lineageState = lineageState
-        self.localBalance = try ToriiOfflineCashCodec.canonicalAmountString(localBalance)
+        self.localBalance = canonicalLocalBalance
         self.localRevision = localRevision
         self.localStateHash = localStateHash
         self.deviceBinding = deviceBinding
         self.keyCertificateBindings = keyCertificateBindings ?? [deviceBinding]
         self.deviceProof = deviceProof
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            operationId: container.decode(String.self, forKey: .operationId),
+            accountId: container.decode(String.self, forKey: .accountId),
+            deviceId: container.decode(String.self, forKey: .deviceId),
+            offlinePublicKey: container.decode(String.self, forKey: .offlinePublicKey),
+            lineageId: container.decode(String.self, forKey: .lineageId),
+            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
+            amount: container.decode(String.self, forKey: .amount),
+            noteCommitment: container.decode(String.self, forKey: .noteCommitment),
+            lineageState: container.decodeIfPresent(ToriiOfflineCashState.self, forKey: .lineageState),
+            localBalance: container.decode(String.self, forKey: .localBalance),
+            localRevision: container.decode(UInt64.self, forKey: .localRevision),
+            localStateHash: container.decode(String.self, forKey: .localStateHash),
+            deviceBinding: container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding),
+            keyCertificateBindings: container.decodeIfPresent(
+                [ToriiOfflineDeviceBinding].self,
+                forKey: .keyCertificateBindings
+            ),
+            deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -350,17 +527,62 @@ public struct ToriiOfflineNoteIssueSettlementResponse: Codable, Equatable, Senda
         localStateHash: String? = nil,
         keyCertificate: OfflineCompactKeyCertificate? = nil,
         keyCertificates: [OfflineCompactKeyCertificate]? = nil
-    ) {
-        self.operationId = operationId
+    ) throws {
+        self.operationId = try ToriiOfflineCashAPIModelValidation.optionalExactNonEmptyText(
+            operationId,
+            field: "operation_id"
+        )
         self.settlement = settlement
-        self.issuedNoteCommitment = issuedNoteCommitment
+        if let issuedNoteCommitment {
+            _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
+                issuedNoteCommitment,
+                field: "issued_note_commitment"
+            )
+            self.issuedNoteCommitment = issuedNoteCommitment
+        } else {
+            self.issuedNoteCommitment = nil
+        }
         self.lineageState = lineageState
-        self.localBalance = localBalance
-        self.lockedBalance = lockedBalance
+        self.localBalance = try ToriiOfflineCashAPIModelValidation.optionalCanonicalNonNegativeAmount(
+            localBalance,
+            field: "local_balance"
+        )
+        self.lockedBalance = try ToriiOfflineCashAPIModelValidation.optionalCanonicalNonNegativeAmount(
+            lockedBalance,
+            field: "locked_balance"
+        )
         self.localRevision = localRevision
-        self.localStateHash = localStateHash
+        self.localStateHash = try ToriiOfflineCashAPIModelValidation.optionalHashHex(
+            localStateHash,
+            field: "local_state_hash"
+        )
         self.keyCertificate = keyCertificate
         self.keyCertificates = keyCertificates
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            operationId: container.decodeIfPresent(String.self, forKey: .operationId),
+            settlement: container.decode(ToriiOfflineSettlementProof.self, forKey: .settlement),
+            issuedNoteCommitment: container.decodeIfPresent(
+                String.self,
+                forKey: .issuedNoteCommitment
+            ),
+            lineageState: container.decodeIfPresent(ToriiOfflineCashState.self, forKey: .lineageState),
+            localBalance: container.decodeIfPresent(String.self, forKey: .localBalance),
+            lockedBalance: container.decodeIfPresent(String.self, forKey: .lockedBalance),
+            localRevision: container.decodeIfPresent(UInt64.self, forKey: .localRevision),
+            localStateHash: container.decodeIfPresent(String.self, forKey: .localStateHash),
+            keyCertificate: container.decodeIfPresent(
+                OfflineCompactKeyCertificate.self,
+                forKey: .keyCertificate
+            ),
+            keyCertificates: container.decodeIfPresent(
+                [OfflineCompactKeyCertificate].self,
+                forKey: .keyCertificates
+            )
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -395,13 +617,53 @@ public struct ToriiOfflineRedemptionProof: Codable, Equatable, Sendable {
         amount: String,
         recursiveProof: OfflineRecursiveProof
     ) throws {
+        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
+            sourceNoteCommitment,
+            field: "source_note_commitment"
+        )
+        guard !inputNullifiers.isEmpty else {
+            throw OfflineNotePayloadError.invalidField("input_nullifiers")
+        }
+        for inputNullifier in inputNullifiers {
+            _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
+                inputNullifier,
+                field: "input_nullifiers"
+            )
+        }
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            recipientAccountId,
+            field: "recipient_account_id"
+        )
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            assetDefinitionId,
+            field: "asset_definition_id"
+        )
         self.sourceNoteCommitment = sourceNoteCommitment
         self.inputNullifiers = inputNullifiers
         self.senderKeyCertificate = senderKeyCertificate
         self.recipientAccountId = recipientAccountId
         self.assetDefinitionId = assetDefinitionId
-        self.amount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
+        self.amount = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
+            amount,
+            field: "amount"
+        )
         self.recursiveProof = recursiveProof
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            sourceNoteCommitment: container.decode(String.self, forKey: .sourceNoteCommitment),
+            inputNullifiers: container.decode([String].self, forKey: .inputNullifiers),
+            senderKeyCertificate: container.decode(
+                OfflineCompactKeyCertificate.self,
+                forKey: .senderKeyCertificate
+            ),
+            recipientAccountId: container.decode(String.self, forKey: .recipientAccountId),
+            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
+            amount: container.decode(String.self, forKey: .amount),
+            recursiveProof: container.decode(OfflineRecursiveProof.self, forKey: .recursiveProof)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -449,13 +711,36 @@ public struct ToriiOfflineNoteRedeemSettlementRequest: Codable, Equatable, Senda
         deviceProof: ToriiOfflineDeviceProof,
         redemption: ToriiOfflineRedemptionProof
     ) throws {
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            operationId,
+            field: "operation_id"
+        )
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(deviceId, field: "device_id")
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(lineageId, field: "lineage_id")
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            assetDefinitionId,
+            field: "asset_definition_id"
+        )
+        let canonicalAmount = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
+            amount,
+            field: "amount"
+        )
+        let canonicalLocalBalance = try ToriiOfflineCashAPIModelValidation.canonicalNonNegativeAmount(
+            localBalance,
+            field: "local_balance"
+        )
+        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
+            localStateHash,
+            field: "local_state_hash"
+        )
         self.operationId = operationId
         self.accountId = accountId
         self.deviceId = deviceId
         self.lineageId = lineageId
         self.assetDefinitionId = assetDefinitionId
-        self.amount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
-        self.localBalance = try ToriiOfflineCashCodec.canonicalAmountString(localBalance)
+        self.amount = canonicalAmount
+        self.localBalance = canonicalLocalBalance
         self.localRevision = localRevision
         self.localStateHash = localStateHash
         self.pendingReceipts = pendingReceipts
@@ -464,6 +749,33 @@ public struct ToriiOfflineNoteRedeemSettlementRequest: Codable, Equatable, Senda
         self.deviceBinding = deviceBinding
         self.deviceProof = deviceProof
         self.redemption = redemption
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            operationId: container.decode(String.self, forKey: .operationId),
+            accountId: container.decode(String.self, forKey: .accountId),
+            deviceId: container.decode(String.self, forKey: .deviceId),
+            lineageId: container.decode(String.self, forKey: .lineageId),
+            assetDefinitionId: container.decode(String.self, forKey: .assetDefinitionId),
+            amount: container.decode(String.self, forKey: .amount),
+            localBalance: container.decode(String.self, forKey: .localBalance),
+            localRevision: container.decode(UInt64.self, forKey: .localRevision),
+            localStateHash: container.decode(String.self, forKey: .localStateHash),
+            pendingReceipts: container.decode([ToriiOfflineTransferReceipt].self, forKey: .pendingReceipts),
+            paymentTokens: container.decodeIfPresent(
+                [OfflinePaymentToken].self,
+                forKey: .paymentTokens
+            ) ?? [],
+            paymentTokensNoritoBase64: container.decodeIfPresent(
+                [String].self,
+                forKey: .paymentTokensNoritoBase64
+            ) ?? [],
+            deviceBinding: container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding),
+            deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof),
+            redemption: container.decode(ToriiOfflineRedemptionProof.self, forKey: .redemption)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -508,17 +820,57 @@ public struct ToriiOfflineNoteRedeemSettlementResponse: Codable, Equatable, Send
         acceptedReceiptIds: [String]? = nil,
         keyCertificate: OfflineCompactKeyCertificate? = nil,
         keyCertificates: [OfflineCompactKeyCertificate]? = nil
-    ) {
-        self.operationId = operationId
+    ) throws {
+        self.operationId = try ToriiOfflineCashAPIModelValidation.optionalExactNonEmptyText(
+            operationId,
+            field: "operation_id"
+        )
         self.settlement = settlement
         self.lineageState = lineageState
-        self.localBalance = localBalance
-        self.lockedBalance = lockedBalance
+        self.localBalance = try ToriiOfflineCashAPIModelValidation.optionalCanonicalNonNegativeAmount(
+            localBalance,
+            field: "local_balance"
+        )
+        self.lockedBalance = try ToriiOfflineCashAPIModelValidation.optionalCanonicalNonNegativeAmount(
+            lockedBalance,
+            field: "locked_balance"
+        )
         self.localRevision = localRevision
-        self.localStateHash = localStateHash
-        self.acceptedReceiptIds = acceptedReceiptIds
+        self.localStateHash = try ToriiOfflineCashAPIModelValidation.optionalHashHex(
+            localStateHash,
+            field: "local_state_hash"
+        )
+        self.acceptedReceiptIds = try acceptedReceiptIds?.map { receiptId in
+            try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+                receiptId,
+                field: "accepted_receipt_ids"
+            )
+            return receiptId
+        }
         self.keyCertificate = keyCertificate
         self.keyCertificates = keyCertificates
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            operationId: container.decodeIfPresent(String.self, forKey: .operationId),
+            settlement: container.decode(ToriiOfflineSettlementProof.self, forKey: .settlement),
+            lineageState: container.decodeIfPresent(ToriiOfflineCashState.self, forKey: .lineageState),
+            localBalance: container.decodeIfPresent(String.self, forKey: .localBalance),
+            lockedBalance: container.decodeIfPresent(String.self, forKey: .lockedBalance),
+            localRevision: container.decodeIfPresent(UInt64.self, forKey: .localRevision),
+            localStateHash: container.decodeIfPresent(String.self, forKey: .localStateHash),
+            acceptedReceiptIds: container.decodeIfPresent([String].self, forKey: .acceptedReceiptIds),
+            keyCertificate: container.decodeIfPresent(
+                OfflineCompactKeyCertificate.self,
+                forKey: .keyCertificate
+            ),
+            keyCertificates: container.decodeIfPresent(
+                [OfflineCompactKeyCertificate].self,
+                forKey: .keyCertificates
+            )
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -560,7 +912,18 @@ public struct ToriiOfflineAuditRequest: Codable, Equatable, Sendable {
         paymentTokensNoritoBase64: [String],
         deviceBinding: ToriiOfflineDeviceBinding,
         deviceProof: ToriiOfflineDeviceProof
-    ) {
+    ) throws {
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+            operationId,
+            field: "operation_id"
+        )
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(deviceId, field: "device_id")
+        try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(lineageId, field: "lineage_id")
+        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
+            localStateHash,
+            field: "local_state_hash"
+        )
         self.operationId = operationId
         self.accountId = accountId
         self.deviceId = deviceId
@@ -572,6 +935,29 @@ public struct ToriiOfflineAuditRequest: Codable, Equatable, Sendable {
         self.paymentTokensNoritoBase64 = paymentTokensNoritoBase64
         self.deviceBinding = deviceBinding
         self.deviceProof = deviceProof
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            operationId: container.decode(String.self, forKey: .operationId),
+            accountId: container.decode(String.self, forKey: .accountId),
+            deviceId: container.decode(String.self, forKey: .deviceId),
+            lineageId: container.decode(String.self, forKey: .lineageId),
+            localRevision: container.decode(UInt64.self, forKey: .localRevision),
+            localStateHash: container.decode(String.self, forKey: .localStateHash),
+            receipts: container.decode([ToriiOfflineTransferReceipt].self, forKey: .receipts),
+            paymentTokens: container.decodeIfPresent(
+                [OfflinePaymentToken].self,
+                forKey: .paymentTokens
+            ) ?? [],
+            paymentTokensNoritoBase64: container.decodeIfPresent(
+                [String].self,
+                forKey: .paymentTokensNoritoBase64
+            ) ?? [],
+            deviceBinding: container.decode(ToriiOfflineDeviceBinding.self, forKey: .deviceBinding),
+            deviceProof: container.decode(ToriiOfflineDeviceProof.self, forKey: .deviceProof)
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -602,12 +988,38 @@ public struct ToriiOfflineAuditResponse: Codable, Equatable, Sendable {
         lineageState: ToriiOfflineCashState? = nil,
         keyCertificate: OfflineCompactKeyCertificate? = nil,
         keyCertificates: [OfflineCompactKeyCertificate]? = nil
-    ) {
-        self.operationId = operationId
-        self.acceptedReceiptIds = acceptedReceiptIds
+    ) throws {
+        self.operationId = try ToriiOfflineCashAPIModelValidation.optionalExactNonEmptyText(
+            operationId,
+            field: "operation_id"
+        )
+        self.acceptedReceiptIds = try acceptedReceiptIds?.map { receiptId in
+            try ToriiOfflineCashAPIModelValidation.requireExactNonEmptyText(
+                receiptId,
+                field: "accepted_receipt_ids"
+            )
+            return receiptId
+        }
         self.lineageState = lineageState
         self.keyCertificate = keyCertificate
         self.keyCertificates = keyCertificates
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            operationId: container.decodeIfPresent(String.self, forKey: .operationId),
+            acceptedReceiptIds: container.decodeIfPresent([String].self, forKey: .acceptedReceiptIds),
+            lineageState: container.decodeIfPresent(ToriiOfflineCashState.self, forKey: .lineageState),
+            keyCertificate: container.decodeIfPresent(
+                OfflineCompactKeyCertificate.self,
+                forKey: .keyCertificate
+            ),
+            keyCertificates: container.decodeIfPresent(
+                [OfflineCompactKeyCertificate].self,
+                forKey: .keyCertificates
+            )
+        )
     }
 
     private enum CodingKeys: String, CodingKey {

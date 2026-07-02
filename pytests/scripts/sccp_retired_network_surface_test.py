@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from html import unescape as html_unescape
 import re
+import unicodedata
 from pathlib import Path
 from urllib.parse import unquote as url_unquote
 
@@ -374,7 +375,12 @@ def _decoded_retired_network_match_is_allowed(
 
 
 def _decode_retired_network_surface_text(text: str) -> str:
-    decoded = html_unescape(text)
+    decoded = text
+    for _html_pass in range(3):
+        next_decoded = html_unescape(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
     for _ in range(3):
         next_decoded = url_unquote(decoded)
         if next_decoded == decoded:
@@ -387,15 +393,33 @@ def _normalize_retired_network_confusables(text: str) -> str:
     return text.translate(RETIRED_NETWORK_CONFUSABLES)
 
 
+def _strip_retired_network_ignored_unicode(text: str) -> str:
+    compatibility_normalized = unicodedata.normalize("NFKC", text)
+    normalized = unicodedata.normalize("NFD", compatibility_normalized)
+    characters: list[str] = []
+    for character in normalized:
+        category = unicodedata.category(character)
+        if category == "Cf" or category.startswith("M"):
+            continue
+        characters.append(character)
+    return "".join(characters)
+
+
+def _normalize_retired_network_surface_text(text: str) -> str:
+    return _normalize_retired_network_confusables(
+        _strip_retired_network_ignored_unicode(
+            _decode_retired_network_surface_text(text)
+        )
+    )
+
+
 def _decoded_retired_network_surface_violations(
     relative: Path, text: str
 ) -> list[str]:
     if relative in SCCP_DECODED_RETIRED_NETWORK_SCAN_SKIP_FILES:
         return []
 
-    decoded = _normalize_retired_network_confusables(
-        _decode_retired_network_surface_text(text)
-    )
+    decoded = _normalize_retired_network_surface_text(text)
     violations: list[str] = []
     for pattern in BANNED_PATTERNS:
         match = pattern.search(decoded)
@@ -487,11 +511,17 @@ def test_retired_network_patterns_catch_html_entity_obfuscation_examples() -> No
     encoded_family = "".join(
         ("Sub", "&#115;", "trate", "/", "Pol", "&#107;", "adot")
     )
+    nested_encoded_family = "".join(
+        ("Sub", "&amp;#115;", "trate", "/", "Pol", "&amp;#107;", "adot")
+    )
     encoded_runtime = "".join(("sp", "&#95;", _RUNTIME))
+    nested_encoded_runtime = "".join(("sp", "&amp;#95;", _RUNTIME))
     adversarial_examples = (
         f"operator added {encoded_family} relayer support",
+        f"operator added {nested_encoded_family} route manifest",
         f"operator added {encoded_family} route manifest",
         f"operator added {encoded_runtime} proof codec",
+        f"operator added {nested_encoded_runtime} proof codec",
     )
 
     for index, text in enumerate(adversarial_examples):
@@ -502,6 +532,13 @@ def test_retired_network_patterns_catch_html_entity_obfuscation_examples() -> No
     approved_examples = (
         SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE,
         f"the exact escaped {encoded_family} no-support sentence remains pinned",
+        "".join(
+            (
+                "SCCP will not support ",
+                nested_encoded_family,
+                " networks for now.",
+            )
+        ),
     )
     for index, text in enumerate(approved_examples):
         assert _decoded_retired_network_surface_violations(
@@ -554,6 +591,26 @@ def test_retired_network_patterns_catch_unicode_confusable_obfuscation_examples(
     for index, text in enumerate(adversarial_examples):
         assert _decoded_retired_network_surface_violations(
             Path(f"confusable-adversarial-{index}.md"), text
+        )
+
+
+def test_retired_network_patterns_catch_unicode_normalization_obfuscation_examples() -> None:
+    adversarial_examples = (
+        "operator added "
+        + "".join(("Ｓ", "ｕ", "ｂ", "ｓ", "ｔ", "ｒ", "ａｔｅ"))
+        + " relayer support",
+        "operator added "
+        + "".join(("Ｐ", "ｏ", "ｌ", "ｋ", "ａｄｏｔ"))
+        + " route manifest",
+        "operator added " + "".join(("s", "u", "b", "\u0332", "strate")) + " proof codec",
+        "operator added " + "".join(("p", "o", "l", "\u0301", "kadot")) + " route manifest",
+        "operator added " + "".join(("s", "p", "\u2060", "_", _RUNTIME)) + " proof codec",
+        "operator added " + "".join(("frame", "\u2060", "::", "support")) + " SDK helper",
+    )
+
+    for index, text in enumerate(adversarial_examples):
+        assert _decoded_retired_network_surface_violations(
+            Path(f"unicode-normalization-adversarial-{index}.md"), text
         )
 
 

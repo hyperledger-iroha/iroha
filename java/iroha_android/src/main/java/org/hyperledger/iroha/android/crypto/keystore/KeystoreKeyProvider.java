@@ -145,7 +145,7 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
     evictAttestationEntry(alias, fingerprint);
     final Optional<KeyAttestation> attestation =
         backend.generateAttestation(alias, normalizedChallenge);
-    if (attestation.isEmpty()) {
+    if (!attestation.isPresent()) {
       throw new KeyManagementException(
           "Attestation challenge is not supported by backend " + backend.name());
     }
@@ -170,7 +170,7 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
     } catch (final KeyManagementException ex) {
       return Optional.empty();
     }
-    if (attestation.isEmpty()) {
+    if (!attestation.isPresent()) {
       return Optional.empty();
     }
     try {
@@ -283,7 +283,7 @@ public final class KeystoreKeyProvider implements IrohaKeyManager.KeyProvider {
       if (alias == null) {
         throw new NullPointerException("alias");
       }
-      if (alias.isBlank()) {
+      if (alias.trim().isEmpty()) {
         throw new IllegalArgumentException("alias must not be blank");
       }
       if (challengeFingerprint == null) {

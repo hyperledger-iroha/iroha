@@ -22,6 +22,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from path_safety import first_symlinked_existing_path_component  # noqa: E402
 import sccp_ton_destination_evidence as evidence  # noqa: E402
 
 
@@ -76,7 +77,15 @@ def _summary_ready(summary: dict[str, Any], field: str) -> bool:
 
 
 def _parse_hex32(value: str, *, label: str) -> bytes:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     return evidence.parse_hex_bytes(value, label=label, byte_length=32)
+
+
+def _parse_ton_raw_address(value: str, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be workchain:account_hex")
+    return evidence.normalize_ton_raw_address(value, label=label)
 
 
 def _decode_hash_text(value: Any, *, label: str) -> bytes:
@@ -108,7 +117,7 @@ def _decode_hash_text(value: Any, *, label: str) -> bytes:
         padded = text + "=" * ((4 - len(text) % 4) % 4)
         try:
             raw = base64.b64decode(padded, altchars=b"-_", validate=True)
-        except (SystemExit, RuntimeError, TypeError, binascii.Error, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, binascii.Error, ValueError):
             raise RuntimeError(f"{label} must be 32-byte hex or base64") from None
         canonical_base64 = base64.b64encode(raw).decode("ascii")
         canonical_base64url = base64.urlsafe_b64encode(raw).decode("ascii")
@@ -142,6 +151,24 @@ def _account_states_url(api_url: str) -> str:
     return urllib.parse.urlunparse(parsed._replace(path=path + "/api/v3/accountStates"))
 
 
+def _reject_runtime_file_symlink_path(path: Path) -> None:
+    if first_symlinked_existing_path_component(path) is not None:
+        raise ValueError("runtime file must not be a symlink")
+
+
+def _read_runtime_text_file(path: Path, *, error_message: str) -> str:
+    try:
+        _reject_runtime_file_symlink_path(path)
+    except (OSError, ValueError):
+        raise ValueError(error_message) from None
+    if not path.is_file():
+        raise ValueError(error_message) from None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        raise ValueError(error_message) from None
+
+
 def _read_api_key(args: argparse.Namespace) -> str | None:
     if args.api_key is not None and args.api_key_file is not None:
         raise ValueError("--api-key and --api-key-file cannot both be supplied")
@@ -149,10 +176,10 @@ def _read_api_key(args: argparse.Namespace) -> str | None:
         return _api_key_token(args.api_key, label="--api-key")
     if args.api_key_file is None:
         return None
-    try:
-        token = Path(args.api_key_file).expanduser().read_text(encoding="utf-8")
-    except OSError:
-        raise ValueError("--api-key-file cannot be read") from None
+    token = _read_runtime_text_file(
+        Path(args.api_key_file).expanduser(),
+        error_message="--api-key-file cannot be read",
+    )
     return _api_key_token(
         token.rstrip("\r\n"),
         label="--api-key-file",
@@ -230,13 +257,23 @@ def _http_get_json(
         raise RuntimeError("TON accountStates returned a non-object response")
     if decoded.get("error") is not None:
         raise RuntimeError("TON accountStates returned error response")
+    ok = decoded.get("ok")
+    if "ok" in decoded and (type(ok) is not bool or ok is not True):
+        raise RuntimeError("TON accountStates returned unsuccessful response")
     return decoded
 
 
 def _account_from_response(decoded: dict[str, Any]) -> dict[str, Any]:
+    has_direct_accounts = "accounts" in decoded
+    result = decoded.get("result")
+    if result is not None and not isinstance(result, dict):
+        raise RuntimeError("TON accountStates result must be an object")
+    has_wrapped_accounts = isinstance(result, dict) and "accounts" in result
+    if has_direct_accounts and has_wrapped_accounts:
+        raise RuntimeError("TON accountStates returned ambiguous accounts")
     accounts = decoded.get("accounts")
-    if accounts is None and isinstance(decoded.get("result"), dict):
-        accounts = decoded["result"].get("accounts")
+    if not has_direct_accounts and has_wrapped_accounts:
+        accounts = result["accounts"]
     if not isinstance(accounts, list):
         raise RuntimeError("TON accountStates response must contain accounts")
     if len(accounts) != 1:
@@ -254,16 +291,16 @@ def _positive_decimal(value: Any, *, label: str) -> str:
         or not value.isdecimal()
         or (len(value) > 1 and value.startswith("0"))
     ):
-        raise RuntimeError(f"{label} must be a decimal string")
+        raise RuntimeError(f"{label} must be a decimal string") from None
     if int(value, 10) <= 0:
-        raise RuntimeError(f"{label} must be positive")
+        raise RuntimeError(f"{label} must be positive") from None
     return value
 
 
 def _exact_live_string(live: dict[str, Any], field: str, *, label: str) -> str:
     value = live.get(field)
     if not isinstance(value, str) or not value or value != value.strip():
-        raise ValueError(f"{label} must be an exact non-empty string")
+        raise ValueError(f"{label} must be an exact non-empty string") from None
     return value
 
 
@@ -352,14 +389,22 @@ def _validate_live_evidence(
         raise ValueError("TON live evidence must be an object")
     try:
         verifier = evidence.normalize_ton_raw_address(
-            str(live.get("verifier_contract_address", "")),
+            _exact_live_string(
+                live,
+                "verifier_contract_address",
+                label="verifier_contract_address",
+            ),
             label="verifier contract address",
         )
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("TON live verifier address metadata is invalid") from None
     try:
         account_address = evidence.normalize_ton_raw_address(
-            str(live.get("account_address", "")),
+            _exact_live_string(
+                live,
+                "account_address",
+                label="account_address",
+            ),
             label="account address",
         )
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
@@ -374,11 +419,15 @@ def _validate_live_evidence(
         raise ValueError("TON live code BoC hash match metadata must be true")
 
     account_state_hash = _parse_hex32(
-        str(live.get("account_state_hash", "")),
+        _exact_live_string(live, "account_state_hash", label="account_state_hash"),
         label="account_state_hash",
     )
     last_transaction_hash = _parse_hex32(
-        str(live.get("last_transaction_hash", "")),
+        _exact_live_string(
+            live,
+            "last_transaction_hash",
+            label="last_transaction_hash",
+        ),
         label="last_transaction_hash",
     )
     try:
@@ -389,11 +438,11 @@ def _validate_live_evidence(
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise ValueError("TON live last_transaction_lt metadata is invalid") from None
     verifier_code_hash = _parse_hex32(
-        str(live.get("verifier_code_hash", "")),
+        _exact_live_string(live, "verifier_code_hash", label="verifier_code_hash"),
         label="verifier_code_hash",
     )
     code_boc_root_hash = _parse_hex32(
-        str(live.get("code_boc_root_hash", "")),
+        _exact_live_string(live, "code_boc_root_hash", label="code_boc_root_hash"),
         label="code_boc_root_hash",
     )
     if code_boc_root_hash != verifier_code_hash:
@@ -656,7 +705,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--verifier-contract-address",
         required=True,
-        type=lambda value: evidence.normalize_ton_raw_address(
+        type=lambda value: _parse_ton_raw_address(
             value,
             label="verifier contract address",
         ),
@@ -666,64 +715,57 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key-file", help="Runtime-only file containing the TON Center API key.")
     parser.add_argument(
         "--expected-account-state-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="expected account state hash",
-            byte_length=32,
         ),
         help="Pinned live TON account_state_hash for the verifier contract.",
     )
     parser.add_argument(
         "--expected-verifier-code-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="expected verifier code hash",
-            byte_length=32,
         ),
         help="Pinned live TON verifier code hash.",
     )
     parser.add_argument(
         "--route-allowlist-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="route allowlist hash",
-            byte_length=32,
         ),
         help="Governed TON route allowlist hash.",
     )
     parser.add_argument(
         "--source-verifier-material-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="source verifier material hash",
-            byte_length=32,
         ),
         help="Source verifier material record hash bound into the route allowlist.",
     )
     parser.add_argument(
         "--source-adapter-engine-deployment-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="source adapter engine deployment hash",
-            byte_length=32,
         ),
         help="Source adapter engine deployment record hash bound into the route allowlist.",
     )
     parser.add_argument(
         "--route-canary-evidence-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="route canary evidence hash",
-            byte_length=32,
         ),
         help="Post-deploy route canary evidence hash for all-lanes TOML metadata.",
     )
     parser.add_argument(
         "--expected-destination-binding-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="expected destination binding hash",
-            byte_length=32,
         ),
         help="Expected canonical SORA -> TON destination binding hash.",
     )
@@ -779,13 +821,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded

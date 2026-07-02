@@ -20,6 +20,7 @@ SPEC.loader.exec_module(MODULE)
 
 
 NOW = 1_800_006_000
+GENERATED_AT = NOW - 120
 HEX = "ab" * 32
 HEX_2 = "cd" * 32
 DEPLOYMENT_ID = "pop-staging-a"
@@ -123,6 +124,7 @@ def complete_payloads() -> dict[str, dict[str, object]]:
             "revoked_proof_rejected": True,
             "replay_nullifier_rejected": True,
             "root_binding_verified": True,
+            "policy_digest_hex": HEX,
             "max_verify_latency_ms": 250,
             "max_service_lag_seconds": 20,
             "raw_proofs_included": False,
@@ -179,6 +181,7 @@ def complete_payloads() -> dict[str, dict[str, object]]:
         },
     }
     for payload in payloads.values():
+        payload["generated_at_unix"] = GENERATED_AT
         payload["deployment_id"] = DEPLOYMENT_ID
         payload["environment"] = ENVIRONMENT
         payload["deployment_context_reviewed"] = True
@@ -236,8 +239,16 @@ def test_complete_evidence_is_ready(tmp_path: Path, capsys) -> None:
     assert payload["status"] == "ready"
     assert payload["required_kinds"] == list(MODULE.DEFAULT_REQUIRED_KINDS)
     assert payload["recognized_artifact_count"] == len(MODULE.DEFAULT_REQUIRED_KINDS)
+    assert payload["valid_juror_sync_bindings"] == [
+        {
+            "synced_root_digest_hex": HEX,
+            "synced_revocation_list_digest_hex": HEX_2,
+        }
+    ]
+    assert payload["valid_pop_snapshot_digests"] == [HEX]
     assert payload["valid_root_digests"] == [HEX]
     assert payload["valid_revocation_list_digests"] == [HEX_2]
+    assert payload["valid_policy_digests"] == [HEX]
     assert payload["required"]["issuer_bundle"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
@@ -254,6 +265,64 @@ def test_response_file_complete_evidence_is_ready(tmp_path: Path, capsys) -> Non
     assert "is ready" in capsys.readouterr().err
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["status"] == "ready"
+
+
+def test_enrollment_portal_route_count_must_match_unique_routes(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    portal = complete_payloads()["enrollment_portal"]
+    portal["route_count"] += 1
+    portal["passed_route_count"] = portal["route_count"]
+    write_json(evidence_dir / "enrollment_portal.json", portal)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["enrollment_portal"]["artifacts"][0]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_enrollment_portal_routes_must_not_duplicate(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    portal = complete_payloads()["enrollment_portal"]
+    portal["routes"].append(dict(portal["routes"][0]))
+    portal["route_count"] = len(portal["routes"])
+    portal["passed_route_count"] = len(portal["routes"])
+    write_json(evidence_dir / "enrollment_portal.json", portal)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["enrollment_portal"]["artifacts"][0]
+    assert "routes must not contain duplicate values" in artifact["errors"]
+    assert "route_count must match unique routes count" in artifact["errors"]
 
 
 def test_deployment_context_is_required(tmp_path: Path) -> None:
@@ -322,7 +391,8 @@ def test_missing_verifier_service_blocks_rollout(tmp_path: Path, capsys) -> None
     assert MODULE.main(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
 
     captured = capsys.readouterr()
-    assert "missing required verifier_service rollout evidence" in captured.err
+    assert "missing required rollout evidence" in captured.err
+    assert "missing required verifier_service rollout evidence" not in captured.err
 
 
 def test_transcript_digest_backend_cannot_pass_governance(tmp_path: Path, capsys) -> None:
@@ -356,6 +426,101 @@ def test_transcript_digest_backend_cannot_pass_governance(tmp_path: Path, capsys
     )
 
 
+def test_verifier_service_requires_policy_digest(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    verifier = complete_payloads()["verifier_service"]
+    del verifier["policy_digest_hex"]
+    write_json(evidence_dir / "verifier_service.json", verifier)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["verifier_service"]["artifacts"][0]
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+    assert payload["valid_policy_digests"] == []
+
+
+def test_governance_policy_digest_must_match_verifier_service(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    governance = complete_payloads()["governance_approval"]
+    governance["policy_digest_hex"] = HEX_2
+    write_json(evidence_dir / "governance_approval.json", governance)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["governance_approval"]["artifacts"][0]
+    assert payload["valid_policy_digests"] == [HEX]
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval policy_digest_hex must match a valid "
+        "verifier_service policy_digest_hex"
+    ]
+
+
+def test_policy_bound_subset_requires_verifier_service_anchor(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    write_json(
+        evidence_dir / "governance_approval.json",
+        complete_payloads()["governance_approval"],
+    )
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--require-kind",
+                "governance_approval",
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["governance_approval"]["artifacts"][0]
+    assert payload["valid_policy_digests"] == []
+    assert artifact["valid"] is False
+    assert (
+        "governance_approval policy_digest_hex must match a valid "
+        "verifier_service policy_digest_hex"
+    ) in artifact["errors"]
+
+
 def test_payload_leakage_blocks_rollout(tmp_path: Path, capsys) -> None:
     evidence_dir = write_complete_evidence(tmp_path)
     issuer = complete_payloads()["issuer_bundle"]
@@ -364,7 +529,9 @@ def test_payload_leakage_blocks_rollout(tmp_path: Path, capsys) -> None:
 
     assert MODULE.main(["--evidence-dir", str(evidence_dir), "--now-unix", str(NOW)]) == 1
 
-    assert "credential_payload must not be present" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "<sensitive-key> must not be present" in err
+    assert "credential_payload must not be present" not in err
 
 
 def test_stale_revocation_registry_blocks_rollout(tmp_path: Path, capsys) -> None:
@@ -443,6 +610,7 @@ def test_juror_root_binding_must_match_published_root(tmp_path: Path, capsys) ->
     assert "juror_client root binding must match" in capsys.readouterr().err
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["valid_root_digests"] == [HEX]
+    assert payload["valid_juror_sync_bindings"] == []
     assert payload["required"]["juror_client"]["valid"] is False
 
 
@@ -546,4 +714,4 @@ def test_invalid_optional_artifact_blocks_subset_gate(tmp_path: Path, capsys) ->
 def test_unknown_required_kind_fails_before_validation(capsys) -> None:
     assert MODULE.main(["--evidence", "missing.json", "--require-kind", "unknown"]) == 2
 
-    assert "unknown required evidence kind `unknown`" in capsys.readouterr().err
+    assert "unknown required evidence kind" in capsys.readouterr().err

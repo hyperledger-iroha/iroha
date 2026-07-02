@@ -3589,6 +3589,20 @@ class EvmSccpProverTest {
                 ),
             )
         }
+        for (removed in listOf<Any?>(null, 1, "secret-token-removed")) {
+            val malformedRemovedLog = assertFailsWith<IllegalArgumentException> {
+                sdk.collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt = receipt + ("logs" to listOf(sourceEventLog + ("removed" to removed))),
+                        block = block,
+                        beaconFinality = beaconFinality,
+                        sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                    ),
+                )
+            }
+            assertTrue(malformedRemovedLog.message?.contains("receipt.logs[0].removed must be a boolean") == true)
+            assertTrue(malformedRemovedLog.message?.contains("secret-token") == false)
+        }
         assertFailsWith<IllegalArgumentException> {
             sdk.collectInboundEvidenceFromReceipt(
                 EthereumMainnetInboundEvidence(
@@ -4188,6 +4202,15 @@ class EvmSccpProverTest {
             SccpSourceProofs.canonicalEvmReceiptRlp(
                 receipt + ("logs" to listOf(validReceiptLog + ("removed" to true))),
             )
+        }
+        for (removed in listOf<Any?>(null, 1, "secret-token-removed")) {
+            val malformedRemovedLog = assertFailsWith<IllegalArgumentException> {
+                SccpSourceProofs.canonicalEvmReceiptRlp(
+                    receipt + ("logs" to listOf(validReceiptLog + ("removed" to removed))),
+                )
+            }
+            assertTrue(malformedRemovedLog.message?.contains("receipt.logs[0].removed must be a boolean") == true)
+            assertTrue(malformedRemovedLog.message?.contains("secret-token") == false)
         }
         val tooManyTopicsLog = validReceiptLog + ("topics" to List(5) { "0x" + "22".repeat(32) })
         assertFailsWith<IllegalArgumentException> {
@@ -4850,6 +4873,22 @@ class EvmSccpProverTest {
             )
         }
         assertTrue(removedBscSourceLog.message?.contains("removed logs") == true)
+        for (removed in listOf<Any?>(null, 1, "secret-token-removed")) {
+            val malformedRemovedBscSourceLog = assertFailsWith<IllegalArgumentException> {
+                sourceEventGuardSdk.collectInboundEvidenceFromReceipt(
+                    BscMainnetInboundEvidence(
+                        receipt = bscReceiptWithSourceLogs(listOf(sourceEventLog(mapOf("removed" to removed)))),
+                        block = block,
+                    ),
+                )
+            }
+            assertTrue(
+                malformedRemovedBscSourceLog.message?.contains(
+                    "receipt.logs[0].removed must be a boolean",
+                ) == true,
+            )
+            assertTrue(malformedRemovedBscSourceLog.message?.contains("secret-token") == false)
+        }
         val missingBscSourceContextLog = assertFailsWith<IllegalArgumentException> {
             sourceEventGuardSdk.collectInboundEvidenceFromReceipt(
                 BscMainnetInboundEvidence(

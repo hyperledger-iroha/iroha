@@ -1,6 +1,6 @@
 package org.hyperledger.iroha.android.client.testing;
 
-import java.util.Map;
+import java.util.Collections;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -21,7 +21,7 @@ public final class FakeHttpTransportExecutor implements HttpTransportExecutor {
       new ConcurrentHashMap<>();
 
   private volatile TransportResponse defaultResponse =
-      new TransportResponse(200, new byte[0], "", Map.of());
+      new TransportResponse(200, new byte[0], "", Collections.emptyMap());
 
   /** Enqueue a response that will be returned for any request when no path-specific response exists. */
   public void enqueueResponse(final TransportResponse response) {

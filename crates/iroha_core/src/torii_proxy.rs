@@ -307,22 +307,11 @@ impl From<crate::queue::RoutingPlan> for ToriiRoutingPlanHintV1 {
     }
 }
 
-impl From<ToriiRoutingPlanHintV1> for crate::queue::RoutingPlan {
-    fn from(value: ToriiRoutingPlanHintV1) -> Self {
-        match value {
-            ToriiRoutingPlanHintV1::Single(leg) => {
-                let leg: crate::queue::RouteLeg = leg.into();
-                Self::single(leg.route)
-            }
-            ToriiRoutingPlanHintV1::NativeAmx {
-                coordinator,
-                participants,
-                ..
-            } => Self::native_amx(
-                crate::queue::RouteLeg::from(coordinator).route,
-                participants.into_iter().map(Into::into).collect(),
-            ),
-        }
+impl TryFrom<ToriiRoutingPlanHintV1> for crate::queue::RoutingPlan {
+    type Error = ToriiRoutingPlanHintError;
+
+    fn try_from(value: ToriiRoutingPlanHintV1) -> Result<Self, Self::Error> {
+        value.try_into_routing_plan()
     }
 }
 
@@ -680,7 +669,7 @@ mod tests {
             RoutingPlan::single(single_route)
         );
         assert_eq!(
-            RoutingPlan::from(single_hint),
+            RoutingPlan::try_from(single_hint).expect("single routing hint should validate"),
             RoutingPlan::single(single_route)
         );
 
@@ -728,7 +717,10 @@ mod tests {
                 .expect("canonical native AMX hint should validate"),
             native_plan
         );
-        assert_eq!(RoutingPlan::from(native_hint), native_plan);
+        assert_eq!(
+            RoutingPlan::try_from(native_hint).expect("native AMX routing hint should validate"),
+            native_plan
+        );
     }
 
     #[test]
@@ -755,7 +747,14 @@ mod tests {
         };
         *plan_digest = advertised;
         assert_eq!(
-            forged_digest.try_into_routing_plan(),
+            forged_digest.clone().try_into_routing_plan(),
+            Err(ToriiRoutingPlanHintError::native_amx_plan_digest_mismatch(
+                advertised,
+                native_plan.digest()
+            ))
+        );
+        assert_eq!(
+            RoutingPlan::try_from(forged_digest),
             Err(ToriiRoutingPlanHintError::native_amx_plan_digest_mismatch(
                 advertised,
                 native_plan.digest()

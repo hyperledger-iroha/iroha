@@ -67,12 +67,20 @@ final class OfflineQrStreamTests: XCTestCase {
         }
     }
 
-    func testQrStreamTextCodecRejectsLegacyVersionedPrefix() throws {
+    func testQrStreamTextCodecRejectsRetiredVersionedPrefix() throws {
         let payload = makePayload(length: 64)
-        let legacy = "iroha:qr-old:" + payload.base64EncodedString()
+        let encoded = OfflineQrStreamTextCodec.encode(payload, encoding: .base64)
+        let retiredPrefix = "iroha:qr-old:" + payload.base64EncodedString()
 
+        XCTAssertEqual(try OfflineQrStreamTextCodec.decode(encoded, encoding: .base64), payload)
         XCTAssertThrowsError(
-            try OfflineQrStreamTextCodec.decode(legacy, encoding: .base64)
+            try OfflineQrStreamTextCodec.decode(" \(encoded)", encoding: .base64)
+        )
+        XCTAssertThrowsError(
+            try OfflineQrStreamTextCodec.decode("\(encoded)\n", encoding: .base64)
+        )
+        XCTAssertThrowsError(
+            try OfflineQrStreamTextCodec.decode(retiredPrefix, encoding: .base64)
         )
     }
 
@@ -98,13 +106,27 @@ final class OfflineQrStreamTests: XCTestCase {
             .offlineReceiptAck
         )
         XCTAssertEqual(
+            OfflineNoteTransferTextPayloadCodec.payloadKind(for: " \(payment)"),
+            .unspecified
+        )
+        XCTAssertEqual(
+            OfflineNoteTransferTextPayloadCodec.payloadKind(for: "\(ack)\n"),
+            .unspecified
+        )
+        XCTAssertEqual(
             try OfflineNoteTransferTextPayloadCodec.decode(challenge, expectedKind: .receiveRequest).payload,
             payload
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteTransferTextPayloadCodec.decode(" \(challenge)", expectedKind: .receiveRequest)
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteTransferTextPayloadCodec.decode("\(ack)\n", expectedKind: .receiptAck)
         )
         XCTAssertThrowsError(try OfflineNoteTransferTextPayloadCodec.decode(payment, expectedKind: .receiveRequest))
     }
 
-    func testCompatibilityReceiptAckTextCodecValidatesRequiredFields() throws {
+    func testReceiptAckTextCodecValidatesRequiredFields() throws {
         let ack = OfflineReceiptAck(
             tokenId: "token-1",
             recipientAccountId: "recipient@paynet",
@@ -113,6 +135,8 @@ final class OfflineQrStreamTests: XCTestCase {
         let encoded = try OfflineNoteTransferTextPayloadCodec.encodeReceiptAck(ack)
 
         XCTAssertEqual(try OfflineNoteTransferTextPayloadCodec.decodeReceiptAck(encoded), ack)
+        XCTAssertThrowsError(try OfflineNoteTransferTextPayloadCodec.decodeReceiptAck(" \(encoded)"))
+        XCTAssertThrowsError(try OfflineNoteTransferTextPayloadCodec.decodeReceiptAck("\(encoded)\n"))
         XCTAssertThrowsError(
             try OfflineNoteTransferTextPayloadCodec.decodeReceiptAck(
                 try OfflineNoteTransferTextPayloadCodec.encodeReceiptAck(

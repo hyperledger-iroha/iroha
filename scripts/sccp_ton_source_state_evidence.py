@@ -114,6 +114,9 @@ def parse_hex_bytes(
 ) -> bytes:
     """Parse a fixed-width hex value."""
 
+    if type(nonzero) is not bool:
+        raise ValueError("TON source-state fixed hex nonzero must be a boolean")
+
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -121,7 +124,7 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -556,22 +559,38 @@ def _require_ton_sora_lane(args: argparse.Namespace) -> None:
     source_domain = _require_exact_u32(args.source_domain, "source_domain", SystemExit)
     target_domain = _require_exact_u32(args.target_domain, "target_domain", SystemExit)
     if source_domain != SCCP_DOMAIN_TON:
-        raise SystemExit("TON production source evidence requires source_domain = 4")
+        raise SystemExit(
+            "TON production source evidence requires source_domain = "
+            f"SCCP_DOMAIN_TON ({SCCP_DOMAIN_TON})"
+        )
     if target_domain != SCCP_DOMAIN_SORA:
-        raise SystemExit("TON production source evidence requires target_domain = 0")
+        raise SystemExit(
+            "TON production source evidence requires target_domain = "
+            f"SCCP_DOMAIN_SORA ({SCCP_DOMAIN_SORA})"
+        )
 
 
 def _require_live_component_hashes(args: argparse.Namespace) -> None:
-    for field, (component_id, component_kind) in TON_TEMPLATE_COMPONENTS.items():
-        if getattr(args, field) == _ton_template_component_hash(
-            component_id,
-            component_kind,
-        ):
+    template_hashes = _template_component_hashes()
+    for field, template_hash in template_hashes.items():
+        if getattr(args, field) == template_hash:
             label = field.replace("_", " ")
             raise SystemExit(
                 f"TON production source evidence requires live {label}; "
                 f"template-derived {label} is not deployable"
             )
+    for field in _component_hash_args():
+        supplied_hash = getattr(args, field, None)
+        if supplied_hash is None:
+            continue
+        for template_field, template_hash in template_hashes.items():
+            if supplied_hash == template_hash:
+                label = field.replace("_", " ")
+                template_label = template_field.replace("_", " ")
+                raise SystemExit(
+                    f"TON production source evidence requires live {label}; "
+                    f"template-derived {template_label} is not deployable"
+                )
 
 
 def _template_component_hashes() -> dict[str, bytes]:
@@ -1072,13 +1091,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded

@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -84,7 +85,7 @@ public final class NoritoRpcClient {
         && observerList.stream().noneMatch(observer -> observer instanceof TelemetryObserver)) {
       observerList.add(new TelemetryObserver(telemetryOptions, telemetrySink));
     }
-    this.observers = List.copyOf(observerList);
+    this.observers = Collections.unmodifiableList(new ArrayList<>(observerList));
     this.flowController =
         builder.flowController != null
             ? builder.flowController
@@ -220,12 +221,12 @@ public final class NoritoRpcClient {
       return;
     }
     final Optional<DeviceProfile> profile = deviceProfileProvider.snapshot();
-    if (profile.isEmpty()) {
+    if (!profile.isPresent()) {
       return;
     }
     telemetrySink.emitSignal(
         "android.telemetry.device_profile",
-        Map.of("profile_bucket", profile.get().bucket()));
+        objectMapOf("profile_bucket", profile.get().bucket()));
   }
 
   private void emitNetworkContextTelemetry() {
@@ -233,7 +234,7 @@ public final class NoritoRpcClient {
       return;
     }
     final Optional<NetworkContext> context = networkContextProvider.snapshot();
-    if (context.isEmpty()) {
+    if (!context.isPresent()) {
       return;
     }
     telemetrySink.emitSignal(
@@ -257,7 +258,7 @@ public final class NoritoRpcClient {
     if (statusCode != null) {
       fields.put("status_code", statusCode);
     }
-    if (errorKind != null && !errorKind.isBlank()) {
+    if (errorKind != null && !errorKind.trim().isEmpty()) {
       fields.put("error_kind", errorKind);
     }
     fields.put("latency_ms", latencyMillis);
@@ -271,7 +272,7 @@ public final class NoritoRpcClient {
       return;
     }
     final String authority = resolveAuthority(request);
-    if (authority.isBlank()) {
+    if (authority.trim().isEmpty()) {
       emitRedactionFailure("blank_authority");
       return;
     }
@@ -320,7 +321,24 @@ public final class NoritoRpcClient {
       return;
     }
     telemetrySink.emitSignal(
-        REDACTION_FAILURE_SIGNAL, Map.of("signal_id", RPC_CALL_SIGNAL, "reason", reason));
+        REDACTION_FAILURE_SIGNAL, objectMapOf("signal_id", RPC_CALL_SIGNAL, "reason", reason));
+  }
+
+  private static Map<String, Object> objectMapOf(final String key, final Object value) {
+    final Map<String, Object> map = new LinkedHashMap<>();
+    map.put(key, value);
+    return Collections.unmodifiableMap(map);
+  }
+
+  private static Map<String, Object> objectMapOf(
+      final String key1,
+      final Object value1,
+      final String key2,
+      final Object value2) {
+    final Map<String, Object> map = new LinkedHashMap<>();
+    map.put(key1, value1);
+    map.put(key2, value2);
+    return Collections.unmodifiableMap(map);
   }
 
   private TransportResponse executeRequest(final TransportRequest request)
@@ -432,7 +450,7 @@ public final class NoritoRpcClient {
   }
 
   private URI resolvePath(final String path) {
-    if (path == null || path.isBlank()) {
+    if (path == null || path.trim().isEmpty()) {
       return baseUri;
     }
     if (path.startsWith("http://") || path.startsWith("https://")) {
@@ -467,12 +485,20 @@ public final class NoritoRpcClient {
         builder.append('&');
       }
       builder
-          .append(URLEncoder.encode(entry.getKey(), StandardCharsets.UTF_8))
+          .append(urlEncode(entry.getKey()))
           .append('=')
-          .append(URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8));
+          .append(urlEncode(entry.getValue()));
       first = false;
     }
     return builder.toString();
+  }
+
+  private static String urlEncode(final String value) {
+    try {
+      return URLEncoder.encode(value, StandardCharsets.UTF_8.name());
+    } catch (final UnsupportedEncodingException ex) {
+      throw new IllegalStateException("UTF-8 not supported", ex);
+    }
   }
 
   private void notifyRequest(final TransportRequest request) {

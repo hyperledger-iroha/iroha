@@ -5641,7 +5641,9 @@ canonical SORA-origin SCCP payload bytes and remains permissionless for valid br
 is accepted only while applying a verified `Executable::IvmProved` overlay. Bare
 `RecordSccpMessage` transactions and non-SORA-origin payloads fail during execution, still follow
 the normal rejected-transaction fee path, and do not contribute to the block-level
-`sccp_commitment_root`. Proposal assembly derives the root only from proved-overlay records.
+`sccp_commitment_root`. Proposal assembly derives the root only from proved-overlay records. When
+present, the root is part of the signed block hash and Nexus commit-QC subject hash; execution
+drift rejects the block instead of rewriting the header.
 
 ## External verification sketch (ICS)
 

@@ -17,6 +17,7 @@ data class MultisigProposeRequest @JvmOverloads constructor(
     val validationFeePolicyVersion: Long? = null,
     val validationFeePolicyHash: String? = null,
     val validationFeeInstructionIndex: Long? = null,
+    val validationFeeTransferEntryIndex: Long? = null,
 ) {
     companion object {
         /** Builds a request from typed instruction boxes by encoding each box as native Norito. */
@@ -35,6 +36,7 @@ data class MultisigProposeRequest @JvmOverloads constructor(
             validationFeePolicyVersion: Long? = null,
             validationFeePolicyHash: String? = null,
             validationFeeInstructionIndex: Long? = null,
+            validationFeeTransferEntryIndex: Long? = null,
         ): MultisigProposeRequest = MultisigProposeRequest(
             multisigAccountId = multisigAccountId,
             multisigAccountAlias = multisigAccountAlias,
@@ -48,6 +50,7 @@ data class MultisigProposeRequest @JvmOverloads constructor(
             validationFeePolicyVersion = validationFeePolicyVersion,
             validationFeePolicyHash = validationFeePolicyHash,
             validationFeeInstructionIndex = validationFeeInstructionIndex,
+            validationFeeTransferEntryIndex = validationFeeTransferEntryIndex,
         )
     }
 }

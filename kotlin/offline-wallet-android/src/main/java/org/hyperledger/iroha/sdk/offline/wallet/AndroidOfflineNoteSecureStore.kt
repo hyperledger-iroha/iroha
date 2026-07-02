@@ -268,10 +268,10 @@ class AndroidOfflineNoteSecureStore @JvmOverloads constructor(
             }
 
         private fun decodeState(value: String): OfflineNoteWalletNoteState =
-            when (value) {
-                "SPEND_PENDING", "spendPending" -> OfflineNoteWalletNoteState.SPENT
-                "CHANGE_PENDING", "changePending" -> OfflineNoteWalletNoteState.SPENDABLE
-                else -> OfflineNoteWalletNoteState.valueOf(value)
+            try {
+                OfflineNoteWalletNoteState.valueOf(value)
+            } catch (e: IllegalArgumentException) {
+                throw IllegalArgumentException("invalid Offline Note wallet note state: $value", e)
             }
     }
 

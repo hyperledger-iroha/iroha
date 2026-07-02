@@ -33,10 +33,10 @@ impl IVMHost for AssetHost {
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
         let mut state = self.state.lock().expect("state mutex poisoned");
         match number {
-            syscalls::SYSCALL_TRANSFER_ASSET => {
+            syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
                 let from = vm.register(10);
                 let to = vm.register(11);
-                let amount = vm.register(12);
+                let amount = vm.register(13);
                 let from_bal = state.entry(from).or_default();
                 if *from_bal < amount {
                     return Err(VMError::UnknownSyscall(number));
@@ -61,15 +61,15 @@ impl IVMHost for AssetHost {
 
 fn build_program() -> Vec<u8> {
     let mut prog = ivm::ProgramMetadata::default().encode();
-    // if x13 < x12 jump to abort (skip next two instructions)
-    let branch = kwide::encode_branch_checked(instruction::wide::control::BLTU, 13, 12, 2)
+    // if x15 < x13 jump to abort (skip next two instructions)
+    let branch = kwide::encode_branch_checked(instruction::wide::control::BLTU, 15, 13, 2)
         .expect("branch offset");
     prog.extend_from_slice(&branch.to_le_bytes());
     // perform transfer
     prog.extend_from_slice(
         &encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
-            syscalls::SYSCALL_TRANSFER_ASSET as u8,
+            syscalls::SYSCALL_TRANSFER_ASSET_SCOPED as u8,
         )
         .to_le_bytes(),
     );
@@ -93,8 +93,10 @@ fn main() {
     vm.set_host(host.clone());
     vm.set_register(10, 1); // sender
     vm.set_register(11, 2); // receiver
-    vm.set_register(12, 30); // amount
-    vm.set_register(13, host.balance(1));
+    vm.set_register(12, 0); // asset definition placeholder
+    vm.set_register(13, 30); // amount
+    vm.set_register(14, 0); // dataspace placeholder
+    vm.set_register(15, host.balance(1));
     let prog = build_program();
     vm.load_program(&prog).unwrap();
     vm.run().expect("VM execution failed");

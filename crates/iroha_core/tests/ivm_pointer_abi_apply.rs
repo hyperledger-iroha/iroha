@@ -41,7 +41,7 @@ fn opaque_asset_definition_literal(aid_bytes: [u8; 16]) -> String {
 
 #[test]
 fn apply_queued_isis_from_corehost_transfer_asset() {
-    // Build a minimal IVM program that performs SCALL TRANSFER_ASSET and HALT
+    // Build a minimal IVM program that performs SCALL TRANSFER_ASSET_SCOPED and HALT
     let from =
         fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     let to =
@@ -55,22 +55,26 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
     let amount = Numeric::from(500_u64);
     let amount_bytes = tlv_envelope(PointerType::NoritoBytes, &amount);
+    let dataspace = iroha_data_model::nexus::DataSpaceId::UNIVERSAL;
+    let dataspace_bytes = tlv_envelope(PointerType::DataSpaceId, &dataspace);
     let align8 = |n: u64| (n + 7) & !7;
     let off_from = 0u64;
     let off_to = align8(off_from + from_bytes.len() as u64);
     let off_asset = align8(off_to + to_bytes.len() as u64);
     let off_amount = align8(off_asset + asset_bytes.len() as u64);
+    let off_dataspace = align8(off_amount + amount_bytes.len() as u64);
     let ptr_from = ivm::Memory::INPUT_START + off_from;
     let ptr_to = ivm::Memory::INPUT_START + off_to;
     let ptr_asset = ivm::Memory::INPUT_START + off_asset;
     let ptr_amount = ivm::Memory::INPUT_START + off_amount;
+    let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
 
     let mut code = Vec::new();
     // SCALL transfer + HALT
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET).unwrap(),
+            u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).unwrap(),
         )
         .to_le_bytes(),
     );
@@ -103,11 +107,15 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     vm.memory
         .preload_input(off_amount, &amount_bytes)
         .expect("preload input");
+    vm.memory
+        .preload_input(off_dataspace, &dataspace_bytes)
+        .expect("preload input");
     vm.load_program(&program).unwrap();
     vm.set_register(10, ptr_from);
     vm.set_register(11, ptr_to);
     vm.set_register(12, ptr_asset);
     vm.set_register(13, ptr_amount);
+    vm.set_register(14, ptr_dataspace);
     vm.run().unwrap();
 
     // Build a minimal State and apply setup ISIs (register domain/accounts/asset, mint initial balance)
@@ -136,7 +144,11 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
     let mint = MintBox::from(Mint::asset_numeric(
         1000u64,
-        AssetId::of(asset_def.clone(), from.clone()),
+        AssetId::with_scope(
+            asset_def.clone(),
+            from.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace),
+        ),
     ));
 
     let executor = tx.world.executor().clone();
@@ -160,8 +172,16 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     block.commit().expect("commit block");
 
     // Assert balances updated: from decreased by 500, to increased by 500
-    let from_asset = AssetId::of(asset_def.clone(), from.clone());
-    let to_asset = AssetId::of(asset_def.clone(), to.clone());
+    let from_asset = AssetId::with_scope(
+        asset_def.clone(),
+        from.clone(),
+        iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace),
+    );
+    let to_asset = AssetId::with_scope(
+        asset_def.clone(),
+        to.clone(),
+        iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace),
+    );
     let from_bal = state
         .view()
         .world
@@ -201,21 +221,25 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let to_bytes = tlv_envelope(PointerType::AccountId, &to);
     let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
     let amount_bytes = tlv_envelope(PointerType::NoritoBytes, &amount);
+    let dataspace = iroha_data_model::nexus::DataSpaceId::UNIVERSAL;
+    let dataspace_bytes = tlv_envelope(PointerType::DataSpaceId, &dataspace);
     let align8 = |n: u64| (n + 7) & !7;
     let off_from = 0u64;
     let off_to = align8(off_from + from_bytes.len() as u64);
     let off_asset = align8(off_to + to_bytes.len() as u64);
     let off_amount = align8(off_asset + asset_bytes.len() as u64);
+    let off_dataspace = align8(off_amount + amount_bytes.len() as u64);
     let ptr_from = ivm::Memory::INPUT_START + off_from;
     let ptr_to = ivm::Memory::INPUT_START + off_to;
     let ptr_asset = ivm::Memory::INPUT_START + off_asset;
     let ptr_amount = ivm::Memory::INPUT_START + off_amount;
+    let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
 
     let mut code = Vec::new();
     code.extend_from_slice(
         &encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET).unwrap(),
+            u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).unwrap(),
         )
         .to_le_bytes(),
     );
@@ -246,11 +270,15 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     vm.memory
         .preload_input(off_amount, &amount_bytes)
         .expect("preload input");
+    vm.memory
+        .preload_input(off_dataspace, &dataspace_bytes)
+        .expect("preload input");
     vm.load_program(&program).unwrap();
     vm.set_register(10, ptr_from);
     vm.set_register(11, ptr_to);
     vm.set_register(12, ptr_asset);
     vm.set_register(13, ptr_amount);
+    vm.set_register(14, ptr_dataspace);
     vm.run().unwrap();
 
     let kura = Kura::blank_kura_for_testing();
@@ -277,7 +305,11 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     ));
     let mint = MintBox::from(Mint::asset_numeric(
         1000u64,
-        AssetId::of(asset_def.clone(), from.clone()),
+        AssetId::with_scope(
+            asset_def.clone(),
+            from.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace),
+        ),
     ));
 
     let executor = tx.world.executor().clone();
@@ -340,8 +372,8 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
             let ev = json("{{\"kind\":\"asset_change\",\"op\":\"added\",\"asset_definition_id\":\"{aed}\",\"account_domain\":\"{domain}\",\"account_id\":\"{dst}\",\"amount_i64\":1}}");
             let recipient = json_get_account_id(ev, name("account_id"));
             let amount = json_get_int(ev, name("amount_i64"));
-            transfer_asset(recipient, account_id("{reserve}"), asset_definition("{aed}"), amount);
-            transfer_asset(account_id("{reserve}"), recipient, asset_definition("{cbdc}"), amount * {ratio});
+            transfer_asset(recipient, account_id("{reserve}"), asset_definition("{aed}"), amount, dataspace_id("0"));
+            transfer_asset(account_id("{reserve}"), recipient, asset_definition("{cbdc}"), amount * {ratio}, dataspace_id("0"));
         }}
         "#,
         aed = aed_asset_raw,

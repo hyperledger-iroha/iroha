@@ -13,6 +13,7 @@ import java.security.cert.TrustAnchor;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
@@ -38,7 +39,7 @@ public final class AttestationVerifier {
     for (final X509Certificate certificate : builder.trustedRoots) {
       anchors.add(new TrustAnchor(certificate, null));
     }
-    this.trustAnchors = Set.copyOf(anchors);
+    this.trustAnchors = Collections.unmodifiableSet(new LinkedHashSet<>(anchors));
     this.requireStrongBox = builder.requireStrongBox;
   }
 

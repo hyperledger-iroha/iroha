@@ -495,6 +495,11 @@ impl Ed25519Sha512 {
     }
 
     fn parse_public_key_uncached(bytes: &[u8; 32]) -> Result<PublicKey, ParseError> {
+        if bytes.iter().all(|byte| *byte == 0) {
+            return Err(ParseError(
+                "ed25519 public key material must not be all zero".to_string(),
+            ));
+        }
         let compressed = CompressedEdwardsY(*bytes);
         let point = compressed
             .decompress()
@@ -566,14 +571,15 @@ impl Ed25519Sha512 {
                     return Ok(());
                 }
             }
-            // `Signature::try_from` only checks length for Ed25519; we already know it's correct.
             let s = Signature::try_from(signature).map_err(|e| ParseError(e.to_string()))?;
+            validate_signature_r_for_strict_batch(signature)?;
             pk.verify_strict(message, &s)
                 .map_err(|_| Error::BadSignature)?;
             remember_verify_ok(pk, message, signature);
             return Ok(());
         }
         let s = Signature::try_from(signature).map_err(|e| ParseError(e.to_string()))?;
+        validate_signature_r_for_strict_batch(signature)?;
         pk.verify_strict(message, &s)
             .map_err(|_| Error::BadSignature)
     }
@@ -1425,6 +1431,12 @@ mod test {
     }
 
     #[test]
+    fn parse_public_key_rejects_all_zero_material() {
+        let err = Ed25519Sha512::parse_public_key(&[0u8; 32]).unwrap_err();
+        assert!(err.0.contains("all zero"), "unexpected error: {err:?}");
+    }
+
+    #[test]
     fn parse_public_key_rejects_non_canonical_encoding() {
         let err = Ed25519Sha512::parse_public_key(&ED25519_NON_CANONICAL_IDENTITY).unwrap_err();
         assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
@@ -1571,6 +1583,26 @@ mod test {
         noncanonical[..32].copy_from_slice(&ED25519_NON_CANONICAL_IDENTITY);
         assert_eq!(
             Ed25519Sha512::parse_signature(&noncanonical).expect_err("non-canonical R must fail"),
+            Error::BadSignature
+        );
+    }
+
+    #[test]
+    fn ed25519_verify_rejects_noncanonical_or_small_order_r_before_strict_verify() {
+        let (public_key, private_key) = key_pair_factory();
+        let mut small_order = Ed25519Sha512::sign(MESSAGE_1, &private_key);
+        small_order[..32].copy_from_slice(&ED25519_SMALL_ORDER_POINT);
+        assert_eq!(
+            Ed25519Sha512::verify(MESSAGE_1, &small_order, &public_key)
+                .expect_err("small-order R must fail"),
+            Error::BadSignature
+        );
+
+        let mut noncanonical = Ed25519Sha512::sign(MESSAGE_1, &private_key);
+        noncanonical[..32].copy_from_slice(&ED25519_NON_CANONICAL_IDENTITY);
+        assert_eq!(
+            Ed25519Sha512::verify(MESSAGE_1, &noncanonical, &public_key)
+                .expect_err("noncanonical R must fail"),
             Error::BadSignature
         );
     }

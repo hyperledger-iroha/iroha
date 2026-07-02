@@ -1,10 +1,10 @@
 #![cfg(feature = "cli")]
 
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::{collections::HashMap, env, fs, path::PathBuf};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::{self, Value};
-use tempfile::tempdir;
+use tempfile::{Builder, TempDir};
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -17,6 +17,18 @@ fn repo_root() -> PathBuf {
 
 fn example_dir() -> PathBuf {
     repo_root().join("docs/examples/sorafs_capacity_simulation")
+}
+
+fn canonical_temp_base() -> PathBuf {
+    env::temp_dir()
+        .canonicalize()
+        .expect("canonical system temp dir")
+}
+
+fn tempdir() -> Result<TempDir, std::io::Error> {
+    Builder::new()
+        .prefix("sorafs-capacity-simulation-")
+        .tempdir_in(canonical_temp_base())
 }
 
 fn run_cli(args: &[String]) -> assert_cmd::assert::Assert {

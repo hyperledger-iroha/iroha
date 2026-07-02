@@ -270,8 +270,7 @@ StatusSafetyAnchors ==
   /\ SnapshotAnchors
 
 RbcStoreStatusExactness ==
-  /\ \A candidate \in Candidates:
-    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ AllCandidatesMatchSpec
   /\ StatusSafetyAnchors
 
 RbcStoreStatusCorrectnessEnvelope ==

@@ -6,46 +6,48 @@ import org.hyperledger.iroha.sdk.client.JsonNumbers
 import org.hyperledger.iroha.sdk.client.JsonParser
 
 object OfflineJsonParser {
+    private val removedKagemushaAbi7ReadinessFields = setOf(
+        "offline_kagemusha_abi7",
+        "offline_kagemusha_abi7_mode",
+        "offline_kagemusha_abi7_bridge_abi_version",
+        "offline_kagemusha_abi7_circuit_id",
+        "offline_kagemusha_abi7_artifacts",
+    )
 
     @JvmStatic
     fun parseOfflineReadiness(payload: ByteArray): OfflineReadiness {
         val root = parse(payload)
         val obj = expectObject(root, "root")
-        val offlineKagemushaAbi7 = asOptionalBoolean(obj["offline_kagemusha_abi7"], false)
-        val offlineKagemushaAbi7Artifacts =
-            asOptionalBoolean(obj["offline_kagemusha_abi7_artifacts"], false)
-        val offlineKagemushaAbi7CircuitId =
-            asOptionalString(obj["offline_kagemusha_abi7_circuit_id"])
+        rejectRemovedKagemushaAbi7ReadinessFields(obj)
         return OfflineReadiness(
-            asOptionalBoolean(obj["offline_note"], false),
-            asOptionalBoolean(obj["offline_one_use_keys"], false),
-            asOptionalBoolean(obj["offline_recursive_note_proof"], false),
-            asOptionalBoolean(obj["offline_fountain_qr"], false),
-            asOptionalBoolean(obj["offline_sync_optional"], false),
+            asOptionalBoolean(obj["offline_note"], "offline_note", false),
+            asOptionalBoolean(obj["offline_one_use_keys"], "offline_one_use_keys", false),
+            asOptionalBoolean(
+                obj["offline_recursive_note_proof"],
+                "offline_recursive_note_proof",
+                false,
+            ),
+            asOptionalBoolean(obj["offline_fountain_qr"], "offline_fountain_qr", false),
+            asOptionalBoolean(obj["offline_sync_optional"], "offline_sync_optional", false),
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
-            asBooleanOrDefault(
+            asBoolean(
                 obj["offline_kagemusha_recursive_compact_available"],
-                offlineKagemushaAbi7,
                 "offline_kagemusha_recursive_compact_available",
             ),
-            asPresentReadinessStringOrFallback(
+            asPresentReadinessString(
                 obj["offline_kagemusha_recursive_compact_mode"],
-                obj["offline_kagemusha_abi7_mode"],
                 "offline_kagemusha_recursive_compact_mode",
             ),
-            asPresentReadinessIntOrFallback(
+            asPresentReadinessInt(
                 obj["offline_kagemusha_recursive_compact_required_native_bridge_abi_version"],
-                obj["offline_kagemusha_abi7_bridge_abi_version"],
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
             ),
-            asPresentReadinessStringOrFallback(
+            asPresentReadinessString(
                 obj["offline_kagemusha_recursive_compact_circuit_id"],
-                offlineKagemushaAbi7CircuitId,
                 "offline_kagemusha_recursive_compact_circuit_id",
             ),
-            asBooleanOrDefault(
+            asBoolean(
                 obj["offline_kagemusha_recursive_compact_artifacts_available"],
-                offlineKagemushaAbi7Artifacts,
                 "offline_kagemusha_recursive_compact_artifacts_available",
             ),
         )
@@ -55,36 +57,27 @@ object OfflineJsonParser {
     fun parseOfflineV2Readiness(payload: ByteArray): OfflineV2Readiness {
         val root = parse(payload)
         val obj = expectObject(root, "root")
-        val offlineKagemushaAbi7 = asOptionalBoolean(obj["offline_kagemusha_abi7"], false)
-        val offlineKagemushaAbi7Artifacts =
-            asOptionalBoolean(obj["offline_kagemusha_abi7_artifacts"], false)
-        val offlineKagemushaAbi7CircuitId =
-            asOptionalString(obj["offline_kagemusha_abi7_circuit_id"])
+        rejectRemovedKagemushaAbi7ReadinessFields(obj)
         return OfflineV2Readiness(
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
-            asBooleanOrDefault(
+            asBoolean(
                 obj["offline_kagemusha_recursive_compact_available"],
-                offlineKagemushaAbi7,
                 "offline_kagemusha_recursive_compact_available",
             ),
-            asPresentReadinessStringOrFallback(
+            asPresentReadinessString(
                 obj["offline_kagemusha_recursive_compact_mode"],
-                obj["offline_kagemusha_abi7_mode"],
                 "offline_kagemusha_recursive_compact_mode",
             ),
-            asPresentReadinessIntOrFallback(
+            asPresentReadinessInt(
                 obj["offline_kagemusha_recursive_compact_required_native_bridge_abi_version"],
-                obj["offline_kagemusha_abi7_bridge_abi_version"],
                 "offline_kagemusha_recursive_compact_required_native_bridge_abi_version",
             ),
-            asPresentReadinessStringOrFallback(
+            asPresentReadinessString(
                 obj["offline_kagemusha_recursive_compact_circuit_id"],
-                offlineKagemushaAbi7CircuitId,
                 "offline_kagemusha_recursive_compact_circuit_id",
             ),
-            asBooleanOrDefault(
+            asBoolean(
                 obj["offline_kagemusha_recursive_compact_artifacts_available"],
-                offlineKagemushaAbi7Artifacts,
                 "offline_kagemusha_recursive_compact_artifacts_available",
             ),
         )
@@ -445,10 +438,6 @@ object OfflineJsonParser {
         return value
     }
 
-    private fun asPresentReadinessStringOrFallback(value: Any?, fallback: Any?, path: String): String {
-        return asPresentReadinessString(value ?: fallback, path)
-    }
-
     private fun asPresentReadinessInt(value: Any?, path: String): Int {
         if (value is String) {
             check(value.isNotEmpty() && value == value.trim()) { "$path must be an exact integer string" }
@@ -470,10 +459,6 @@ object OfflineJsonParser {
         return parsed.toInt()
     }
 
-    private fun asPresentReadinessIntOrFallback(value: Any?, fallback: Any?, path: String): Int {
-        return asPresentReadinessInt(value ?: fallback, path)
-    }
-
     private fun asLong(value: Any?, path: String): Long {
         return JsonNumbers.asLong(value, path)
     }
@@ -483,12 +468,18 @@ object OfflineJsonParser {
         return value
     }
 
-    private fun asBooleanOrDefault(value: Any?, defaultValue: Boolean, path: String): Boolean {
-        return if (value == null) defaultValue else asBoolean(value, path)
+    private fun asOptionalBoolean(value: Any?, path: String, default: Boolean): Boolean {
+        if (value == null) return default
+        check(value is Boolean) { "$path must be a boolean" }
+        return value
     }
 
-    private fun asOptionalBoolean(value: Any?, default: Boolean): Boolean {
-        return if (value is Boolean) value else default
+    private fun rejectRemovedKagemushaAbi7ReadinessFields(obj: Map<String, Any>) {
+        for (field in removedKagemushaAbi7ReadinessFields) {
+            check(!obj.containsKey(field)) {
+                "$field is not supported; use offline_kagemusha_recursive_compact_*"
+            }
+        }
     }
 
     private fun asBytes(value: Any?, path: String): ByteArray {
@@ -504,7 +495,7 @@ object OfflineJsonParser {
     }
 
     private fun decodeHexBytes(hex: String, path: String): ByteArray {
-        check(hex.length % 2 == 0) { "$path must be a hex string of even length" }
+        check(hex.length % 2 == 0) { "$path must be a lowercase hex string of even length" }
         val out = ByteArray(hex.length / 2)
         for (i in out.indices) {
             val hi = hexDigit(hex[2 * i], path, 2 * i)
@@ -518,8 +509,7 @@ object OfflineJsonParser {
         return when (c) {
             in '0'..'9' -> c - '0'
             in 'a'..'f' -> c - 'a' + 10
-            in 'A'..'F' -> c - 'A' + 10
-            else -> error("invalid hex digit `$c` at $path[$index]")
+            else -> error("invalid lowercase hex digit `$c` at $path[$index]")
         }
     }
 }

@@ -86,7 +86,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 14;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
 const SORAFS_ORDERBOOK_SIDE_ASK: u32 = 2;
@@ -570,6 +570,69 @@ fn build_fee_sponsor_metadata(fee_sponsor: Option<AccountId>) -> Metadata {
         );
     }
     metadata
+}
+
+unsafe fn parse_optional_string_bridge(
+    ptr: *const c_char,
+    len: c_ulong,
+) -> BridgeResult<Option<String>> {
+    if ptr.is_null() || len == 0 {
+        return Ok(None);
+    }
+    unsafe { read_string_bridge(ptr, len) }.map(Some)
+}
+
+unsafe fn parse_metadata_object_bridge(ptr: *const c_char, len: c_ulong) -> BridgeResult<Metadata> {
+    let mut metadata = Metadata::default();
+    if ptr.is_null() || len == 0 {
+        return Ok(metadata);
+    }
+    let bytes = unsafe { slice::from_raw_parts(ptr as *const u8, len as usize) };
+    let value: norito::json::Value =
+        norito::json::from_slice(bytes).map_err(|_| BridgeError::MetadataValue)?;
+    let object = value.as_object().ok_or(BridgeError::MetadataValue)?;
+    for (key, value) in object {
+        let name = Name::from_str(key).map_err(|_| BridgeError::MetadataKey)?;
+        let json = Json::from_norito_value_ref(value).map_err(|_| BridgeError::MetadataValue)?;
+        metadata.insert(name, json);
+    }
+    Ok(metadata)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_validation_fee_metadata(
+    mut metadata: Metadata,
+    policy_version: u64,
+    policy_hash: String,
+    fee_instruction_index: u64,
+    fee_sponsor: Option<AccountId>,
+    memo: Option<String>,
+) -> BridgeResult<Metadata> {
+    metadata.insert(
+        Name::from_str("validation_fee_policy_version").expect("static metadata key"),
+        Json::new(policy_version),
+    );
+    metadata.insert(
+        Name::from_str("validation_fee_policy_hash").expect("static metadata key"),
+        Json::new(policy_hash),
+    );
+    metadata.insert(
+        Name::from_str("validation_fee_instruction_index").expect("static metadata key"),
+        Json::new(fee_instruction_index),
+    );
+    if let Some(fee_sponsor) = fee_sponsor {
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static metadata key"),
+            Json::new(fee_sponsor.to_string()),
+        );
+    }
+    if let Some(memo) = memo {
+        let memo_key = Name::from_str("memo").expect("static metadata key");
+        if metadata.get(&memo_key).is_none() {
+            metadata.insert(memo_key, Json::new(memo));
+        }
+    }
+    Ok(metadata)
 }
 
 fn parse_json_value(bytes: &[u8]) -> BridgeResult<Json> {
@@ -3821,7 +3884,7 @@ fn parse_identifier_receipt_signature(value: Option<&JsonValue>) -> BridgeResult
         .and_then(JsonValue::as_str)
         .ok_or(BridgeError::IdentifierReceipt)?;
     let signature_bytes = decode_identifier_receipt_hex(signature_hex)?;
-    Ok(Signature::from_bytes(&signature_bytes))
+    Signature::try_from_bytes(&signature_bytes).map_err(|_| BridgeError::IdentifierReceipt)
 }
 
 fn parse_identifier_receipt_payload_value(
@@ -4281,7 +4344,10 @@ pub unsafe extern "C" fn connect_norito_verify_detached(
         let message = unsafe { slice::from_raw_parts(message_ptr, message_len as usize) };
         let signature_bytes =
             unsafe { slice::from_raw_parts(signature_ptr, signature_len as usize) };
-        let signature = Signature::from_bytes(signature_bytes);
+        let signature = match Signature::try_from_bytes(signature_bytes) {
+            Ok(signature) => signature,
+            Err(_) => return Ok(()),
+        };
         match signature.verify(&public_key, message) {
             Ok(()) => {
                 unsafe { *out_valid = 1 };
@@ -4670,9 +4736,14 @@ fn build_confidential_encrypted_payload(
     Ok(payload)
 }
 
-fn decode_hex_array<const N: usize>(hex_str: &str) -> BridgeResult<[u8; N]> {
-    let body = hex_str.trim().trim_start_matches("0x");
-    let bytes = hex::decode(body).map_err(|_| BridgeError::ProofAttachment)?;
+fn decode_exact_lower_hex_array<const N: usize>(hex_str: &str) -> BridgeResult<[u8; N]> {
+    if hex_str.len() != N * 2
+        || !hex_str.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || hex_str.bytes().any(|byte| byte.is_ascii_uppercase())
+    {
+        return Err(BridgeError::ProofAttachment);
+    }
+    let bytes = hex::decode(hex_str).map_err(|_| BridgeError::ProofAttachment)?;
     if bytes.len() != N {
         return Err(BridgeError::ProofAttachment);
     }
@@ -4783,10 +4854,15 @@ fn parse_proof_attachment_value(value: &JsonValue) -> BridgeResult<ProofAttachme
 
     let mut attachment = attachment;
     if let Some(commit_hex) = value.get("vk_commitment_hex").and_then(JsonValue::as_str) {
-        attachment.vk_commitment = Some(decode_hex_array(commit_hex)?);
+        attachment.vk_commitment = Some(decode_exact_lower_hex_array(commit_hex)?);
     }
-    if let Some(envelope_hex) = value.get("envelope_hash_hex").and_then(JsonValue::as_str) {
-        attachment.envelope_hash = Some(decode_hex_array(envelope_hex)?);
+    let envelope_hex = value
+        .get("envelope_hash_hex")
+        .and_then(JsonValue::as_str)
+        .ok_or(BridgeError::ProofAttachment)?;
+    attachment.envelope_hash = Some(decode_exact_lower_hex_array(envelope_hex)?);
+    if attachment.structural_error().is_some() {
+        return Err(BridgeError::ProofAttachment);
     }
     Ok(attachment)
 }
@@ -5295,6 +5371,18 @@ fn parse_connect_wallet_signature_algorithm_label(alg_str: &str) -> Result<Algor
         return Ok(Algorithm::Ed25519);
     }
     Err(-8)
+}
+
+fn connect_wallet_signature_from_algorithm_bytes(
+    algorithm: Algorithm,
+    signature: &[u8],
+) -> Option<proto::WalletSignatureV1> {
+    match algorithm {
+        Algorithm::Ed25519 => proto::WalletSignatureV1::from_ed25519_bytes(signature),
+        _ => Signature::try_from_bytes(signature)
+            .ok()
+            .map(|signature| proto::WalletSignatureV1::new(algorithm, signature)),
+    }
 }
 
 unsafe fn parse_algorithm_cstr(
@@ -6558,13 +6646,16 @@ pub unsafe extern "C" fn connect_norito_encode_control_approve_ext_with_alg(
             Err(code) => return code,
         };
         let sig_bytes = std::slice::from_raw_parts(sig_ptr, sig_len as usize);
-        let signature = Signature::from_bytes(sig_bytes);
+        let sig_wallet = match connect_wallet_signature_from_algorithm_bytes(algorithm, sig_bytes) {
+            Some(signature) => signature,
+            None => return -4,
+        };
         let ctrl = proto::ConnectControlV1::Approve {
             wallet_pk: wallet_pk_arr,
             account_id,
             permissions,
             proof,
-            sig_wallet: proto::WalletSignatureV1::new(algorithm, signature),
+            sig_wallet,
         };
         let frame = proto::ConnectFrameV1 {
             sid: sid_arr,
@@ -6859,13 +6950,10 @@ pub unsafe extern "C" fn connect_norito_decode_ciphertext_frame(
 
 // ---------------- Offline Note prover helpers ----------------
 
-/// Generate a recursive Halo2/IPA proof for an Offline redemption.
+/// Retired classic offline-note redemption prover.
 ///
-/// The input is Norito-archive bytes of
-/// `iroha_data_model::offline::OfflineNoteRedeem`. The existing
-/// `recursive_proof` field is ignored, so callers may pass a stub. The output
-/// is Norito-archive bytes of `OfflineNoteRecursiveProof`, ready to slot back
-/// into the redemption before transaction submission.
+/// Kagemusha is the only active offline payment implementation, so this
+/// entrypoint always fails closed with `ERR_OFFLINE_NOTE_PROVE`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_offline_prove_note_redeem(
     redeem_norito_ptr: *const c_uchar,
@@ -6873,29 +6961,19 @@ pub unsafe extern "C" fn connect_norito_offline_prove_note_redeem(
     out_recursive_proof_ptr: *mut *mut c_uchar,
     out_recursive_proof_len: *mut c_ulong,
 ) -> c_int {
-    let result = (|| {
-        if redeem_norito_ptr.is_null()
-            || out_recursive_proof_ptr.is_null()
-            || out_recursive_proof_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
-        let bytes = unsafe { slice::from_raw_parts(redeem_norito_ptr, redeem_norito_len as usize) };
-        let recursive = prove_offline_note_redeem_recursive(bytes)?;
-        let archive = norito::to_bytes(&recursive).map_err(|_| BridgeError::OfflineNoteProve)?;
-        unsafe { write_bytes_bridge(out_recursive_proof_ptr, out_recursive_proof_len, &archive) }
-    })();
-
-    bridge_result_to_code(result)
+    let _ = (
+        redeem_norito_ptr,
+        redeem_norito_len,
+        out_recursive_proof_ptr,
+        out_recursive_proof_len,
+    );
+    bridge_result_to_code(retired_offline_note_payment_transaction())
 }
 
-/// Generate a recursive Halo2/IPA proof for an Offline audit bundle.
+/// Retired classic offline-note audit prover.
 ///
-/// The input is Norito-archive bytes of
-/// `iroha_data_model::offline::OfflineNoteAuditBundle`. The existing
-/// `recursive_proof` field is ignored, so callers may pass a stub. The output
-/// is Norito-archive bytes of `OfflineNoteRecursiveProof`, ready to slot back
-/// into the audit bundle before transaction submission.
+/// Kagemusha is the only active offline payment implementation, so this
+/// entrypoint always fails closed with `ERR_OFFLINE_NOTE_PROVE`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_offline_prove_note_audit(
     audit_norito_ptr: *const c_uchar,
@@ -6903,20 +6981,13 @@ pub unsafe extern "C" fn connect_norito_offline_prove_note_audit(
     out_recursive_proof_ptr: *mut *mut c_uchar,
     out_recursive_proof_len: *mut c_ulong,
 ) -> c_int {
-    let result = (|| {
-        if audit_norito_ptr.is_null()
-            || out_recursive_proof_ptr.is_null()
-            || out_recursive_proof_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
-        let bytes = unsafe { slice::from_raw_parts(audit_norito_ptr, audit_norito_len as usize) };
-        let recursive = prove_offline_note_audit_recursive(bytes)?;
-        let archive = norito::to_bytes(&recursive).map_err(|_| BridgeError::OfflineNoteProve)?;
-        unsafe { write_bytes_bridge(out_recursive_proof_ptr, out_recursive_proof_len, &archive) }
-    })();
-
-    bridge_result_to_code(result)
+    let _ = (
+        audit_norito_ptr,
+        audit_norito_len,
+        out_recursive_proof_ptr,
+        out_recursive_proof_len,
+    );
+    bridge_result_to_code(retired_offline_note_payment_transaction())
 }
 
 /// Retired classic offline-note redemption transaction encoder.
@@ -7319,7 +7390,10 @@ pub unsafe extern "C" fn connect_norito_encode_defund_offline_note_signed_transa
     bridge_result_to_code(retired_offline_note_payment_transaction())
 }
 
-/// Generate a recursive Halo2/IPA proof for an Offline redemption against a chain-supplied verifying key.
+/// Retired classic offline-note redemption prover against a chain-supplied verifying key.
+///
+/// Kagemusha is the only active offline payment implementation, so this
+/// entrypoint always fails closed with `ERR_OFFLINE_NOTE_PROVE`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_offline_prove_note_redeem_with_vk(
     redeem_norito_ptr: *const c_uchar,
@@ -7329,26 +7403,21 @@ pub unsafe extern "C" fn connect_norito_offline_prove_note_redeem_with_vk(
     out_recursive_proof_ptr: *mut *mut c_uchar,
     out_recursive_proof_len: *mut c_ulong,
 ) -> c_int {
-    let result = (|| {
-        if redeem_norito_ptr.is_null()
-            || vk_norito_ptr.is_null()
-            || out_recursive_proof_ptr.is_null()
-            || out_recursive_proof_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
-        let redeem_bytes =
-            unsafe { slice::from_raw_parts(redeem_norito_ptr, redeem_norito_len as usize) };
-        let vk_bytes = unsafe { slice::from_raw_parts(vk_norito_ptr, vk_norito_len as usize) };
-        let archive = prove_offline_note_redeem_recursive_with_vk(redeem_bytes, vk_bytes)
-            .map_err(|_| BridgeError::OfflineNoteProve)?;
-        unsafe { write_bytes_bridge(out_recursive_proof_ptr, out_recursive_proof_len, &archive) }
-    })();
-
-    bridge_result_to_code(result)
+    let _ = (
+        redeem_norito_ptr,
+        redeem_norito_len,
+        vk_norito_ptr,
+        vk_norito_len,
+        out_recursive_proof_ptr,
+        out_recursive_proof_len,
+    );
+    bridge_result_to_code(retired_offline_note_payment_transaction())
 }
 
-/// Generate a recursive Halo2/IPA proof for an Offline audit bundle against a chain-supplied verifying key.
+/// Retired classic offline-note audit prover against a chain-supplied verifying key.
+///
+/// Kagemusha is the only active offline payment implementation, so this
+/// entrypoint always fails closed with `ERR_OFFLINE_NOTE_PROVE`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_offline_prove_note_audit_with_vk(
     audit_norito_ptr: *const c_uchar,
@@ -7358,23 +7427,15 @@ pub unsafe extern "C" fn connect_norito_offline_prove_note_audit_with_vk(
     out_recursive_proof_ptr: *mut *mut c_uchar,
     out_recursive_proof_len: *mut c_ulong,
 ) -> c_int {
-    let result = (|| {
-        if audit_norito_ptr.is_null()
-            || vk_norito_ptr.is_null()
-            || out_recursive_proof_ptr.is_null()
-            || out_recursive_proof_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
-        let audit_bytes =
-            unsafe { slice::from_raw_parts(audit_norito_ptr, audit_norito_len as usize) };
-        let vk_bytes = unsafe { slice::from_raw_parts(vk_norito_ptr, vk_norito_len as usize) };
-        let archive = prove_offline_note_audit_recursive_with_vk(audit_bytes, vk_bytes)
-            .map_err(|_| BridgeError::OfflineNoteProve)?;
-        unsafe { write_bytes_bridge(out_recursive_proof_ptr, out_recursive_proof_len, &archive) }
-    })();
-
-    bridge_result_to_code(result)
+    let _ = (
+        audit_norito_ptr,
+        audit_norito_len,
+        vk_norito_ptr,
+        vk_norito_len,
+        out_recursive_proof_ptr,
+        out_recursive_proof_len,
+    );
+    bridge_result_to_code(retired_offline_note_payment_transaction())
 }
 
 /// Cryptographically verify an Offline redemption's embedded recursive proof against a chain-supplied verifying key.
@@ -7430,142 +7491,6 @@ pub unsafe extern "C" fn connect_norito_offline_verify_note_audit_with_vk(
         }
         Err(_) => ERR_OFFLINE_NOTE_VERIFY,
     }
-}
-
-fn prove_offline_note_redeem_recursive(
-    redeem_archive: &[u8],
-) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProof> {
-    use iroha_core::zk::{
-        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, offline_note_recursive_vk_box, prove_offline_note_redeem,
-    };
-    use iroha_data_model::{
-        offline::{OfflineNoteRecursiveProof, OfflineNoteRedeem},
-        proof::VerifyingKeyId,
-    };
-
-    let redemption: OfflineNoteRedeem =
-        norito::decode_from_bytes(redeem_archive).map_err(|_| BridgeError::OfflineNoteProve)?;
-    let vk_box = offline_note_recursive_vk_box().map_err(|_| BridgeError::OfflineNoteProve)?;
-    let proof_box = prove_offline_note_redeem(
-        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
-        &vk_box,
-        &redemption,
-        None,
-    )
-    .map_err(|_| BridgeError::OfflineNoteProve)?;
-    let public_inputs_hash = redemption
-        .public_inputs_hash()
-        .map_err(|_| BridgeError::OfflineNoteProve)?;
-
-    Ok(OfflineNoteRecursiveProof {
-        verifier_key_id: VerifyingKeyId::new(
-            vk_box.backend.clone(),
-            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
-        ),
-        public_inputs_hash,
-        proof: proof_box,
-    })
-}
-
-fn prove_offline_note_audit_recursive(
-    audit_archive: &[u8],
-) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProof> {
-    use iroha_core::zk::{
-        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, offline_note_recursive_vk_box, prove_offline_note_audit,
-    };
-    use iroha_data_model::{
-        offline::{OfflineNoteAuditBundle, OfflineNoteRecursiveProof},
-        proof::VerifyingKeyId,
-    };
-
-    let audit: OfflineNoteAuditBundle =
-        norito::decode_from_bytes(audit_archive).map_err(|_| BridgeError::OfflineNoteProve)?;
-    let vk_box = offline_note_recursive_vk_box().map_err(|_| BridgeError::OfflineNoteProve)?;
-    let proof_box =
-        prove_offline_note_audit(OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, &vk_box, &audit, None)
-            .map_err(|_| BridgeError::OfflineNoteProve)?;
-    let public_inputs_hash = audit
-        .public_inputs_hash()
-        .map_err(|_| BridgeError::OfflineNoteProve)?;
-
-    Ok(OfflineNoteRecursiveProof {
-        verifier_key_id: VerifyingKeyId::new(
-            vk_box.backend.clone(),
-            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
-        ),
-        public_inputs_hash,
-        proof: proof_box,
-    })
-}
-
-fn prove_offline_note_redeem_recursive_with_vk(
-    redemption_norito: &[u8],
-    vk_box_norito: &[u8],
-) -> Result<Vec<u8>, String> {
-    use iroha_core::zk::{OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, prove_offline_note_redeem};
-    use iroha_data_model::{
-        offline::{OfflineNoteRecursiveProof, OfflineNoteRedeem},
-        proof::{VerifyingKeyBox, VerifyingKeyId},
-    };
-
-    let redemption: OfflineNoteRedeem = norito::decode_from_bytes(redemption_norito)
-        .map_err(|err| format!("failed to decode offline note redemption: {err}"))?;
-    let vk_box: VerifyingKeyBox = norito::decode_from_bytes(vk_box_norito)
-        .map_err(|err| format!("failed to decode verifying key box: {err}"))?;
-    let proof_box = prove_offline_note_redeem(
-        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
-        &vk_box,
-        &redemption,
-        None,
-    )
-    .map_err(|err| format!("failed to prove offline note redemption: {err}"))?;
-    let public_inputs_hash = redemption
-        .public_inputs_hash()
-        .map_err(|err| format!("failed to compute offline note redemption public inputs: {err}"))?;
-
-    let recursive = OfflineNoteRecursiveProof {
-        verifier_key_id: VerifyingKeyId::new(
-            vk_box.backend.clone(),
-            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
-        ),
-        public_inputs_hash,
-        proof: proof_box,
-    };
-    norito::to_bytes(&recursive)
-        .map_err(|err| format!("failed to encode offline note recursive proof: {err}"))
-}
-
-fn prove_offline_note_audit_recursive_with_vk(
-    audit_norito: &[u8],
-    vk_box_norito: &[u8],
-) -> Result<Vec<u8>, String> {
-    use iroha_core::zk::{OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, prove_offline_note_audit};
-    use iroha_data_model::{
-        offline::{OfflineNoteAuditBundle, OfflineNoteRecursiveProof},
-        proof::{VerifyingKeyBox, VerifyingKeyId},
-    };
-
-    let audit: OfflineNoteAuditBundle = norito::decode_from_bytes(audit_norito)
-        .map_err(|err| format!("failed to decode offline note audit bundle: {err}"))?;
-    let vk_box: VerifyingKeyBox = norito::decode_from_bytes(vk_box_norito)
-        .map_err(|err| format!("failed to decode verifying key box: {err}"))?;
-    let proof_box =
-        prove_offline_note_audit(OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, &vk_box, &audit, None)
-            .map_err(|err| format!("failed to prove offline note audit: {err}"))?;
-    let public_inputs_hash = audit
-        .public_inputs_hash()
-        .map_err(|err| format!("failed to compute offline note audit public inputs: {err}"))?;
-
-    let recursive = OfflineNoteRecursiveProof {
-        verifier_key_id: VerifyingKeyId::new(
-            vk_box.backend.clone(),
-            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
-        ),
-        public_inputs_hash,
-        proof: proof_box,
-    };
-    norito::to_bytes(&recursive)
-        .map_err(|err| format!("failed to encode offline note recursive proof: {err}"))
 }
 
 const ZK1_ENVELOPE_MAGIC: &[u8; 4] = b"ZK1\0";
@@ -7783,34 +7708,6 @@ fn verify_offline_note_audit_recursive_with_vk(
         &expected_public_instances,
         &vk_box,
     )
-}
-
-/// Legacy unanchored Kagemusha compact-token prover entry point.
-///
-/// This symbol is retained for ABI compatibility only. Production compact-token
-/// proving requires verifier-record trust anchors, so callers must use
-/// [`connect_norito_kagemusha_prove_verified_compact_payment_token_with_records`].
-/// A syntactically valid unanchored
-/// `iroha_data_model::offline::KagemushaVerifiedFoldBundle` returns
-/// [`ERR_KAGEMUSHA_PROVE`] without producing output bytes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_prove_verified_compact_payment_token(
-    verified_bundle_norito_ptr: *const c_uchar,
-    verified_bundle_norito_len: c_ulong,
-    out_compact_token_ptr: *mut *mut c_uchar,
-    out_compact_token_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| {
-        clear_bridge_output_or_null(out_compact_token_ptr, out_compact_token_len)?;
-        let bytes = unsafe {
-            read_kagemusha_archive_bytes(verified_bundle_norito_ptr, verified_bundle_norito_len)
-        }?;
-        let _bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle =
-            norito::decode_from_bytes(&bytes).map_err(|_| BridgeError::KagemushaProve)?;
-        Err(BridgeError::KagemushaProve)
-    })();
-
-    bridge_result_to_code(result)
 }
 
 /// Verify private Kagemusha hop proofs against supplied verifier records and generate a compact token.
@@ -9182,10 +9079,10 @@ mod offline_note_prover_tests {
     use std::{ffi::CString, sync::OnceLock};
 
     use iroha_core::zk::{
-        KAGEMUSHA_HOP_MAX_PROOF_BYTES, KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS,
-        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA, confidential_v2, hash_vk,
-        kagemusha_fold_step_proof_hash, kagemusha_fold_step_public_inputs_digest,
-        kagemusha_folded_vk_box, kagemusha_pallas_open_envelope_metadata_for_verified_hop,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+        ZK_BACKEND_HALO2_IPA, confidential_v2, hash_vk, kagemusha_fold_step_proof_hash,
+        kagemusha_fold_step_public_inputs_digest, kagemusha_folded_vk_box,
+        kagemusha_pallas_open_envelope_metadata_for_verified_hop,
         kagemusha_recursive_aggregation_proof_public_input_instance_values,
         kagemusha_recursive_aggregation_proof_vk_box,
         kagemusha_recursive_fixed_window_shared_table_manifest_digest,
@@ -9194,7 +9091,7 @@ mod offline_note_prover_tests {
         kagemusha_recursive_spend_lineage_append_opening_preflight_from_archives,
         kagemusha_verified_folded_public_inputs_from_record_bundle,
         kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelope_archive,
-        offline_note_recursive_vk_box, verify_backend, verify_kagemusha_compact_payment_token,
+        verify_kagemusha_compact_payment_token,
         verify_kagemusha_recursive_aggregation_proof_bundle,
         verify_kagemusha_recursive_compact_payment_token,
     };
@@ -9932,10 +9829,6 @@ mod offline_note_prover_tests {
         }
     }
 
-    fn sample_kagemusha_verified_bundle() -> KagemushaVerifiedFoldBundle {
-        sample_kagemusha_verified_record_bundle().bundle
-    }
-
     fn sample_kagemusha_verified_record_bundle() -> KagemushaVerifiedFoldRecordBundle {
         static BUNDLE: OnceLock<KagemushaVerifiedFoldRecordBundle> = OnceLock::new();
         BUNDLE
@@ -10341,16 +10234,6 @@ mod offline_note_prover_tests {
         }
     }
 
-    fn decode_recursive_proof(
-        out_ptr: *mut c_uchar,
-        out_len: c_ulong,
-    ) -> OfflineNoteRecursiveProof {
-        assert!(!out_ptr.is_null(), "prover output pointer must be set");
-        let out = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
-        connect_norito_free(out_ptr);
-        norito::decode_from_bytes(&out).expect("decode recursive proof")
-    }
-
     fn decode_kagemusha_compact_token(
         out_ptr: *mut c_uchar,
         out_len: c_ulong,
@@ -10605,25 +10488,9 @@ mod offline_note_prover_tests {
         }
     }
 
-    fn assert_recursive_proof_verifies(
-        recursive: &OfflineNoteRecursiveProof,
-        expected_public_inputs_hash: Hash,
-    ) {
-        let vk_box = offline_note_recursive_vk_box().expect("offline note verifying key");
-        assert_eq!(
-            recursive.verifier_key_id,
-            VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID)
-        );
-        assert_eq!(recursive.public_inputs_hash, expected_public_inputs_hash);
-        assert!(
-            verify_backend(ZK_BACKEND_HALO2_IPA, &recursive.proof, Some(&vk_box)),
-            "bridge output must verify against the canonical Offline verifier"
-        );
-    }
-
     #[test]
     fn bridge_abi_version_advertises_sorafs_hedging_validation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 12);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 14);
     }
 
     #[test]
@@ -10676,20 +10543,6 @@ mod offline_note_prover_tests {
 
         let mut out_ptr: *mut c_uchar = ptr::dangling_mut::<c_uchar>();
         let mut out_len: c_ulong = 99;
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token(
-                archive.as_ptr(),
-                c_ulong::MAX,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-
-        out_ptr = ptr::dangling_mut::<c_uchar>();
-        out_len = 99;
         let status = unsafe {
             connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
                 archive.as_ptr(),
@@ -11104,7 +10957,7 @@ mod offline_note_prover_tests {
         );
         assert!(
             !verify_kagemusha_compact_payment_token(&token, &compact_vk),
-            "legacy checked-prefold compact verifier must not accept recursive mode-2 tokens"
+            "checked-prefold compact verifier must not accept recursive mode-2 tokens"
         );
         let mut out_valid: c_uchar = 0;
         let status = unsafe {
@@ -11537,26 +11390,6 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn kagemusha_unanchored_compact_token_ffi_rejects_valid_bundle_without_records() {
-        let bundle = sample_kagemusha_verified_bundle();
-        let archive = norito::to_bytes(&bundle).expect("encode verified fold bundle");
-        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
-            connect_norito_kagemusha_prove_verified_compact_payment_token,
-            &archive,
-        );
-
-        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
-        assert!(
-            out_ptr.is_null(),
-            "unanchored bridge entry point must not return an output buffer"
-        );
-        assert_eq!(
-            out_len, 0,
-            "unanchored bridge entry point must not return output bytes"
-        );
-    }
-
-    #[test]
     #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_verified_record_compact_token_ffi_returns_verifying_token() {
         let record_bundle = sample_kagemusha_verified_record_bundle();
@@ -11922,47 +11755,6 @@ mod offline_note_prover_tests {
         let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
             connect_norito_kagemusha_prove_verified_compact_payment_token_with_records,
             &archive,
-        );
-
-        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-    }
-
-    #[test]
-    fn kagemusha_verified_compact_token_ffi_rejects_missing_trust_anchor_metadata() {
-        type BundleMutator = fn(&mut KagemushaVerifiedFoldBundle);
-
-        let cases: [(&str, BundleMutator); 2] = [
-            ("missing verifier-key commitment", |bundle| {
-                bundle.steps[0].attachment.vk_commitment = None;
-            }),
-            ("empty verifier-key id name", |bundle| {
-                bundle.steps[0].attachment.vk_ref.name = "   ".to_owned();
-            }),
-        ];
-
-        for (case, mutate) in cases {
-            let mut bundle = sample_kagemusha_verified_bundle();
-            mutate(&mut bundle);
-            let archive = norito::to_bytes(&bundle).expect("encode mutated trust-anchor bundle");
-            let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
-                connect_norito_kagemusha_prove_verified_compact_payment_token,
-                &archive,
-            );
-
-            assert_eq!(status, ERR_KAGEMUSHA_PROVE, "{case} must reject");
-            assert!(out_ptr.is_null(), "{case} must not return an output buffer");
-            assert_eq!(out_len, 0, "{case} must not return output bytes");
-        }
-    }
-
-    #[test]
-    fn kagemusha_verified_compact_token_ffi_rejects_invalid_archive() {
-        let bad_archive = b"not a norito archive";
-        let (status, out_ptr, out_len) = call_single_archive_ffi_with_stale_output(
-            connect_norito_kagemusha_prove_verified_compact_payment_token,
-            bad_archive,
         );
 
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
@@ -13306,35 +13098,36 @@ mod offline_note_prover_tests {
         request
             .previous_recursive_proof_open_envelopes_archive
             .clear();
-        let legacy_profile =
+        let evidence_only_profile =
             kagemusha_recursive_spend_transition_profile_append_from_request_archive(
-                &norito::to_bytes(&request).expect("encode legacy append transition request"),
+                &norito::to_bytes(&request)
+                    .expect("encode evidence-only append transition request"),
             )
-            .expect("legacy append transition profile without previous proof openings");
+            .expect("evidence-only append transition profile without previous proof openings");
         assert_eq!(
-            legacy_profile.append_opening_preflight_digest, None,
-            "legacy append profiles must not synthesize append opening preflight bytes"
+            evidence_only_profile.append_opening_preflight_digest, None,
+            "evidence-only append profiles must not synthesize append opening preflight bytes"
         );
         assert_eq!(
-            legacy_profile.append_opening_preflight, None,
-            "legacy append profiles must not synthesize append opening preflight contracts"
+            evidence_only_profile.append_opening_preflight, None,
+            "evidence-only append profiles must not synthesize append opening preflight contracts"
         );
         assert_eq!(
-            legacy_profile.previous_recursive_proof_open_envelopes_archive_digest, None,
-            "legacy append profiles must not bind absent previous proof opening bytes"
+            evidence_only_profile.previous_recursive_proof_open_envelopes_archive_digest, None,
+            "evidence-only append profiles must not bind absent previous proof opening bytes"
         );
         let profile_digest =
             iroha_data_model::offline::kagemusha_recursive_spend_transition_profile_digest(
                 &profile,
             )
             .expect("append opening profile digest");
-        let legacy_profile_digest =
+        let evidence_only_profile_digest =
             iroha_data_model::offline::kagemusha_recursive_spend_transition_profile_digest(
-                &legacy_profile,
+                &evidence_only_profile,
             )
-            .expect("legacy append profile digest");
+            .expect("evidence-only append profile digest");
         assert_ne!(
-            profile_digest, legacy_profile_digest,
+            profile_digest, evidence_only_profile_digest,
             "binding append opening preflight bytes must change the bridge transition profile digest"
         );
     }
@@ -13971,200 +13764,6 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn kagemusha_verified_compact_token_ffi_rejects_tampered_hop_proof() {
-        let mut bundle = sample_kagemusha_verified_bundle();
-        let last = bundle.steps[0]
-            .attachment
-            .proof
-            .bytes
-            .last_mut()
-            .expect("proof bytes");
-        *last ^= 0x01;
-        let archive = norito::to_bytes(&bundle).expect("encode tampered bundle");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-
-        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-    }
-
-    #[test]
-    fn kagemusha_verified_compact_token_ffi_rejects_forged_envelope_hash_metadata() {
-        let mut bundle = sample_kagemusha_verified_bundle();
-        bundle.steps[0].attachment.envelope_hash = Some([0xA7; Hash::LENGTH]);
-        let archive = norito::to_bytes(&bundle).expect("encode forged-envelope-hash bundle");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-
-        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-    }
-
-    #[test]
-    fn kagemusha_verified_compact_token_ffi_rejects_hop_envelope_aux_substitution() {
-        let mut bundle = sample_kagemusha_verified_bundle();
-        mutate_kagemusha_bundle_hop_envelope(&mut bundle, |envelope| {
-            envelope.aux = b"kagemusha-forged-hop-aux".to_vec();
-        });
-        let archive = norito::to_bytes(&bundle).expect("encode forged-hop-aux bundle");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-
-        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-    }
-
-    #[test]
-    fn kagemusha_verified_compact_token_ffi_rejects_oversized_hop_proof() {
-        let mut bundle = sample_kagemusha_verified_bundle();
-        bundle.steps[0]
-            .attachment
-            .proof
-            .bytes
-            .resize(KAGEMUSHA_HOP_MAX_PROOF_BYTES as usize + 1, 0xA7);
-        let archive = norito::to_bytes(&bundle).expect("encode oversized-hop bundle");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-
-        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-    }
-
-    #[test]
-    fn kagemusha_verified_compact_token_ffi_rejects_oversized_bundle_before_proof_decode() {
-        let mut bundle = sample_kagemusha_verified_bundle();
-        bundle.steps[0].attachment.proof.bytes = vec![0xA7];
-        bundle.steps = vec![
-            bundle.steps[0].clone();
-            iroha_data_model::offline::KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS + 1
-        ];
-        let archive = norito::to_bytes(&bundle).expect("encode oversized-hop-count bundle");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-
-        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-    }
-
-    #[test]
-    fn kagemusha_verified_compact_token_ffi_rejects_bad_hop_shape_before_proof_decode() {
-        let mut bundle = sample_kagemusha_verified_bundle();
-        bundle.steps[0].input_nullifiers.clear();
-        bundle.steps[0].attachment.proof.bytes = vec![0xA7];
-        let archive = norito::to_bytes(&bundle).expect("encode bad-shape bundle");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-
-        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-    }
-
-    #[test]
-    fn kagemusha_verified_compact_token_ffi_rejects_root_discontinuity_before_proof_decode() {
-        let mut bundle = sample_kagemusha_verified_bundle();
-        bundle.steps[0].attachment.proof.bytes = vec![0xA7];
-        bundle.steps.push(bundle.steps[0].clone());
-        let archive = norito::to_bytes(&bundle).expect("encode root-discontinuous bundle");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-
-        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-    }
-
-    #[test]
-    fn kagemusha_verified_compact_token_ffi_rejects_vk_commitment_mismatch() {
-        let mut bundle = sample_kagemusha_verified_bundle();
-        bundle.steps[0].attachment.vk_commitment = Some([0xA5; Hash::LENGTH]);
-        let archive = norito::to_bytes(&bundle).expect("encode mismatched bundle");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
-            connect_norito_kagemusha_prove_verified_compact_payment_token(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-
-        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-    }
-
-    #[test]
     fn kagemusha_recursive_spend_redeem_bridge_rejects_semantic_profile_after_public_binding() {
         let request = sample_recursive_spend_redeem_request(42);
         request
@@ -14644,71 +14243,68 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn offline_note_redeem_ffi_returns_verifying_recursive_proof() {
-        let redemption = sample_redemption();
-        let archive = norito::to_bytes(&redemption).expect("encode redemption");
+    fn offline_note_prover_ffis_are_retired() {
+        let redeem_archive = norito::to_bytes(&sample_redemption()).expect("encode redemption");
+        let audit_archive = norito::to_bytes(&sample_audit()).expect("encode audit bundle");
+        let vk_archive = b"retired classic verifier key archive";
+
+        fn assert_retired_proof_output(status: c_int, out_ptr: *mut c_uchar, out_len: c_ulong) {
+            assert_eq!(status, ERR_OFFLINE_NOTE_PROVE);
+            assert!(out_ptr.is_null());
+            assert_eq!(out_len, 0);
+        }
+
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
+        let redeem_status = unsafe {
             connect_norito_offline_prove_note_redeem(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
+                redeem_archive.as_ptr(),
+                redeem_archive.len() as c_ulong,
                 &mut out_ptr,
                 &mut out_len,
             )
         };
+        assert_retired_proof_output(redeem_status, out_ptr, out_len);
 
-        assert_eq!(status, 0);
-        let recursive = decode_recursive_proof(out_ptr, out_len);
-        assert_recursive_proof_verifies(
-            &recursive,
-            redemption.public_inputs_hash().expect("public input hash"),
-        );
-    }
-
-    #[test]
-    fn offline_note_audit_ffi_returns_verifying_recursive_proof() {
-        let audit = sample_audit();
-        let archive = norito::to_bytes(&audit).expect("encode audit bundle");
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+        let audit_status = unsafe {
             connect_norito_offline_prove_note_audit(
-                archive.as_ptr(),
-                archive.len() as c_ulong,
+                audit_archive.as_ptr(),
+                audit_archive.len() as c_ulong,
                 &mut out_ptr,
                 &mut out_len,
             )
         };
+        assert_retired_proof_output(audit_status, out_ptr, out_len);
 
-        assert_eq!(status, 0);
-        let recursive = decode_recursive_proof(out_ptr, out_len);
-        assert_recursive_proof_verifies(
-            &recursive,
-            audit.public_inputs_hash().expect("public input hash"),
-        );
-    }
-
-    #[test]
-    fn offline_note_prover_ffi_rejects_invalid_archive() {
-        let bad_archive = b"not a norito archive";
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-
-        let status = unsafe {
-            connect_norito_offline_prove_note_redeem(
-                bad_archive.as_ptr(),
-                bad_archive.len() as c_ulong,
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+        let redeem_with_vk_status = unsafe {
+            connect_norito_offline_prove_note_redeem_with_vk(
+                redeem_archive.as_ptr(),
+                redeem_archive.len() as c_ulong,
+                vk_archive.as_ptr(),
+                vk_archive.len() as c_ulong,
                 &mut out_ptr,
                 &mut out_len,
             )
         };
+        assert_retired_proof_output(redeem_with_vk_status, out_ptr, out_len);
 
-        assert_eq!(status, ERR_OFFLINE_NOTE_PROVE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+        let audit_with_vk_status = unsafe {
+            connect_norito_offline_prove_note_audit_with_vk(
+                audit_archive.as_ptr(),
+                audit_archive.len() as c_ulong,
+                vk_archive.as_ptr(),
+                vk_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_retired_proof_output(audit_with_vk_status, out_ptr, out_len);
     }
 
     #[test]
@@ -15041,12 +14637,13 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_sign_result_ok_with_alg(
             Err(code) => return code,
         };
         let sig_bytes = std::slice::from_raw_parts(sig_ptr, sig_len as usize);
-        let signature = Signature::from_bytes(sig_bytes);
+        let signature = match connect_wallet_signature_from_algorithm_bytes(algorithm, sig_bytes) {
+            Some(signature) => signature,
+            None => return -2,
+        };
         let env = proto::EnvelopeV1 {
             seq,
-            payload: proto::ConnectPayloadV1::SignResultOk {
-                signature: proto::WalletSignatureV1::new(algorithm, signature),
-            },
+            payload: proto::ConnectPayloadV1::SignResultOk { signature },
         };
         let buf = match encode_envelope_framed(&env) {
             Ok(buf) => buf,
@@ -15800,6 +15397,182 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
             || {
                 let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
+            },
+        )?;
+
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_transfer_instruction_box(
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    asset_definition_ptr: *const c_char,
+    asset_definition_len: c_ulong,
+    quantity_ptr: *const c_char,
+    quantity_len: c_ulong,
+    destination_ptr: *const c_char,
+    destination_len: c_ulong,
+    out_instruction_ptr: *mut *mut c_uchar,
+    out_instruction_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_instruction_ptr.is_null() || out_instruction_len.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let authority =
+            parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
+        let asset_definition =
+            unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
+        let quantity = parse_quantity(unsafe { read_string_bridge(quantity_ptr, quantity_len) }?)?;
+        let destination =
+            parse_destination(unsafe { read_string_bridge(destination_ptr, destination_len) }?)?;
+        let (asset_definition, asset_scope) =
+            parse_asset_definition_with_balance_scope(asset_definition)?;
+        let asset_id = AssetId::with_scope(asset_definition, authority, asset_scope);
+        let instruction =
+            InstructionBox::from(Transfer::asset_numeric(asset_id, quantity, destination));
+        let instruction_bytes =
+            norito::core::to_bytes(&instruction).map_err(|_| BridgeError::JsonSerialize)?;
+
+        unsafe {
+            write_bytes_bridge(out_instruction_ptr, out_instruction_len, &instruction_bytes)
+        }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_validation_fee_transfer_signed_transaction(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    nonce: u32,
+    nonce_present: c_uchar,
+    principal_asset_definition_ptr: *const c_char,
+    principal_asset_definition_len: c_ulong,
+    principal_quantity_ptr: *const c_char,
+    principal_quantity_len: c_ulong,
+    destination_ptr: *const c_char,
+    destination_len: c_ulong,
+    fee_asset_definition_ptr: *const c_char,
+    fee_asset_definition_len: c_ulong,
+    fee_quantity_ptr: *const c_char,
+    fee_quantity_len: c_ulong,
+    treasury_ptr: *const c_char,
+    treasury_len: c_ulong,
+    policy_version: u64,
+    policy_hash_ptr: *const c_char,
+    policy_hash_len: c_ulong,
+    fee_instruction_index: u64,
+    fee_sponsor_ptr: *const c_char,
+    fee_sponsor_len: c_ulong,
+    memo_ptr: *const c_char,
+    memo_len: c_ulong,
+    metadata_json_ptr: *const c_char,
+    metadata_json_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let inputs = unsafe {
+            gather_asset_tx_inputs(AssetInputPointers {
+                chain_ptr,
+                chain_len,
+                authority_ptr,
+                authority_len,
+                asset_definition_ptr: principal_asset_definition_ptr,
+                asset_definition_len: principal_asset_definition_len,
+                quantity_ptr: principal_quantity_ptr,
+                quantity_len: principal_quantity_len,
+                destination_ptr,
+                destination_len,
+                ttl_ms,
+                ttl_present,
+                private_key_ptr,
+                private_key_len,
+            })?
+        };
+
+        let fee_asset_definition =
+            unsafe { read_string_bridge(fee_asset_definition_ptr, fee_asset_definition_len) }?;
+        let fee_quantity = unsafe { read_string_bridge(fee_quantity_ptr, fee_quantity_len) }?;
+        let treasury = unsafe { read_string_bridge(treasury_ptr, treasury_len) }?;
+        let policy_hash = unsafe { read_string_bridge(policy_hash_ptr, policy_hash_len) }?;
+        let fee_sponsor =
+            unsafe { parse_optional_account_id_bridge(fee_sponsor_ptr, fee_sponsor_len)? };
+        let memo = unsafe { parse_optional_string_bridge(memo_ptr, memo_len)? };
+        let metadata =
+            unsafe { parse_metadata_object_bridge(metadata_json_ptr, metadata_json_len)? };
+        let metadata = build_validation_fee_metadata(
+            metadata,
+            policy_version,
+            policy_hash,
+            fee_instruction_index,
+            fee_sponsor,
+            memo,
+        )?;
+
+        let (fee_asset_definition, fee_asset_scope) =
+            parse_asset_definition_with_balance_scope(fee_asset_definition)?;
+        let fee_quantity = parse_quantity(fee_quantity)?;
+        let treasury = parse_destination(treasury)?;
+
+        let AssetTxInputs {
+            chain_id,
+            authority,
+            asset_definition,
+            asset_scope,
+            destination,
+            quantity,
+            ttl,
+            private_key,
+        } = inputs;
+        let nonce = parse_nonce(nonce, nonce_present != 0)?;
+
+        let principal_asset_id =
+            AssetId::with_scope(asset_definition.clone(), authority.clone(), asset_scope);
+        let fee_asset_id = AssetId::with_scope(
+            fee_asset_definition.clone(),
+            authority.clone(),
+            fee_asset_scope,
+        );
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            nonce,
+            metadata,
+            private_key,
+            || {
+                let principal_transfer =
+                    Transfer::asset_numeric(principal_asset_id, quantity, destination);
+                let fee_transfer = Transfer::asset_numeric(fee_asset_id, fee_quantity, treasury);
+                Executable::from([
+                    InstructionBox::from(principal_transfer),
+                    InstructionBox::from(fee_transfer),
+                ])
             },
         )?;
 
@@ -18219,6 +17992,17 @@ mod accel_tests {
         CString::new(s).expect("valid cstring")
     }
 
+    fn proof_bytes_hash_hex(bytes: &[u8]) -> String {
+        let hash: [u8; Hash::LENGTH] = Hash::new(bytes).into();
+        hex::encode(hash)
+    }
+
+    fn proof_attachment_json(backend: &str, proof_b64: &str, envelope_hash_hex: &str) -> String {
+        format!(
+            r#"{{"backend":"{backend}","proof_b64":"{proof_b64}","vk_ref":{{"backend":"{backend}","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
+        )
+    }
+
     fn chain_guard() -> std::sync::MutexGuard<'static, ()> {
         super::test_support::chain_discriminant_guard()
     }
@@ -19202,6 +18986,41 @@ mod accel_tests {
     }
 
     #[test]
+    fn validation_fee_metadata_preserves_explicit_memo() {
+        let memo_key = Name::from_str("memo").expect("metadata key");
+        let mut metadata = Metadata::default();
+        metadata.insert(memo_key.clone(), Json::new("explicit memo"));
+
+        let metadata = build_validation_fee_metadata(
+            metadata,
+            7,
+            "ab".repeat(32),
+            1,
+            None,
+            Some("fallback memo".to_owned()),
+        )
+        .expect("validation fee metadata");
+
+        assert_eq!(metadata.get(&memo_key), Some(&Json::new("explicit memo")));
+    }
+
+    #[test]
+    fn validation_fee_metadata_inserts_fallback_memo_when_missing() {
+        let metadata = build_validation_fee_metadata(
+            Metadata::default(),
+            7,
+            "ab".repeat(32),
+            1,
+            None,
+            Some("fallback memo".to_owned()),
+        )
+        .expect("validation fee metadata");
+
+        let memo_key = Name::from_str("memo").expect("metadata key");
+        assert_eq!(metadata.get(&memo_key), Some(&Json::new("fallback memo")));
+    }
+
+    #[test]
     fn mint_encoder_nonce_roundtrip() {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
@@ -19518,9 +19337,8 @@ mod accel_tests {
         let asset_definition = asset_definition_cstring("bank", "usd");
         let inputs = [0x11_u8; 32];
         let outputs = [0x22_u8; 32];
-        let proof = cstring(
-            r#"{"backend":"groth16","proof_b64":"AA==","vk_ref":{"backend":"groth16","name":"vk1"}}"#,
-        );
+        let proof_json = proof_attachment_json("groth16", "AA==", &proof_bytes_hash_hex(&[0_u8]));
+        let proof = cstring(&proof_json);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
         let mut out_signed_len: c_ulong = 0;
         let mut out_hash = [0u8; 32];
@@ -19573,10 +19391,8 @@ mod accel_tests {
         let destination = authority.clone();
         let input = [0x11_u8; 32];
         let output = [0x22_u8; 32];
-        let proof = parse_proof_attachment_from_json_slice(
-            br#"{"backend":"groth16","proof_b64":"AA==","vk_ref":{"backend":"groth16","name":"vk1"}}"#,
-        )
-        .expect("proof");
+        let proof_json = proof_attachment_json("groth16", "AA==", &proof_bytes_hash_hex(&[0_u8]));
+        let proof = parse_proof_attachment_from_json_slice(proof_json.as_bytes()).expect("proof");
 
         let (signed_bytes, hash_bytes) =
             encode_asset_transaction(chain_id, authority, 1, None, private_key, || {
@@ -19860,6 +19676,75 @@ mod accel_tests {
                 .expect_err("legacy inline verifying-key field rejected");
             assert!(matches!(err, BridgeError::ProofAttachment));
         }
+    }
+
+    #[test]
+    fn proof_attachment_json_accepts_matching_envelope_hash() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        let json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
+        let value: JsonValue = norito::json::from_str(&json).expect("json");
+        let attachment =
+            parse_proof_attachment_value(&value).expect("matching envelope hash should parse");
+        assert_eq!(attachment.envelope_hash, Some(Hash::new(&[0_u8]).into()));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_missing_envelope_hash() {
+        let value: JsonValue = norito::json::from_str(
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
+        )
+        .expect("json");
+        let err =
+            parse_proof_attachment_value(&value).expect_err("envelope_hash_hex must be present");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_forged_envelope_hash() {
+        let forged_hash = hex::encode([0x11_u8; 32]);
+        let json = proof_attachment_json("halo2/ipa", "AA==", &forged_hash);
+        let value: JsonValue = norito::json::from_str(&json).expect("json");
+        let err = parse_proof_attachment_value(&value)
+            .expect_err("envelope_hash_hex must match proof bytes");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_noncanonical_envelope_hash_hex() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        for noncanonical in [
+            envelope_hash_hex.to_uppercase(),
+            format!("0x{envelope_hash_hex}"),
+            format!(" {envelope_hash_hex}"),
+        ] {
+            let json = proof_attachment_json("halo2/ipa", "AA==", &noncanonical);
+            let value: JsonValue = norito::json::from_str(&json).expect("json");
+            let err = parse_proof_attachment_value(&value)
+                .expect_err("envelope_hash_hex must be exact lowercase hex");
+            assert!(matches!(err, BridgeError::ProofAttachment));
+        }
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_zero_vk_commitment() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
+        json.insert_str(
+            json.len() - 1,
+            r#","vk_commitment_hex":"0000000000000000000000000000000000000000000000000000000000000000""#,
+        );
+        let value: JsonValue = norito::json::from_str(&json).expect("json");
+        let err = parse_proof_attachment_value(&value).expect_err("zero vk commitment must reject");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_empty_proof_bytes() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[]);
+        let json = proof_attachment_json("halo2/ipa", "", &envelope_hash_hex);
+        let value: JsonValue = norito::json::from_str(&json).expect("json");
+        let err = parse_proof_attachment_value(&value).expect_err("empty proof bytes must reject");
+        assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
     #[test]
@@ -21954,7 +21839,10 @@ fn java_verify_detached_bytes(
         .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
     let public_key = PublicKey::from_bytes(algorithm, public_key)
         .map_err(|_| "invalid public key bytes".to_string())?;
-    let signature = Signature::from_bytes(signature);
+    let signature = match Signature::try_from_bytes(signature) {
+        Ok(signature) => signature,
+        Err(_) => return Ok(false),
+    };
     match signature.verify(&public_key, message) {
         Ok(()) => Ok(true),
         Err(CryptoError::BadSignature) => Ok(false),
@@ -22650,25 +22538,12 @@ fn java_native_offline_prove_note_redeem_with_vk(
     redeem_norito: jni::objects::JByteArray<'_>,
     vk_box_norito: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    let result = (|| -> Result<jni::sys::jbyteArray, String> {
-        let redeem_bytes = read_java_byte_array(env, &redeem_norito, "redeemNorito")
-            .ok_or_else(|| "invalid offline note redemption bytes".to_string())?;
-        let vk_box_bytes = read_java_byte_array(env, &vk_box_norito, "vkBoxNorito")
-            .ok_or_else(|| "invalid verifying key box bytes".to_string())?;
-        let recursive_archive =
-            prove_offline_note_redeem_recursive_with_vk(&redeem_bytes, &vk_box_bytes)?;
-        let array = env
-            .byte_array_from_slice(&recursive_archive)
-            .map_err(|err| err.to_string())?;
-        Ok(array.into_raw())
-    })();
-    match result {
-        Ok(array) => array,
-        Err(message) => {
-            throw_java_illegal_argument(env, message);
-            std::ptr::null_mut()
-        }
-    }
+    let _ = (redeem_norito, vk_box_norito);
+    throw_java_illegal_state(
+        env,
+        "classic Offline Note proof generation is retired; use Kagemusha flows".to_owned(),
+    );
+    std::ptr::null_mut()
 }
 
 #[cfg(any(
@@ -22682,25 +22557,12 @@ fn java_native_offline_prove_note_audit_with_vk(
     audit_norito: jni::objects::JByteArray<'_>,
     vk_box_norito: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    let result = (|| -> Result<jni::sys::jbyteArray, String> {
-        let audit_bytes = read_java_byte_array(env, &audit_norito, "auditNorito")
-            .ok_or_else(|| "invalid offline note audit bundle bytes".to_string())?;
-        let vk_box_bytes = read_java_byte_array(env, &vk_box_norito, "vkBoxNorito")
-            .ok_or_else(|| "invalid verifying key box bytes".to_string())?;
-        let recursive_archive =
-            prove_offline_note_audit_recursive_with_vk(&audit_bytes, &vk_box_bytes)?;
-        let array = env
-            .byte_array_from_slice(&recursive_archive)
-            .map_err(|err| err.to_string())?;
-        Ok(array.into_raw())
-    })();
-    match result {
-        Ok(array) => array,
-        Err(message) => {
-            throw_java_illegal_argument(env, message);
-            std::ptr::null_mut()
-        }
-    }
+    let _ = (audit_norito, vk_box_norito);
+    throw_java_illegal_state(
+        env,
+        "classic Offline Note proof generation is retired; use Kagemusha flows".to_owned(),
+    );
+    std::ptr::null_mut()
 }
 
 #[cfg(any(
@@ -32772,6 +32634,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_identifier_receipt_rejects_all_zero_signed_attestation() {
+        let payload = sample_identifier_receipt_payload();
+        let mut value = sample_identifier_signed_receipt_json(&payload);
+        set_json_string_at_path(&mut value, &["attestation", "signature"], "00".repeat(64));
+
+        let err = parse_identifier_receipt_value(value)
+            .expect_err("all-zero identifier receipt signature must reject");
+        assert!(matches!(err, BridgeError::IdentifierReceipt));
+    }
+
+    #[test]
     fn validate_identifier_claim_account_rejects_mismatched_receipt_account() {
         let payload = sample_identifier_receipt_payload();
         let receipt =
@@ -33127,6 +33000,47 @@ mod tests {
     }
 
     #[test]
+    fn ffi_verify_detached_rejects_all_zero_signature_material() {
+        let private = vec![0x11; 32];
+        let message = b"ffi-ed25519-signing";
+        let mut pk_ptr: *mut c_uchar = ptr::null_mut();
+        let mut pk_len: c_ulong = 0;
+        let rc_pk = unsafe {
+            connect_norito_public_key_from_private(
+                Algorithm::Ed25519 as u8,
+                private.as_ptr(),
+                private.len() as c_ulong,
+                &mut pk_ptr,
+                &mut pk_len,
+            )
+        };
+        assert_eq!(rc_pk, 0, "public key derivation must succeed");
+        let public_key = unsafe { slice::from_raw_parts(pk_ptr, pk_len as usize).to_vec() };
+        connect_norito_free(pk_ptr);
+
+        let signature = [0_u8; 64];
+        let mut valid: c_uchar = 1;
+        let rc_verify = unsafe {
+            connect_norito_verify_detached(
+                Algorithm::Ed25519 as u8,
+                public_key.as_ptr(),
+                public_key.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut valid,
+            )
+        };
+
+        assert_eq!(
+            rc_verify, 0,
+            "verification call must stay fallible only for API errors"
+        );
+        assert_eq!(valid, 0, "malformed signature material must not verify");
+    }
+
+    #[test]
     fn ffi_sign_verify_secp256k1() {
         let mut private = [0u8; 32];
         private[31] = 1;
@@ -33171,6 +33085,176 @@ mod tests {
                 .expect("Java verify helper runs"),
             "Java helper signature must verify"
         );
+    }
+
+    #[test]
+    fn java_detached_verify_helper_rejects_all_zero_signature_material() {
+        let private = vec![0x21; 32];
+        let message = b"java-helper-detached-signing";
+        let algorithm = Algorithm::Ed25519 as jni::sys::jint;
+        let public = java_public_key_from_private_bytes(algorithm, &private)
+            .expect("Java public-key helper derives key");
+        let signature = [0_u8; 64];
+
+        assert!(
+            !java_verify_detached_bytes(algorithm, &public, message, &signature)
+                .expect("Java verify helper runs"),
+            "all-zero signature material must not verify"
+        );
+    }
+
+    #[test]
+    fn encode_control_approve_ext_with_alg_rejects_all_zero_signature_material() {
+        let sid = [0x11_u8; 32];
+        let wallet_pk = [0x22_u8; 32];
+        let account = b"wallet-account";
+        let algorithm = b"ed25519";
+        let signature = [0_u8; 64];
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_encode_control_approve_ext_with_alg(
+                sid.as_ptr(),
+                1,
+                7,
+                wallet_pk.as_ptr(),
+                account.as_ptr().cast::<c_char>(),
+                account.len() as c_ulong,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                algorithm.as_ptr().cast::<c_char>(),
+                algorithm.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if !out_ptr.is_null() {
+            connect_norito_free(out_ptr);
+        }
+
+        assert_eq!(rc, -4);
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn encode_control_approve_ext_with_alg_rejects_noncanonical_ed25519_signature_r() {
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let sid = [0x11_u8; 32];
+        let wallet_pk = [0x22_u8; 32];
+        let account = b"wallet-account";
+        let algorithm = b"ed25519";
+        let key_pair = fixture_key_pair(0x62);
+        let mut signature = Signature::try_new(
+            key_pair.private_key(),
+            b"connect approve ext with alg malformed R",
+        )
+        .expect("fixture signature")
+        .payload()
+        .to_vec();
+        signature[..32].copy_from_slice(&NONCANONICAL_R);
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_encode_control_approve_ext_with_alg(
+                sid.as_ptr(),
+                1,
+                7,
+                wallet_pk.as_ptr(),
+                account.as_ptr().cast::<c_char>(),
+                account.len() as c_ulong,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                algorithm.as_ptr().cast::<c_char>(),
+                algorithm.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if !out_ptr.is_null() {
+            connect_norito_free(out_ptr);
+        }
+
+        assert_eq!(rc, -4);
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn encode_envelope_sign_result_ok_with_alg_rejects_all_zero_signature_material() {
+        let algorithm = b"ed25519";
+        let signature = [0_u8; 64];
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_encode_envelope_sign_result_ok_with_alg(
+                9,
+                algorithm.as_ptr().cast::<c_char>(),
+                algorithm.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if !out_ptr.is_null() {
+            connect_norito_free(out_ptr);
+        }
+
+        assert_eq!(rc, -2);
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn encode_envelope_sign_result_ok_with_alg_rejects_noncanonical_ed25519_signature_r() {
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let algorithm = b"ed25519";
+        let key_pair = fixture_key_pair(0x63);
+        let mut signature = Signature::try_new(
+            key_pair.private_key(),
+            b"connect envelope sign result malformed R",
+        )
+        .expect("fixture signature")
+        .payload()
+        .to_vec();
+        signature[..32].copy_from_slice(&NONCANONICAL_R);
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_encode_envelope_sign_result_ok_with_alg(
+                9,
+                algorithm.as_ptr().cast::<c_char>(),
+                algorithm.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if !out_ptr.is_null() {
+            connect_norito_free(out_ptr);
+        }
+
+        assert_eq!(rc, -2);
+        assert_eq!(out_len, 0);
     }
 
     #[test]
@@ -33261,6 +33345,31 @@ mod tests {
     }
 
     #[test]
+    fn sm2_public_key_prefixed_ffi_rejects_zero_coordinate_material() {
+        let distid = "connect-sm2-zero-coordinate-prefixed";
+        let distid_c = CString::new(distid).expect("distid c string");
+        let mut public_bytes = [0u8; 65];
+        public_bytes[0] = 0x04;
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_sm2_public_key_prefixed(
+                distid_c.as_ptr(),
+                distid_c.as_bytes().len() as c_ulong,
+                public_bytes.as_ptr(),
+                public_bytes.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(rc, ERR_SM2_PARSE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
     fn sm2_sign_ffi_uses_checked_signing_and_verifies() {
         let distid = "connect-sm2-checked-signing";
         let distid_c = CString::new(distid).expect("distid c string");
@@ -33314,6 +33423,36 @@ mod tests {
             )
         };
         assert_eq!(rc_bad, 0, "tampered SM2 signature must fail cleanly");
+    }
+
+    #[test]
+    fn sm2_verify_ffi_rejects_zero_coordinate_public_key_material() {
+        let distid = "connect-sm2-zero-coordinate-verify";
+        let distid_c = CString::new(distid).expect("distid c string");
+        let private = Sm2PrivateKey::from_seed(distid, b"connect-sm2-zero-coordinate-verify-seed")
+            .expect("derive SM2 key");
+        let message = b"connect-sm2-zero-coordinate-verify";
+        let signature = private
+            .try_sign(message)
+            .expect("fixture SM2 signature")
+            .to_bytes();
+        let mut public_bytes = [0u8; 65];
+        public_bytes[0] = 0x04;
+
+        let rc = unsafe {
+            connect_norito_sm2_verify(
+                distid_c.as_ptr(),
+                distid_c.as_bytes().len() as c_ulong,
+                public_bytes.as_ptr(),
+                public_bytes.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+            )
+        };
+
+        assert_eq!(rc, ERR_SM2_PARSE);
     }
 
     #[test]

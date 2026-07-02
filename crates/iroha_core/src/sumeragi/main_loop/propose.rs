@@ -4,6 +4,7 @@ use super::proposals::block_payload_bytes;
 use super::*;
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
+use crate::state::WorldReadOnly;
 use core::num::{NonZeroU64, NonZeroUsize};
 use iroha_data_model::block::BlockExecutionContextBundle;
 use iroha_data_model::consensus::{
@@ -13,6 +14,7 @@ use iroha_data_model::consensus::{
 };
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
+use mv::storage::StorageReadOnly;
 
 const PROPOSAL_STALE_WINDOW_TX_QUANTUM: usize = 128;
 const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 4;
@@ -453,6 +455,7 @@ fn refresh_proposal_routing_from_state(
     routing_plan_batch: &mut Vec<crate::queue::RoutingPlan>,
     state_view: &crate::state::StateView<'_>,
     ledger_time_ms: u64,
+    proposal_height: u64,
 ) -> Result<bool> {
     if tx_batch.len() != routing_batch.len() || tx_batch.len() != routing_plan_batch.len() {
         return Err(eyre!(
@@ -470,15 +473,19 @@ fn refresh_proposal_routing_from_state(
     let mut refreshed_routing = Vec::with_capacity(tx_batch.len());
     let mut refreshed_plans = Vec::with_capacity(tx_batch.len());
     for (idx, tx) in tx_batch.iter().enumerate() {
-        let refreshed_plan = crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
-            nexus,
-            tx,
-            state_view.world(),
-            ledger_time_ms,
-        )
-        .map_err(|err| {
-            eyre!("proposal routing cannot be resolved from committed state at index {idx}: {err}")
-        })?;
+        let refreshed_plan =
+            crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                nexus,
+                tx,
+                state_view.world(),
+                ledger_time_ms,
+                proposal_height,
+            )
+            .map_err(|err| {
+                eyre!(
+                    "proposal routing cannot be resolved from committed state at index {idx}: {err}"
+                )
+            })?;
         refreshed_routing.push(refreshed_plan.coordinator_route());
         refreshed_plans.push(refreshed_plan);
     }
@@ -490,6 +497,57 @@ fn refresh_proposal_routing_from_state(
         *routing_plan_batch = refreshed_plans;
     }
     Ok(changed)
+}
+
+fn collect_sccp_messages_for_active_proposal_routes<F>(
+    tx_batch: &[AcceptedTransaction<'static>],
+    routing_batch: &[RoutingDecision],
+    nexus: &iroha_config::parameters::actual::Nexus,
+    is_already_recorded: F,
+) -> Result<Vec<crate::bridge::RecordedSccpMessage>>
+where
+    F: Fn(&iroha_data_model::bridge::SccpOutboundMessageKey) -> bool,
+{
+    if tx_batch.len() != routing_batch.len() {
+        return Err(eyre!(
+            "proposal SCCP routing vector length mismatch: txs={} routes={}",
+            tx_batch.len(),
+            routing_batch.len()
+        ));
+    }
+    if !nexus.enabled {
+        return Ok(Vec::new());
+    }
+    Ok(
+        crate::bridge::collect_new_sccp_messages_from_accepted_transactions_where(
+            tx_batch,
+            |tx_index| {
+                let route = routing_batch[tx_index];
+                crate::state::nexus_active_lane_dataspace(route.lane_id, nexus)
+                    .is_some_and(|dataspace_id| dataspace_id == route.dataspace_id)
+            },
+            is_already_recorded,
+        ),
+    )
+}
+
+fn proposal_sccp_commitment_root_after_execution(
+    state: &crate::state::State,
+    builder: &crate::block::BlockBuilder<crate::block::Chained>,
+    sccp_root: Option<[u8; 32]>,
+    private_key: &iroha_crypto::PrivateKey,
+    local_validator_index: u32,
+) -> Result<Option<[u8; 32]>> {
+    let probe_block: SignedBlock = builder
+        .clone()
+        .with_sccp_commitment_root(sccp_root)
+        .try_sign_with_index(private_key, u64::from(local_validator_index))
+        .map_err(|err| eyre!("failed to sign SCCP root probe block: {err}"))?
+        .unpack(|_| {})
+        .into();
+    let mut state_block = state.block(probe_block.header());
+    crate::block::ValidBlock::sccp_commitment_root_after_execution(probe_block, &mut state_block)
+        .map_err(|err| eyre!("failed to derive SCCP commitment root after execution: {err}"))
 }
 
 const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_millis(1);
@@ -597,8 +655,15 @@ impl Actor {
     }
 
     fn native_amx_vote_roster(&self) -> Vec<PeerId> {
-        let mut roster = self.effective_commit_topology();
+        let mut roster = self.trusted_topology();
+        if roster.is_empty() {
+            roster = self.effective_commit_topology();
+        }
         roster.retain(roster_member_allowed_bls);
+        if roster.is_empty() {
+            roster = self.effective_commit_topology();
+            roster.retain(roster_member_allowed_bls);
+        }
         roster
     }
 
@@ -1142,6 +1207,14 @@ impl Actor {
         }
     }
 
+    pub(super) fn proposal_multilane_lookahead_enabled(
+        nexus: &iroha_config::parameters::actual::Nexus,
+        block_height: u64,
+    ) -> bool {
+        nexus.enabled
+            && crate::queue::routable_lane_ids_for_nexus_at_height(nexus, block_height).len() > 1
+    }
+
     pub(super) fn pull_transactions_for_proposal(
         &self,
         state: &State,
@@ -1168,7 +1241,7 @@ impl Actor {
         let scan_budget = scan_budget.max(1);
         let committed_nexus = state.nexus_snapshot();
         let multilane_lookahead =
-            committed_nexus.enabled && committed_nexus.uses_multilane_catalogs();
+            Self::proposal_multilane_lookahead_enabled(&committed_nexus, height);
         if self.queue.reconfigure_nexus_with_state_if_needed(
             &committed_nexus,
             state,
@@ -1247,7 +1320,7 @@ impl Actor {
                     }
                 };
 
-            for idx in order {
+            for (order_pos, idx) in order.iter().copied().enumerate() {
                 let Some(guard) = fetched_slots.get_mut(idx).and_then(Option::take) else {
                     continue;
                 };
@@ -1277,7 +1350,24 @@ impl Actor {
                     let allow_oversized =
                         gas_used_in_block == 0 && tx_guards.is_empty() && accepted.is_empty();
 
-                    if would_exceed && !allow_oversized {
+                    let fitting_later_candidate = would_exceed
+                        && allow_oversized
+                        && order.iter().skip(order_pos + 1).any(|candidate_idx| {
+                            fetched_slots
+                                .get(*candidate_idx)
+                                .and_then(Option::as_ref)
+                                .is_some_and(|candidate| {
+                                    let candidate_is_ivm_heavy = Self::is_ivm_heavy_transaction(
+                                        candidate.as_accepted(),
+                                        replay_ivm_proved,
+                                    );
+                                    max_ivm_transactions.is_none_or(|max| {
+                                        !candidate_is_ivm_heavy || ivm_transactions_included < max
+                                    }) && candidate.gas_cost() <= remaining_gas
+                                })
+                        });
+
+                    if would_exceed && (!allow_oversized || fitting_later_candidate) {
                         release_lane_consumption(&guard, &mut lane_consumption);
                         deferred_accumulator.push((guard.clone_accepted(), guard.routing_plan()));
                         continue;
@@ -1385,7 +1475,7 @@ impl Actor {
         )
     }
 
-    fn drop_stale_pending_block_for_fresh_proposal(
+    pub(super) fn drop_stale_pending_block_for_fresh_proposal(
         &mut self,
         pending_hash: HashOf<BlockHeader>,
         height: u64,
@@ -1395,7 +1485,7 @@ impl Actor {
             pending_hash,
             height,
             view,
-            false,
+            true,
             None,
         )
     }
@@ -1735,8 +1825,13 @@ impl Actor {
                     && pending.commit_qc_observed()
             });
         let new_view_qc_supersedes_owner = self.latest_committed_qc().is_some_and(|highest_qc| {
-            self.new_view_qc_supersedes_same_height_vote_conflict(
-                height, view, highest_qc, owner_hash, owner_view,
+            self.new_view_qc_supersedes_noncommit_same_height_vote_conflict(
+                height,
+                view,
+                highest_qc,
+                owner_hash,
+                owner_view,
+                crate::sumeragi::consensus::Phase::Prepare,
             )
         });
         let Some(owner_pending) = self
@@ -1750,6 +1845,7 @@ impl Actor {
             })
         else {
             let mut body_repair_requested = false;
+            let mut passive_catchup_requested = false;
             let mut stale_vote_locked_recovery_requested = false;
             if let Some((owner_age, frontier_commit_qc_observed, competing_quorum_locked)) =
                 owner_slot_evidence
@@ -1764,6 +1860,50 @@ impl Actor {
                     || commit_inflight_live;
                 body_repair_requested = protected_owner
                     && self.request_frontier_owner_body_repair(owner_hash, height, owner_view, now);
+                let owner_body_repair_active = body_repair_requested
+                    || self.frontier_slot.as_ref().is_some_and(|slot| {
+                        slot.height == height
+                            && slot.view == owner_view
+                            && slot.block_hash == owner_hash
+                            && slot.exact_fetch_armed
+                            && slot.body_missing()
+                    });
+                let owner_body_repair_lagged = owner_age
+                    >= self
+                        .frontier_slot_lag_window()
+                        .max(Duration::from_millis(1));
+                if protected_owner
+                    && pending_queue_len > 0
+                    && owner_body_repair_active
+                    && owner_body_repair_lagged
+                    && !self.frontier_block_materialized_locally(owner_hash)
+                {
+                    let _ = self.handoff_contiguous_frontier_to_passive_catchup(
+                        height,
+                        now,
+                        "stale_frontier_owner_body_repair",
+                    );
+                    passive_catchup_requested = self.request_range_pull_from_anchor(
+                        height,
+                        "stale_frontier_owner_body_repair",
+                        now,
+                    );
+                    if passive_catchup_requested {
+                        info!(
+                            height,
+                            view,
+                            owner_view,
+                            owner = %owner_hash,
+                            owner_age_ms = owner_age.as_millis(),
+                            frontier_lag_window_ms = self.frontier_slot_lag_window().as_millis(),
+                            queue_len = pending_queue_len,
+                            frontier_commit_qc_observed,
+                            competing_quorum_locked,
+                            new_view_qc_supersedes_owner,
+                            "escalated stale frontier owner body repair to passive catch-up"
+                        );
+                    }
+                }
                 let stale_vote_locked_owner = protected_owner
                     && owner_age >= hard_yield_age
                     && (local_vote_consensus_locked
@@ -1871,6 +2011,7 @@ impl Actor {
                     local_commit_vote_blocks_fresh_branch,
                     commit_inflight_live,
                     body_repair_requested,
+                    passive_catchup_requested,
                     stale_vote_locked_recovery_requested,
                     new_view_qc_supersedes_owner,
                     frontier_commit_qc_observed = owner_slot_evidence
@@ -1892,12 +2033,13 @@ impl Actor {
         let local_vote = self.local_same_height_vote(height, self.epoch_for_height(height));
         let local_vote_new_view_qc_supersedes = local_vote.as_ref().is_some_and(|vote| {
             self.latest_committed_qc().is_some_and(|highest_qc| {
-                self.new_view_qc_supersedes_same_height_vote_conflict(
+                self.new_view_qc_supersedes_noncommit_same_height_vote_conflict(
                     height,
                     view,
                     highest_qc,
                     vote.block_hash,
                     vote.view,
+                    vote.phase,
                 )
             })
         });
@@ -1935,7 +2077,7 @@ impl Actor {
         };
         let frontier_commit_qc_blocks_yield = frontier_commit_qc_observed && !recovery_exhausted;
         let competing_quorum_blocks_yield =
-            competing_quorum_locked && !new_view_qc_supersedes_owner;
+            competing_quorum_locked && !new_view_qc_supersedes_owner && owner_age < yield_age;
         if owner_qc_observed
             || frontier_commit_qc_blocks_yield
             || local_vote_consensus_locked
@@ -2354,10 +2496,19 @@ impl Actor {
             return false;
         }
 
-        let repair_window = self
+        let commit_qc_repair_window = self
             .known_block_commit_qc_recovery_view_change_window()
             .max(self.quorum_timeout(self.runtime_da_enabled()))
             .max(Duration::from_millis(1));
+        let missing_qc_liveness_active =
+            self.frontier_missing_qc_liveness_active(proposal_height, proposal_view);
+        let repair_window = if missing_qc_liveness_active {
+            super::reschedule::near_quorum_payload_timeout(self.rebroadcast_cooldown())
+                .min(commit_qc_repair_window)
+                .max(Duration::from_millis(1))
+        } else {
+            commit_qc_repair_window
+        };
         let stale_branch_terminal = self
             .pending
             .pending_blocks
@@ -2387,9 +2538,33 @@ impl Actor {
                             .max(now.saturating_duration_since(pending.inserted_at))
                             >= repair_window)
             });
-        (stale_branch_terminal
-            || self.frontier_missing_qc_liveness_active(proposal_height, proposal_view))
+        (stale_branch_terminal || missing_qc_liveness_active)
             && pending_allows_stale_branch_rotation
+    }
+
+    fn stale_local_commit_vote_allows_frontier_owner_clear_for_proposal_assembly(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        owner_hash: HashOf<BlockHeader>,
+        owner_view: u64,
+        now: Instant,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+    ) -> bool {
+        self.local_same_height_vote(proposal_height, self.epoch_for_height(proposal_height))
+            .as_ref()
+            .is_some_and(|existing_vote| {
+                existing_vote.block_hash == owner_hash
+                    && existing_vote.view == owner_view
+                    && self
+                        .stale_local_commit_vote_allows_proposal_assembly_after_missing_qc_repair(
+                            proposal_height,
+                            proposal_view,
+                            existing_vote,
+                            now,
+                            highest_qc,
+                        )
+            })
     }
 
     pub(super) fn local_same_height_vote_is_committed_parent_marker(
@@ -3198,6 +3373,7 @@ impl Actor {
                         &mut routing_plan_batch,
                         &state_view,
                         routing_ledger_time_ms,
+                        proposal_height,
                     )? {
                         info!(
                             height = proposal_height,
@@ -3217,11 +3393,16 @@ impl Actor {
                 let npos_effects =
                     self.build_npos_consensus_effects_for_proposal(proposal_height)?;
                 builder = builder.with_npos_consensus_effects(npos_effects);
-                let sccp_messages =
-                    crate::bridge::collect_sccp_messages_from_accepted_transactions(&tx_batch);
-                builder = builder.with_sccp_commitment_root(
-                    crate::bridge::sccp_commitment_root_from_messages(&sccp_messages),
-                );
+                let proposal_may_record_sccp_messages = {
+                    let world_view = self.state.world_view();
+                    !collect_sccp_messages_for_active_proposal_routes(
+                        &tx_batch,
+                        &routing_batch,
+                        &nexus,
+                        |key| world_view.sccp_outbound_messages().get(key).is_some(),
+                    )?
+                    .is_empty()
+                };
 
                 let receipt_plan = if nexus_enabled {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot_cached();
@@ -3358,7 +3539,7 @@ impl Actor {
                     if bundle.is_empty() {
                         bundle_opt = None;
                     } else {
-                        self.validate_da_bundle(bundle)?;
+                        self.validate_da_bundle(bundle, proposal_height)?;
                     }
 
                     if let Some(bundle) = bundle_opt.as_ref() {
@@ -3432,11 +3613,13 @@ impl Actor {
                     let account_exists = |account: &iroha_data_model::account::AccountId| -> bool {
                         world.accounts().get(account).is_some()
                     };
-                    let (mut intents, rejected) = crate::da::sanitize_pin_intents_against_nexus(
-                        bundle.intents,
-                        &nexus,
-                        account_exists,
-                    );
+                    let (mut intents, rejected) =
+                        crate::da::sanitize_pin_intents_against_nexus_at_height(
+                            bundle.intents,
+                            &nexus,
+                            proposal_height,
+                            account_exists,
+                        );
                     if let Some(first_rejection) = rejected.first().cloned() {
                         for reason in &rejected {
                             #[cfg(feature = "telemetry")]
@@ -3498,7 +3681,8 @@ impl Actor {
                     }
                 }
 
-                let proof_policy_bundle = crate::da::active_proof_policy_bundle(&nexus);
+                let proof_policy_bundle =
+                    crate::da::active_proof_policy_bundle_at_height(&nexus, proposal_height);
                 builder = builder.with_da_proof_policies(Some(proof_policy_bundle));
 
                 if !tx_batch.is_empty() {
@@ -3518,6 +3702,7 @@ impl Actor {
                             &mut routing_plan_batch,
                             &state_view,
                             routing_ledger_time_ms,
+                            proposal_height,
                         )?;
                         (state_height, refreshed)
                     };
@@ -3566,11 +3751,39 @@ impl Actor {
                         BlockExecutionContextBundle::new(execution_context),
                     ));
                 }
+                builder = builder.with_confidential_features(conf_features);
+                let sccp_commitment_root = if proposal_may_record_sccp_messages {
+                    let private_key = self.common_config.key_pair.private_key();
+                    let initial_root = proposal_sccp_commitment_root_after_execution(
+                        self.state.as_ref(),
+                        &builder,
+                        None,
+                        private_key,
+                        local_validator_index,
+                    )?;
+                    let stable_root = proposal_sccp_commitment_root_after_execution(
+                        self.state.as_ref(),
+                        &builder,
+                        initial_root,
+                        private_key,
+                        local_validator_index,
+                    )?;
+                    if stable_root != initial_root {
+                        return Err(eyre!(
+                            "unstable SCCP commitment root after proposal execution: initial={:?} stable={:?}",
+                            initial_root,
+                            stable_root
+                        ));
+                    }
+                    stable_root
+                } else {
+                    None
+                };
+                builder = builder.with_sccp_commitment_root(sccp_commitment_root);
                 last_sidecar_ms = sidecar_started_at.elapsed().as_millis();
 
                 let block_build_started_at = Instant::now();
                 let new_block = builder
-                    .with_confidential_features(conf_features)
                     .try_sign_with_index(
                         self.common_config.key_pair.private_key(),
                         u64::from(local_validator_index),
@@ -4027,7 +4240,11 @@ impl Actor {
     /// The current `PoR` proof bundle is tracked by commitments only; we bound proof
     /// openings by the same count until proof summaries are threaded through the
     /// consensus path.
-    pub(super) fn validate_da_bundle(&mut self, bundle: &DaCommitmentBundle) -> Result<()> {
+    pub(super) fn validate_da_bundle(
+        &mut self,
+        bundle: &DaCommitmentBundle,
+        proposal_height: u64,
+    ) -> Result<()> {
         let nexus = self.state.nexus_snapshot();
         let lane_config = nexus.lane_config.clone();
         validate_da_bundle_caps(
@@ -4037,7 +4254,8 @@ impl Actor {
         )?;
 
         for record in &bundle.commitments {
-            crate::da::active_lane_proof_policy(&nexus, record.lane_id).map_err(|err| {
+            crate::da::active_lane_proof_policy_at_height(&nexus, record.lane_id, proposal_height)
+                .map_err(|err| {
                 eyre!(
                     "DA commitment active lane validation failed for lane {} epoch {} seq {}: {err}",
                     record.lane_id.as_u32(),
@@ -4092,8 +4310,12 @@ impl Actor {
             )?;
         }
 
-        crate::da::validate_commitment_bundle_against_nexus(bundle, &nexus)
-            .map_err(|err| eyre!("DA commitment bundle failed validation: {err}"))?;
+        crate::da::validate_commitment_bundle_against_nexus_at_height(
+            bundle,
+            &nexus,
+            proposal_height,
+        )
+        .map_err(|err| eyre!("DA commitment bundle failed validation: {err}"))?;
 
         Ok(())
     }
@@ -4417,7 +4639,7 @@ impl Actor {
             return None;
         }
 
-        let (pending_block, block_hash, pending_payload_bytes, pending_payload_hash) = {
+        let (pending_block, block_hash, pending_payload_hash) = {
             let Some(pending) = self.pending.pending_blocks.values().find(|pending| {
                 !pending.aborted
                     && pending.height == height
@@ -4439,7 +4661,6 @@ impl Actor {
             (
                 pending.block.clone(),
                 pending.block.hash(),
-                pending.payload_bytes_cow().into_owned(),
                 pending.payload_hash,
             )
         };
@@ -4547,18 +4768,70 @@ impl Actor {
             && height == self.committed_height_snapshot().saturating_add(1)
             && view > 0
             && pending_queue_len > 0;
+        let prior_body_rebroadcast = self
+            .proposal_rebroadcast_log
+            .last_sent_at(&block_hash)
+            .is_some();
         let payload_cooldown = self.payload_rebroadcast_cooldown();
-        let cooldown = if frontier_recovery_cached {
-            payload_cooldown.min(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+        let mut cooldown = if frontier_recovery_cached {
+            self.targeted_payload_rescue_cooldown()
         } else {
             payload_cooldown
         };
-        if !frontier_recovery_cached && self.relay_backpressure_active(now, cooldown) {
+        cooldown = cooldown.max(CACHED_PROPOSAL_REBROADCAST_COOLDOWN_FLOOR);
+        if self.relay_backpressure_active(now, payload_cooldown)
+            && (!frontier_recovery_cached || prior_body_rebroadcast)
+        {
             trace!(
                 height,
-                view, "skipping cached proposal rebroadcast due to relay backpressure"
+                view,
+                block = %block_hash,
+                frontier_recovery_cached,
+                prior_body_rebroadcast,
+                "skipping cached proposal rebroadcast due to relay backpressure"
             );
             return None;
+        }
+        let queue_drop_backpressure = self.queue_drop_backpressure_active(now, payload_cooldown);
+        let queue_block_backpressure = self.queue_block_backpressure_active(now, payload_cooldown);
+        if (queue_drop_backpressure || queue_block_backpressure) && prior_body_rebroadcast {
+            let queue_depths = super::status::worker_queue_depth_snapshot();
+            trace!(
+                height,
+                view,
+                block = %block_hash,
+                frontier_recovery_cached,
+                queue_drop_backpressure,
+                queue_block_backpressure,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                "skipping cached proposal rebroadcast due to consensus queue backpressure"
+            );
+            return None;
+        }
+        let tx_queue_pressure = self.queue.pressure_snapshot();
+        let tx_queue_capacity_backpressure =
+            tx_queue_pressure.saturated_by_count || tx_queue_pressure.saturated_by_bytes;
+        if tx_queue_capacity_backpressure && prior_body_rebroadcast {
+            let slow_cooldown = self.rbc_deliver_commit_qc_recovery_cooldown().max(cooldown);
+            if slow_cooldown > cooldown {
+                trace!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    frontier_recovery_cached,
+                    queued = tx_queue_pressure.queued_tx_count,
+                    tracked = tx_queue_pressure.tracked_tx_count,
+                    capacity = tx_queue_pressure.capacity.get(),
+                    retained_bytes = tx_queue_pressure.retained_bytes,
+                    max_retained_bytes = tx_queue_pressure.max_retained_bytes.get(),
+                    saturated_by_count = tx_queue_pressure.saturated_by_count,
+                    saturated_by_bytes = tx_queue_pressure.saturated_by_bytes,
+                    cooldown_ms = slow_cooldown.as_millis(),
+                    "slowing cached proposal rebroadcast due to transaction queue backpressure"
+                );
+                cooldown = slow_cooldown;
+            }
         }
         if !self
             .proposal_rebroadcast_log
@@ -4577,12 +4850,32 @@ impl Actor {
         }
 
         let local_peer_id = self.common_config.peer.id().clone();
-        let block_created = self
-            .frontier_block_created_for_local_proposal_wire_with_payload(
-                &pending_block,
+        let block_created = {
+            let Some(pending) = self
+                .pending
+                .pending_blocks
+                .get(&block_hash)
+                .filter(|pending| {
+                    !pending.aborted
+                        && pending.height == height
+                        && pending.view == view
+                        && pending.payload_hash == pending_payload_hash
+                })
+            else {
+                trace!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    "skipping cached proposal rebroadcast: pending block changed before wire build"
+                );
+                return None;
+            };
+            let pending_payload_bytes = pending.payload_bytes();
+            self.frontier_block_created_for_local_proposal_wire_with_payload(
+                &pending.block,
                 &proposal,
                 &proposal_roster,
-                &pending_payload_bytes,
+                pending_payload_bytes,
                 pending_payload_hash,
             )
             .unwrap_or_else(|| {
@@ -4592,8 +4885,9 @@ impl Actor {
                     block = %block_hash,
                     "rebroadcasting cached proposal with plain block-created fallback"
                 );
-                super::message::BlockCreated::from(&pending_block)
-            });
+                super::message::BlockCreated::from(&pending.block)
+            })
+        };
         let block_msg = Arc::new(BlockMessage::BlockCreated(block_created));
         let block_encoded = Arc::new(BlockMessageWire::encode_message(block_msg.as_ref()));
         let proposal_hint = super::message::ProposalHint {
@@ -4746,6 +5040,228 @@ impl Actor {
         progressed
     }
 
+    fn same_height_frontier_owner_blocks_proposal(
+        &mut self,
+        height: u64,
+        view_idx: u64,
+        pending_queue_len: usize,
+        now: Instant,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+    ) -> bool {
+        let Some((owner_hash, owner_view)) = self
+            .frontier_slot_live_local_owner_for_round(height, view_idx)
+            .filter(|(_, owner_view)| *owner_view < view_idx)
+        else {
+            return false;
+        };
+        let stale_local_commit_vote_allows_owner_clear = self
+            .stale_local_commit_vote_allows_frontier_owner_clear_for_proposal_assembly(
+                height, view_idx, owner_hash, owner_view, now, highest_qc,
+            );
+        if self.maybe_yield_stale_frontier_owner_for_fresh_proposal(
+            height,
+            view_idx,
+            owner_hash,
+            owner_view,
+            now,
+            pending_queue_len,
+        ) {
+            debug!(
+                height,
+                view = view_idx,
+                owner = %owner_hash,
+                owner_view,
+                queue_len = pending_queue_len,
+                "stale same-height frontier owner yielded; continuing fresh proposal assembly"
+            );
+            false
+        } else if stale_local_commit_vote_allows_owner_clear {
+            let dropped =
+                self.drop_stale_pending_block_for_fresh_proposal(owner_hash, height, owner_view);
+            if self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height && slot.view == owner_view && slot.block_hash == owner_hash
+            }) {
+                self.frontier_slot = None;
+            }
+            info!(
+                height,
+                view = view_idx,
+                owner = %owner_hash,
+                owner_view,
+                queue_len = pending_queue_len,
+                dropped_tx_count = dropped.map(|(tx_count, _, _, _)| tx_count),
+                "cleared stale same-height frontier owner for fresh proposal assembly after missing-QC repair"
+            );
+            false
+        } else {
+            let progressed = self.maybe_progress_existing_slot_proposal(
+                height,
+                owner_view,
+                pending_queue_len,
+                now,
+                "same_height_owner_live",
+            );
+            if !progressed {
+                self.nudge_frontier_recovery_proposal_retry(now);
+            }
+            if pending_queue_len > 0 {
+                debug!(
+                    height,
+                    view = view_idx,
+                    owner = %owner_hash,
+                    owner_view,
+                    queue_len = pending_queue_len,
+                    "same-height frontier owner is still locally live for this round; deferring reassembly"
+                );
+            } else {
+                trace!(
+                    height,
+                    view = view_idx,
+                    owner = %owner_hash,
+                    owner_view,
+                    "same-height frontier owner is still locally live for this round; deferring reassembly"
+                );
+            }
+            self.warn_resilience_frontier_proposal_deferred(
+                height,
+                view_idx,
+                "same_height_owner_live",
+                highest_qc,
+                pending_queue_len,
+                now,
+            );
+            true
+        }
+    }
+
+    fn stale_proposals_seen_only_slot_allows_recovery_rotation(
+        &self,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        now: Instant,
+        precommit_votes_at_view: usize,
+    ) -> Option<(Duration, Duration)> {
+        if !self.config.resilience.enabled
+            || height != self.committed_height_snapshot().saturating_add(1)
+            || view == 0
+            || precommit_votes_at_view > 0
+            || !self.slot_tracker.proposals_seen.contains(&(height, view))
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_proposal(height, view)
+                .is_some()
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_hint(height, view)
+                .is_some()
+            || self.authoritative_slot_owner_hash(height, view).is_some()
+            || self
+                .frontier_slot_live_local_owner_for_round(height, view)
+                .is_some()
+            || self.slot_has_actionable_vote_backed_proposal_evidence(height, view, epoch)
+            || self.same_height_has_recoverable_qc(height)
+            || self.pending.pending_blocks.values().any(|pending| {
+                !pending.aborted
+                    && !pending.is_retired_same_height()
+                    && pending.validation_status != ValidationStatus::Invalid
+                    && pending.height == height
+                    && pending.view == view
+            })
+        {
+            return None;
+        }
+
+        if let Some(existing_vote) = self.local_same_height_vote(height, epoch)
+            && existing_vote.view >= view
+            && self.local_same_height_vote_blocks_fresh_proposal(
+                height,
+                view,
+                &existing_vote,
+                now,
+                true,
+            )
+        {
+            return None;
+        }
+
+        let stale_window = self
+            .quorum_timeout(self.runtime_da_enabled())
+            .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+            .max(Duration::from_millis(1));
+        let view_age = self.phase_tracker.view_age(height, now)?;
+        (view_age >= stale_window).then_some((view_age, stale_window))
+    }
+
+    fn stale_slot_proposal_evidence_allows_recovery_rotation(
+        &self,
+        height: u64,
+        view: u64,
+        epoch: u64,
+        now: Instant,
+        precommit_votes_at_view: usize,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+    ) -> Option<(Duration, Duration)> {
+        if !self.config.resilience.enabled
+            || height != self.committed_height_snapshot().saturating_add(1)
+            || view == 0
+            || precommit_votes_at_view > 0
+            || !self.frontier_missing_qc_liveness_active(height, view)
+            || self.same_height_has_recoverable_qc(height)
+            || self
+                .subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| {
+                    !inflight.pending.aborted
+                        && inflight.pending.validation_status != ValidationStatus::Invalid
+                        && inflight.pending.height == height
+                        && inflight.pending.view == view
+                })
+            || self.pending.pending_blocks.values().any(|pending| {
+                !pending.aborted
+                    && pending.validation_status != ValidationStatus::Invalid
+                    && pending.height == height
+                    && pending.view == view
+                    && pending.commit_qc_observed()
+            })
+            || self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height
+                    && slot.view == view
+                    && slot.quorum_progress.commit_qc_observed
+            })
+        {
+            return None;
+        }
+
+        if let Some(existing_vote) = self.local_same_height_vote(height, epoch)
+            && existing_vote.view >= view
+            && self.local_same_height_vote_blocks_fresh_proposal_assembly(
+                height,
+                view,
+                &existing_vote,
+                now,
+                true,
+                highest_qc,
+            )
+        {
+            return None;
+        }
+
+        let stale_window = self
+            .quorum_timeout(self.runtime_da_enabled())
+            .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+            .max(self.frontier_slot_lag_window())
+            .max(Duration::from_millis(1));
+        let view_age = self.phase_tracker.view_age(height, now)?;
+        (view_age >= stale_window).then_some((view_age, stale_window))
+    }
+
     pub(super) fn on_pacemaker_backpressure_deferral(
         &mut self,
         now: Instant,
@@ -4798,8 +5314,7 @@ impl Actor {
             && target_height == self.committed_height_snapshot().saturating_add(1)
             && target_view > 0;
         let cooldown = if frontier_recovery_new_view {
-            self.rebroadcast_cooldown()
-                .min(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+            self.frontier_recovery_new_view_rebroadcast_cooldown()
         } else {
             self.rebroadcast_cooldown()
         };
@@ -5495,15 +6010,25 @@ impl Actor {
                 quorum: required,
                 highest_qc: qc,
             });
-            warn!(
-                height = tracked_height,
-                view = tracked_view,
-                committed_height,
-                qc_height = qc.height,
-                qc_view = qc.view,
-                queue_len = pending_queue_len,
-                "using committed-QC frontier candidate without NEW_VIEW quorum under resilience liveness pressure"
-            );
+            if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
+                ProposalDeferWarningKind::CommittedQcNoNewViewFallback,
+                tracked_height,
+                tracked_view,
+                qc.subject_block_hash,
+                now,
+                Duration::from_secs(2),
+            ) {
+                warn!(
+                    height = tracked_height,
+                    view = tracked_view,
+                    committed_height,
+                    qc_height = qc.height,
+                    qc_view = qc.view,
+                    queue_len = pending_queue_len,
+                    suppressed_since_last,
+                    "using committed-QC frontier candidate without NEW_VIEW quorum under resilience liveness pressure"
+                );
+            }
         }
 
         if candidate.is_none()
@@ -5768,12 +6293,25 @@ impl Actor {
                     .proposal_cache
                     .get_hint(height, view_idx)
                     .cloned();
-                let repair_window = self
+                let base_repair_window = self
                     .frontier_slot_lag_window()
                     .max(self.recovery_deferred_qc_ttl())
                     .max(quorum_timeout)
                     .max(self.rebroadcast_cooldown())
                     .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL);
+                let repair_window =
+                    self.cap_active_block_production_gap(base_repair_window, pending_queue_len > 0);
+                if repair_window < base_repair_window {
+                    debug!(
+                        height,
+                        view = view_idx,
+                        queue_len = pending_queue_len,
+                        precommit_votes_at_view,
+                        repair_window_ms = base_repair_window.as_millis(),
+                        capped_repair_window_ms = repair_window.as_millis(),
+                        "capping cached proposal body repair window under active transaction backlog"
+                    );
+                }
                 let cache_age = self
                     .subsystems
                     .propose
@@ -6057,6 +6595,15 @@ impl Actor {
                             .seed_frontier_recovery_for_quorum_timeout_without_local_pending(
                                 height, view_idx, now,
                             );
+                        let recovery_advance = self.advance_frontier_recovery(
+                            "quorum_timeout",
+                            height,
+                            view_idx,
+                            false,
+                            true,
+                            true,
+                            now,
+                        );
                         debug!(
                             height,
                             view = view_idx,
@@ -6066,7 +6613,8 @@ impl Actor {
                             base_quorum_timeout_ms = quorum_timeout.as_millis(),
                             timeout_streak,
                             seeded_frontier_owner = seeded,
-                            "cached proposal slot quorum-timeout suppressed while same-slot frontier recovery remains active"
+                            ?recovery_advance,
+                            "cached proposal slot quorum-timeout routed through same-slot frontier recovery"
                         );
                     } else if contiguous_frontier {
                         warn!(
@@ -6288,6 +6836,16 @@ impl Actor {
             );
         }
 
+        if self.same_height_frontier_owner_blocks_proposal(
+            height,
+            view_idx,
+            pending_queue_len,
+            now,
+            highest_qc,
+        ) {
+            return false;
+        }
+
         if let Some(block_hash) = self.authoritative_slot_owner_hash(height, view_idx) {
             let progressed = self.maybe_progress_existing_slot_proposal(
                 height,
@@ -6327,6 +6885,48 @@ impl Actor {
         }
 
         if self.slot_has_proposal_evidence(height, view_idx) {
+            if let Some((view_age, stale_window)) = self
+                .stale_proposals_seen_only_slot_allows_recovery_rotation(
+                    height,
+                    view_idx,
+                    epoch,
+                    now,
+                    precommit_votes_at_view,
+                )
+            {
+                self.slot_tracker.proposals_seen.remove(&(height, view_idx));
+                if self
+                    .subsystems
+                    .propose
+                    .proposal_liveness
+                    .is_some_and(|slot| slot.height == height && slot.view == view_idx)
+                {
+                    self.subsystems.propose.proposal_liveness = None;
+                }
+                warn!(
+                    height,
+                    view = view_idx,
+                    queue_len = pending_queue_len,
+                    view_age_ms = view_age.as_millis(),
+                    stale_window_ms = stale_window.as_millis(),
+                    "proposal-seen marker has no materialized slot owner; rotating recovery view"
+                );
+                self.apply_view_change_after_exhausted_frontier_recovery(
+                    height,
+                    view_idx,
+                    ViewChangeCause::QuorumTimeout,
+                );
+                self.maybe_rebroadcast_new_view_votes(height, now);
+                self.warn_resilience_frontier_proposal_deferred(
+                    height,
+                    view_idx,
+                    "proposal_seen_without_materialized_owner",
+                    highest_qc,
+                    pending_queue_len,
+                    now,
+                );
+                return false;
+            }
             let progressed = self.maybe_progress_existing_slot_proposal(
                 height,
                 view_idx,
@@ -6335,6 +6935,49 @@ impl Actor {
                 "slot_has_proposal_evidence",
             );
             if !progressed {
+                if let Some((view_age, stale_window)) = self
+                    .stale_slot_proposal_evidence_allows_recovery_rotation(
+                        height,
+                        view_idx,
+                        epoch,
+                        now,
+                        precommit_votes_at_view,
+                        highest_qc,
+                    )
+                {
+                    self.slot_tracker.proposals_seen.remove(&(height, view_idx));
+                    if self
+                        .subsystems
+                        .propose
+                        .proposal_liveness
+                        .is_some_and(|slot| slot.height == height && slot.view == view_idx)
+                    {
+                        self.subsystems.propose.proposal_liveness = None;
+                    }
+                    warn!(
+                        height,
+                        view = view_idx,
+                        queue_len = pending_queue_len,
+                        view_age_ms = view_age.as_millis(),
+                        stale_window_ms = stale_window.as_millis(),
+                        "proposal evidence made no local progress; rotating recovery view"
+                    );
+                    self.apply_view_change_after_exhausted_frontier_recovery(
+                        height,
+                        view_idx,
+                        ViewChangeCause::QuorumTimeout,
+                    );
+                    self.maybe_rebroadcast_new_view_votes(height, now);
+                    self.warn_resilience_frontier_proposal_deferred(
+                        height,
+                        view_idx,
+                        "stale_slot_proposal_evidence",
+                        highest_qc,
+                        pending_queue_len,
+                        now,
+                    );
+                    return false;
+                }
                 self.nudge_frontier_recovery_proposal_retry(now);
             }
             if pending_queue_len > 0 {
@@ -6360,84 +7003,6 @@ impl Actor {
                 now,
             );
             return false;
-        }
-
-        if let Some((owner_hash, owner_view)) = self
-            .frontier_slot_live_local_owner_for_round(height, view_idx)
-            .filter(|(_, owner_view)| *owner_view < view_idx)
-        {
-            if self.maybe_yield_stale_frontier_owner_for_fresh_proposal(
-                height,
-                view_idx,
-                owner_hash,
-                owner_view,
-                now,
-                pending_queue_len,
-            ) {
-                debug!(
-                    height,
-                    view = view_idx,
-                    owner = %owner_hash,
-                    owner_view,
-                    queue_len = pending_queue_len,
-                    "stale same-height frontier owner yielded; continuing fresh proposal assembly"
-                );
-            } else if pending_queue_len > 0 {
-                let progressed = self.maybe_progress_existing_slot_proposal(
-                    height,
-                    owner_view,
-                    pending_queue_len,
-                    now,
-                    "same_height_owner_live",
-                );
-                if !progressed {
-                    self.nudge_frontier_recovery_proposal_retry(now);
-                }
-                debug!(
-                    height,
-                    view = view_idx,
-                    owner = %owner_hash,
-                    owner_view,
-                    queue_len = pending_queue_len,
-                    "same-height frontier owner is still locally live for this round; deferring reassembly"
-                );
-                self.warn_resilience_frontier_proposal_deferred(
-                    height,
-                    view_idx,
-                    "same_height_owner_live",
-                    highest_qc,
-                    pending_queue_len,
-                    now,
-                );
-                return false;
-            } else {
-                let progressed = self.maybe_progress_existing_slot_proposal(
-                    height,
-                    owner_view,
-                    pending_queue_len,
-                    now,
-                    "same_height_owner_live",
-                );
-                if !progressed {
-                    self.nudge_frontier_recovery_proposal_retry(now);
-                }
-                trace!(
-                    height,
-                    view = view_idx,
-                    owner = %owner_hash,
-                    owner_view,
-                    "same-height frontier owner is still locally live for this round; deferring reassembly"
-                );
-                self.warn_resilience_frontier_proposal_deferred(
-                    height,
-                    view_idx,
-                    "same_height_owner_live",
-                    highest_qc,
-                    pending_queue_len,
-                    now,
-                );
-                return false;
-            }
         }
 
         if height == self.committed_height_snapshot().saturating_add(1)
@@ -7017,9 +7582,10 @@ mod tests {
         ProposalBackpressure, age_starved_queue_allows_stale_pending_override,
         cached_slot_timeout_hysteresis_remaining, canonicalize_parallel_batch_by_key,
         canonicalize_proposal_batch, canonicalize_proposal_batch_with_plans,
-        consensus_queue_backpressure, da_payload_budget, drain_aligned_batch,
-        next_cached_slot_timeout_streak, refresh_proposal_routing_from_state,
-        reorder_vec_by_indices, trim_batch_for_size_cap, trim_batch_for_size_cap_with_plans,
+        collect_sccp_messages_for_active_proposal_routes, consensus_queue_backpressure,
+        da_payload_budget, drain_aligned_batch, next_cached_slot_timeout_streak,
+        refresh_proposal_routing_from_state, reorder_vec_by_indices, trim_batch_for_size_cap,
+        trim_batch_for_size_cap_with_plans,
     };
     use crate::queue::{
         BackpressureState, ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingPlan,
@@ -7027,6 +7593,7 @@ mod tests {
     use crate::sumeragi::status;
     use crate::tx::AcceptedTransaction;
     use iroha_config::parameters::actual::LaneRoutingPolicy;
+    use iroha_crypto::Hash;
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         ChainId, Level,
@@ -7037,6 +7604,7 @@ mod tests {
             DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
         },
         prelude::{AccountId, InstructionBox, TransactionBuilder},
+        transaction::{Executable, IvmBytecode, IvmProved},
     };
     use std::borrow::Cow;
     use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
@@ -7058,6 +7626,47 @@ mod tests {
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
 
+    fn proposal_sccp_transfer_payload(nonce: u64) -> iroha_sccp::SccpPayloadV1 {
+        iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        })
+    }
+
+    fn accepted_sccp_record_transaction(nonce: u64) -> AcceptedTransaction<'static> {
+        let chain: ChainId = "proposal-sccp-root".parse().expect("chain id");
+        let key_pair = checked_key_pair();
+        let (_, private_key) = key_pair.clone().into_parts();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let payload =
+            iroha_sccp::canonical_sccp_payload_bytes(&proposal_sccp_transfer_payload(nonce));
+        let executable = Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+            overlay: vec![InstructionBox::from(
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(payload),
+            )]
+            .into(),
+            events_commitment: Hash::new(b"proposal-sccp-events"),
+            gas_policy_commitment: Hash::new(b"proposal-sccp-gas"),
+        });
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_executable(executable)
+            .sign(&private_key);
+        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
     fn blank_state() -> crate::state::State {
         let world = crate::state::World::default();
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -7071,6 +7680,85 @@ mod tests {
         {
             crate::state::State::new(world, kura, query)
         }
+    }
+
+    #[test]
+    fn proposal_sccp_collection_ignores_records_when_nexus_disabled() {
+        let state = blank_state();
+        let tx = accepted_sccp_record_transaction(1);
+        let routing = vec![RoutingDecision::default()];
+        let nexus = state.nexus_snapshot();
+
+        let messages =
+            collect_sccp_messages_for_active_proposal_routes(&[tx], &routing, &nexus, |_| false)
+                .expect("disabled Nexus should not be a routing error");
+
+        assert!(
+            messages.is_empty(),
+            "proposal roots must not commit SCCP records that disabled Nexus execution will reject"
+        );
+    }
+
+    #[test]
+    fn proposal_sccp_collection_includes_active_route_records() {
+        let mut state = blank_state();
+        state.nexus.get_mut().enabled = true;
+        let tx = accepted_sccp_record_transaction(2);
+        let routing = vec![RoutingDecision::default()];
+        let nexus = state.nexus_snapshot();
+
+        let messages =
+            collect_sccp_messages_for_active_proposal_routes(&[tx], &routing, &nexus, |_| false)
+                .expect("active default route should collect");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].tx_index, 0);
+        assert_eq!(messages[0].instruction_index, 0);
+    }
+
+    #[test]
+    fn proposal_sccp_collection_filters_inactive_routes_without_renumbering() {
+        let mut state = blank_state();
+        state.nexus.get_mut().enabled = true;
+        let skipped = accepted_sccp_record_transaction(3);
+        let included = accepted_sccp_record_transaction(4);
+        let routing = vec![
+            RoutingDecision::new(LaneId::new(99), DataSpaceId::UNIVERSAL),
+            RoutingDecision::default(),
+        ];
+        let nexus = state.nexus_snapshot();
+
+        let messages = collect_sccp_messages_for_active_proposal_routes(
+            &[skipped, included],
+            &routing,
+            &nexus,
+            |_| false,
+        )
+        .expect("inactive routed entries should be filtered, not fatal");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].tx_index, 1,
+            "route filtering must preserve canonical entrypoint indices"
+        );
+        assert_eq!(messages[0].instruction_index, 0);
+    }
+
+    #[test]
+    fn proposal_sccp_collection_rejects_routing_vector_length_drift() {
+        let mut state = blank_state();
+        state.nexus.get_mut().enabled = true;
+        let tx = accepted_sccp_record_transaction(5);
+        let nexus = state.nexus_snapshot();
+
+        let err = collect_sccp_messages_for_active_proposal_routes(&[tx], &[], &nexus, |_| false)
+            .expect_err("routing length drift must reject before root computation");
+
+        assert!(
+            err.to_string()
+                .contains("SCCP routing vector length mismatch"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -7092,6 +7780,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            1,
         )
         .expect("refresh should use committed state routing");
 
@@ -7105,6 +7794,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            1,
         )
         .expect("second refresh should remain valid");
 
@@ -7156,6 +7846,7 @@ mod tests {
                 &mut routing_plan_batch,
                 &state.view(),
                 0,
+                2,
             )
             .expect("proposal refresh should resolve autoscale candidates");
             if routing_batch[0].lane_id == LaneId::new(1) {
@@ -7173,6 +7864,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            2,
         )
         .expect("proposal refresh should use live Nexus autoscale range");
 
@@ -7236,6 +7928,7 @@ mod tests {
                 &mut routing_plan_batch,
                 &state.view(),
                 0,
+                2,
             )
             .expect("enabled Nexus should resolve autoscale candidates");
             if routing_batch == vec![stale_elastic_route] {
@@ -7260,6 +7953,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            2,
         )
         .expect("disabled Nexus should refresh stale elastic proposal vectors");
 
@@ -7392,6 +8086,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            1,
         )
         .expect("proposal refresh should replace stale Native AMX participant legs");
 
@@ -7416,6 +8111,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            1,
         )
         .expect_err("routing vector drift must fail closed");
 

@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/sorafs_pdp_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9282c522d94aab6cbc286ac4de9ee8780050b76d409fc4ce3f4aa369c9010282
-source_last_modified: "2026-06-25T17:38:19+00:00"
-translation_last_reviewed: 2026-06-25
+source_hash: 4494c3f07b85e5064344f7ebe495a232fe69ddb1662c8fbc27aac1a62a033e8a
+source_last_modified: "2026-07-01T19:31:44.160457+00:00"
+translation_last_reviewed: 2026-07-01
 ---
 
 # Sora-PDP Hot Storage Proofs
@@ -41,8 +41,38 @@ Implemented locally:
   governance-approval artifacts before reporting `ready`, and it requires
   replay, governance/repair, observability, and governance approval evidence to
   carry a `proof_summary_digest_hex` matching a valid proof-generation artifact
-  in the same bundle. Proof-summary mismatches are recorded on the offending
-  artifact in the JSON summary before required-kind validity is reported.
+  in the same bundle. Proof-generation artifacts also carry
+  `policy_digest_hex` and `provider_roster_digest_hex`, valid PDP policy and
+  provider-roster digests are published as `valid_policy_digests` and
+  `valid_provider_roster_digests`, and governance approval evidence must bind
+  its `policy_digest_hex` and `provider_roster_digest_hex` to the matching
+  valid proof-generation digests. Provider-transport artifacts also bind
+  `route_count` to the unique canonical `routes[].name` inventory and reject
+  duplicate route entries before promotion can report ready.
+  Proof-summary mismatches are recorded on the offending artifact in the JSON
+  summary before required-kind validity is reported. Policy and provider-roster
+  mismatches are recorded on the offending governance approval artifact through
+  the same summary path. The checker exports its required top-level payload
+  fields as `EVIDENCE_REQUIRED_FIELDS`, and the collection runner includes the
+  checker-backed `evidence_contract` map in dry-run output for the selected
+  required kinds, and validates the schema-closed collection plan, required
+  kinds, thresholds, external evidence map, evidence contract, and command steps
+  before dry-run output or verifier execution. The shared runner plan guard also
+  rejects non-canonical nested required-kind, threshold, external-evidence,
+  evidence-contract, and command-step shapes before dry-run output or verifier
+  execution.
+- `scripts/build_sorafs_pdp_canary.py` builds individual payload-free SF-13
+  canary artifacts for provider transport, proof generation, validator replay,
+  governance/repair, observability, and governance approval evidence. The
+  builder requires reviewed deployment context, complete PDP route and metric
+  coverage where applicable, proof-summary digest bindings, provider/challenge/
+  proof minimum counts, route/proof latency thresholds, config-backed
+  governance metadata, and reviewed policy and provider-roster digest input for
+  proof-generation and governance-approval canaries, then validates every
+  generated artifact through
+  `scripts/check_sorafs_pdp_rollout_evidence.py` before writing. Checked-in
+  response-file examples cover provider transport and proof-generation
+  canaries.
 - `fixtures/sorafs_manifest/pdp/` now contains canonical PDP commitment,
   challenge, and proof `.to`/JSON pairs plus negative fixtures for duplicate
   hot-leaf challenge material and missing proof signatures. The fixture bundle
@@ -185,20 +215,19 @@ Implemented:
 - Torii test coverage that PDP proof-stream requests are rejected as unsupported
   while the provider protocol is absent.
 - Canonical `fixtures/sorafs_manifest/pdp/` commitment/challenge/proof samples.
-- Negative PDP fixtures for duplicate hot-leaf challenges and missing proof
-  signatures. The fixture generator now also emits deterministic negative
-  proof cases for missing segment Merkle paths, missing hot-leaf Merkle paths,
+- Negative PDP fixtures for duplicate hot-leaf challenges, missing proof
+  signatures, missing segment Merkle paths, missing hot-leaf Merkle paths,
   late proofs, wrong providers, wrong manifests, and witness coverage
-  mismatches once `generate_pdp_fixtures` is rerun.
+  mismatches. The fixture tests cover every committed negative `.to` payload and
+  verify that each commentary JSON `norito_bytes_hex` value matches the encoded
+  bytes.
 - Fail-closed PDP rollout evidence checker, dry-run-visible collection runner,
+  checker-backed evidence-contract export, payload-free canary builder,
   focused tests, and operator argfile templates for reviewed deployed evidence,
   including cross-artifact proof-summary digest binding.
 
 Required before production enablement:
 
-- Regenerate and commit the expanded negative PDP fixture artifacts for bad
-  paths, deadline overruns, wrong provider ids, wrong manifest digests, and
-  witness coverage mismatches once the workspace is free for fixture generation.
 - Storage-node integration tests that generate PDP proofs from persisted
   payloads and validate them against commitment roots.
 - Torii endpoint tests for challenge issuance, proof submission, governance
@@ -228,23 +257,21 @@ Completed local foundations:
 - Add structural validators and unit tests.
 - Derive PDP hot/segment commitment roots from stored payload trees.
 - Reserve proof-stream request and telemetry labels.
-- Generate canonical PDP fixture bundle and initial negative fixtures.
+- Generate canonical PDP fixture bundle and expanded negative fixtures.
 - Add reference validator and `sorafs-validate pdp` coverage for PDP binding.
 - Reject empty segment and hot-leaf Merkle paths in `PdpProofV1` and cover late
   proof, wrong provider, wrong manifest, and witness coverage mismatch paths in
   focused validator tests.
 - Extend `generate_pdp_fixtures` so the expanded negative PDP fixture set is
-  reproducible when fixture regeneration can run.
+  reproducible, committed, and covered by fixture inventory tests.
 - Keep the fail-closed PDP rollout evidence gate and collection planner covered
-  with proof-summary digest binding.
+  with proof-summary digest binding and rejection of evidence supplied for
+  excluded `--require-kind` values.
 
 Remaining production gates:
 
 - Implement provider challenge/proof transport.
 - Verify provider signatures and PDP inclusion witnesses.
-- Regenerate and commit the expanded negative fixture `.to`/JSON artifacts for
-  bad paths, deadline overruns, wrong provider ids, wrong manifest digests, and
-  witness coverage mismatches.
 - Archive PDP verdicts/failures in Governance DAG and wire repair handoff.
 - Collect deployed provider-transport, proof-generation, validator-replay,
   governance/repair, observability, and governed-approval evidence that passes

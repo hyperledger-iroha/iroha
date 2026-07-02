@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_node_client_protocol.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b6bcb9307ee3e1dbca76499a5880460fa01873c7e8e0071224bffcaba7cf9906
+source_hash: 62e601ce5e0ac2485f65089503ccb3baafefbd8f11a1c476619aed5ad83f08a8
 source_last_modified: "2026-01-22T15:38:30.712276+00:00"
 translation_last_reviewed: 2026-01-30
 ---

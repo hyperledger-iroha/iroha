@@ -968,9 +968,10 @@ impl RelayCertificateBundleV2 {
                 "Ed25519 public key is small-order (weak); rejected".to_owned(),
             ));
         }
-        validate_verify_signature_not_all_zero("Ed25519 signature", &self.signatures.ed25519)?;
+        let ed25519_signature =
+            parse_ed25519_verify_signature("Ed25519 signature", &self.signatures.ed25519)?;
         ed25519_public
-            .verify_strict(&ed_digest, &Signature::from_bytes(&self.signatures.ed25519))
+            .verify_strict(&ed_digest, &ed25519_signature)
             .map_err(|err| {
                 CertificateError::SignatureFailure(format!("Ed25519 verify failed: {err}"))
             })?;
@@ -1289,6 +1290,24 @@ fn validate_certificate_time_bounds(
     valid_after: i64,
     valid_until: i64,
 ) -> Result<(), CertificateError> {
+    if published_at < 0 {
+        return Err(CertificateError::InvalidFieldValue {
+            field: "certificate.published_at",
+            reason: "must be non-negative Unix seconds".to_owned(),
+        });
+    }
+    if valid_after < 0 {
+        return Err(CertificateError::InvalidFieldValue {
+            field: "certificate.valid_after",
+            reason: "must be non-negative Unix seconds".to_owned(),
+        });
+    }
+    if valid_until < 0 {
+        return Err(CertificateError::InvalidFieldValue {
+            field: "certificate.valid_until",
+            reason: "must be non-negative Unix seconds".to_owned(),
+        });
+    }
     if valid_after >= valid_until {
         return Err(CertificateError::InvalidFieldValue {
             field: "certificate.valid_until",
@@ -1535,6 +1554,18 @@ fn validate_verify_signature_not_all_zero(
         )));
     }
     Ok(())
+}
+
+fn parse_ed25519_verify_signature(
+    label: &str,
+    signature: &[u8; 64],
+) -> Result<Signature, CertificateError> {
+    validate_verify_signature_not_all_zero(label, signature)?;
+    crate::signature::ed25519::Ed25519Sha512::parse_signature(signature).map_err(|err| {
+        CertificateError::SignatureFailure(format!(
+            "{label} has invalid Ed25519 signature R encoding: {err}"
+        ))
+    })
 }
 
 /// Minimal CBOR encoder specialised for `SRCv2` structures.
@@ -1873,6 +1904,12 @@ mod tests {
     const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
+    ];
+
+    const ED25519_NONCANONICAL_IDENTITY: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
     ];
 
     fn sample_certificate() -> RelayCertificateV2 {
@@ -2693,6 +2730,44 @@ mod tests {
     #[test]
     fn parse_certificate_payload_rejects_invalid_validity_windows() {
         let mut certificate = sample_certificate();
+        certificate.published_at = -1;
+        let err = parse_certificate_payload(&certificate.to_cbor())
+            .expect_err("negative publication timestamps must fail");
+        match err {
+            CertificateError::InvalidFieldValue { field, reason } => {
+                assert_eq!(field, "certificate.published_at");
+                assert!(reason.contains("non-negative"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let mut certificate = sample_certificate();
+        certificate.valid_after = -1;
+        let err = parse_certificate_payload(&certificate.to_cbor())
+            .expect_err("negative valid_after timestamps must fail");
+        match err {
+            CertificateError::InvalidFieldValue { field, reason } => {
+                assert_eq!(field, "certificate.valid_after");
+                assert!(reason.contains("non-negative"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let mut certificate = sample_certificate();
+        certificate.published_at = 0;
+        certificate.valid_after = 0;
+        certificate.valid_until = -1;
+        let err = parse_certificate_payload(&certificate.to_cbor())
+            .expect_err("negative valid_until timestamps must fail");
+        match err {
+            CertificateError::InvalidFieldValue { field, reason } => {
+                assert_eq!(field, "certificate.valid_until");
+                assert!(reason.contains("non-negative"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let mut certificate = sample_certificate();
         certificate.valid_until = certificate.valid_after;
         let err = parse_certificate_payload(&certificate.to_cbor())
             .expect_err("zero-length validity windows must fail");
@@ -3030,6 +3105,60 @@ mod tests {
             CertificateError::SignatureFailure(message) => {
                 assert!(message.contains("ML-DSA signature"));
                 assert!(message.contains("all zero"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verification_rejects_invalid_ed25519_signature_r_before_backend() {
+        let certificate = sample_certificate();
+
+        let mut rng = StdRng::seed_from_u64(10);
+        let mut seed = [0u8; SECRET_KEY_LENGTH];
+        rng.fill_bytes(&mut seed);
+        let signing_key = SigningKey::from_bytes(&seed);
+        let verifying_key = VerifyingKey::from(&signing_key);
+
+        let mldsa_keys = generate_mldsa_keypair_from_os(MlDsaSuite::MlDsa65)
+            .expect("ML-DSA keypair generation should succeed");
+
+        let bundle = certificate
+            .issue(&signing_key, mldsa_keys.secret_key())
+            .expect("issue");
+
+        let mut small_order_r = bundle.clone();
+        small_order_r.signatures.ed25519[..ed25519_dalek::PUBLIC_KEY_LENGTH]
+            .copy_from_slice(&ED25519_SMALL_ORDER_POINT);
+        let err = small_order_r
+            .verify(
+                &verifying_key,
+                mldsa_keys.public_key(),
+                CertificateValidationPhase::Phase3RequireDual,
+            )
+            .expect_err("small-order Ed25519 signature R must fail before backend verify");
+        match err {
+            CertificateError::SignatureFailure(message) => {
+                assert!(message.contains("Ed25519 signature"));
+                assert!(message.contains("invalid Ed25519 signature R"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let mut noncanonical_r = bundle;
+        noncanonical_r.signatures.ed25519[..ed25519_dalek::PUBLIC_KEY_LENGTH]
+            .copy_from_slice(&ED25519_NONCANONICAL_IDENTITY);
+        let err = noncanonical_r
+            .verify(
+                &verifying_key,
+                mldsa_keys.public_key(),
+                CertificateValidationPhase::Phase3RequireDual,
+            )
+            .expect_err("noncanonical Ed25519 signature R must fail before backend verify");
+        match err {
+            CertificateError::SignatureFailure(message) => {
+                assert!(message.contains("Ed25519 signature"));
+                assert!(message.contains("invalid Ed25519 signature R"));
             }
             other => panic!("unexpected error: {other:?}"),
         }

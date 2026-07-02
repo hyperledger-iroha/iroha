@@ -338,7 +338,7 @@ fn prelude_macros_compile() {
                 let bob = account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
                 let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
                 set_account_detail(authority(), name!("cursor"), json!{ query: "sc_dummy", cursor: 1 });
-                transfer_asset(alice, bob, asset, 1);
+                transfer_asset(alice, bob, asset, 1, dataspace_id("0"));
             }
         }
     "#;
@@ -356,7 +356,8 @@ fn public_function_without_permission_rejected() {
                     account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
                     account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
                     asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-                    1
+                    1,
+                    dataspace_id("0")
                 );
             }
         }
@@ -434,7 +435,8 @@ fn public_function_with_permission_is_allowed() {
                     account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
                     account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
                     asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-                    1
+                    1,
+                    dataspace_id("0")
                 );
             }
         }
@@ -2481,8 +2483,8 @@ fn production_manifest_accepts_authority_placeholder_isi_access() {
 fn production_manifest_rejects_opaque_parameter_isi_access() {
     let src = r#"
         seiyaku Test {
-            kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {
-                transfer_asset(from, to, asset, amount);
+            kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int, space: DataSpaceId) permission(Admin) {
+                transfer_asset(from, to, asset, amount, space);
             }
         }
     "#;
@@ -2549,7 +2551,8 @@ fn namespaced_host_calls_and_std_map_new_parse_and_type() {
               account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
               account_id("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
               asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-              1
+              1,
+              dataspace_id("0")
             );
         }
     "#;
@@ -2570,7 +2573,8 @@ fn indirect_sensitive_calls_require_permission() {
               account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
               account_id("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
               asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
-              1
+              1,
+              dataspace_id("0")
             );
         }
 
@@ -3121,7 +3125,7 @@ fn parse_mint_asset_builtin() {
 #[test]
 fn parse_transfer_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: int){ transfer_asset(a,b,c,d); }";
+    let src = "fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: int, e: DataSpaceId){ transfer_asset(a,b,c,d,e); }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -3136,26 +3140,20 @@ fn parse_transfer_asset_builtin() {
 #[test]
 fn parse_transfer_batch_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: int){ transfer_batch((a,b,c,d), (b,a,c,d)); }";
+    let src = "fn f(a: AccountId, b: AccountId, c: AssetDefinitionId, d: int, e: DataSpaceId){ transfer_batch((a,b,c,d,e), (b,a,c,d,e)); }";
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
-    let begin_idx = instrs
-        .iter()
-        .position(|i| matches!(i, Instr::TransferBatchBegin))
-        .expect("begin not emitted");
-    let end_idx = instrs
-        .iter()
-        .position(|i| matches!(i, Instr::TransferBatchEnd))
-        .expect("end not emitted");
     assert!(
-        begin_idx < end_idx,
-        "batch begin must precede batch end (begin={begin_idx}, end={end_idx})"
+        !instrs
+            .iter()
+            .any(|i| matches!(i, Instr::TransferBatchBegin | Instr::TransferBatchEnd)),
+        "high-level transfer_batch must not emit batch boundary syscalls"
     );
     let transfer_count = instrs
         .iter()
-        .filter(|i| matches!(i, Instr::TransferAsset { .. }))
+        .filter(|i| matches!(i, Instr::TransferBatchAsset { .. }))
         .count();
     assert_eq!(
         transfer_count, 2,

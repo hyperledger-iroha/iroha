@@ -634,12 +634,16 @@ CommitCertificateMatchesFinality ==
     /\ commitEvidenceStake >= StakeQuorum
   )
 
+LiveCommitGateCanCommitState ==
+  /\ commitVotesHonest + commitVotesByz >= CommitQuorum
+  /\ stakeSigned >= StakeQuorum
+  /\ rbcState = "Delivered"
+
 LiveCommitGateMatchesFinality ==
-  committed <=>
-    CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, rbcState)
+  committed <=> LiveCommitGateCanCommitState
 
 LiveCommitGateRbcEvidenceMatches ==
-  CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, rbcState) <=>
+  LiveCommitGateCanCommitState <=>
     /\ commitVotesHonest + commitVotesByz >= CommitQuorum
     /\ stakeSigned >= StakeQuorum
     /\ rbcState = "Delivered"
@@ -6651,7 +6655,7 @@ RbcDeliveredWithoutFinalityWaitsForCommitEvidence ==
    /\ ~committed) =>
     /\ RbcDeliveredWithoutFinalityHasNoCommitCertificate
     /\ RbcDeliveredDisablesRbcProgress
-    /\ ~CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, rbcState)
+    /\ ~LiveCommitGateCanCommitState
     /\ phase # "Committed"
     /\ (phase = "CommitVote" => prepareVotes >= CommitQuorum)
 
@@ -10725,6 +10729,48 @@ DeliveredPendingCompleteWaitStateCommitVoteStepCompletesFinalityStep ==
           /\ commitEvidenceVotes' = commitVotesHonest + commitVotesByz + 1
           /\ commitEvidenceStake' = stakeSigned + StakePerByzVote)
 
+DeliveredPendingCompleteWaitStateCommitVoteStepMatchesCertifiedCommitEnvelopeStep ==
+  (/\ DeliveredPendingCompleteWaitState
+   /\ [Next]_vars
+   /\ (\/ /\ HonestCommitVote
+          /\ CanCommit(
+               commitVotesHonest + 1,
+               commitVotesByz,
+               stakeSigned + StakePerHonestVote,
+               rbcState
+             )
+       \/ /\ ByzantineEquivocateCommit
+          /\ CanCommit(
+               commitVotesHonest,
+               commitVotesByz + 1,
+               stakeSigned + StakePerByzVote,
+               rbcState
+             ))) =>
+    /\ DeliveredPendingCompleteWaitStateCommitVoteStepCompletesFinalityStep
+    /\ RbcDeliveredFinalityOnlyByCommitVoteStep
+    /\ RbcDeliveredFinalityStepCompletesCommittedDelivery
+    /\ RbcDeliveredFinalityCommitsCurrentViewStep
+    /\ RbcDeliveredFinalityLeavesOnlyGstElapsedGateStep
+    /\ RbcDeliveredFinalityInstallsCommitCertificateWitnessesStep
+    /\ RbcDeliveredFinalityMatchesCommitCertificateWitnessChangeStep
+    /\ RbcDeliveredFinalityMatchesCommitViewWitnessChangeStep
+    /\ RbcDeliveredFinalityMatchesLiveCommitGateCrossingStep
+    /\ RbcDeliveredFinalityDisablesProgressAfterCommittedDeliveryStep
+    /\ RbcDeliveredFinalityMatchesCertifiedSourceStackStep
+    /\ RbcDeliveredFinalityInstallsFinalityCertificateStackStep
+    /\ RbcDeliveredFinalityMatchesCommittedPhaseEntryStep
+    /\ RbcDeliveredFinalityMatchesCommitArtifactsChangeStep
+    /\ RbcDeliveredFinalityCouplesLatchAndCommitArtifactsStep
+    /\ RbcDeliveredFinalityRecordsExactCommitVoteWitnessesStep
+    /\ RbcDeliveredFinalityPreservesDeliveredRbcEvidenceStep
+    /\ RbcDeliveredFinalityPreservesViewPrepareHandoffEvidenceStep
+    /\ RbcDeliveredFinalityHasExactProtocolFrameStep
+    /\ RbcDeliveredFinalityHasExactCommitVoteActionFrameStep
+    /\ RbcDeliveredFinalityInstallsCommittedPostStateInvariantsStep
+    /\ RbcDeliveredFinalityPostStateGateSplitStep
+    /\ (~gst => RbcDeliveredFinalityPreGstPostStateLeavesOnlyGstElapsedStep)
+    /\ (gst => RbcDeliveredFinalityPostGstPostStateIsTerminalStep)
+
 DeliveredPendingCompleteWaitStatePrepareVoteStepSplitsStep ==
   (/\ DeliveredPendingCompleteWaitState
    /\ [Next]_vars
@@ -11241,6 +11287,150 @@ DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteBranchClassifierStep ==
           /\ commitEvidenceStake' = 0
           /\ commitView' = 0
           /\ ~FinalityCertificateStackPresent')
+
+DeliveredPendingCompleteWaitStateSpecStepCommittedOutcomeMatchesCertifiedEnvelopeStep ==
+  (/\ DeliveredPendingCompleteWaitState
+   /\ [Next]_vars
+   /\ committed') =>
+    /\ DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteBranchClassifierStep
+    /\ RbcDeliveredPendingSpecStepFinalitySourceMatchesCommitVoteStep
+    /\ DeliveredPendingCompleteWaitStateCommitVoteStepMatchesCertifiedCommitEnvelopeStep
+    /\ Next
+    /\ phase = "CommitVote"
+    /\ phase' = "Committed"
+    /\ ~DeliveredPendingCompleteWaitState'
+    /\ FinalityCertificateStackPresent'
+    /\ CommitDisablesProgressActions'
+    /\ commitEvidenceVotes' = commitVotesHonest' + commitVotesByz'
+    /\ commitEvidenceStake' = stakeSigned'
+    /\ commitView' = view'
+    /\ rbcState' = "Delivered"
+    /\ readyVotes' >= CommitQuorum
+    /\ chunkCount' >= MaxChunks
+    /\ headerSeen'
+    /\ digestValid'
+    /\ CanCommit(commitVotesHonest', commitVotesByz', stakeSigned', rbcState')
+    /\ \/ /\ HonestCommitVote
+          /\ ~ByzantineEquivocateCommit
+          /\ CanCommit(
+               commitVotesHonest + 1,
+               commitVotesByz,
+               stakeSigned + StakePerHonestVote,
+               rbcState
+             )
+          /\ commitVotesHonest' = commitVotesHonest + 1
+          /\ commitVotesByz' = commitVotesByz
+          /\ stakeSigned' = stakeSigned + StakePerHonestVote
+       \/ /\ ~HonestCommitVote
+          /\ ByzantineEquivocateCommit
+          /\ CanCommit(
+               commitVotesHonest,
+               commitVotesByz + 1,
+               stakeSigned + StakePerByzVote,
+               rbcState
+             )
+          /\ commitVotesHonest' = commitVotesHonest
+          /\ commitVotesByz' = commitVotesByz + 1
+          /\ stakeSigned' = stakeSigned + StakePerByzVote
+
+DeliveredPendingCompleteWaitStateSpecStepNonCommittedOutcomeMatchesWaitEnvelopeStep ==
+  (/\ DeliveredPendingCompleteWaitState
+   /\ [Next]_vars
+   /\ ~committed') =>
+    /\ DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteBranchClassifierStep
+    /\ RbcDeliveredPendingSpecStepStableCommitArtifactsCompleteWaitStateStep
+    /\ ~(\/ commitEvidenceVotes' # commitEvidenceVotes
+          \/ commitEvidenceStake' # commitEvidenceStake
+          \/ commitView' # commitView)
+    /\ DeliveredPendingCompleteWaitState'
+    /\ RbcDeliveredWithoutFinalityWaitsForCommitEvidence'
+    /\ RbcDeliveredWithoutFinalityHasNoCommitCertificate'
+    /\ DeliverImpliesEvidence'
+    /\ ViewEvidenceIsCompleteOrEmpty'
+    /\ phase' \in {"Propose", "Prepare", "CommitVote", "NewView"}
+    /\ rbcState' = "Delivered"
+    /\ readyVotes' >= CommitQuorum
+    /\ chunkCount' >= MaxChunks
+    /\ headerSeen'
+    /\ digestValid'
+    /\ commitEvidenceVotes' = 0
+    /\ commitEvidenceStake' = 0
+    /\ commitView' = 0
+    /\ ~FinalityCertificateStackPresent'
+    /\ FinalityCertificateStackComplete'
+    /\ FinalityCertificateStackMatchesFinality'
+    /\ CommitCertificateMatchesFinality'
+    /\ LiveCommitGateMatchesFinality'
+    /\ LiveCommitGateRbcEvidenceMatches'
+    /\ CommitDisablesProgressActions'
+    /\ ~CanCommit(commitVotesHonest', commitVotesByz', stakeSigned', rbcState')
+    /\ ~RbcInitEnabled'
+    /\ ~RbcChunkGoodEnabled'
+    /\ ~RbcReadyGoodEnabled'
+    /\ ~RbcDeliverGoodEnabled'
+    /\ ~ByzantineFaultEnabled'
+    /\ (PostGstProgressEnabled' <=>
+          \/ HonestProposeEnabled'
+          \/ HonestPrepareVoteEnabled'
+          \/ HonestCommitVoteEnabled'
+          \/ HonestNewViewVoteEnabled')
+    /\ (GstElapsedEnabled' <=> ~gst')
+    /\ (TimeoutTickEnabled' <=> (~gst' \/ ~PostGstProgressEnabled'))
+    /\ (Next <=>
+          \/ HonestPropose
+          \/ HonestPrepareVote
+          \/ HonestCommitVote
+          \/ ByzantineEquivocateCommit
+          \/ TimeoutTick
+          \/ HonestNewViewVote
+          \/ GstElapsed)
+    /\ (\/ /\ Next
+          /\ DeliveredPendingCompleteWaitStateNextStepMatchesNamedActionBranchStep
+       \/ /\ ~Next
+          /\ DeliveredPendingCompleteWaitStateStutterStepKeepsWaitStateStep)
+
+DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteOutcomeEnvelopeStep ==
+  (/\ DeliveredPendingCompleteWaitState
+   /\ [Next]_vars) =>
+    /\ DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteBranchClassifierStep
+    /\ DeliveredPendingCompleteWaitStateSpecStepClosesStep
+    /\ rbcState' = "Delivered"
+    /\ readyVotes' >= CommitQuorum
+    /\ chunkCount' >= MaxChunks
+    /\ headerSeen'
+    /\ digestValid'
+    /\ ((\/ commitEvidenceVotes' # commitEvidenceVotes
+          \/ commitEvidenceStake' # commitEvidenceStake
+          \/ commitView' # commitView) <=> committed')
+    /\ (committed' =>
+          /\ DeliveredPendingCompleteWaitStateSpecStepCommittedOutcomeMatchesCertifiedEnvelopeStep
+          /\ ~DeliveredPendingCompleteWaitState'
+          /\ phase = "CommitVote"
+          /\ phase' = "Committed"
+          /\ FinalityCertificateStackPresent'
+          /\ CommitDisablesProgressActions'
+          /\ commitEvidenceVotes' = commitVotesHonest' + commitVotesByz'
+          /\ commitEvidenceStake' = stakeSigned'
+          /\ commitEvidenceVotes' >= CommitQuorum
+          /\ commitEvidenceStake' >= StakeQuorum
+          /\ commitView' = view'
+          /\ CanCommit(commitVotesHonest', commitVotesByz', stakeSigned', rbcState'))
+    /\ (~committed' =>
+          /\ DeliveredPendingCompleteWaitStateSpecStepNonCommittedOutcomeMatchesWaitEnvelopeStep
+          /\ DeliveredPendingCompleteWaitState'
+          /\ RbcDeliveredWithoutFinalityWaitsForCommitEvidence'
+          /\ RbcDeliveredWithoutFinalityHasNoCommitCertificate'
+          /\ phase' \in {"Propose", "Prepare", "CommitVote", "NewView"}
+          /\ commitEvidenceVotes' = 0
+          /\ commitEvidenceStake' = 0
+          /\ commitView' = 0
+          /\ ~FinalityCertificateStackPresent'
+          /\ ~CanCommit(commitVotesHonest', commitVotesByz', stakeSigned', rbcState')
+          /\ ~RbcInitEnabled'
+          /\ ~RbcChunkGoodEnabled'
+          /\ ~RbcReadyGoodEnabled'
+          /\ ~RbcDeliverGoodEnabled'
+          /\ ~ByzantineFaultEnabled')
 
 RbcStateChangeMatchesLocalExitClassificationStep ==
   (rbcState' # rbcState) =>
@@ -12353,6 +12543,9 @@ DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysPreservesWaitState ==
 DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysCompletesFinality ==
   [] [DeliveredPendingCompleteWaitStateCommitVoteStepCompletesFinalityStep]_vars
 
+DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysMatchesCertifiedCommitEnvelope ==
+  [] [DeliveredPendingCompleteWaitStateCommitVoteStepMatchesCertifiedCommitEnvelopeStep]_vars
+
 DeliveredPendingCompleteWaitStatePrepareVoteStepAlwaysSplits ==
   [] [DeliveredPendingCompleteWaitStatePrepareVoteStepSplitsStep]_vars
 
@@ -12377,11 +12570,21 @@ DeliveredPendingCompleteWaitStateStutterStepAlwaysKeepsWaitState ==
 DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteBranchClassifier ==
   [] [DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteBranchClassifierStep]_vars
 
+DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCommittedCertifiedEnvelope ==
+  [] [DeliveredPendingCompleteWaitStateSpecStepCommittedOutcomeMatchesCertifiedEnvelopeStep]_vars
+
+DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesNonCommittedWaitEnvelope ==
+  [] [DeliveredPendingCompleteWaitStateSpecStepNonCommittedOutcomeMatchesWaitEnvelopeStep]_vars
+
+DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteOutcomeEnvelope ==
+  [] [DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteOutcomeEnvelopeStep]_vars
+
 DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope ==
   /\ DeliveredPendingCompleteWaitStateSpecStepAlwaysCloses
   /\ DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysSplits
   /\ DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysPreservesWaitState
   /\ DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysCompletesFinality
+  /\ DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysMatchesCertifiedCommitEnvelope
   /\ DeliveredPendingCompleteWaitStatePrepareVoteStepAlwaysSplits
   /\ DeliveredPendingCompleteWaitStateTimeoutStepAlwaysStartsNewView
   /\ DeliveredPendingCompleteWaitStateNewViewVoteStepAlwaysSplits
@@ -12390,6 +12593,9 @@ DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope ==
   /\ DeliveredPendingCompleteWaitStateNextStepAlwaysMatchesNamedActionBranch
   /\ DeliveredPendingCompleteWaitStateStutterStepAlwaysKeepsWaitState
   /\ DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteBranchClassifier
+  /\ DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCommittedCertifiedEnvelope
+  /\ DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesNonCommittedWaitEnvelope
+  /\ DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteOutcomeEnvelope
 
 RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope ==
   /\ RbcDeliveryNeverLost
@@ -12624,6 +12830,11 @@ RbcProgressEvidenceNeverDiverges ==
 RbcPartialProgressEvidenceNeverDiverges ==
   [] RbcPartialProgressEvidenceMatchesState
 
+RbcProgressStateEvidenceAlwaysMatchesEnvelope ==
+  /\ RbcProgressEvidenceNeverDiverges
+  /\ RbcPartialProgressEvidenceNeverDiverges
+  /\ RbcLiveEvidenceCausalityAlwaysMatchesEnvelope
+
 RbcCorruptedDigestNeverValid ==
   [] RbcCorruptedNeverHasValidDigest
 
@@ -12705,6 +12916,27 @@ RbcCounterEvidenceNeverOutrunsValidDigestOrCorruption ==
 RbcInvalidDigestNeverLeavesIdleOrCorruption ==
   [] RbcInvalidDigestRequiresIdleOrCorruption
 
+RbcLiveEvidenceCausalityAlwaysMatchesEnvelope ==
+  /\ RbcHeaderInstallationOnlyByProposalOrInit
+  /\ RbcHeaderEvidenceNeverLost
+  /\ RbcMissingHeaderNeverLeavesIdle
+  /\ RbcHeaderEvidenceNeverReturnsToIdle
+  /\ RbcDigestInstallationOnlyByProposalInitOrChunk
+  /\ RbcValidDigestNeverOutrunsHeader
+  /\ RbcValidDigestNeverLeavesActiveStates
+  /\ RbcChunkEvidenceNeverOutrunsHeader
+  /\ RbcChunkEvidenceNeverLeavesChunkOrCorruptedHandoff
+  /\ RbcPartialChunkEvidenceNeverLeavesChunkingOrCorruptedHandoff
+  /\ RbcFullChunkCoverageNeverLeavesCoveredOrCorruptedHandoff
+  /\ RbcZeroChunkEvidenceNeverLeavesPreChunkOrCorruptedHandoff
+  /\ RbcReadyVotesNeverOutrunChunkHeaderEvidence
+  /\ RbcReadyVotesNeverLeaveReadyOrCorruptedHandoff
+  /\ RbcPartialReadyEvidenceNeverLeavesPartialOrCorruptedHandoff
+  /\ RbcReadyQuorumEvidenceNeverLeavesQuorumOrCorruptedHandoff
+  /\ RbcZeroReadyEvidenceNeverLeavesPreReadyOrCorruptedHandoff
+  /\ RbcCounterEvidenceNeverOutrunsValidDigestOrCorruption
+  /\ RbcInvalidDigestNeverLeavesIdleOrCorruption
+
 RbcWithheldNeverReached ==
   [] (rbcState # "Withheld")
 
@@ -12741,11 +12973,18 @@ RbcInitEntryOnlyByProposalOrInit ==
 RbcCorruptionExitOnlyByInit ==
   [] [RbcCorruptionExitOnlyByInitStep]_vars
 
+RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope ==
+  /\ RbcIdleExitOnlyByProposalOrInit
+  /\ RbcInitEntryOnlyByProposalOrInit
+  /\ RbcWithheldNeverReached
+  /\ RbcWithheldEntryOnlyByStutteringFromWithheld
+
 RbcProgressMutationAlwaysMatchesLocalClassification ==
   /\ RbcStateOnlyChangesByProtocolOrFault
   /\ RbcStateChangeAlwaysMatchesLocalExitClassification
   /\ RbcEvidenceOnlyChangesByProtocolOrFault
   /\ RbcEvidenceChangeAlwaysMatchesLocalEffectClassification
+  /\ RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope
   /\ RbcDeliveryEntryOnlyByDeliver
   /\ RbcDeliveryEntryAlwaysMatchesReadyQuorumExitAndCommitBranch
   /\ RbcCorruptionEntryOnlyByFault
@@ -12904,6 +13143,7 @@ LiveReadyVotesNeverBypassRbcHandoff ==
   [] LiveReadyVotesStayInRbcHandoff
 
 RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope ==
+  /\ RbcProgressStateEvidenceAlwaysMatchesEnvelope
   /\ RbcProgressMutationAlwaysMatchesLocalClassification
   /\ LiveHeaderDigestEvidenceNeverBypassRbcHandoff
   /\ LiveChunkEvidenceNeverBypassRbcHandoff
@@ -12924,6 +13164,7 @@ SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope ==
   /\ PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope
   /\ CommitVoteHandoffAlwaysMatchesFinalityEnvelope
   /\ FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope
+  /\ PendingProtocolStepsNeverChangeGst
   /\ RbcLifecycleAlwaysMatchesEndToEndEnvelope
 
 SumeragiConsensusCoreStateMatchesEnvelope ==
@@ -13020,12 +13261,8 @@ SumeragiConsensusCoreStateMatchesEnvelope ==
   /\ LiveChunkEvidenceStayInRbcHandoff
   /\ LiveReadyVotesStayInRbcHandoff
 
-SumeragiConsensusCoreStateSafetyEnvelope ==
-  /\ TypeInvariant
-  /\ SumeragiConsensusCoreStateMatchesEnvelope
-
 SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope ==
-  [] SumeragiConsensusCoreStateSafetyEnvelope
+  [] SumeragiConsensusCoreStateMatchesEnvelope
 
 SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope ==
   /\ SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope

@@ -8,7 +8,6 @@ import {
   generateKeyPair,
   isKagemushaRecursiveSpendNativeAvailable,
   kagemushaRecursiveSpendInit,
-  KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
   normalizeCryptoAlgorithm,
   preferredKagemushaOfflineSpendMode,
@@ -204,6 +203,37 @@ test("browser crypto normalizes all algorithm labels but only signs Ed25519 loca
   );
 });
 
+test("browser crypto exposes recovery phrase helpers in source and dist bundles", () => {
+  const entropy = Buffer.from(Array.from({ length: 32 }, (_, index) => index + 1));
+
+  for (const [label, crypto] of [
+    ["src", srcBrowserCrypto],
+    ["dist", distBrowserCrypto],
+  ]) {
+    const recovery = crypto.ed25519SeedToRecoveryPhrase(entropy);
+
+    assert.equal(recovery.wordCount, 24, `${label} exports 24-word Ed25519 seed recovery`);
+    assert.equal(recovery.words.length, 24, `${label} recovery word count matches`);
+    assert.equal(crypto.validateRecoveryPhrase(recovery.phrase), true, `${label} validates generated phrase`);
+    assert.deepEqual(crypto.recoveryPhraseToEntropy(recovery.phrase), entropy, `${label} recovers original seed`);
+    assert.deepEqual(
+      crypto.deriveEd25519SeedFromRecoveryPhrase(recovery.phrase),
+      entropy,
+      `${label} derives original Ed25519 seed`,
+    );
+    assert.throws(
+      () => crypto.normalizeRecoveryPhrase(recovery.words.slice(0, 11).join(" ")),
+      /12 or 24 words/,
+      `${label} rejects unsupported word count`,
+    );
+    assert.throws(
+      () => crypto.entropyToRecoveryPhrase(Buffer.alloc(20)),
+      /16 or 32 bytes/,
+      `${label} rejects unsupported entropy length`,
+    );
+  }
+});
+
 test("browser crypto exposes native-only helpers as safe stubs", () => {
   for (const [label, crypto] of [
     ["src", srcBrowserCrypto],
@@ -217,13 +247,18 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
     );
     assert.equal(
       crypto.preferredKagemushaOfflineSpendMode(),
-      crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
-      `${label} browser build must default to checked prefold spend mode`,
+      null,
+      `${label} browser build must expose no preferred Kagemusha mode without recursive native support`,
     );
     assert.equal(
-      crypto.preferredKagemushaOfflineSpendMode(true),
+      crypto.preferredKagemushaOfflineSpendMode(false, true),
       crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
       `${label} native recursive availability should select recursive spend mode`,
+    );
+    assert.throws(
+      () => crypto.preferredKagemushaOfflineSpendMode(true),
+      /requires either zero arguments or both recursiveCompactAvailable and recursiveSpendAvailable/u,
+      `${label} browser build rejects partial explicit preferred-mode capabilities`,
     );
     assert.equal(
       crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
@@ -360,11 +395,11 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
     );
     assert.equal(
       crypto.normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(""),
-      crypto.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      "",
     );
     assert.equal(
       crypto.isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(""),
-      true,
+      false,
     );
     assert.equal(
       crypto.isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(

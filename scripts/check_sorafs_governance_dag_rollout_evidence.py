@@ -30,8 +30,10 @@ from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
 from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
     build_evidence_artifact,
     count_evidence_artifacts,
+    recognized_evidence_artifacts,
     count_evidence_files,
     evidence_gate_status,
     evidence_artifact_is_valid,
@@ -62,6 +64,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     require_zero_count,
 )
 from sorafs_required_kinds import (  # noqa: E402
@@ -121,6 +124,7 @@ PUBLIC_HEAD_BOUND_KINDS = (
     "ipfs_ipns_e2e",
     "governance_approval",
 )
+POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -208,6 +212,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "parent_chain_verified",
         "car_segments_pinned",
         "public_head_cid_hex",
+        "policy_digest_hex",
         "pin_lag_seconds",
         "head_age_seconds",
         "block_count",
@@ -309,6 +314,7 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "generated_at_unix",
     "deployment_id",
     "environment",
+    "deployment_context_reviewed",
     "public_head_cid_hex",
     "checkpoint_digest_hex",
     "policy_digest_hex",
@@ -343,6 +349,12 @@ def validate_ingest_service(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "quarantine_invalid_blocks", errors)
     require_positive_int(payload, "source_count", errors)
     require_string_coverage(payload, "payload_kinds", "", REQUIRED_PAYLOAD_KINDS, errors)
+    require_string_inventory_count_match(
+        payload,
+        "payload_kinds",
+        "source_count",
+        errors,
+    )
     require_false(payload, "payload_bytes_included", errors)
 
 
@@ -358,6 +370,7 @@ def validate_publisher_service(
     require_bool_true(payload, "parent_chain_verified", errors)
     require_bool_true(payload, "car_segments_pinned", errors)
     require_hex(payload, "public_head_cid_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
     require_maximum_number(payload, "pin_lag_seconds", options.max_pin_lag_secs, errors)
     require_maximum_number(payload, "head_age_seconds", options.max_head_age_secs, errors)
     require_minimum_int(payload, "block_count", options.min_blocks, errors)
@@ -404,6 +417,14 @@ def validate_dashboard_api(
     require_hex(payload, "public_head_cid_hex", HEX64_LEN, errors)
     require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_string_coverage(payload, "routes", "name", REQUIRED_DASHBOARD_ROUTES, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     require_bool_true(payload, "runtime_ipfs_backed", errors)
     require_false(payload, "response_bodies_included", errors)
     validate_routes(payload, errors, options)
@@ -517,6 +538,9 @@ def build_summary(
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
     valid_public_head_cids: set[str] = set()
     public_head_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_policy_digests: set[str] = set()
+    policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_checkpoint_digests: set[str] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -539,7 +563,7 @@ def build_summary(
             )
             continue
         artifact = build_evidence_artifact(
-            path,
+            archive_artifact_path_label(path, evidence_dirs),
             digest,
             payload,
             validation_errors,
@@ -547,12 +571,22 @@ def build_summary(
         )
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         if evidence_artifact_is_valid(artifact):
-            digest = evidence_artifact_fingerprint(artifact).get("public_head_cid_hex")
+            fingerprint = evidence_artifact_fingerprint(artifact)
+            digest = fingerprint.get("public_head_cid_hex")
             if kind_name == "publisher_service":
                 if isinstance(digest, str):
                     valid_public_head_cids.add(digest.lower())
-            elif kind_name in PUBLIC_HEAD_BOUND_KINDS:
+                policy_digest = fingerprint.get("policy_digest_hex")
+                if isinstance(policy_digest, str):
+                    valid_policy_digests.add(policy_digest.lower())
+            if kind_name == "operator_recovery":
+                checkpoint_digest = fingerprint.get("checkpoint_digest_hex")
+                if isinstance(checkpoint_digest, str):
+                    valid_checkpoint_digests.add(checkpoint_digest.lower())
+            if kind_name in PUBLIC_HEAD_BOUND_KINDS:
                 public_head_bound_artifacts.append((kind_name, artifact))
+            if kind_name in POLICY_BOUND_KINDS:
+                policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_validation_errors(path, validation_errors, errors)
 
     validate_bound_evidence_digest_references(
@@ -569,6 +603,23 @@ def build_summary(
         missing_anchor_error_template=(
             "{kind_name} public_head_cid_hex requires a valid "
             "publisher_service public_head_cid_hex"
+        ),
+    )
+
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("publisher_service",),
+        bound_artifacts=policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must match a valid "
+            "publisher_service policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex requires a valid "
+            "publisher_service policy_digest_hex"
         ),
     )
 
@@ -594,7 +645,10 @@ def build_summary(
         },
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
+        "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
+        "valid_checkpoint_digests": sorted(valid_checkpoint_digests),
         "valid_public_head_cids": sorted(valid_public_head_cids),
+        "valid_policy_digests": sorted(valid_policy_digests),
         "required": required,
         "errors": errors,
     }

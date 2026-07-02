@@ -51,16 +51,41 @@ public final class OfflineBearerCashTextCodec {
   }
 
   public static OfflineBearerCashPayloadKindV1 payloadKind(final String text) {
-    final String trimmed = Objects.requireNonNull(text, "text").trim();
-    if (trimmed.startsWith(RECEIVE_REQUEST_TEXT_PREFIX)) {
+    final String value = Objects.requireNonNull(text, "text");
+    if (hasExactUnpaddedBase64UrlPayload(value, RECEIVE_REQUEST_TEXT_PREFIX)) {
       return OfflineBearerCashPayloadKindV1.RECEIVE_REQUEST;
     }
-    if (trimmed.startsWith(PAYMENT_TEXT_PREFIX)) {
+    if (hasExactUnpaddedBase64UrlPayload(value, PAYMENT_TEXT_PREFIX)) {
       return OfflineBearerCashPayloadKindV1.PAYMENT;
     }
-    if (trimmed.startsWith(ACK_TEXT_PREFIX)) {
+    if (hasExactUnpaddedBase64UrlPayload(value, ACK_TEXT_PREFIX)) {
       return OfflineBearerCashPayloadKindV1.ACK;
     }
     return null;
+  }
+
+  private static boolean hasExactUnpaddedBase64UrlPayload(
+      final String text, final String prefix) {
+    if (!text.startsWith(prefix)) {
+      return false;
+    }
+    final String payload = text.substring(prefix.length());
+    if (payload.isEmpty() || !payload.trim().equals(payload) || payload.indexOf('=') >= 0) {
+      return false;
+    }
+    for (int index = 0; index < payload.length(); index++) {
+      if (!isBase64UrlCharacter(payload.charAt(index))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean isBase64UrlCharacter(final char ch) {
+    return (ch >= 'A' && ch <= 'Z')
+        || (ch >= 'a' && ch <= 'z')
+        || (ch >= '0' && ch <= '9')
+        || ch == '-'
+        || ch == '_';
   }
 }

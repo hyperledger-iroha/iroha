@@ -45,18 +45,19 @@ fn sorafs_node_cli_ingest_and_export_roundtrip() -> Result<(), Box<dyn std::erro
     }
 
     let temp_dir = TempDir::new()?;
-    let storage_dir = temp_dir.path().join("storage");
+    let temp_path = temp_dir.path().canonicalize()?;
+    let storage_dir = temp_path.join("storage");
 
     let payload = b"sorafs-node CLI integration payload";
     let (_plan, manifest) = build_manifest(payload)?;
     let manifest_bytes = norito::to_bytes(&manifest)?;
 
-    let manifest_path = temp_dir.path().join("manifest.to");
+    let manifest_path = temp_path.join("manifest.to");
     fs::write(&manifest_path, &manifest_bytes)?;
-    let payload_path = temp_dir.path().join("payload.bin");
+    let payload_path = temp_path.join("payload.bin");
     fs::write(&payload_path, payload)?;
 
-    let ingest_plan_path = temp_dir.path().join("ingest_plan.json");
+    let ingest_plan_path = temp_path.join("ingest_plan.json");
     let mut ingest = cargo_bin_cmd!("sorafs-node");
     let ingest_assert = ingest
         .arg("ingest")
@@ -80,9 +81,9 @@ fn sorafs_node_cli_ingest_and_export_roundtrip() -> Result<(), Box<dyn std::erro
     let ingest_plan_value: norito::json::Value =
         norito::json::from_slice(&fs::read(&ingest_plan_path)?)?;
 
-    let export_manifest_path = temp_dir.path().join("export_manifest.to");
-    let export_payload_path = temp_dir.path().join("export_payload.bin");
-    let export_plan_path = temp_dir.path().join("export_plan.json");
+    let export_manifest_path = temp_path.join("export_manifest.to");
+    let export_payload_path = temp_path.join("export_payload.bin");
+    let export_plan_path = temp_path.join("export_plan.json");
     let mut export = cargo_bin_cmd!("sorafs-node");
     let export_assert = export
         .arg("export")
@@ -124,7 +125,8 @@ fn sorafs_node_cli_ingest_por_flow() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let temp_dir = TempDir::new()?;
-    let storage_dir = temp_dir.path().join("storage");
+    let temp_path = temp_dir.path().canonicalize()?;
+    let storage_dir = temp_path.join("storage");
     fs::create_dir_all(&storage_dir)?;
 
     let base = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -189,15 +191,16 @@ fn sorafs_node_cli_ingest_por_replays_proof() -> Result<(), Box<dyn std::error::
     }
 
     let temp_dir = TempDir::new()?;
-    let storage_dir = temp_dir.path().join("storage");
+    let temp_path = temp_dir.path().canonicalize()?;
+    let storage_dir = temp_path.join("storage");
 
     let payload = b"sorafs-node PoR replay payload";
     let (_plan, manifest) = build_manifest(payload)?;
     let manifest_bytes = norito::to_bytes(&manifest)?;
 
-    let manifest_path = temp_dir.path().join("manifest_por.to");
+    let manifest_path = temp_path.join("manifest_por.to");
     fs::write(&manifest_path, &manifest_bytes)?;
-    let payload_path = temp_dir.path().join("payload_por.bin");
+    let payload_path = temp_path.join("payload_por.bin");
     fs::write(&payload_path, payload)?;
 
     let mut ingest = cargo_bin_cmd!("sorafs-node");
@@ -236,8 +239,8 @@ fn sorafs_node_cli_ingest_por_replays_proof() -> Result<(), Box<dyn std::error::
     );
     let proof = fixture_proof(&challenge);
 
-    let challenge_path = temp_dir.path().join("challenge.to");
-    let proof_path = temp_dir.path().join("proof.to");
+    let challenge_path = temp_path.join("challenge.to");
+    let proof_path = temp_path.join("proof.to");
     fs::write(&challenge_path, norito::to_bytes(&challenge)?)?;
     fs::write(&proof_path, norito::to_bytes(&proof)?)?;
 

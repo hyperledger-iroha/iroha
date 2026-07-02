@@ -2902,6 +2902,27 @@ pub(crate) fn metal_ed25519_verify_batch(
     if !metal_runtime_allowed() {
         return None;
     }
+    use ed25519_dalek::VerifyingKey;
+
+    let invalid_inputs = signatures
+        .iter()
+        .zip(public_keys)
+        .map(|(signature, public_key)| {
+            crate::signature::signature_bytes_are_all_zero(signature)
+                || crate::signature::material_bytes_are_all_zero(public_key)
+                || crate::signature::signature_has_invalid_ed25519_r(signature)
+                || VerifyingKey::from_bytes(public_key)
+                    .map(|key| crate::signature::ed25519_public_key_is_weak(&key))
+                    .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+    let valid_count = invalid_inputs
+        .iter()
+        .filter(|&&is_invalid| !is_invalid)
+        .count();
+    if valid_count == 0 {
+        return Some(vec![false; signatures.len()]);
+    }
     use core::ptr::NonNull;
 
     use objc2::rc::autoreleasepool;
@@ -2909,10 +2930,22 @@ pub(crate) fn metal_ed25519_verify_batch(
 
     autoreleasepool(|_| {
         with_metal_state_try(|ctx| {
-            let n = signatures.len();
-            let flat_sigs: Vec<u8> = signatures.iter().flat_map(|s| s.iter()).copied().collect();
-            let flat_pks: Vec<u8> = public_keys.iter().flat_map(|p| p.iter()).copied().collect();
-            let flat_hrams: Vec<u8> = hrams.iter().flat_map(|h| h.iter()).copied().collect();
+            let n = valid_count;
+            let mut valid_indices = Vec::with_capacity(valid_count);
+            let mut flat_sigs = Vec::with_capacity(valid_count * 64);
+            let mut flat_pks = Vec::with_capacity(valid_count * 32);
+            let mut flat_hrams = Vec::with_capacity(valid_count * 32);
+            for (index, ((signature, public_key), hram)) in
+                signatures.iter().zip(public_keys).zip(hrams).enumerate()
+            {
+                if invalid_inputs[index] {
+                    continue;
+                }
+                valid_indices.push(index);
+                flat_sigs.extend_from_slice(signature);
+                flat_pks.extend_from_slice(public_key);
+                flat_hrams.extend_from_slice(hram);
+            }
             let count_buf = [n as u32];
 
             let Some(pipeline) = ctx.ed25519_signature.as_ref() else {
@@ -2979,7 +3012,14 @@ pub(crate) fn metal_ed25519_verify_batch(
             }
             let out =
                 unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n) };
-            Some(out.iter().map(|b| *b != 0).collect())
+            let mut merged = vec![false; signatures.len()];
+            for (index, verified) in valid_indices
+                .into_iter()
+                .zip(out.iter().map(|byte| *byte != 0))
+            {
+                merged[index] = verified;
+            }
+            Some(merged)
         })
     })
 }

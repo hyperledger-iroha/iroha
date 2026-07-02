@@ -1,6 +1,8 @@
 # Example arguments for the SFM-3 reputation rollout evidence gate.
 # Use runtime artifact locations; do not store bearer tokens, signing keys,
 # raw snapshots, proof bytes, response bodies, or operator secrets.
+# Each evidence artifact must include reviewed deployment context fields:
+# generated_at_unix, deployment_id, environment, and deployment_context_reviewed.
 --evidence-dir
 artifacts/sorafs/reputation/staged
 --evidence

@@ -40,11 +40,47 @@ from sorafs_runner_preflight import (  # noqa: E402
     emit_runner_exception,
     run_command_plan,
     require_existing_files,
+    require_no_unrequired_evidence,
     require_runner_non_negative_int,
     require_runner_positive_int,
+    validate_runner_evidence_plan,
+    validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
 )
+
+
+PLAN_SCHEMA = "sorafs.orderbook.rollout_evidence_collection_plan.v1"
+PLAN_FIELDS = frozenset(
+    {
+        "schema",
+        "verifier_summary_schema",
+        "required_kinds",
+        "thresholds",
+        "external_evidence",
+        "evidence_contract",
+        "steps",
+    }
+)
+PLAN_REQUIRED_THRESHOLD_FIELDS = frozenset(
+    {
+        "max_evidence_age_secs",
+        "max_route_latency_ms",
+        "max_stream_lag_ms",
+        "max_matcher_lag_ms",
+        "min_reconciliation_peers",
+    }
+)
+PLAN_POSITIVE_THRESHOLD_FIELDS = frozenset(
+    {
+        "max_route_latency_ms",
+        "max_stream_lag_ms",
+        "max_matcher_lag_ms",
+        "min_reconciliation_peers",
+        "now_unix",
+    }
+)
+PLAN_NON_NEGATIVE_THRESHOLD_FIELDS = frozenset({"max_evidence_age_secs"})
 
 
 @dataclass(frozen=True)
@@ -54,8 +90,6 @@ class CommandPlan:
     label: str
     artifact: Path | None
     command: list[str]
-
-
 
 
 EVIDENCE_OPTIONS_BY_KIND = {
@@ -100,8 +134,14 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         paths = paths_by_kind[kind]
         if not paths:
             errors.append(
-                f"missing {EVIDENCE_FLAGS_BY_KIND[kind]} for required `{kind}` rollout evidence"
+                "missing required rollout evidence input"
             )
+    require_no_unrequired_evidence(
+        paths_by_kind,
+        args.required_kinds,
+        errors,
+        diagnostic="rollout evidence supplied for unrequired kind",
+    )
 
     for kind, paths in paths_by_kind.items():
         errors.extend(require_existing_files(paths, EVIDENCE_FLAGS_BY_KIND[kind], seen=seen_input_files))
@@ -148,7 +188,9 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     return [CommandPlan("rollout_evidence_gate", summary_out, verifier_command)]
 
 
-def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
+def threshold_values(args: argparse.Namespace) -> dict[str, int]:
+    """Return threshold values rendered in dry-run plans."""
+
     thresholds: dict[str, int] = {
         "max_evidence_age_secs": args.max_evidence_age_secs,
         "max_route_latency_ms": args.max_route_latency_ms,
@@ -158,24 +200,39 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
     }
     if args.now_unix is not None:
         thresholds["now_unix"] = args.now_unix
+    return thresholds
+
+
+def external_evidence(args: argparse.Namespace) -> dict[str, list[str]]:
+    """Return reviewed external evidence paths rendered in dry-run plans."""
 
     return {
-        "schema": "sorafs.orderbook.rollout_evidence_collection_plan.v1",
+        kind: [str(path) for path in paths]
+        for kind, paths in evidence_paths_by_kind(args).items()
+        if paths
+    }
+
+
+def evidence_contract(args: argparse.Namespace) -> dict[str, dict[str, object]]:
+    """Return the checker-backed evidence contract rendered in dry-run plans."""
+
+    return {
+        kind: {
+            "schema": KIND_BY_NAME[kind].schema,
+            "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+        }
+        for kind in args.required_kinds
+    }
+
+
+def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
+    return {
+        "schema": PLAN_SCHEMA,
         "verifier_summary_schema": SUMMARY_SCHEMA,
         "required_kinds": list(args.required_kinds),
-        "thresholds": thresholds,
-        "external_evidence": {
-            kind: [str(path) for path in paths]
-            for kind, paths in evidence_paths_by_kind(args).items()
-            if paths
-        },
-        "evidence_contract": {
-            kind: {
-                "schema": KIND_BY_NAME[kind].schema,
-                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
-            }
-            for kind in args.required_kinds
-        },
+        "thresholds": threshold_values(args),
+        "external_evidence": external_evidence(args),
+        "evidence_contract": evidence_contract(args),
         "steps": [
             {
                 "label": step.label,
@@ -185,6 +242,32 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
             for step in plan
         ],
     }
+
+
+def validate_plan_json(
+    rendered: object,
+    plan: Sequence[CommandPlan],
+    args: argparse.Namespace,
+) -> list[str]:
+    """Validate the orderbook collection-plan envelope before use."""
+
+    return validate_runner_evidence_plan(
+        rendered,
+        plan,
+        diagnostic_prefix="orderbook rollout runner plan",
+        plan_schema=PLAN_SCHEMA,
+        plan_fields=PLAN_FIELDS,
+        summary_schema=SUMMARY_SCHEMA,
+        required_kinds=args.required_kinds,
+        known_kinds=KIND_BY_NAME,
+        thresholds=threshold_values(args),
+        required_threshold_fields=PLAN_REQUIRED_THRESHOLD_FIELDS,
+        positive_threshold_fields=PLAN_POSITIVE_THRESHOLD_FIELDS,
+        non_negative_threshold_fields=PLAN_NON_NEGATIVE_THRESHOLD_FIELDS,
+        external_evidence=external_evidence(args),
+        evidence_contract=evidence_contract(args),
+        evidence_required_fields=EVIDENCE_REQUIRED_FIELDS,
+    )
 
 
 def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:
@@ -363,8 +446,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     plan = build_command_plan(args)
+    rendered_plan = plan_json(plan, args)
+    plan_errors = validate_plan_json(rendered_plan, plan, args)
+    if plan_errors:
+        emit_runner_error_lines(plan_errors)
+        return 2
     if args.dry_run:
-        plan_errors = write_runner_plan(plan_json(plan, args))
+        plan_errors = write_runner_plan(rendered_plan)
         if plan_errors:
             emit_runner_error_lines(plan_errors)
             return 2

@@ -68,8 +68,31 @@ LANE_CLI_HELPERS = (
     ),
 )
 
+
+def deep_percent_encoded_text(value: str, *, layers: int = 5) -> str:
+    encoded = value
+    for _layer in range(layers):
+        encoded = "".join(f"%{ord(character):02X}" for character in encoded)
+    return encoded
+
+
+def nested_html_entity_text(value: str, *, layers: int = 5) -> str:
+    encoded = value
+    for _layer in range(layers):
+        encoded = encoded.replace("&", "&amp;")
+    return encoded
+
+
 SENSITIVE_MESSAGES = (
     ("operator secret-token value", ("secret-token",)),
+    (
+        deep_percent_encoded_text("operator api key value"),
+        ("operator", "api", "key"),
+    ),
+    (
+        "operator " + nested_html_entity_text("private&#95;key") + " value",
+        ("private", "key"),
+    ),
     ("operator secret%20key value", ("secret%20key",)),
     ("operator secret%2dtoken value", ("secret%2dtoken",)),
     ("operator secret%252dtoken value", ("secret%252dtoken",)),
@@ -138,6 +161,8 @@ SENSITIVE_MESSAGES = (
 )
 
 UNSAFE_MESSAGES = (
+    deep_percent_encoded_text("safe|collector detail"),
+    "safe" + nested_html_entity_text("&#124;") + "collector detail",
     "safe%0Acollector detail",
     "safe%E2%80%AEcollector detail",
     "safe%7Ccollector detail",
@@ -187,6 +212,15 @@ def test_lane_cli_error_detail_redacts_decoded_unsafe_messages():
         for message in UNSAFE_MESSAGES:
             detail = module._cli_error_detail(RuntimeError(message), fallback=fallback)
             assert detail == fallback, (script_name, message)
+
+
+def test_lane_cli_error_detail_treats_system_exit_as_opaque():
+    safe_message = "safe helper SystemExit detail"
+    for script_name, fallback in LANE_CLI_HELPERS:
+        module = load_helper(script_name)
+        detail = module._cli_error_detail(SystemExit(safe_message), fallback=fallback)
+        assert detail == fallback, script_name
+        assert safe_message not in detail
 
 
 def test_lane_cli_error_detail_preserves_safe_runtime_error_messages():

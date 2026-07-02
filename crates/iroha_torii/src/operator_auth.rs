@@ -21,7 +21,6 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ciborium::{de::from_reader, value::Value as CborValue};
 use dashmap::DashMap;
-use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _, VerifyingKey as Ed25519Key};
 use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256Key, signature::Verifier as _};
 use rand::rand_core::{TryCryptoRng, TryRngCore as _};
 use sha2::{Digest as _, Sha256};
@@ -31,6 +30,7 @@ use iroha_config::parameters::actual::{
     OperatorAuthLockout, OperatorTokenFallback, OperatorTokenSource, OperatorWebAuthnAlgorithm,
     OperatorWebAuthnConfig, ToriiOperatorAuth,
 };
+use iroha_crypto::{Algorithm, PublicKey, Signature};
 
 use crate::{
     JsonBody, JsonOnly, SharedAppState, json_entry, json_object, json_value, limits,
@@ -44,6 +44,7 @@ const HEADER_API_TOKEN: &str = "x-api-token";
 const CREDENTIALS_FILENAME: &str = "operator_webauthn.json";
 const CHALLENGE_BYTES: usize = 32;
 const SESSION_TOKEN_BYTES: usize = 32;
+const P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN: usize = 65;
 
 const ACTION_GATE: &str = "gate";
 const ACTION_REGISTER_OPTIONS: &str = "register_options";
@@ -1651,6 +1652,7 @@ fn parse_cose_key(
             if !allowed.contains(&OperatorWebAuthnAlgorithm::Es256) {
                 return Err(OperatorAuthError::credential_not_allowed());
             }
+            parse_es256_public_key(&public_key)?;
             Ok(CoseKey {
                 alg: OperatorWebAuthnAlgorithm::Es256,
                 public_key,
@@ -1677,13 +1679,12 @@ fn verify_signature(
     message: &[u8],
     signature: &[u8],
 ) -> Result<(), OperatorAuthError> {
+    if !signature.is_empty() && signature.iter().all(|byte| *byte == 0) {
+        return Err(OperatorAuthError::signature_invalid());
+    }
     match alg {
         OperatorWebAuthnAlgorithm::Es256 => {
-            let encoded = p256::EncodedPoint::from_bytes(public_key).map_err(|_| {
-                OperatorAuthError::invalid_payload("invalid ES256 public key encoding")
-            })?;
-            let verifying_key = P256Key::from_encoded_point(&encoded)
-                .map_err(|_| OperatorAuthError::invalid_payload("invalid ES256 public key"))?;
+            let verifying_key = parse_es256_public_key(public_key)?;
             let sig = P256Signature::from_der(signature)
                 .map_err(|_| OperatorAuthError::signature_invalid())?;
             verifying_key
@@ -1691,20 +1692,36 @@ fn verify_signature(
                 .map_err(|_| OperatorAuthError::signature_invalid())
         }
         OperatorWebAuthnAlgorithm::Ed25519 => {
-            let pk: [u8; 32] = public_key
-                .try_into()
-                .map_err(|_| OperatorAuthError::invalid_payload("invalid Ed25519 key length"))?;
-            let sig: [u8; 64] = signature
-                .try_into()
+            if signature.len() != 64 {
+                return Err(OperatorAuthError::signature_invalid());
+            }
+            let verifying_key = PublicKey::from_bytes(Algorithm::Ed25519, public_key)
                 .map_err(|_| OperatorAuthError::signature_invalid())?;
-            let verifying_key =
-                Ed25519Key::from_bytes(&pk).map_err(|_| OperatorAuthError::signature_invalid())?;
-            let signature = Ed25519Signature::from_bytes(&sig);
-            verifying_key
-                .verify_strict(message, &signature)
+            let signature = Signature::try_from_bytes(signature)
+                .map_err(|_| OperatorAuthError::signature_invalid())?;
+            signature
+                .verify(&verifying_key, message)
                 .map_err(|_| OperatorAuthError::signature_invalid())
         }
     }
+}
+
+fn parse_es256_public_key(public_key: &[u8]) -> Result<P256Key, OperatorAuthError> {
+    if p256_public_key_has_zero_coordinate_material(public_key) {
+        return Err(OperatorAuthError::invalid_payload(
+            "invalid ES256 public key",
+        ));
+    }
+    let encoded = p256::EncodedPoint::from_bytes(public_key)
+        .map_err(|_| OperatorAuthError::invalid_payload("invalid ES256 public key encoding"))?;
+    P256Key::from_encoded_point(&encoded)
+        .map_err(|_| OperatorAuthError::invalid_payload("invalid ES256 public key"))
+}
+
+fn p256_public_key_has_zero_coordinate_material(public_key: &[u8]) -> bool {
+    public_key.len() == P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN
+        && public_key.first().copied() == Some(0x04)
+        && public_key[1..].iter().all(|byte| *byte == 0)
 }
 
 fn cbor_int(value: &CborValue) -> Result<i128, OperatorAuthError> {
@@ -2525,6 +2542,156 @@ mod tests {
             &signature,
         )
         .expect("signature ok");
+    }
+
+    #[test]
+    fn es256_cose_key_rejects_all_zero_public_key_material() {
+        let map = vec![
+            (CborValue::Integer(1.into()), CborValue::Integer(2.into())),
+            (
+                CborValue::Integer(3.into()),
+                CborValue::Integer((-7).into()),
+            ),
+            (
+                CborValue::Integer((-1).into()),
+                CborValue::Integer(1.into()),
+            ),
+            (
+                CborValue::Integer((-2).into()),
+                CborValue::Bytes(vec![0u8; 32]),
+            ),
+            (
+                CborValue::Integer((-3).into()),
+                CborValue::Bytes(vec![0u8; 32]),
+            ),
+        ];
+        let cose_key = CborValue::Map(map);
+        let err = match parse_cose_key(&cose_key, &[OperatorWebAuthnAlgorithm::Es256]) {
+            Ok(_) => panic!("all-zero ES256 public key material must be rejected"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.code, "operator_webauthn_payload_invalid");
+        assert_eq!(err.metric_label, "invalid_payload");
+    }
+
+    #[test]
+    fn es256_signature_verify_rejects_all_zero_signature_material() {
+        let signing_key = SigningKey::random(&mut OsRng);
+        let public_key = signing_key.verifying_key().to_encoded_point(false);
+        let signature = [0u8; 64];
+
+        let err = verify_signature(
+            OperatorWebAuthnAlgorithm::Es256,
+            public_key.as_bytes(),
+            b"operator-auth-test",
+            &signature,
+        )
+        .expect_err("all-zero ES256 signature material must be rejected");
+
+        assert_eq!(err.code, "operator_webauthn_signature_invalid");
+        assert_eq!(err.metric_label, "signature_invalid");
+    }
+
+    #[test]
+    fn es256_signature_verify_rejects_all_zero_public_key_material() {
+        let signing_key = SigningKey::random(&mut OsRng);
+        let message = b"operator-auth-test";
+        let signature: p256::ecdsa::Signature = signing_key.sign(message);
+        let mut public_key = Vec::with_capacity(P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN);
+        public_key.push(0x04);
+        public_key.extend_from_slice(&[0u8; 64]);
+
+        let err = verify_signature(
+            OperatorWebAuthnAlgorithm::Es256,
+            &public_key,
+            message,
+            signature.to_der().as_bytes(),
+        )
+        .expect_err("all-zero ES256 public key material must be rejected");
+
+        assert_eq!(err.code, "operator_webauthn_payload_invalid");
+        assert_eq!(err.metric_label, "invalid_payload");
+    }
+
+    #[test]
+    fn ed25519_signature_verify_rejects_all_zero_signature_material() {
+        let mut rng = OsRng;
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
+        let public_key = signing_key.verifying_key().to_bytes();
+        let signature = [0u8; 64];
+
+        let err = verify_signature(
+            OperatorWebAuthnAlgorithm::Ed25519,
+            &public_key,
+            b"operator-auth-test",
+            &signature,
+        )
+        .expect_err("all-zero signature material must be rejected");
+
+        assert_eq!(err.code, "operator_webauthn_signature_invalid");
+        assert_eq!(err.metric_label, "signature_invalid");
+    }
+
+    #[test]
+    fn ed25519_signature_verify_rejects_all_zero_public_key_material() {
+        let mut rng = OsRng;
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
+        let message = b"operator-auth-test";
+        let signature = signing_key.sign(message).to_bytes();
+
+        let err = verify_signature(
+            OperatorWebAuthnAlgorithm::Ed25519,
+            &[0u8; 32],
+            message,
+            &signature,
+        )
+        .expect_err("all-zero Ed25519 public key material must be rejected");
+
+        assert_eq!(err.code, "operator_webauthn_signature_invalid");
+        assert_eq!(err.metric_label, "signature_invalid");
+    }
+
+    #[test]
+    fn ed25519_signature_verify_rejects_malformed_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let mut rng = OsRng;
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
+        let public_key = signing_key.verifying_key().to_bytes();
+        let message = b"operator-auth-test";
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut signature = signing_key.sign(message).to_bytes();
+            signature[..32].copy_from_slice(&replacement_r);
+
+            let err = verify_signature(
+                OperatorWebAuthnAlgorithm::Ed25519,
+                &public_key,
+                message,
+                &signature,
+            )
+            .expect_err("malformed Ed25519 signature R must be rejected");
+
+            assert_eq!(
+                err.code, "operator_webauthn_signature_invalid",
+                "{label} signature R should fail"
+            );
+            assert_eq!(
+                err.metric_label, "signature_invalid",
+                "{label} signature R should map to signature_invalid"
+            );
+        }
     }
 
     #[tokio::test]

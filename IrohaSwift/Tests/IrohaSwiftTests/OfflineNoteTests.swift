@@ -790,6 +790,12 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertEqual(OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix, OfflineBearerCashTextCodec.paymentTextPrefix)
         XCTAssertEqual(try OfflineNotePaymentTokenCodec.decodeText(text).tokenIdHex, token.tokenIdHex)
         XCTAssertEqual(try OfflineBearerCashTextCodec.decodePaymentText(text).tokenIdHex, token.tokenIdHex)
+        XCTAssertEqual(OfflineBearerCashTextCodec.payloadKind(text), Optional.some(.payment))
+        XCTAssertThrowsError(try OfflineNotePaymentTokenCodec.decodeText(" \(text)"))
+        XCTAssertThrowsError(try OfflineNotePaymentTokenCodec.decodeText("\(text)\n"))
+        XCTAssertThrowsError(try OfflineBearerCashTextCodec.decodePaymentText("\t\(text)"))
+        XCTAssertNil(OfflineBearerCashTextCodec.payloadKind(" \(text)"))
+        XCTAssertNil(OfflineBearerCashTextCodec.payloadKind(" wallet-offline-bearer-cash-payment:AAAA"))
         XCTAssertThrowsError(
             try OfflineNotePaymentTokenCodec.decodeText(
                 "wallet-offline-bearer-cash-payment-invalid:" + String(text.split(separator: ":").last!)
@@ -1002,6 +1008,10 @@ final class OfflineNoteTests: XCTestCase {
             try OfflineNoteTransferTextPayloadCodec.decodeReceiveRequest(text).outputCommitmentHex,
             request.outputCommitmentHex
         )
+        XCTAssertEqual(OfflineBearerCashTextCodec.payloadKind(text), Optional.some(.receiveRequest))
+        XCTAssertThrowsError(try OfflineNoteReceiveRequestCodec.decodeText(" \(text)"))
+        XCTAssertThrowsError(try OfflineBearerCashTextCodec.decodeReceiveRequestText("\(text)\n"))
+        XCTAssertNil(OfflineBearerCashTextCodec.payloadKind("\(text) "))
 
         let frames = try OfflineNoteReceiveRequestCodec.encodeQrFrameBytes(
             request,
@@ -1015,6 +1025,27 @@ final class OfflineNoteTests: XCTestCase {
         }
         let qrDecoded = try OfflineNoteReceiveRequestCodec.decodeQrPayload(XCTUnwrap(payload))
         XCTAssertEqual(qrDecoded.outputCommitmentHex, request.outputCommitmentHex)
+    }
+
+    func testOfflineNoteReceiptAckCodecRejectsWhitespaceWrappedText() throws {
+        let fixture = try Self.loadFixture()
+        let token = try OfflineNotePaymentTokenCodec.decodeNorito(Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64))
+        let receiveOutput = try XCTUnwrap(token.audit.outputClaims.first)
+        let ack = try OfflineNoteReceiptAck.fromPaymentToken(
+            token,
+            recipientAccountId: receiveOutput.keyCertificate.accountId,
+            acceptedAtMs: 1_706_000_000_333
+        )
+
+        let text = try OfflineNoteReceiptAckCodec.encodeText(ack)
+        XCTAssertTrue(text.hasPrefix(OfflineNoteReceiptAckCodec.textPrefix))
+        XCTAssertEqual(try OfflineNoteReceiptAckCodec.decodeText(text).tokenIdHex, ack.tokenIdHex)
+        XCTAssertEqual(try OfflineBearerCashTextCodec.decodeAckText(text).tokenIdHex, ack.tokenIdHex)
+        XCTAssertEqual(OfflineBearerCashTextCodec.payloadKind(text), Optional.some(.ack))
+        XCTAssertThrowsError(try OfflineNoteReceiptAckCodec.decodeText(" \(text)"))
+        XCTAssertThrowsError(try OfflineBearerCashTextCodec.decodeAckText("\(text)\t"))
+        XCTAssertNil(OfflineBearerCashTextCodec.payloadKind("\n\(text)"))
+        XCTAssertThrowsError(try OfflineNoteReceiptAckCodec.decodeText(text + "="))
     }
 
     func testOfflineNoteReceiveRequestCodecRoundTripsMultisigAccountText() throws {
@@ -2235,7 +2266,7 @@ final class OfflineNoteTests: XCTestCase {
             recipientAccountId: receiveOutput.keyCertificate.accountId,
             acceptedAtMs: 1_706_000_000_333
         )
-        let challenge = try OfflineNoteNearbyPairingChallenge(assetName: " nearby_pairing_bird ")
+        let challenge = try OfflineNoteNearbyPairingChallenge(assetName: "nearby_pairing_bird")
         let challengeEnvelope = try OfflineNoteNearbyEnvelope(
             kind: .receiveRequest,
             payload: OfflineNoteReceiveRequestCodec.encodeNorito(receiveRequest),
@@ -2267,6 +2298,20 @@ final class OfflineNoteTests: XCTestCase {
         )
 
         XCTAssertEqual(try OfflineNoteNearbyEnvelope.decode(challengeEnvelope.encoded()).pairingChallenge, challenge)
+        let challengeEnvelopeText = try XCTUnwrap(String(data: challengeEnvelope.encoded(), encoding: .utf8))
+        XCTAssertTrue(challengeEnvelopeText.contains(#""pairingChallenge":"nearby_pairing_bird""#))
+        XCTAssertThrowsError(try OfflineNoteNearbyEnvelope.decode(Data(
+            challengeEnvelopeText.replacingOccurrences(
+                of: #""pairingChallenge":"nearby_pairing_bird""#,
+                with: #""pairingChallenge":" nearby_pairing_bird""#
+            ).utf8
+        )))
+        XCTAssertThrowsError(try OfflineNoteNearbyEnvelope.decode(Data(
+            challengeEnvelopeText.replacingOccurrences(
+                of: #""pairingChallenge":"nearby_pairing_bird""#,
+                with: #""pairingChallenge":{"assetName":"nearby_pairing_bird "}"#
+            ).utf8
+        )))
         XCTAssertEqual(
             try OfflineNoteNearbyEnvelope.decode(challengeEnvelope.encoded()).receiveRequest().outputCommitmentHex,
             receiveRequest.outputCommitmentHex
@@ -2401,7 +2446,7 @@ final class OfflineNoteTests: XCTestCase {
         }
     }
 
-    func testDeviceToDeviceTextPayloadValidationRejectsWeakCompatibilityShapes() throws {
+    func testDeviceToDeviceTextPayloadValidationRejectsWeakCanonicalPayloadShapes() throws {
         let fixture = try Self.loadFixture()
         let token = try OfflineNotePaymentTokenCodec.decodeNorito(Self.base64(fixture.sdkInterop.paymentTokenNoritoBase64))
         let receiveOutput = try XCTUnwrap(token.audit.outputClaims.first)
@@ -2425,8 +2470,8 @@ final class OfflineNoteTests: XCTestCase {
         )
         let validReceiveText = try OfflineNoteTransferTextPayloadCodec.encodeReceiveRequest(receiveRequest)
         let validAckText = try OfflineNoteTransferTextPayloadCodec.encodeReceiptAck(receiptAck)
-        let compatibilityReceive = OfflineReceiveRequestPayload(request: receiveRequest)
-        let compatibilityAckText = try OfflineNoteTransferTextPayloadCodec.encodeReceiptAck(
+        let canonicalReceive = OfflineReceiveRequestPayload(request: receiveRequest)
+        let canonicalAckText = try OfflineNoteTransferTextPayloadCodec.encodeReceiptAck(
             OfflineReceiptAck(ack: receiptAck)
         )
 
@@ -2446,120 +2491,120 @@ final class OfflineNoteTests: XCTestCase {
         )
         XCTAssertNoThrow(
             try OfflineNoteTransferHandoff.normalizeTextTransportPayload(
-                compatibilityAckText,
+                canonicalAckText,
                 expectedKind: .receiptAck
             )
         )
         XCTAssertThrowsError(
             try OfflineNoteTransferHandoff.normalizeDeviceToDeviceTextPayload(
-                compatibilityAckText,
+                canonicalAckText,
                 expectedKind: .receiptAck
             )
         )
         XCTAssertThrowsError(
             try OfflineNoteNearbyEnvelope(
                 kind: .receiptAck,
-                payload: Data(compatibilityAckText.utf8),
+                payload: Data(canonicalAckText.utf8),
                 contentType: OfflineNoteTransferHandoff.textReceiptAckContentType
             )
         )
 
         let pairingChallenge = try OfflineNoteNearbyPairingChallenge(assetName: "nearby_pairing_bird")
         let weakReceiveRequests = [
-            OfflineReceiveRequestPayload(
-                invoiceId: compatibilityReceive.invoiceId,
-                accountId: compatibilityReceive.accountId,
-                assetDefinitionId: compatibilityReceive.assetDefinitionId,
-                amount: compatibilityReceive.amount,
-                recipientKeyCertificate: compatibilityReceive.recipientKeyCertificate,
-                generatedAtMs: compatibilityReceive.generatedAtMs,
-                displayTtlMs: compatibilityReceive.displayTtlMs,
+            try OfflineReceiveRequestPayload(
+                invoiceId: canonicalReceive.invoiceId,
+                accountId: canonicalReceive.accountId,
+                assetDefinitionId: canonicalReceive.assetDefinitionId,
+                amount: canonicalReceive.amount,
+                recipientKeyCertificate: canonicalReceive.recipientKeyCertificate,
+                generatedAtMs: canonicalReceive.generatedAtMs,
+                displayTtlMs: canonicalReceive.displayTtlMs,
                 chainId: nil,
-                assetId: compatibilityReceive.assetId,
-                outputCommitment: compatibilityReceive.outputCommitment
+                assetId: canonicalReceive.assetId,
+                outputCommitment: canonicalReceive.outputCommitment
             ),
-            OfflineReceiveRequestPayload(
-                invoiceId: compatibilityReceive.invoiceId,
-                accountId: compatibilityReceive.accountId,
-                assetDefinitionId: compatibilityReceive.assetDefinitionId,
-                amount: compatibilityReceive.amount,
-                recipientKeyCertificate: compatibilityReceive.recipientKeyCertificate,
-                generatedAtMs: compatibilityReceive.generatedAtMs,
-                displayTtlMs: compatibilityReceive.displayTtlMs,
+            try OfflineReceiveRequestPayload(
+                invoiceId: canonicalReceive.invoiceId,
+                accountId: canonicalReceive.accountId,
+                assetDefinitionId: canonicalReceive.assetDefinitionId,
+                amount: canonicalReceive.amount,
+                recipientKeyCertificate: canonicalReceive.recipientKeyCertificate,
+                generatedAtMs: canonicalReceive.generatedAtMs,
+                displayTtlMs: canonicalReceive.displayTtlMs,
                 chainId: " \n\t ",
-                assetId: compatibilityReceive.assetId,
-                outputCommitment: compatibilityReceive.outputCommitment
+                assetId: canonicalReceive.assetId,
+                outputCommitment: canonicalReceive.outputCommitment
             ),
-            OfflineReceiveRequestPayload(
-                invoiceId: compatibilityReceive.invoiceId,
-                accountId: compatibilityReceive.accountId,
-                assetDefinitionId: compatibilityReceive.assetDefinitionId,
-                amount: compatibilityReceive.amount,
-                recipientKeyCertificate: compatibilityReceive.recipientKeyCertificate,
-                generatedAtMs: compatibilityReceive.generatedAtMs,
-                displayTtlMs: compatibilityReceive.displayTtlMs,
-                chainId: " \(try XCTUnwrap(compatibilityReceive.chainId))",
-                assetId: compatibilityReceive.assetId,
-                outputCommitment: compatibilityReceive.outputCommitment
+            try OfflineReceiveRequestPayload(
+                invoiceId: canonicalReceive.invoiceId,
+                accountId: canonicalReceive.accountId,
+                assetDefinitionId: canonicalReceive.assetDefinitionId,
+                amount: canonicalReceive.amount,
+                recipientKeyCertificate: canonicalReceive.recipientKeyCertificate,
+                generatedAtMs: canonicalReceive.generatedAtMs,
+                displayTtlMs: canonicalReceive.displayTtlMs,
+                chainId: " \(try XCTUnwrap(canonicalReceive.chainId))",
+                assetId: canonicalReceive.assetId,
+                outputCommitment: canonicalReceive.outputCommitment
             ),
-            OfflineReceiveRequestPayload(
-                invoiceId: compatibilityReceive.invoiceId,
-                accountId: compatibilityReceive.accountId,
-                assetDefinitionId: compatibilityReceive.assetDefinitionId,
-                amount: compatibilityReceive.amount,
-                recipientKeyCertificate: compatibilityReceive.recipientKeyCertificate,
-                generatedAtMs: compatibilityReceive.generatedAtMs,
-                displayTtlMs: compatibilityReceive.displayTtlMs,
-                chainId: compatibilityReceive.chainId,
-                assetId: "\(try XCTUnwrap(compatibilityReceive.assetId)) ",
-                outputCommitment: compatibilityReceive.outputCommitment
+            try OfflineReceiveRequestPayload(
+                invoiceId: canonicalReceive.invoiceId,
+                accountId: canonicalReceive.accountId,
+                assetDefinitionId: canonicalReceive.assetDefinitionId,
+                amount: canonicalReceive.amount,
+                recipientKeyCertificate: canonicalReceive.recipientKeyCertificate,
+                generatedAtMs: canonicalReceive.generatedAtMs,
+                displayTtlMs: canonicalReceive.displayTtlMs,
+                chainId: canonicalReceive.chainId,
+                assetId: "\(try XCTUnwrap(canonicalReceive.assetId)) ",
+                outputCommitment: canonicalReceive.outputCommitment
             ),
-            OfflineReceiveRequestPayload(
-                invoiceId: compatibilityReceive.invoiceId,
-                accountId: compatibilityReceive.accountId,
-                assetDefinitionId: compatibilityReceive.assetDefinitionId,
-                amount: compatibilityReceive.amount,
-                recipientKeyCertificate: compatibilityReceive.recipientKeyCertificate,
-                generatedAtMs: compatibilityReceive.generatedAtMs,
-                displayTtlMs: compatibilityReceive.displayTtlMs,
-                chainId: compatibilityReceive.chainId,
-                assetId: compatibilityReceive.assetId,
-                outputCommitment: "\t\(try XCTUnwrap(compatibilityReceive.outputCommitment))"
+            try OfflineReceiveRequestPayload(
+                invoiceId: canonicalReceive.invoiceId,
+                accountId: canonicalReceive.accountId,
+                assetDefinitionId: canonicalReceive.assetDefinitionId,
+                amount: canonicalReceive.amount,
+                recipientKeyCertificate: canonicalReceive.recipientKeyCertificate,
+                generatedAtMs: canonicalReceive.generatedAtMs,
+                displayTtlMs: canonicalReceive.displayTtlMs,
+                chainId: canonicalReceive.chainId,
+                assetId: canonicalReceive.assetId,
+                outputCommitment: "\t\(try XCTUnwrap(canonicalReceive.outputCommitment))"
             ),
-            OfflineReceiveRequestPayload(
-                invoiceId: compatibilityReceive.invoiceId,
-                accountId: compatibilityReceive.accountId,
-                assetDefinitionId: compatibilityReceive.assetDefinitionId,
-                amount: compatibilityReceive.amount,
-                recipientKeyCertificate: compatibilityReceive.recipientKeyCertificate,
-                generatedAtMs: compatibilityReceive.generatedAtMs,
-                displayTtlMs: compatibilityReceive.displayTtlMs,
-                chainId: compatibilityReceive.chainId,
+            try OfflineReceiveRequestPayload(
+                invoiceId: canonicalReceive.invoiceId,
+                accountId: canonicalReceive.accountId,
+                assetDefinitionId: canonicalReceive.assetDefinitionId,
+                amount: canonicalReceive.amount,
+                recipientKeyCertificate: canonicalReceive.recipientKeyCertificate,
+                generatedAtMs: canonicalReceive.generatedAtMs,
+                displayTtlMs: canonicalReceive.displayTtlMs,
+                chainId: canonicalReceive.chainId,
                 assetId: "not an asset id",
-                outputCommitment: compatibilityReceive.outputCommitment
+                outputCommitment: canonicalReceive.outputCommitment
             ),
-            OfflineReceiveRequestPayload(
-                invoiceId: compatibilityReceive.invoiceId,
-                accountId: compatibilityReceive.accountId,
-                assetDefinitionId: compatibilityReceive.assetDefinitionId,
-                amount: compatibilityReceive.amount,
-                recipientKeyCertificate: compatibilityReceive.recipientKeyCertificate,
-                generatedAtMs: compatibilityReceive.generatedAtMs,
-                displayTtlMs: compatibilityReceive.displayTtlMs,
-                chainId: compatibilityReceive.chainId,
-                assetId: compatibilityReceive.assetId,
+            try OfflineReceiveRequestPayload(
+                invoiceId: canonicalReceive.invoiceId,
+                accountId: canonicalReceive.accountId,
+                assetDefinitionId: canonicalReceive.assetDefinitionId,
+                amount: canonicalReceive.amount,
+                recipientKeyCertificate: canonicalReceive.recipientKeyCertificate,
+                generatedAtMs: canonicalReceive.generatedAtMs,
+                displayTtlMs: canonicalReceive.displayTtlMs,
+                chainId: canonicalReceive.chainId,
+                assetId: canonicalReceive.assetId,
                 outputCommitment: String(repeating: "ab", count: 31)
             ),
-            OfflineReceiveRequestPayload(
-                invoiceId: compatibilityReceive.invoiceId,
-                accountId: compatibilityReceive.accountId,
-                assetDefinitionId: compatibilityReceive.assetDefinitionId,
-                amount: compatibilityReceive.amount,
-                recipientKeyCertificate: compatibilityReceive.recipientKeyCertificate,
-                generatedAtMs: compatibilityReceive.generatedAtMs,
-                displayTtlMs: compatibilityReceive.displayTtlMs,
-                chainId: compatibilityReceive.chainId,
-                assetId: compatibilityReceive.assetId,
+            try OfflineReceiveRequestPayload(
+                invoiceId: canonicalReceive.invoiceId,
+                accountId: canonicalReceive.accountId,
+                assetDefinitionId: canonicalReceive.assetDefinitionId,
+                amount: canonicalReceive.amount,
+                recipientKeyCertificate: canonicalReceive.recipientKeyCertificate,
+                generatedAtMs: canonicalReceive.generatedAtMs,
+                displayTtlMs: canonicalReceive.displayTtlMs,
+                chainId: canonicalReceive.chainId,
+                assetId: canonicalReceive.assetId,
                 outputCommitment: String(repeating: "zz", count: 32)
             ),
         ]
@@ -2612,6 +2657,8 @@ final class OfflineNoteTests: XCTestCase {
         )
         XCTAssertGreaterThan(oversizedEncodedEnvelope.count, OfflineNoteNearbyEnvelope.maxEncodedBytes)
         XCTAssertThrowsError(try OfflineNoteNearbyEnvelope.decode(oversizedEncodedEnvelope))
+        XCTAssertThrowsError(try OfflineNoteNearbyPairingChallenge(assetName: " nearby_pairing_mask"))
+        XCTAssertThrowsError(try OfflineNoteNearbyPairingChallenge(assetName: "nearby_pairing_mask\n"))
         XCTAssertThrowsError(try OfflineNoteNearbyPairingChallenge(assetName: "nearby_pairing_mask<script>"))
         XCTAssertThrowsError(
             try OfflineNoteNearbyEnvelope(
@@ -3168,21 +3215,44 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertEqual(decoded, note)
         XCTAssertEqual(try decoded.keyCertificate.noritoEncoded(), try note.keyCertificate.noritoEncoded())
 
-        var spendPendingObject = try XCTUnwrap(
+        var nonCanonicalAmountObject = try XCTUnwrap(
             JSONSerialization.jsonObject(with: OfflineNoteWalletNoteJsonCodec.encode(note)) as? [String: Any]
         )
-        spendPendingObject["state"] = "spendPending"
-        let migratedSpent = try OfflineNoteWalletNoteJsonCodec.decode(
-            JSONSerialization.data(withJSONObject: spendPendingObject, options: [.sortedKeys])
-        )
-        XCTAssertEqual(migratedSpent.state, .spent)
+        nonCanonicalAmountObject["amount"] = "0\(note.amount)"
+        XCTAssertThrowsError(
+            try OfflineNoteWalletNoteJsonCodec.decode(
+                JSONSerialization.data(withJSONObject: nonCanonicalAmountObject, options: [.sortedKeys])
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteWalletNoteJsonCodecError, .invalidField("amount"))
+        }
 
-        var changePendingObject = spendPendingObject
-        changePendingObject["state"] = "CHANGE_PENDING"
-        let migratedChange = try OfflineNoteWalletNoteJsonCodec.decode(
-            JSONSerialization.data(withJSONObject: changePendingObject, options: [.sortedKeys])
+        var nonCanonicalAssetObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: OfflineNoteWalletNoteJsonCodec.encode(note)) as? [String: Any]
         )
-        XCTAssertEqual(migratedChange.state, .spendable)
+        nonCanonicalAssetObject["asset_id"] = "\(note.assetId)#dataspace:01"
+        XCTAssertThrowsError(
+            try OfflineNoteWalletNoteJsonCodec.decode(
+                JSONSerialization.data(withJSONObject: nonCanonicalAssetObject, options: [.sortedKeys])
+            )
+        ) { error in
+            XCTAssertEqual(error as? OfflineNoteWalletNoteJsonCodecError, .invalidField("asset_id"))
+        }
+
+        var retiredStateObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: OfflineNoteWalletNoteJsonCodec.encode(note)) as? [String: Any]
+        )
+        for retiredState in ["spendPending", "SPEND_PENDING", "changePending", "CHANGE_PENDING"] {
+            retiredStateObject["state"] = retiredState
+            XCTAssertThrowsError(
+                try OfflineNoteWalletNoteJsonCodec.decode(
+                    JSONSerialization.data(withJSONObject: retiredStateObject, options: [.sortedKeys])
+                ),
+                "retired \(retiredState) wallet-note state should reject"
+            ) { error in
+                XCTAssertEqual(error as? OfflineNoteWalletNoteJsonCodecError, .invalidField("state"))
+            }
+        }
     }
 
     func testOfflineNoteWalletNoteScopeIdsRejectSurroundingWhitespace() throws {
@@ -3194,13 +3264,15 @@ final class OfflineNoteTests: XCTestCase {
         func copy(
             chainId: String = note.chainId,
             accountId: String = note.accountId,
+            assetId: String = note.assetId,
+            amount: String = note.amount,
             spentPaymentRequestId: String? = note.spentPaymentRequestId
         ) throws -> OfflineNoteWalletNote {
             try OfflineNoteWalletNote(
                 chainId: chainId,
                 accountId: accountId,
-                assetId: note.assetId,
-                amount: note.amount,
+                assetId: assetId,
+                amount: amount,
                 keyCertificate: note.keyCertificate,
                 noteCommitment: note.noteCommitment,
                 noteSecret: note.noteSecret,
@@ -3220,6 +3292,10 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertThrowsError(try copy(accountId: "\(note.accountId)\n")) { error in
             XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("account_id"))
         }
+        XCTAssertThrowsError(try copy(amount: "0\(note.amount)")) { error in
+            XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("amount"))
+        }
+        XCTAssertThrowsError(try copy(assetId: "\(note.assetId)#dataspace:01"))
         XCTAssertThrowsError(try copy(spentPaymentRequestId: "\(spentPaymentRequestId) ")) { error in
             XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("spent_payment_request_id"))
         }
@@ -3307,8 +3383,8 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertEqual(loaded.state, .spendable)
     }
 
-    func testOfflineNoteKeychainStoreKeepsLegacyCollectionWhenMetadataSaveFails() throws {
-        let label = "legacy-metadata-failure-test"
+    func testOfflineNoteKeychainStoreKeepsUnrevisionedCollectionWhenMetadataSaveFails() throws {
+        let label = "unrevisioned-metadata-failure-test"
         let fixture = try Self.loadFixture()
         let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
@@ -3365,8 +3441,8 @@ final class OfflineNoteTests: XCTestCase {
         }
     }
 
-    func testOfflineNoteKeychainStoreDoesNotFallBackToLegacyCollectionWhenMetadataExists() throws {
-        let label = "metadata-blocks-legacy-fallback-test"
+    func testOfflineNoteKeychainStoreDoesNotReadUnrevisionedCollectionWhenMetadataExists() throws {
+        let label = "metadata-blocks-unrevisioned-collection-test"
         let fixture = try Self.loadFixture()
         let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
@@ -3526,8 +3602,8 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertTrue(try store.listNotes().isEmpty)
     }
 
-    func testOfflineNoteKeychainStoreUsesMetadataWhenLegacyDeleteFails() throws {
-        let label = "legacy-delete-failure-test"
+    func testOfflineNoteKeychainStoreUsesMetadataWhenUnrevisionedDeleteFails() throws {
+        let label = "unrevisioned-delete-failure-test"
         let fixture = try Self.loadFixture()
         let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
         let note = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
@@ -3633,9 +3709,12 @@ final class OfflineNoteTests: XCTestCase {
         )
 
         XCTAssertTrue(nativeToken.containsOutputNoteCommitment(hex: derivation.recipientOutputCommitment))
-        XCTAssertTrue(nativeToken.containsOutputNoteCommitment(
+        XCTAssertFalse(nativeToken.containsOutputNoteCommitment(
             hex: " 0x\(derivation.changeOutputCommitment.uppercased()) "
         ))
+        XCTAssertFalse(nativeToken.containsOutputNoteCommitment(hex: derivation.changeOutputCommitment.uppercased()))
+        XCTAssertNil(nativeToken.outputClaim(matchingNoteCommitmentHex: "0x\(derivation.changeOutputCommitment)"))
+        XCTAssertNil(nativeToken.outputClaim(matchingNoteCommitmentHex: "\(derivation.changeOutputCommitment) "))
         XCTAssertEqual(
             nativeToken.outputClaim(matchingNoteCommitment: try Self.hex(derivation.changeOutputCommitment))?.amount,
             changeOutput.amount
@@ -3649,7 +3728,7 @@ final class OfflineNoteTests: XCTestCase {
         let recipientCompact = OfflineCompactKeyCertificate(
             certificate: try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
         )
-        let compatibilityToken = OfflinePaymentToken(
+        let canonicalToken = try OfflinePaymentToken(
             tokenId: derivation.paymentTokenId,
             invoiceId: derivation.paymentRequestId,
             senderAccountId: fixture.paymentToken.senderAccountId,
@@ -3662,14 +3741,14 @@ final class OfflineNoteTests: XCTestCase {
             inputClaims: [],
             outputCommitments: fixture.chainVectors.audit.outputCommitments,
             outputClaims: [
-                OfflinePaymentTokenOutputClaim(
+                try OfflinePaymentTokenOutputClaim(
                     noteCommitment: recipientOutput.noteCommitment,
                     keyCertificate: recipientCompact,
                     accountId: recipientOutput.accountId,
                     assetDefinitionId: recipientOutput.assetDefinitionId,
                     amount: recipientOutput.amount
                 ),
-                OfflinePaymentTokenOutputClaim(
+                try OfflinePaymentTokenOutputClaim(
                     noteCommitment: changeOutput.noteCommitment,
                     keyCertificate: senderCompact,
                     accountId: changeOutput.accountId,
@@ -3693,15 +3772,303 @@ final class OfflineNoteTests: XCTestCase {
             createdAtMs: fixture.paymentToken.createdAtMs
         )
 
-        XCTAssertTrue(compatibilityToken.containsOutputNoteCommitment(derivation.recipientOutputCommitment))
-        XCTAssertTrue(compatibilityToken.containsOutputNoteCommitment(
+        XCTAssertTrue(canonicalToken.containsOutputNoteCommitment(derivation.recipientOutputCommitment))
+        XCTAssertFalse(canonicalToken.containsOutputNoteCommitment(
             " 0x\(derivation.changeOutputCommitment.uppercased()) "
         ))
+        XCTAssertFalse(canonicalToken.containsOutputNoteCommitment(derivation.changeOutputCommitment.uppercased()))
+        XCTAssertNil(canonicalToken.outputClaim(matchingNoteCommitment: "0x\(derivation.changeOutputCommitment)"))
+        XCTAssertNil(canonicalToken.outputClaim(matchingNoteCommitment: "\(derivation.changeOutputCommitment) "))
         XCTAssertEqual(
-            compatibilityToken.outputClaim(matchingNoteCommitment: derivation.changeOutputCommitment)?.amount,
+            canonicalToken.outputClaim(matchingNoteCommitment: derivation.changeOutputCommitment)?.amount,
             changeOutput.amount
         )
-        XCTAssertFalse(compatibilityToken.containsOutputNoteCommitment(String(repeating: "f", count: 64)))
+        XCTAssertFalse(canonicalToken.containsOutputNoteCommitment(String(repeating: "f", count: 64)))
+    }
+
+    func testOfflineNotePayloadRejectsInvalidAmountStrings() throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let recipientOutput = fixture.paymentToken.outputClaims[0]
+        let changeOutput = fixture.paymentToken.outputClaims[1]
+        let senderCompact = OfflineCompactKeyCertificate(
+            certificate: try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        )
+        let recipientCompact = OfflineCompactKeyCertificate(
+            certificate: try Self.certificate(fixture.paymentToken.recipientKeyCertificate)
+        )
+
+        let validReceive = try OfflineReceiveRequestPayload(
+            invoiceId: derivation.paymentRequestId,
+            accountId: recipientOutput.accountId,
+            assetDefinitionId: recipientOutput.assetDefinitionId,
+            amount: "1.00",
+            recipientKeyCertificate: recipientCompact
+        )
+        XCTAssertEqual(validReceive.amount, "1.00")
+        XCTAssertThrowsError(try OfflineReceiveRequestPayload(
+            invoiceId: derivation.paymentRequestId,
+            accountId: recipientOutput.accountId,
+            assetDefinitionId: recipientOutput.assetDefinitionId,
+            amount: "not-an-amount",
+            recipientKeyCertificate: recipientCompact
+        )) { error in
+            XCTAssertEqual(error as? ToriiOfflineAmountError, .invalidAmount("not-an-amount"))
+        }
+
+        let inputClaim = fixture.paymentToken.inputClaims[0]
+        let validInput = try OfflinePaymentTokenInputClaim(
+            domain: inputClaim.domain,
+            noteCommitment: inputClaim.noteCommitment,
+            keyCertificatePayloadHash: inputClaim.keyCertificatePayloadHash,
+            assetId: inputClaim.assetId,
+            amount: "1.00"
+        )
+        XCTAssertEqual(validInput.amount, "1.00")
+        XCTAssertEqual(validInput.assetId, try OfflineNorito.canonicalAssetIdLiteral(inputClaim.assetId))
+        XCTAssertNotNil(validInput.claimHash)
+        let nonCanonicalAssetId = "cash#branch.sbp"
+        XCTAssertNotEqual(nonCanonicalAssetId, inputClaim.assetId)
+        XCTAssertThrowsError(try OfflinePaymentTokenInputClaim(
+            domain: inputClaim.domain,
+            noteCommitment: inputClaim.noteCommitment,
+            keyCertificatePayloadHash: inputClaim.keyCertificatePayloadHash,
+            assetId: nonCanonicalAssetId,
+            amount: "1.00"
+        )) { error in
+            guard case OfflineNoritoError.invalidAssetId(nonCanonicalAssetId) = error else {
+                return XCTFail("expected invalidAssetId, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(try OfflinePaymentTokenInputClaim(
+            domain: inputClaim.domain,
+            noteCommitment: inputClaim.noteCommitment,
+            keyCertificatePayloadHash: inputClaim.keyCertificatePayloadHash,
+            assetId: inputClaim.assetId,
+            amount: "not-an-amount"
+        )) { error in
+            XCTAssertEqual(error as? ToriiOfflineAmountError, .invalidAmount("not-an-amount"))
+        }
+        XCTAssertThrowsError(try OfflinePaymentTokenInputClaim(
+            domain: inputClaim.domain,
+            noteCommitment: String(repeating: "z", count: 64),
+            keyCertificatePayloadHash: inputClaim.keyCertificatePayloadHash,
+            assetId: inputClaim.assetId,
+            amount: "1.00"
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("note_commitment"))
+        }
+        XCTAssertThrowsError(try OfflinePaymentTokenInputClaim(
+            domain: inputClaim.domain,
+            noteCommitment: "0x\(inputClaim.noteCommitment)",
+            keyCertificatePayloadHash: inputClaim.keyCertificatePayloadHash,
+            assetId: inputClaim.assetId,
+            amount: "1.00"
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("note_commitment"))
+        }
+        XCTAssertThrowsError(try OfflinePaymentTokenInputClaim(
+            domain: inputClaim.domain,
+            noteCommitment: " \(inputClaim.noteCommitment)",
+            keyCertificatePayloadHash: inputClaim.keyCertificatePayloadHash,
+            assetId: inputClaim.assetId,
+            amount: "1.00"
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("note_commitment"))
+        }
+        XCTAssertThrowsError(try OfflinePaymentTokenInputClaim(
+            domain: inputClaim.domain,
+            noteCommitment: String(repeating: "ab", count: 32).uppercased(),
+            keyCertificatePayloadHash: inputClaim.keyCertificatePayloadHash,
+            assetId: inputClaim.assetId,
+            amount: "1.00"
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("note_commitment"))
+        }
+        XCTAssertThrowsError(try OfflinePaymentTokenInputClaim(
+            domain: inputClaim.domain,
+            noteCommitment: inputClaim.noteCommitment,
+            keyCertificatePayloadHash: inputClaim.keyCertificatePayloadHash,
+            assetId: inputClaim.assetId,
+            amount: "1.00",
+            claimHash: String(repeating: "f", count: 64)
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("claim_hash"))
+        }
+        let computedClaimHash = try validInput.offlineNoteIssuedClaim().claimHash().hexLowercased()
+        XCTAssertThrowsError(try OfflinePaymentTokenInputClaim(
+            domain: inputClaim.domain,
+            noteCommitment: inputClaim.noteCommitment,
+            keyCertificatePayloadHash: inputClaim.keyCertificatePayloadHash,
+            assetId: inputClaim.assetId,
+            amount: "1.00",
+            claimHash: ""
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("claim_hash"))
+        }
+        XCTAssertThrowsError(try OfflinePaymentTokenInputClaim(
+            domain: inputClaim.domain,
+            noteCommitment: inputClaim.noteCommitment,
+            keyCertificatePayloadHash: inputClaim.keyCertificatePayloadHash,
+            assetId: inputClaim.assetId,
+            amount: "1.00",
+            claimHash: " \(computedClaimHash)"
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("claim_hash"))
+        }
+        XCTAssertThrowsError(try OfflinePaymentTokenInputClaim(
+            domain: inputClaim.domain,
+            noteCommitment: inputClaim.noteCommitment,
+            keyCertificatePayloadHash: inputClaim.keyCertificatePayloadHash,
+            assetId: inputClaim.assetId,
+            amount: "1.00",
+            claimHash: "0x\(computedClaimHash)"
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("claim_hash"))
+        }
+        XCTAssertThrowsError(try OfflinePaymentTokenInputClaim(
+            domain: inputClaim.domain,
+            noteCommitment: inputClaim.noteCommitment,
+            keyCertificatePayloadHash: inputClaim.keyCertificatePayloadHash,
+            assetId: inputClaim.assetId,
+            amount: "1.00",
+            claimHash: computedClaimHash.uppercased()
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("claim_hash"))
+        }
+
+        var inputObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(validInput)) as? [String: Any]
+        )
+        inputObject["amount"] = "not-an-amount"
+        let inputData = try JSONSerialization.data(withJSONObject: inputObject, options: [.sortedKeys])
+        XCTAssertThrowsError(try JSONDecoder().decode(OfflinePaymentTokenInputClaim.self, from: inputData)) { error in
+            XCTAssertEqual(error as? ToriiOfflineAmountError, .invalidAmount("not-an-amount"))
+        }
+        inputObject["amount"] = "1.00"
+        inputObject["asset_id"] = nonCanonicalAssetId
+        let nonCanonicalAssetIdData = try JSONSerialization.data(withJSONObject: inputObject, options: [.sortedKeys])
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(OfflinePaymentTokenInputClaim.self, from: nonCanonicalAssetIdData)
+        ) { error in
+            guard case OfflineNoritoError.invalidAssetId(nonCanonicalAssetId) = error else {
+                return XCTFail("expected invalidAssetId, got \(error)")
+            }
+        }
+        inputObject["asset_id"] = validInput.assetId
+        inputObject["claim_hash"] = String(repeating: "f", count: 64)
+        let mismatchedClaimHashData = try JSONSerialization.data(withJSONObject: inputObject, options: [.sortedKeys])
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(OfflinePaymentTokenInputClaim.self, from: mismatchedClaimHashData)
+        ) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("claim_hash"))
+        }
+
+        let validOutput = try OfflinePaymentTokenOutputClaim(
+            noteCommitment: recipientOutput.noteCommitment,
+            keyCertificate: recipientCompact,
+            accountId: recipientOutput.accountId,
+            assetDefinitionId: recipientOutput.assetDefinitionId,
+            amount: "1.00"
+        )
+        XCTAssertEqual(validOutput.amount, "1.00")
+        XCTAssertThrowsError(try OfflinePaymentTokenOutputClaim(
+            noteCommitment: recipientOutput.noteCommitment,
+            keyCertificate: recipientCompact,
+            accountId: recipientOutput.accountId,
+            assetDefinitionId: recipientOutput.assetDefinitionId,
+            amount: "1..2"
+        )) { error in
+            XCTAssertEqual(error as? ToriiOfflineAmountError, .invalidAmount("1..2"))
+        }
+
+        var outputObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(validOutput)) as? [String: Any]
+        )
+        outputObject["amount"] = "not-an-amount"
+        let outputData = try JSONSerialization.data(withJSONObject: outputObject, options: [.sortedKeys])
+        XCTAssertThrowsError(try JSONDecoder().decode(OfflinePaymentTokenOutputClaim.self, from: outputData)) { error in
+            XCTAssertEqual(error as? ToriiOfflineAmountError, .invalidAmount("not-an-amount"))
+        }
+
+        let validToken = try OfflinePaymentToken(
+            tokenId: derivation.paymentTokenId,
+            invoiceId: derivation.paymentRequestId,
+            senderAccountId: fixture.paymentToken.senderAccountId,
+            recipientAccountId: fixture.paymentToken.recipientAccountId,
+            assetDefinitionId: recipientOutput.assetDefinitionId,
+            amount: "2.00",
+            changeAmount: "1.00",
+            sourceNoteCommitment: derivation.sourceNoteCommitment,
+            inputNullifiers: [derivation.inputNullifier],
+            inputClaims: [validInput],
+            outputCommitments: fixture.chainVectors.audit.outputCommitments,
+            outputClaims: [
+                validOutput,
+                try OfflinePaymentTokenOutputClaim(
+                    noteCommitment: changeOutput.noteCommitment,
+                    keyCertificate: senderCompact,
+                    accountId: changeOutput.accountId,
+                    assetDefinitionId: changeOutput.assetDefinitionId,
+                    amount: changeOutput.amount
+                )
+            ],
+            senderKeyCertificate: senderCompact,
+            recipientKeyCertificate: recipientCompact,
+            oneUseAssertion: OfflineOneUseAssertion(
+                platform: senderCompact.platform,
+                keyId: senderCompact.keyId,
+                counter: 1,
+                challengeHashHex: fixture.chainVectors.audit.publicInputsHash,
+                assertionBase64: Data("assertion".utf8).base64EncodedString()
+            ),
+            recursiveProof: OfflineRecursiveProof(
+                publicInputsHashHex: fixture.chainVectors.audit.publicInputsHash,
+                proofBytesBase64: Data("proof".utf8).base64EncodedString()
+            ),
+            createdAtMs: fixture.paymentToken.createdAtMs
+        )
+        XCTAssertEqual(validToken.amount, "2.00")
+        XCTAssertEqual(validToken.changeAmount, "1.00")
+        var tokenObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(validToken)) as? [String: Any]
+        )
+        var tokenInputClaims = try XCTUnwrap(tokenObject["input_claims"] as? [[String: Any]])
+        tokenInputClaims[0]["amount"] = "not-an-amount"
+        tokenObject["input_claims"] = tokenInputClaims
+        let tokenData = try JSONSerialization.data(withJSONObject: tokenObject, options: [.sortedKeys])
+        XCTAssertThrowsError(try JSONDecoder().decode(OfflinePaymentToken.self, from: tokenData)) { error in
+            XCTAssertEqual(error as? ToriiOfflineAmountError, .invalidAmount("not-an-amount"))
+        }
+        XCTAssertThrowsError(try OfflinePaymentToken(
+            tokenId: derivation.paymentTokenId,
+            invoiceId: derivation.paymentRequestId,
+            senderAccountId: fixture.paymentToken.senderAccountId,
+            recipientAccountId: fixture.paymentToken.recipientAccountId,
+            assetDefinitionId: recipientOutput.assetDefinitionId,
+            amount: "2.00",
+            changeAmount: "not-an-amount",
+            inputNullifiers: [derivation.inputNullifier],
+            inputClaims: [],
+            outputCommitments: fixture.chainVectors.audit.outputCommitments,
+            outputClaims: [validOutput],
+            senderKeyCertificate: senderCompact,
+            recipientKeyCertificate: recipientCompact,
+            oneUseAssertion: OfflineOneUseAssertion(
+                platform: senderCompact.platform,
+                keyId: senderCompact.keyId,
+                counter: 1,
+                challengeHashHex: fixture.chainVectors.audit.publicInputsHash,
+                assertionBase64: Data("assertion".utf8).base64EncodedString()
+            ),
+            recursiveProof: OfflineRecursiveProof(
+                publicInputsHashHex: fixture.chainVectors.audit.publicInputsHash,
+                proofBytesBase64: Data("proof".utf8).base64EncodedString()
+            ),
+            createdAtMs: fixture.paymentToken.createdAtMs
+        )) { error in
+            XCTAssertEqual(error as? ToriiOfflineAmountError, .invalidAmount("not-an-amount"))
+        }
     }
 
     func testOfflineNotePublicInputHashesMatchRustVectors() throws {
@@ -3791,6 +4158,145 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertEqual(note.state, .issuePending)
     }
 
+    func testOfflineNoteWalletRejectsNonPositiveLoadAmounts() async throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let issue = fixture.chainVectors.issue
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let loadContext = OfflineNoteLoadContext(
+            operationId: derivation.issuerLoadOperationId,
+            lineageId: derivation.issuerLoadLineageId,
+            localRevision: derivation.issuerLoadLocalRevision,
+            keyCertificate: senderCertificate
+        )
+        let issuerClient = RecordingIssuerClient(loadContext: loadContext)
+        let store = InMemoryOfflineNoteStore()
+        let wallet = OfflineNoteWallet(
+            chainId: derivation.chainId,
+            accountId: Self.accountId(fromAssetId: issue.assetId),
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            store: store,
+            issuerClient: issuerClient,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            certificateVerifier: try Self.fixtureOwnerCertificateVerifier(fixture),
+            randomSource: QueueRandomSource(values: []),
+            idGenerator: FixedIdGenerator(id: "\(derivation.paymentRequestId)-positive-load"),
+            clock: { 1_700_000_012_180 }
+        )
+        let assetDefinitionId = Self.assetDefinition(fromAssetId: issue.assetId)
+
+        for invalidAmount in ["0", "-1"] {
+            await XCTAssertThrowsErrorAsync(try await wallet.load(
+                assetDefinitionId: assetDefinitionId,
+                amount: invalidAmount
+            )) { error in
+                XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("amount"))
+            }
+            XCTAssertEqual(issuerClient.prepareLoadCount, 0)
+            XCTAssertNil(issuerClient.lastIssueRequest)
+            XCTAssertTrue(try store.listNotes().isEmpty)
+        }
+    }
+
+    func testOfflineNoteWalletCanonicalizesLoadAndReceiveAmounts() async throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let issue = fixture.chainVectors.issue
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let loadContext = OfflineNoteLoadContext(
+            operationId: derivation.issuerLoadOperationId,
+            lineageId: derivation.issuerLoadLineageId,
+            localRevision: derivation.issuerLoadLocalRevision,
+            keyCertificate: senderCertificate
+        )
+        let issuerClient = RecordingIssuerClient(loadContext: loadContext)
+        let loadWallet = OfflineNoteWallet(
+            chainId: derivation.chainId,
+            accountId: Self.accountId(fromAssetId: issue.assetId),
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            issuerClient: issuerClient,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            certificateVerifier: try Self.fixtureOwnerCertificateVerifier(fixture),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.sourceNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: "\(derivation.paymentRequestId)-canonical-load"),
+            clock: { 1_700_000_012_190 }
+        )
+        let assetDefinitionId = Self.assetDefinition(fromAssetId: issue.assetId)
+
+        let loaded = try await loadWallet.load(
+            assetDefinitionId: assetDefinitionId,
+            amount: "001.2300"
+        )
+
+        XCTAssertEqual(issuerClient.lastPrepareLoadAmount, "1.2300")
+        XCTAssertEqual(issuerClient.lastIssueRequest?.amount, "1.2300")
+        XCTAssertEqual(loaded.amount, "1.2300")
+
+        let issuer = try SoftwareIssuerCertificateSigner(privateKeyByte: 0x82)
+        let recipientSigner = try SoftwareOwnerCertificateSigner(privateKeyByte: 0x83)
+        let recipientAttestation = try issuer.issuerCertificate(accountId: recipientSigner.accountId)
+        let receiveStore = InMemoryOfflineNoteStore()
+        let receiveWallet = OfflineNoteWallet.p2pEnabled(
+            chainId: derivation.chainId,
+            accountId: recipientSigner.accountId,
+            attestationProvider: StaticAttestationProvider(certificate: recipientAttestation),
+            store: receiveStore,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: Ed25519OfflineNoteCertificateVerifier(trustedIssuerPublicKeys: [issuer.publicKey]),
+            ownerCertificateSigner: recipientSigner,
+            randomSource: QueueRandomSource(values: [
+                Data(repeating: 0x42, count: 32)
+            ]),
+            idGenerator: FixedIdGenerator(id: "\(derivation.paymentRequestId)-canonical-receive"),
+            clock: { 1_700_000_012_200 }
+        )
+
+        let receiveRequest = try receiveWallet.prepareReceive(
+            assetDefinitionId: assetDefinitionId,
+            amount: "010"
+        )
+
+        XCTAssertEqual(receiveRequest.amount, "10")
+        let storedReceiveNotes = try receiveStore.listNotes()
+        XCTAssertEqual(storedReceiveNotes.count, 1)
+        let storedReceive = try XCTUnwrap(storedReceiveNotes.first)
+        XCTAssertEqual(storedReceive.amount, "10")
+        XCTAssertEqual(storedReceive.noteCommitment, receiveRequest.outputCommitment)
+
+        for nonCanonicalAmount in ["010", "+10"] {
+            XCTAssertThrowsError(try OfflineNoteReceiveRequest(
+                chainId: receiveRequest.chainId,
+                paymentRequestId: "\(receiveRequest.paymentRequestId)-\(nonCanonicalAmount)",
+                accountId: receiveRequest.accountId,
+                assetDefinitionId: receiveRequest.assetDefinitionId,
+                assetId: receiveRequest.assetId,
+                amount: nonCanonicalAmount,
+                keyCertificate: receiveRequest.keyCertificate,
+                outputCommitment: receiveRequest.outputCommitment
+            )) { error in
+                XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("amount"))
+            }
+        }
+        XCTAssertThrowsError(try OfflineNoteReceiveRequest(
+            chainId: receiveRequest.chainId,
+            paymentRequestId: "\(receiveRequest.paymentRequestId)-asset",
+            accountId: receiveRequest.accountId,
+            assetDefinitionId: receiveRequest.assetDefinitionId,
+            assetId: "\(receiveRequest.assetId)#dataspace:01",
+            amount: receiveRequest.amount,
+            keyCertificate: receiveRequest.keyCertificate,
+            outputCommitment: receiveRequest.outputCommitment
+        )) { error in
+            XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("asset_id"))
+        }
+    }
+
     /// Regression: `Wallet.load(assetDefinitionId:)` must forward the
     /// asset definition id verbatim to the issuer client. An earlier
     /// revision derived the value from the SDK-internal 2-part `assetId
@@ -3875,8 +4381,8 @@ final class OfflineNoteTests: XCTestCase {
                         balance: "0",
                         serverStateHash: " lineage-state-hash "
                     ),
-                    "key_certificate": Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000),
-                    "key_certificates": [Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)],
+                    "key_certificate": Self.currentIssuerCertificateJSON(certificate, expiresAtMs: 1_700_000_060_000),
+                    "key_certificates": [Self.currentIssuerCertificateJSON(certificate, expiresAtMs: 1_700_000_060_000)],
                 ]
             case "/v1/offline/v2/notes/issue":
                 XCTFail("retired Offline Note issue must not POST to Torii")
@@ -3966,7 +4472,78 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertEqual(try Self.string(secondRefillBody, "local_state_hash"), "")
     }
 
-    func testToriiIssuerClientStripsLegacyCanonicalAuthHeadersFromV2Requests() async throws {
+    func testToriiIssuerDeviceBindingRejectsRetiredAssertionPublicKeyAliases() throws {
+        let offlinePublicKey = String(repeating: "a5", count: 32)
+        for retiredKey in ["device_public_key", "app_attest_public_key_base64"] {
+            var deviceBinding: [String: Any] = [
+                "device_id": "device-1",
+                "attestation_key_id": "attestation-key-1",
+                "offline_public_key": offlinePublicKey,
+            ]
+            deviceBinding[retiredKey] = Data(repeating: 2, count: 65).base64EncodedString()
+
+            XCTAssertThrowsError(try OfflineNoteIssuerDeviceBinding(
+                deviceId: "device-1",
+                offlinePublicKey: offlinePublicKey,
+                deviceBinding: deviceBinding
+            )) { error in
+                XCTAssertEqual(
+                    error as? ToriiOfflineNoteIssuerClientError,
+                    .invalidJSON("device_binding.\(retiredKey)")
+                )
+            }
+        }
+    }
+
+    func testToriiIssuerDeviceBindingRejectsWhitespaceNormalizedFields() throws {
+        let offlinePublicKey = String(repeating: "a5", count: 32)
+        func binding(deviceId: String = "device-1",
+                     offlinePublicKeyValue: String = offlinePublicKey,
+                     bindingDeviceId: String = "device-1",
+                     bindingOfflinePublicKey: String = offlinePublicKey,
+                     attestationKeyId: Any = "attestation-key-1") throws -> OfflineNoteIssuerDeviceBinding {
+            try OfflineNoteIssuerDeviceBinding(
+                deviceId: deviceId,
+                offlinePublicKey: offlinePublicKeyValue,
+                deviceBinding: [
+                    "device_id": bindingDeviceId,
+                    "attestation_key_id": attestationKeyId,
+                    "offline_public_key": bindingOfflinePublicKey,
+                ]
+            )
+        }
+
+        XCTAssertEqual(try binding().attestationKeyId(), "attestation-key-1")
+        XCTAssertThrowsError(try binding(deviceId: " device-1")) { error in
+            XCTAssertEqual(error as? ToriiOfflineNoteIssuerClientError, .invalidJSON("device_id"))
+        }
+        XCTAssertThrowsError(try binding(offlinePublicKeyValue: "\(offlinePublicKey) ")) { error in
+            XCTAssertEqual(error as? ToriiOfflineNoteIssuerClientError, .invalidJSON("offline_public_key"))
+        }
+        XCTAssertThrowsError(try binding(bindingDeviceId: "device-1 ")) { error in
+            XCTAssertEqual(error as? ToriiOfflineNoteIssuerClientError, .invalidJSON("device_binding.device_id"))
+        }
+        XCTAssertThrowsError(try binding(bindingOfflinePublicKey: " \(offlinePublicKey)")) { error in
+            XCTAssertEqual(error as? ToriiOfflineNoteIssuerClientError, .invalidJSON("device_binding.offline_public_key"))
+        }
+
+        let paddedAttestation = try binding(attestationKeyId: " attestation-key-1")
+        XCTAssertThrowsError(try paddedAttestation.attestationKeyId()) { error in
+            XCTAssertEqual(
+                error as? ToriiOfflineNoteIssuerClientError,
+                .invalidJSON("device_binding.attestation_key_id")
+            )
+        }
+        let emptyAttestation = try binding(attestationKeyId: "")
+        XCTAssertThrowsError(try emptyAttestation.attestationKeyId()) { error in
+            XCTAssertEqual(
+                error as? ToriiOfflineNoteIssuerClientError,
+                .invalidJSON("device_binding.attestation_key_id")
+            )
+        }
+    }
+
+    func testToriiIssuerClientStripsRetiredCanonicalAuthHeadersFromV2Requests() async throws {
         let fixture = try Self.loadFixture()
         let certificate = fixture.paymentToken.senderKeyCertificate
         let accountId = certificate.accountId
@@ -3987,8 +4564,8 @@ final class OfflineNoteTests: XCTestCase {
             let response: [String: Any] = [
                 "operation_id": try Self.string(body, "operation_id"),
                 "lineage_state": Self.lineageState(revision: 0, balance: "0"),
-                "key_certificate": Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000),
-                "key_certificates": [Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)],
+                "key_certificate": Self.currentIssuerCertificateJSON(certificate, expiresAtMs: 1_700_000_060_000),
+                "key_certificates": [Self.currentIssuerCertificateJSON(certificate, expiresAtMs: 1_700_000_060_000)],
             ]
             return (200, try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]))
         }
@@ -4004,11 +4581,11 @@ final class OfflineNoteTests: XCTestCase {
             ),
             deviceBindingProvider: StaticIssuerDeviceBindingProvider(binding: deviceBinding),
             defaultHeaders: [
-                "X-Iroha-Account": "legacy-account",
-                "x-iroha-signature": "legacy-signature",
+                "X-Iroha-Account": "retired-account",
+                "x-iroha-signature": "retired-signature",
                 "X-IROHA-TIMESTAMP-MS": "123",
-                "X-Iroha-Nonce": "legacy-nonce",
-                "X-Iroha-Witness": "legacy-witness",
+                "X-Iroha-Nonce": "retired-nonce",
+                "X-Iroha-Witness": "retired-witness",
                 "X-Client-Trace": "trace-1",
             ],
             clock: { 1_700_000_000_000 },
@@ -4041,7 +4618,7 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertFalse(try Self.string(body, "signature_base64").isEmpty)
     }
 
-    func testToriiIssuerClientDoesNotFallBackToLegacyRoutesAfterV2Failure() async throws {
+    func testToriiIssuerClientDoesNotRetryRetiredRoutesAfterV2Failure() async throws {
         let fixture = try Self.loadFixture()
         let certificate = fixture.paymentToken.senderKeyCertificate
         let accountId = certificate.accountId
@@ -4062,8 +4639,8 @@ final class OfflineNoteTests: XCTestCase {
             case "/v1/offline/v2/keys/refill":
                 return (404, Data(#"{"error":"v2 only"}"#.utf8))
             case "/v1/offline/keys/refill":
-                XCTFail("client must not fall back to legacy offline issuer routes")
-                return (200, Data(#"{"unexpected":"legacy"}"#.utf8))
+                XCTFail("client must not retry retired offline issuer routes")
+                return (200, Data(#"{"unexpected":"retired"}"#.utf8))
             default:
                 return (500, Data(#"{"error":"unexpected route"}"#.utf8))
             }
@@ -4093,7 +4670,7 @@ final class OfflineNoteTests: XCTestCase {
                 assetDefinitionId: assetDefinitionId,
                 amount: "5"
             )
-            XCTFail("v2 issuer 404 must be surfaced instead of retrying legacy routes")
+            XCTFail("v2 issuer 404 must be surfaced instead of retrying retired routes")
         } catch let error as ToriiOfflineNoteIssuerClientError {
             guard case let .httpStatus(status, body) = error else {
                 return XCTFail("expected httpStatus, got \(error)")
@@ -4130,7 +4707,7 @@ final class OfflineNoteTests: XCTestCase {
             NSNumber(value: UInt64(4_294_967_297)),
             "1",
         ] as [Any] {
-            var certificateJSON = Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)
+            var certificateJSON = Self.currentIssuerCertificateJSON(certificate, expiresAtMs: 1_700_000_060_000)
             certificateJSON["assertion_usage_count_limit"] = invalidLimit
             malformedCertificates.append(certificateJSON)
         }
@@ -4140,8 +4717,38 @@ final class OfflineNoteTests: XCTestCase {
             NSNumber(value: UInt64(4_294_967_297)),
             "1",
         ] as [Any] {
-            var certificateJSON = Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)
+            var certificateJSON = Self.currentIssuerCertificateJSON(certificate, expiresAtMs: 1_700_000_060_000)
             certificateJSON["version"] = invalidVersion
+            malformedCertificates.append(certificateJSON)
+        }
+        for invalidScheme in ["apple-appattest-counter", "android-keymint-ecdsa-p256-usage-limit"] {
+            var certificateJSON = Self.currentIssuerCertificateJSON(certificate, expiresAtMs: 1_700_000_060_000)
+            certificateJSON["assertion_scheme"] = invalidScheme
+            malformedCertificates.append(certificateJSON)
+        }
+        for invalidAlgorithm in ["ecdsa-p256-sha256", "ed25519"] {
+            var certificateJSON = Self.currentIssuerCertificateJSON(certificate, expiresAtMs: 1_700_000_060_000)
+            certificateJSON["assertion_key_algorithm"] = invalidAlgorithm
+            malformedCertificates.append(certificateJSON)
+        }
+        for invalidPlatform in ["android", "android-keymint ", "Android-keymint", "ios-appattest-android"] {
+            var certificateJSON = Self.currentIssuerCertificateJSON(certificate, expiresAtMs: 1_700_000_060_000)
+            certificateJSON["platform"] = invalidPlatform
+            certificateJSON["assertion_scheme"] = OfflineNoteV2Constants.androidKeyMintAssertionScheme
+            certificateJSON["assertion_key_algorithm"] = OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm
+            certificateJSON["assertion_usage_count_limit"] = 1
+            malformedCertificates.append(certificateJSON)
+        }
+        for (field, invalidValue) in [
+            ("public_key", String(repeating: "01", count: 33)),
+            ("assertion_public_key", Data(repeating: 0xff, count: 65).base64EncodedString()
+                .replacingOccurrences(of: "/", with: "_")),
+            ("issuer_signature_base64", " \(Data(repeating: 3, count: 64).base64EncodedString())"),
+            ("issuer_signature_base64", Data(repeating: 3, count: 64).base64EncodedString()
+                .replacingOccurrences(of: "=", with: "")),
+        ] {
+            var certificateJSON = Self.currentIssuerCertificateJSON(certificate, expiresAtMs: 1_700_000_060_000)
+            certificateJSON[field] = invalidValue
             malformedCertificates.append(certificateJSON)
         }
 
@@ -4221,8 +4828,8 @@ final class OfflineNoteTests: XCTestCase {
             let response: [String: Any] = [
                 "operation_id": try Self.string(body, "operation_id"),
                 "lineage_state": Self.lineageState(revision: 0, balance: "0"),
-                "key_certificate": Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000),
-                "key_certificates": [Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)],
+                "key_certificate": Self.currentIssuerCertificateJSON(certificate, expiresAtMs: 1_700_000_060_000),
+                "key_certificates": [Self.currentIssuerCertificateJSON(certificate, expiresAtMs: 1_700_000_060_000)],
             ]
             return (200, try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]))
         }
@@ -4396,6 +5003,143 @@ final class OfflineNoteTests: XCTestCase {
             .spendable
         )
         XCTAssertEqual(try senderStore.listNotes().count, 1)
+    }
+
+    func testOfflineNoteWalletRejectsPaymentsNeedingMoreThanFourInputs() throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let assetDefinitionId = Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId)
+        let issuer = try SoftwareIssuerCertificateSigner(privateKeyByte: 0x74)
+        let senderSigner = try SoftwareOwnerCertificateSigner(privateKeyByte: 0x75)
+        let recipientSigner = try SoftwareOwnerCertificateSigner(privateKeyByte: 0x76)
+        let verifier = Ed25519OfflineNoteCertificateVerifier(trustedIssuerPublicKeys: [issuer.publicKey])
+        let senderCertificate = try issuer.issuerCertificate(accountId: senderSigner.accountId)
+        let recipientAttestation = try issuer.issuerCertificate(accountId: recipientSigner.accountId)
+        let senderStore = InMemoryOfflineNoteStore()
+        for index in 0..<5 {
+            try senderStore.upsert(try Self.derivedIssuerSourceWalletNote(
+                chainId: derivation.chainId,
+                accountId: senderSigner.accountId,
+                assetDefinitionId: assetDefinitionId,
+                amount: "1",
+                keyCertificate: senderCertificate,
+                noteSecret: Data(repeating: UInt8(0xA0 + index), count: 32),
+                operationSuffix: "input-cap-\(index)",
+                createdAtMs: 1_700_000_012_000 + UInt64(index)
+            ))
+        }
+        let senderWallet = OfflineNoteWallet(
+            chainId: derivation.chainId,
+            accountId: senderSigner.accountId,
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            store: senderStore,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: verifier,
+            ownerCertificateSigner: senderSigner,
+            randomSource: QueueRandomSource(values: []),
+            idGenerator: FixedIdGenerator(id: "\(derivation.paymentRequestId)-input-cap"),
+            clock: { 1_700_000_012_100 }
+        )
+        let recipientWallet = OfflineNoteWallet.p2pEnabled(
+            chainId: derivation.chainId,
+            accountId: recipientSigner.accountId,
+            attestationProvider: StaticAttestationProvider(certificate: recipientAttestation),
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: verifier,
+            ownerCertificateSigner: recipientSigner,
+            randomSource: QueueRandomSource(values: [
+                Data(repeating: 0xB0, count: 32)
+            ]),
+            idGenerator: FixedIdGenerator(id: "\(derivation.paymentRequestId)-input-cap"),
+            clock: { 1_700_000_012_050 }
+        )
+
+        let receiveRequest = try recipientWallet.prepareReceive(
+            assetDefinitionId: assetDefinitionId,
+            amount: "5"
+        )
+
+        XCTAssertThrowsError(try senderWallet.pay(receiveRequest)) { error in
+            XCTAssertEqual(error as? OfflineNoteWalletError, .insufficientBalance)
+        }
+        XCTAssertEqual(try senderStore.listNotes().count, 5)
+        XCTAssertEqual(try senderStore.listNotes().filter { $0.state == .spendable }.count, 5)
+    }
+
+    func testOfflineNoteWalletRejectsNonPositiveReceiveAndPaymentAmounts() throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let assetDefinitionId = Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId)
+        let issuer = try SoftwareIssuerCertificateSigner(privateKeyByte: 0x77)
+        let senderSigner = try SoftwareOwnerCertificateSigner(privateKeyByte: 0x78)
+        let recipientSigner = try SoftwareOwnerCertificateSigner(privateKeyByte: 0x79)
+        let verifier = Ed25519OfflineNoteCertificateVerifier(trustedIssuerPublicKeys: [issuer.publicKey])
+        let senderCertificate = try issuer.issuerCertificate(accountId: senderSigner.accountId)
+        let recipientAttestation = try issuer.issuerCertificate(accountId: recipientSigner.accountId)
+        let recipientStore = InMemoryOfflineNoteStore()
+        let recipientWallet = OfflineNoteWallet.p2pEnabled(
+            chainId: derivation.chainId,
+            accountId: recipientSigner.accountId,
+            attestationProvider: StaticAttestationProvider(certificate: recipientAttestation),
+            store: recipientStore,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: verifier,
+            ownerCertificateSigner: recipientSigner,
+            randomSource: QueueRandomSource(values: [
+                Data(repeating: 0xC0, count: 32),
+                Data(repeating: 0xC1, count: 32)
+            ]),
+            idGenerator: FixedIdGenerator(id: "\(derivation.paymentRequestId)-positive-amount"),
+            clock: { 1_700_000_012_150 }
+        )
+
+        for invalidAmount in ["0", "-1"] {
+            XCTAssertThrowsError(try recipientWallet.prepareReceive(
+                assetDefinitionId: assetDefinitionId,
+                amount: invalidAmount
+            )) { error in
+                XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("amount"))
+            }
+            XCTAssertTrue(try recipientStore.listNotes().isEmpty)
+        }
+
+        let receiveRequest = try recipientWallet.prepareReceive(
+            assetDefinitionId: assetDefinitionId,
+            amount: "1"
+        )
+        let senderStore = InMemoryOfflineNoteStore()
+        try senderStore.upsert(try Self.derivedIssuerSourceWalletNote(
+            chainId: derivation.chainId,
+            accountId: senderSigner.accountId,
+            assetDefinitionId: assetDefinitionId,
+            amount: "2",
+            keyCertificate: senderCertificate,
+            noteSecret: Data(repeating: 0xD0, count: 32),
+            operationSuffix: "positive-amount",
+            createdAtMs: 1_700_000_012_160
+        ))
+        for invalidAmount in ["0", "-1"] {
+            XCTAssertThrowsError(try OfflineNoteReceiveRequest(
+                chainId: receiveRequest.chainId,
+                paymentRequestId: "\(receiveRequest.paymentRequestId)-\(invalidAmount)",
+                accountId: receiveRequest.accountId,
+                assetDefinitionId: receiveRequest.assetDefinitionId,
+                assetId: receiveRequest.assetId,
+                amount: invalidAmount,
+                keyCertificate: receiveRequest.keyCertificate,
+                outputCommitment: receiveRequest.outputCommitment
+            )) { error in
+                XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("amount"))
+            }
+            XCTAssertEqual(try senderStore.listNotes().count, 1)
+            XCTAssertEqual(try senderStore.listNotes().first?.state, .spendable)
+        }
     }
 
     func testOfflineNoteWalletRejectsRedeemWhenRecursiveVerifierFails() async throws {
@@ -5320,21 +6064,21 @@ final class OfflineNoteTests: XCTestCase {
         )
 
         let committed = try OfflineNoteOutcomeIndex.fromExplorerOutcomes([
-            OfflineNoteExplorerInstructionOutcome(
+            try OfflineNoteExplorerInstructionOutcome(
                 kind: OfflineNoteOutcomeIndex.kindIssue,
-                transactionStatus: "Committed",
+                transactionStatus: OfflineNoteOutcomeIndex.statusCommitted,
                 transactionHashHex: "issue-tx",
                 encodedInstruction: try Self.issueInstructionEnvelope(issue)
             ),
-            OfflineNoteExplorerInstructionOutcome(
+            try OfflineNoteExplorerInstructionOutcome(
                 kind: OfflineNoteOutcomeIndex.kindAudit,
-                transactionStatus: "Committed",
+                transactionStatus: OfflineNoteOutcomeIndex.statusCommitted,
                 transactionHashHex: "audit-tx",
                 encodedInstruction: try Self.auditInstructionEnvelope(audit)
             ),
-            OfflineNoteExplorerInstructionOutcome(
+            try OfflineNoteExplorerInstructionOutcome(
                 kind: OfflineNoteOutcomeIndex.kindRedeem,
-                transactionStatus: "Committed",
+                transactionStatus: OfflineNoteOutcomeIndex.statusCommitted,
                 transactionHashHex: "redeem-tx",
                 encodedInstruction: try Self.redeemInstructionEnvelope(redeem)
             ),
@@ -5347,6 +6091,33 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertEqual(try committed.resolve(redeemPending), OfflineNoteSyncResolution(
             state: .redeemed,
             transactionHashHex: "redeem-tx"
+        ))
+
+        let permissiveCaseDrift = try OfflineNoteOutcomeIndex.fromExplorerOutcomes([
+            try OfflineNoteExplorerInstructionOutcome(
+                kind: OfflineNoteOutcomeIndex.kindIssue,
+                transactionStatus: "committed",
+                transactionHashHex: "issue-case-drift",
+                encodedInstruction: try Self.issueInstructionEnvelope(issue)
+            ),
+            try OfflineNoteExplorerInstructionOutcome(
+                kind: "redeemofflinenote",
+                transactionStatus: OfflineNoteOutcomeIndex.statusCommitted,
+                transactionHashHex: "redeem-case-drift",
+                encodedInstruction: try Self.redeemInstructionEnvelope(redeem)
+            ),
+        ])
+        XCTAssertNil(try permissiveCaseDrift.resolve(issuePending))
+        XCTAssertNil(try permissiveCaseDrift.resolve(redeemPending))
+        XCTAssertThrowsError(try OfflineNoteExplorerInstructionOutcome(
+            kind: " \(OfflineNoteOutcomeIndex.kindRedeem)",
+            transactionStatus: OfflineNoteOutcomeIndex.statusCommitted,
+            encodedInstruction: try Self.redeemInstructionEnvelope(redeem)
+        ))
+        XCTAssertThrowsError(try OfflineNoteExplorerInstructionOutcome(
+            kind: OfflineNoteOutcomeIndex.kindRedeem,
+            transactionStatus: "\(OfflineNoteOutcomeIndex.statusCommitted) ",
+            encodedInstruction: try Self.redeemInstructionEnvelope(redeem)
         ))
 
         let rejected = OfflineNoteOutcomeIndex()
@@ -5362,6 +6133,28 @@ final class OfflineNoteTests: XCTestCase {
             state: .spendable,
             transactionHashHex: "redeem-rejected"
         ))
+    }
+
+    func testToriiOfflineNoteOutcomeProviderRequiresExactEncodedInstructionHex() async throws {
+        let topLevel = try await Self.toriiOutcomeProviderEncodedInstruction("beef", nested: false)
+        XCTAssertEqual(topLevel, Data([0xbe, 0xef]))
+        let nested = try await Self.toriiOutcomeProviderEncodedInstruction("cafe", nested: true)
+        XCTAssertEqual(nested, Data([0xca, 0xfe]))
+
+        let malformed: [(encoded: String, nested: Bool)] = [
+            (" beef", false),
+            ("beef\n", false),
+            ("0xbeef", false),
+            ("BEEF", true),
+            ("", true),
+            ("abc", true),
+            ("gg", true),
+        ]
+        for payload in malformed {
+            await XCTAssertThrowsErrorAsync(
+                try await Self.toriiOutcomeProviderEncodedInstruction(payload.encoded, nested: payload.nested)
+            ) { _ in }
+        }
     }
 
     func testOfflineNoteTransactionBuildersAreRetired() throws {
@@ -5740,6 +6533,14 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertEqual(claim.assetId, issue.assetId)
         XCTAssertEqual(claim.amount, "5.5000")
         XCTAssertEqual(try claim.claimHash().count, 32)
+        XCTAssertThrowsError(try OfflineNoteIssuedClaim(
+            noteCommitment: issue.noteCommitment,
+            keyCertificatePayloadHash: try certificate.payloadHash(),
+            assetId: issue.assetId,
+            amount: "05.5000"
+        )) { error in
+            XCTAssertEqual(error as? OfflineNoteError, .nonCanonicalField(field: "amount"))
+        }
 
         XCTAssertThrowsError(try OfflineNoteIssue(
             noteCommitment: Data(repeating: 0x01, count: 31),
@@ -6943,6 +7744,45 @@ final class OfflineNoteTests: XCTestCase {
         )
     }
 
+    private static func derivedIssuerSourceWalletNote(
+        chainId: String,
+        accountId: String,
+        assetDefinitionId: String,
+        amount: String,
+        keyCertificate: OfflineNoteKeyCertificate,
+        noteSecret: Data,
+        operationSuffix: String,
+        createdAtMs: UInt64
+    ) throws -> OfflineNoteWalletNote {
+        let assetId = "\(assetDefinition(fromAssetId: assetDefinitionId))#\(accountId)"
+        let origin = try OfflineNoteCommitmentOrigin.issuerLoad(OfflineNoteIssuerLoadOrigin(
+            operationId: "issuer-load-\(operationSuffix)",
+            lineageId: "issuer-lineage-\(operationSuffix)",
+            localRevision: 1
+        ))
+        let noteCommitment = try OfflineNoteCommitmentPreimage(
+            chainId: chainId,
+            ownerKeyCertificatePayloadHash: keyCertificate.payloadHash(),
+            assetId: assetId,
+            amount: amount,
+            noteSecret: noteSecret,
+            origin: origin
+        ).deriveNoteCommitment()
+        return try OfflineNoteWalletNote(
+            chainId: chainId,
+            accountId: accountId,
+            assetId: assetId,
+            amount: amount,
+            keyCertificate: keyCertificate,
+            noteCommitment: noteCommitment,
+            noteSecret: noteSecret,
+            origin: origin,
+            state: .spendable,
+            createdAtMs: createdAtMs,
+            updatedAtMs: createdAtMs
+        )
+    }
+
     private static func noteVariant(
         _ note: OfflineNoteWalletNote,
         xorFirstByte: UInt8,
@@ -7245,8 +8085,10 @@ final class OfflineNoteTests: XCTestCase {
 
     private final class RecordingIssuerClient: OfflineNoteIssuerClient {
         let loadContext: OfflineNoteLoadContext
+        var prepareLoadCount = 0
         var lastIssueRequest: OfflineNoteIssueRequest?
         var lastPrepareLoadAssetDefinitionId: String?
+        var lastPrepareLoadAmount: String?
 
         init(loadContext: OfflineNoteLoadContext) {
             self.loadContext = loadContext
@@ -7256,7 +8098,9 @@ final class OfflineNoteTests: XCTestCase {
                          accountId: String,
                          assetDefinitionId: String,
                          amount: String) async throws -> OfflineNoteLoadContext {
+            prepareLoadCount += 1
             lastPrepareLoadAssetDefinitionId = assetDefinitionId
+            lastPrepareLoadAmount = amount
             return loadContext
         }
 
@@ -7511,6 +8355,56 @@ final class OfflineNoteTests: XCTestCase {
             .trimmingCharacters(in: CharacterSet(charactersIn: "="))
     }
 
+    private static func toriiOutcomeProviderEncodedInstruction(_ encoded: String, nested: Bool) async throws -> Data {
+        OfflineIssuerURLProtocol.reset()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [OfflineIssuerURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = ToriiClient(baseURL: URL(string: "https://example.test")!, session: session)
+        defer {
+            client.invalidateAndCancel()
+            OfflineIssuerURLProtocol.reset()
+        }
+        OfflineIssuerURLProtocol.handler = { request in
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let queryItems = components?.queryItems ?? []
+            let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+            let kind = query["kind"] ?? OfflineNoteOutcomeIndex.kindIssue
+            return (200, try Self.explorerOutcomePage(encoded: encoded, nested: nested, kind: kind))
+        }
+        let outcomes = try await ToriiOfflineNoteOutcomeProvider(client: client).listOutcomes()
+        XCTAssertEqual(outcomes.count, 3)
+        return try XCTUnwrap(outcomes.first?.encodedInstruction)
+    }
+
+    private static func explorerOutcomePage(encoded: String, nested: Bool, kind: String) throws -> Data {
+        let json: [String: Any] = nested ? ["encoded": encoded] : [:]
+        var box: [String: Any] = ["json": json]
+        if !nested {
+            box["encoded"] = encoded
+        }
+        let item: [String: Any] = [
+            "authority": "authority",
+            "created_at": "2025-01-01T00:00:00Z",
+            "kind": kind,
+            "r#box": box,
+            "transaction_hash": "hash",
+            "transaction_status": OfflineNoteOutcomeIndex.statusCommitted,
+            "block": NSNumber(value: 1),
+            "index": NSNumber(value: 0),
+        ]
+        let page: [String: Any] = [
+            "pagination": [
+                "page": 1,
+                "per_page": 1,
+                "total_pages": 1,
+                "total_items": 1,
+            ],
+            "items": [item],
+        ]
+        return try JSONSerialization.data(withJSONObject: page, options: [.sortedKeys])
+    }
+
     private static func certificateJSON(_ certificate: OfflineCertificateJSON,
                                         expiresAtMs: UInt64) -> [String: Any] {
         [
@@ -7528,6 +8422,28 @@ final class OfflineNoteTests: XCTestCase {
             "issuer_signature_base64": certificate.issuerSignatureBase64,
             "expires_at_ms": NSNumber(value: expiresAtMs),
         ]
+    }
+
+    private static func currentIssuerCertificateJSON(
+        _ certificate: OfflineCertificateJSON,
+        expiresAtMs: UInt64
+    ) -> [String: Any] {
+        var value = certificateJSON(certificate, expiresAtMs: expiresAtMs)
+        let platform = value["platform"] as? String ?? ""
+        if platform == OfflineNoteV2Constants.androidKeyMintPlatform {
+            value["assertion_scheme"] = OfflineNoteV2Constants.androidKeyMintAssertionScheme
+            value["assertion_key_algorithm"] = OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm
+            value["assertion_usage_count_limit"] = 1
+        } else if platform == OfflineNoteV2Constants.iosAppAttestPlatform {
+            value["assertion_scheme"] = OfflineNoteV2Constants.iosAppAttestAssertionScheme
+            value["assertion_key_algorithm"] = OfflineNoteV2Constants.iosAppAttestAssertionKeyAlgorithm
+            value["assertion_usage_count_limit"] = NSNull()
+        } else {
+            value["assertion_scheme"] = "unsupported-platform"
+            value["assertion_key_algorithm"] = "unsupported-platform"
+            value["assertion_usage_count_limit"] = NSNull()
+        }
+        return value
     }
 
     private static func lineageState(

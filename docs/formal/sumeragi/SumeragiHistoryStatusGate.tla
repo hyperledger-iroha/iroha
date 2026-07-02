@@ -439,8 +439,7 @@ SafetyAnchors ==
   /\ ConsensusKeyHistoryAnchors
 
 HistoryStatusExactness ==
-  /\ \A candidate \in Candidates:
-    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ AllHistoryStatusCandidatesMatchSpec
   /\ SafetyAnchors
 
 HistoryStatusCorrectnessEnvelope ==

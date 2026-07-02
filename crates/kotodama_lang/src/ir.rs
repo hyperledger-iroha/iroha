@@ -371,8 +371,16 @@ pub enum Instr {
         account: Temp,
         mintable: Temp,
     },
-    /// Call the `transfer_asset` syscall with from, to, asset and amount parameters.
+    /// Call the scoped `transfer_asset` syscall with from, to, asset, amount and dataspace parameters.
     TransferAsset {
+        from: Temp,
+        to: Temp,
+        asset: Temp,
+        amount: Temp,
+        dataspace: Temp,
+    },
+    /// Add one transfer entry to the active FASTPQ transfer batch.
+    TransferBatchAsset {
         from: Temp,
         to: Temp,
         asset: Temp,
@@ -3149,7 +3157,7 @@ fn lower_transfer_batch_call(
             });
             out
         };
-        ctx.current_instr(Instr::TransferAsset {
+        ctx.current_instr(Instr::TransferBatchAsset {
             from,
             to,
             asset,
@@ -3893,11 +3901,13 @@ fn lower_surface_builtin_call(
             let to = lower_expr(ctx, &args[1], vars);
             let asset = lower_expr(ctx, &args[2], vars);
             let amt = lower_expr_as_numeric(ctx, &args[3], vars);
+            let dataspace = lower_expr(ctx, &args[4], vars);
             ctx.current_instr(Instr::TransferAsset {
                 from,
                 to,
                 asset,
                 amount: amt,
+                dataspace,
             });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });

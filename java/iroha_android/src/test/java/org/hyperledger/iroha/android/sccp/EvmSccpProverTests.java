@@ -4781,6 +4781,32 @@ public final class EvmSccpProverTests {
     }
     assert threw : "Ethereum source-event validation must reject removed logs";
 
+    for (final Object removed : new Object[] {null, Integer.valueOf(1), "secret-token-removed"}) {
+      final Map<String, Object> malformedRemovedLog = new LinkedHashMap<>(sourceEventLog);
+      malformedRemovedLog.put("removed", removed);
+      final Map<String, Object> malformedRemovedReceipt = new LinkedHashMap<>(receipt);
+      malformedRemovedReceipt.put("logs", Arrays.asList(malformedRemovedLog));
+      threw = false;
+      try {
+        sdk.collectInboundEvidenceFromReceipt(
+            new EthereumMainnetSccp.InboundEvidence(
+                EvmSccpProver.DOMAIN_ETH,
+                EvmSccpProver.DOMAIN_SORA,
+                null,
+                malformedRemovedReceipt,
+                block,
+                beaconFinality,
+                null,
+                null,
+                sourceBridgeEmitterAddress));
+      } catch (final IllegalArgumentException ex) {
+        threw =
+            ex.getMessage().contains("receipt.logs[0].removed must be a boolean")
+                && !ex.getMessage().contains("secret-token");
+      }
+      assert threw : "Ethereum source-event validation must reject non-boolean removed flags";
+    }
+
     final Map<String, Object> nonObjectLogReceipt = new LinkedHashMap<>(receipt);
     nonObjectLogReceipt.put("logs", Arrays.asList("not-a-log"));
     threw = false;
@@ -5592,6 +5618,22 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("removed");
     }
     assert threw : "receipt RLP must reject removed logs";
+
+    for (final Object removed : new Object[] {null, Integer.valueOf(1), "secret-token-removed"}) {
+      final Map<String, Object> malformedRemovedLog = new LinkedHashMap<>(validReceiptLog);
+      malformedRemovedLog.put("removed", removed);
+      final Map<String, Object> malformedRemovedReceipt = new LinkedHashMap<>(receipt);
+      malformedRemovedReceipt.put("logs", Arrays.asList(malformedRemovedLog));
+      threw = false;
+      try {
+        SourceSccpProofs.canonicalEvmReceiptRlp(malformedRemovedReceipt);
+      } catch (final IllegalArgumentException ex) {
+        threw =
+            ex.getMessage().contains("receipt.logs[0].removed must be a boolean")
+                && !ex.getMessage().contains("secret-token");
+      }
+      assert threw : "receipt RLP must reject non-boolean removed flags";
+    }
 
     final Map<String, Object> tooManyTopicsLog = new LinkedHashMap<>(validReceiptLog);
     tooManyTopicsLog.put(
@@ -7554,6 +7596,31 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("removed logs");
     }
     assert threw : "BSC source-event validation must reject removed source-event logs";
+
+    for (final Object removed : new Object[] {null, Integer.valueOf(1), "secret-token-removed"}) {
+      final Map<String, Object> malformedRemovedBscSourceLog = new LinkedHashMap<>(sourceEventLog);
+      malformedRemovedBscSourceLog.put("removed", removed);
+      final Map<String, Object> malformedRemovedBscSourceReceipt = new LinkedHashMap<>(receipt);
+      malformedRemovedBscSourceReceipt.put(
+          "logs", Collections.singletonList(malformedRemovedBscSourceLog));
+      threw = false;
+      try {
+        sourceEventGuardSdk.collectInboundEvidenceFromReceipt(
+            new BscMainnetSccp.InboundEvidence(
+                EvmSccpProver.DOMAIN_BSC,
+                EvmSccpProver.DOMAIN_SORA,
+                null,
+                malformedRemovedBscSourceReceipt,
+                block,
+                null,
+                null));
+      } catch (final IllegalArgumentException ex) {
+        threw =
+            ex.getMessage().contains("receipt.logs[0].removed must be a boolean")
+                && !ex.getMessage().contains("secret-token");
+      }
+      assert threw : "BSC source-event validation must reject non-boolean removed flags";
+    }
 
     final Map<String, Object> missingBscSourceContextLog = new LinkedHashMap<>(sourceEventLog);
     missingBscSourceContextLog.remove("transactionHash");

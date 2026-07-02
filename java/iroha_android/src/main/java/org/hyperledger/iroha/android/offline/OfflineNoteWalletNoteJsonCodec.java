@@ -1,17 +1,20 @@
 package org.hyperledger.iroha.android.offline;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 
-/** JSON persistence codec for structured Offline Note wallet notes. */
+/**
+ * Archived classic Offline Note wallet-note JSON codec kept as fixture-only
+ * inputs; production offline payments use Kagemusha.
+ */
 public final class OfflineNoteWalletNoteJsonCodec {
   public static final long VERSION = 1L;
 
@@ -51,11 +54,15 @@ public final class OfflineNoteWalletNoteJsonCodec {
       throw new IllegalArgumentException(
           "Offline Note wallet note JSON version must be " + VERSION);
     }
+    final String amount = asString(object.get("amount"), "amount");
+    if (!amount.equals(OfflineNote.canonicalAmountString(amount))) {
+      throw new IllegalArgumentException("amount must be canonical");
+    }
     return new OfflineNoteWalletNote(
         asString(object.get("chain_id"), "chain_id"),
         asString(object.get("account_id"), "account_id"),
         asString(object.get("asset_id"), "asset_id"),
-        asString(object.get("amount"), "amount"),
+        amount,
         OfflineNote.decodeCertificate(
             Base64.getDecoder()
                 .decode(
@@ -140,13 +147,11 @@ public final class OfflineNoteWalletNoteJsonCodec {
   }
 
   private static OfflineNoteWalletNoteState decodeState(final String state) {
-    if ("SPEND_PENDING".equals(state) || "spendPending".equals(state)) {
-      return OfflineNoteWalletNoteState.SPENT;
+    try {
+      return OfflineNoteWalletNoteState.valueOf(state);
+    } catch (final IllegalArgumentException exception) {
+      throw new IllegalArgumentException("invalid Offline Note wallet note state: " + state, exception);
     }
-    if ("CHANGE_PENDING".equals(state) || "changePending".equals(state)) {
-      return OfflineNoteWalletNoteState.SPENDABLE;
-    }
-    return OfflineNoteWalletNoteState.valueOf(state);
   }
 
   @SuppressWarnings("unchecked")
@@ -195,29 +200,45 @@ public final class OfflineNoteWalletNoteJsonCodec {
   }
 
   private static long asLong(final Object value, final String field) {
-    if (value instanceof Number) {
+    if (value instanceof BigInteger) {
+      try {
+        return ((BigInteger) value).longValueExact();
+      } catch (final ArithmeticException ex) {
+        throw new IllegalArgumentException(field + " must fit in signed 64-bit range", ex);
+      }
+    }
+    if (value instanceof Byte
+        || value instanceof Short
+        || value instanceof Integer
+        || value instanceof Long) {
       return ((Number) value).longValue();
     }
-    if (value instanceof String) {
-      return Long.parseLong((String) value);
+    if (value instanceof Float || value instanceof Double) {
+      throw new IllegalArgumentException(field + " must be an integer");
     }
-    throw new IllegalArgumentException(field + " must be an integer");
+    throw new IllegalArgumentException(field + " must be a JSON integer number");
   }
 
   private static byte[] hexBytes(final String value, final String field) {
-    final String normalized = value.toLowerCase(Locale.ROOT);
-    if ((normalized.length() & 1) != 0) {
-      throw new IllegalArgumentException(field + " must have an even hex length");
+    if (value.length() != 64) {
+      throw new IllegalArgumentException(field + " must be 32-byte lowercase hex");
     }
-    final byte[] out = new byte[normalized.length() / 2];
+    final byte[] out = new byte[32];
     for (int i = 0; i < out.length; i++) {
-      final int hi = Character.digit(normalized.charAt(i * 2), 16);
-      final int lo = Character.digit(normalized.charAt(i * 2 + 1), 16);
-      if (hi < 0 || lo < 0) {
-        throw new IllegalArgumentException(field + " must be hex");
-      }
+      final int hi = lowercaseHexDigit(value.charAt(i * 2), field);
+      final int lo = lowercaseHexDigit(value.charAt(i * 2 + 1), field);
       out[i] = (byte) ((hi << 4) | lo);
     }
     return out;
+  }
+
+  private static int lowercaseHexDigit(final char ch, final String field) {
+    if (ch >= '0' && ch <= '9') {
+      return ch - '0';
+    }
+    if (ch >= 'a' && ch <= 'f') {
+      return ch - 'a' + 10;
+    }
+    throw new IllegalArgumentException(field + " must be 32-byte lowercase hex");
   }
 }

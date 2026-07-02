@@ -417,8 +417,7 @@ SafetyAnchors ==
   /\ LockedSnapshotAnchors
 
 QcStatusExactness ==
-  /\ \A candidate \in Candidates:
-    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ AllQcStatusCandidatesMatchSpec
   /\ SafetyAnchors
 
 QcStatusCorrectnessEnvelope ==

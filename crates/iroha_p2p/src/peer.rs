@@ -70,10 +70,28 @@ pub const DEFAULT_AAD: &[u8; 10] = b"Iroha2 AAD";
 pub const DEFAULT_BUFFER_CAPACITY: usize = 1024;
 /// Upper bound for preallocating per-connection message buffers to reduce growth.
 const DEFAULT_MESSAGE_PREALLOC_CAP: usize = 512 * 1024;
+/// Largest idle per-connection message buffer retained after a large frame.
+const MAX_RETAINED_MESSAGE_BUFFER_CAP: usize = DEFAULT_MESSAGE_PREALLOC_CAP;
 /// Prefix byte used to indicate a versioned handshake hello payload.
 const HANDSHAKE_HELLO_VERSION_PREFIX: u8 = 0xFF;
 /// Single supported handshake hello payload version.
 const HANDSHAKE_HELLO_VERSION: u8 = 1;
+
+fn retained_message_buffer_cap(max_frame_bytes: usize) -> usize {
+    DEFAULT_BUFFER_CAPACITY.max(max_frame_bytes.min(MAX_RETAINED_MESSAGE_BUFFER_CAP))
+}
+
+fn shrink_empty_vec_to_cap(buffer: &mut Vec<u8>, retained_cap: usize) {
+    if buffer.is_empty() && buffer.capacity() > retained_cap {
+        *buffer = Vec::with_capacity(retained_cap);
+    }
+}
+
+fn shrink_empty_bytes_to_cap(buffer: &mut BytesMut, retained_cap: usize) {
+    if buffer.is_empty() && buffer.capacity() > retained_cap {
+        *buffer = BytesMut::with_capacity(retained_cap);
+    }
+}
 
 /// Count of handshake failures (timeout or verification error).
 static HANDSHAKE_FAILURES: AtomicU64 = AtomicU64::new(0);
@@ -3715,7 +3733,7 @@ mod run {
             cryptographer: Cryptographer<E>,
             max_frame_bytes: usize,
         ) -> Self {
-            let prealloc = max_frame_bytes.min(DEFAULT_MESSAGE_PREALLOC_CAP);
+            let prealloc = retained_message_buffer_cap(max_frame_bytes);
             let capacity = DEFAULT_BUFFER_CAPACITY.max(prealloc.saturating_add(Self::U32_SIZE));
             let decrypt_capacity = DEFAULT_BUFFER_CAPACITY.max(prealloc);
             let align = core::mem::align_of::<ncore::Archived<M>>();
@@ -3742,6 +3760,18 @@ mod run {
 
         fn take_malformed_payload_context(&mut self) -> Option<MalformedPayloadFrameContext> {
             self.last_malformed_payload.take()
+        }
+
+        fn shrink_consumed_frame_buffers(&mut self) {
+            let retained_cap = retained_message_buffer_cap(self.max_frame_bytes);
+            self.decrypted.clear();
+            self.decode_scratch.clear();
+            shrink_empty_vec_to_cap(&mut self.decrypted, retained_cap);
+            shrink_empty_vec_to_cap(&mut self.decode_scratch, retained_cap);
+            shrink_empty_bytes_to_cap(
+                &mut self.buffer,
+                retained_cap.saturating_add(Self::U32_SIZE),
+            );
         }
 
         fn copy_to_aligned_scratch<'a>(
@@ -3972,6 +4002,7 @@ mod run {
             })();
 
             self.buffer.advance(size + Self::U32_SIZE);
+            self.shrink_consumed_frame_buffers();
 
             match parsed? {
                 ParsedFrame::Messages(messages) => {
@@ -4099,8 +4130,7 @@ mod run {
             max_frame_bytes: usize,
             queue_limits: OutboundFrameQueueLimits,
         ) -> Self {
-            let prealloc = max_frame_bytes.min(DEFAULT_MESSAGE_PREALLOC_CAP);
-            let capacity = DEFAULT_BUFFER_CAPACITY.max(prealloc);
+            let capacity = retained_message_buffer_cap(max_frame_bytes);
             let batch_capacity = capacity.max(Self::MAX_BATCH_BYTES);
             Self {
                 write,
@@ -4134,6 +4164,40 @@ mod run {
             }
         }
 
+        fn retained_message_buffer_cap(&self) -> usize {
+            retained_message_buffer_cap(self.max_frame_bytes)
+        }
+
+        fn retained_frame_buffer_cap(&self) -> usize {
+            self.retained_message_buffer_cap()
+                .saturating_add(Self::U32_SIZE)
+        }
+
+        fn shrink_idle_buffers(&mut self) {
+            let retained_cap = self.retained_message_buffer_cap();
+            let retained_frame_cap = self.retained_frame_buffer_cap();
+            shrink_empty_vec_to_cap(&mut self.buffer, retained_cap);
+            shrink_empty_vec_to_cap(&mut self.plain_high, retained_cap);
+            shrink_empty_vec_to_cap(&mut self.plain_low, retained_cap);
+            shrink_empty_vec_to_cap(&mut self.encrypted, retained_cap);
+            shrink_empty_bytes_to_cap(&mut self.batch, retained_frame_cap);
+        }
+
+        fn clear_encrypted_buffer(&mut self) {
+            let retained_cap = self.retained_message_buffer_cap();
+            self.encrypted.clear();
+            shrink_empty_vec_to_cap(&mut self.encrypted, retained_cap);
+        }
+
+        fn recycle_frame_buffer(&mut self, mut frame: BytesMut) {
+            frame.clear();
+            if self.frame_pool.len() < Self::FRAME_POOL_MAX
+                && frame.capacity() <= self.retained_frame_buffer_cap()
+            {
+                self.frame_pool.push(frame);
+            }
+        }
+
         /// Prepare message for the delivery and put it into the queue to be sent later
         ///
         /// # Errors
@@ -4148,6 +4212,8 @@ mod run {
             let max_plaintext = crate::frame_plaintext_cap(self.max_frame_bytes);
             let msg_len = self.buffer.len();
             if msg_len > max_plaintext {
+                self.buffer.clear();
+                self.shrink_idle_buffers();
                 return Err(Error::FrameTooLarge);
             }
 
@@ -4245,6 +4311,7 @@ mod run {
                 self.write.flush().await?;
                 self.batch.clear();
                 self.batch_offset = 0;
+                self.shrink_idle_buffers();
             }
             Ok(())
         }
@@ -4273,6 +4340,7 @@ mod run {
                     let mut plaintext = plaintext;
                     plaintext.clear();
                     self.plain_high = plaintext;
+                    self.shrink_idle_buffers();
                 }
                 Err(err) => {
                     self.plain_high = plaintext;
@@ -4294,6 +4362,7 @@ mod run {
                     let mut plaintext = plaintext;
                     plaintext.clear();
                     self.plain_low = plaintext;
+                    self.shrink_idle_buffers();
                 }
                 Err(err) => {
                     self.plain_low = plaintext;
@@ -4318,6 +4387,7 @@ mod run {
                     let mut plaintext = plaintext;
                     plaintext.clear();
                     self.buffer = plaintext;
+                    self.shrink_idle_buffers();
                     Ok(())
                 }
                 Err(err) => {
@@ -4400,10 +4470,14 @@ mod run {
 
             let size = self.encrypted.len();
             if size > self.max_frame_bytes {
+                self.clear_encrypted_buffer();
                 return Err(Error::FrameTooLarge);
             }
             let needed = size.saturating_add(Self::U32_SIZE);
-            self.check_queue_limit(priority, needed)?;
+            if let Err(error) = self.check_queue_limit(priority, needed) {
+                self.clear_encrypted_buffer();
+                return Err(error);
+            }
             let mut frame = self.frame_pool.pop().unwrap_or_default();
             frame.clear();
             if frame.capacity() < needed {
@@ -4427,6 +4501,7 @@ mod run {
                 Priority::Low => self.queue_low.push_back(frame),
             }
             self.account_enqueued(priority, needed);
+            self.clear_encrypted_buffer();
             Ok(())
         }
 
@@ -4614,7 +4689,7 @@ mod run {
                     break;
                 }
 
-                let Some(mut frame) = (if let Some(class) = next_high {
+                let Some(frame) = (if let Some(class) = next_high {
                     self.pop_high_frame(class)
                 } else {
                     self.pop_low_frame()
@@ -4622,10 +4697,7 @@ mod run {
                     break;
                 };
                 self.batch.extend_from_slice(&frame);
-                frame.clear();
-                if self.frame_pool.len() < Self::FRAME_POOL_MAX {
-                    self.frame_pool.push(frame);
-                }
+                self.recycle_frame_buffer(frame);
 
                 frames_added = frames_added.saturating_add(1);
                 if let Some(class) = next_high {
@@ -5022,6 +5094,45 @@ mod run {
                 sender.send().await.expect("send");
             }
             assert_eq!(sender.frame_pool.len(), 1, "expected pooled frame reuse");
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_drops_oversized_idle_frame_buffers() {
+            let stats = Arc::new(Mutex::new(WriteStats::default()));
+            let writer = TrackingWrite { stats };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[8u8; 32])
+                    .expect("valid key length");
+            let mut sender = MessageSender::new(
+                Box::new(writer),
+                cryptographer,
+                MAX_RETAINED_MESSAGE_BUFFER_CAP * 2,
+            );
+            let payload = Blob(vec![3u8; MAX_RETAINED_MESSAGE_BUFFER_CAP + 64 * 1024]);
+
+            sender
+                .prepare_message(&Message::Data(payload), Priority::High)
+                .expect("prepare oversized-but-valid message");
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            assert!(
+                sender.frame_pool.is_empty(),
+                "oversized frame buffers should not remain pooled"
+            );
+            assert!(
+                sender.buffer.capacity() <= sender.retained_message_buffer_cap(),
+                "encoded message buffer retained oversized capacity"
+            );
+            assert!(
+                sender.encrypted.capacity() <= sender.retained_message_buffer_cap(),
+                "encrypted buffer retained oversized capacity"
+            );
+            assert!(
+                sender.batch.capacity() <= sender.retained_frame_buffer_cap(),
+                "batch buffer retained oversized capacity"
+            );
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -6330,6 +6441,49 @@ mod run {
             assert!(mr.buffer.capacity() >= before);
         }
 
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_reader_releases_oversized_idle_frame_buffers() {
+            let key_byte = 12u8;
+            let payload_len = MAX_RETAINED_MESSAGE_BUFFER_CAP + 64 * 1024;
+            let plaintext = blob_message_frame(&vec![7u8; payload_len]);
+            let raw = encrypted_frame(&plaintext, key_byte);
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead {
+                data: Bytes::from(raw),
+                pos: 0,
+            });
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[key_byte; 32])
+                    .expect("valid key length");
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
+                MessageReader::new(read, cryptographer, MAX_RETAINED_MESSAGE_BUFFER_CAP * 2);
+
+            let (message, _) = reader
+                .read_message()
+                .await
+                .expect("read frame")
+                .expect("message");
+
+            match message {
+                Message::Data(Blob(payload)) => assert_eq!(payload.len(), payload_len),
+                Message::Ping | Message::Pong => panic!("expected blob data message"),
+            }
+            assert!(
+                reader.buffer.capacity()
+                    <= retained_message_buffer_cap(reader.max_frame_bytes)
+                        + MessageReader::<ChaCha20Poly1305, Message<Blob>>::U32_SIZE,
+                "read buffer retained oversized capacity"
+            );
+            assert!(
+                reader.decrypted.capacity() <= retained_message_buffer_cap(reader.max_frame_bytes),
+                "decrypted buffer retained oversized capacity"
+            );
+            assert!(
+                reader.decode_scratch.capacity()
+                    <= retained_message_buffer_cap(reader.max_frame_bytes),
+                "decode scratch retained oversized capacity"
+            );
+        }
+
         fn make_sender(max_frame_bytes: usize) -> MessageSender<ChaCha20Poly1305> {
             let writer: Box<dyn AsyncWrite + Send + Unpin> = Box::new(tokio::io::sink());
             let crypt =
@@ -6344,6 +6498,21 @@ mod run {
                 .prepare_message(&payload, Priority::High)
                 .unwrap_err();
             assert!(matches!(err, Error::FrameTooLarge));
+            assert!(!sender.ready(), "rejected frame should not queue data");
+        }
+
+        #[test]
+        fn message_sender_releases_buffer_after_oversized_rejection() {
+            let mut sender = make_sender(1024);
+            let payload = Blob(vec![0u8; MAX_RETAINED_MESSAGE_BUFFER_CAP + 1]);
+
+            let err = sender
+                .prepare_message(&payload, Priority::High)
+                .expect_err("oversized frame must be rejected");
+
+            assert!(matches!(err, Error::FrameTooLarge));
+            assert_eq!(sender.buffer.len(), 0);
+            assert!(sender.buffer.capacity() <= sender.retained_message_buffer_cap());
             assert!(!sender.ready(), "rejected frame should not queue data");
         }
 
@@ -8087,7 +8256,9 @@ mod state {
                 Ok(pk) => pk,
                 Err(e) => return Err(crate::Error::from(iroha_crypto::error::Error::from(e))),
             };
-            let signature = Signature::from_bytes(&signature);
+            let signature = Signature::try_from_bytes(&signature)
+                .map_err(iroha_crypto::error::Error::from)
+                .map_err(crate::Error::Keys)?;
 
             let payload = handshake_signature_payload::<K, E>(
                 &cryptographer,
@@ -8903,6 +9074,88 @@ mod tests {
         assert!(
             ready.scion_supported,
             "handshake should propagate SCION support flag"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_all_zero_signature_material() {
+        use tokio::io::AsyncWriteExt;
+
+        let kx = KexAlgo::new();
+        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
+        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
+        let addr: SocketAddr = "127.0.0.1:1443".parse().unwrap();
+        let key_pair = KeyPair::random();
+        let (algorithm, public_key) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
+        let cryptographer =
+            Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[13u8; 32]).unwrap();
+        let hello = HandshakeHelloV1 {
+            algorithm,
+            public_key: public_key.to_vec(),
+            signature: vec![0u8; 64],
+            addr,
+            relay: RelayRole::Disabled,
+            consensus: HandshakeConsensusMeta {
+                mode_tag: None,
+                proto_version: None,
+                consensus_fingerprint: None,
+                config: None,
+            },
+            confidential: HandshakeConfidentialMeta {
+                enabled: None,
+                assume_valid: None,
+                verifier_backend: None,
+                features: None,
+            },
+            crypto: HandshakeCryptoMeta {
+                sm_enabled: None,
+                sm_openssl_preview: None,
+            },
+            trust: HandshakeTrustMeta {
+                trust_gossip: true,
+                scion_supported: false,
+            },
+        };
+        let encoded =
+            encode_handshake_message(&cryptographer, &hello).expect("encode crafted hello");
+
+        let (stream_a, stream_b) = tokio::io::duplex(4096);
+        let (_sender_read, mut sender_write) = tokio::io::split(stream_a);
+        let (receiver_read, receiver_write) = tokio::io::split(stream_b);
+        sender_write
+            .write_u16(encoded.len() as u16)
+            .await
+            .expect("write hello length");
+        sender_write
+            .write_all(&encoded)
+            .await
+            .expect("write hello bytes");
+
+        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+            connection: Connection::from_split(15, receiver_read, receiver_write),
+            expected_peer_id: None,
+            kx_local_pk: receiver_kx,
+            kx_remote_pk: sender_kx,
+            cryptographer,
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        };
+
+        let err = match GetKey::read_their_public_key(get_key).await {
+            Ok(_) => panic!("all-zero handshake signature material must be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, crate::Error::Keys(_)),
+            "expected signature parse failure, got {err:?}"
         );
     }
 

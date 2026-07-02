@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -348,7 +349,7 @@ public sealed class KagemushaRecursiveSpendVerifyResult
         bool chainAdmissible,
         string chainAdmissionReason,
         bool witnesslessRedeemSupported,
-        bool lineageWitnessRequired)
+        bool lineageWitnessRequiredForRedeem)
     {
         Valid = valid;
         HopCount = hopCount;
@@ -357,7 +358,7 @@ public sealed class KagemushaRecursiveSpendVerifyResult
         ChainAdmissible = chainAdmissible;
         ChainAdmissionReason = chainAdmissionReason;
         WitnesslessRedeemSupported = witnesslessRedeemSupported;
-        LineageWitnessRequired = lineageWitnessRequired;
+        LineageWitnessRequiredForRedeem = lineageWitnessRequiredForRedeem;
     }
 
     public bool Valid { get; }
@@ -374,13 +375,12 @@ public sealed class KagemushaRecursiveSpendVerifyResult
 
     public bool WitnesslessRedeemSupported { get; }
 
-    public bool LineageWitnessRequired { get; }
+    public bool LineageWitnessRequiredForRedeem { get; }
 }
 
 public enum KagemushaOfflineSpendMode
 {
     RecursiveSpendV1 = 0,
-    CheckedPrefoldV1 = 1,
     RecursiveCompactV1 = 2,
 }
 
@@ -388,7 +388,6 @@ public static class KagemushaOfflineSpendModeExtensions
 {
     public const string RecursiveCompactV1WireName = "recursive_compact_v1";
     public const string RecursiveSpendV1WireName = "recursive_spend_v1";
-    public const string CheckedPrefoldV1WireName = "checked_prefold_v1";
 
     public static string WireName(this KagemushaOfflineSpendMode mode)
     {
@@ -396,7 +395,6 @@ public static class KagemushaOfflineSpendModeExtensions
         {
             KagemushaOfflineSpendMode.RecursiveCompactV1 => RecursiveCompactV1WireName,
             KagemushaOfflineSpendMode.RecursiveSpendV1 => RecursiveSpendV1WireName,
-            KagemushaOfflineSpendMode.CheckedPrefoldV1 => CheckedPrefoldV1WireName,
             _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown Kagemusha offline spend mode."),
         };
     }
@@ -454,14 +452,16 @@ public static class KagemushaRecursiveSpendNative
     public const string RecursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1";
     public const string RecursiveSpendBundleWireName =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1";
-    public const string RecursiveAggregationProofPublicInputsWireName =
-        "iroha_data_model::offline::model::KagemushaRecursiveAggregationProofPublicInputs";
-    public const string RecursiveSpendVerifyResultWireName =
-        "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1";
     public const string RecursiveSpendInitRequestWireName =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
     public const string RecursiveSpendAppendRequestWireName =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1";
+    public const string RecursiveSpendRecordBundleWireName =
+        "iroha_data_model::offline::model::KagemushaVerifiedFoldRecordBundle";
+    public const string RecursiveAggregationProofPublicInputsWireName =
+        "iroha_data_model::offline::model::KagemushaRecursiveAggregationProofPublicInputs";
+    public const string RecursiveSpendVerifyResultWireName =
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1";
     public const string RecursiveSpendLineageWitnessWireName =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendLineageWitnessV1";
     public const string RecursiveSpendTransitionProfileWireName =
@@ -486,6 +486,11 @@ public static class KagemushaRecursiveSpendNative
     public const int NativeArchiveMaxBytes = 64 * 1024 * 1024;
     private const string MaxU128Decimal = "340282366920938463463374607431768211455";
     private static readonly BigInteger MaxU128 = (BigInteger.One << 128) - BigInteger.One;
+    private static readonly byte[] PallasOpenEnvelopesSchemaHash = new byte[]
+    {
+        0xfe, 0x38, 0x26, 0x32, 0x8f, 0x08, 0x17, 0x71,
+        0x75, 0x0f, 0x24, 0xfe, 0x11, 0x02, 0x60, 0xca,
+    };
     internal const int RecursiveCompactUnavailableBridgeErrorCode = -312;
     public const string RecursiveSpendTransitionProfileDomain =
         "iroha:kagemusha:v1:recursive-spend-transition-profile";
@@ -513,6 +518,9 @@ public static class KagemushaRecursiveSpendNative
     private const byte KagemushaNoritoPackedStructFlag = 0x04;
     private const byte PrivacyNoritoFieldBitsetFlag = 0x20;
     private const ushort KagemushaLineageProvingKeyArchiveVersionV1 = 1;
+    private const ushort PallasCurveId = 1;
+    private const int PallasOpenEnvelopeMaxK = 24;
+    private const int PallasOpenEnvelopeMaxN = 1 << PallasOpenEnvelopeMaxK;
     private static readonly byte[] KagemushaLineageProvingKeyArchiveSchemaHash = new byte[]
     {
         0xc8, 0x84, 0x89, 0x61, 0x8a, 0x01, 0x2c, 0x28,
@@ -523,7 +531,6 @@ public static class KagemushaRecursiveSpendNative
         0xfe, 0x38, 0x26, 0x32, 0x8f, 0x08, 0x17, 0x71,
         0x75, 0x0f, 0x24, 0xfe, 0x11, 0x02, 0x60, 0xca,
     };
-    private const ushort PallasCurveId = 1;
     private const int RecursivePallasOpenEnvelopeMaxK = 24;
     private const int RecursivePallasOpenEnvelopeMaxN = 1 << RecursivePallasOpenEnvelopeMaxK;
     private const string BundleTopupAnchorNullifiersField = "bundle.accumulator.topup_anchor_nullifiers";
@@ -564,6 +571,38 @@ public static class KagemushaRecursiveSpendNative
         uint HopCount,
         KagemushaRecursiveSpendableNoteSummary CurrentNote);
 
+    private readonly record struct RecursiveProofDecodeContext(
+        string TrailingField,
+        string ProofBoxTrailingField,
+        string VerifierTrailingField,
+        string VerifierBackendField,
+        string VerifierNameField,
+        string ProofPublicInputsField,
+        string ProofPublicInputsHashField,
+        string ProofBackendField,
+        string ProofBytesField);
+
+    private static readonly RecursiveProofDecodeContext BundleRecursiveProofContext = new(
+        "recursiveProof",
+        "proof",
+        "verifierKeyId",
+        "verifierKeyId.backend",
+        "verifierKeyId",
+        "bundle.proof_public_inputs",
+        "bundle.proof_public_inputs_hash",
+        "bundle.proof_backend",
+        "bundle.proof_bytes");
+
+    private static readonly RecursiveProofDecodeContext LineagePreviousProofContext = new(
+        "lineageWitness.previousRecursiveProofs",
+        "lineageWitness.previousRecursiveProofs.proof",
+        "lineageWitness.previousRecursiveProofs.verifierKeyId",
+        "lineageWitness.previousRecursiveProofs.verifierKeyId.backend",
+        "lineageWitness.previousRecursiveProofs.verifierKeyId.name",
+        "lineageWitness.previousRecursiveProofs.proof_public_inputs",
+        "lineageWitness.previousRecursiveProofs.proof_public_inputs_hash",
+        "lineageWitness.previousRecursiveProofs.proof_backend",
+        "lineageWitness.previousRecursiveProofs.proof_bytes");
     private readonly record struct TransitionProfileStepSummary(
         byte[][] InputNullifiers,
         byte[][] OutputCommitments);
@@ -874,17 +913,12 @@ public static class KagemushaRecursiveSpendNative
         }
     }
 
-    public static KagemushaOfflineSpendMode PreferredMode()
+    public static KagemushaOfflineSpendMode? PreferredMode()
     {
         return PreferredMode(IsRecursiveCompactPaymentTokenProverAvailable(), IsAvailable());
     }
 
-    public static KagemushaOfflineSpendMode PreferredMode(bool recursiveSpendAvailable)
-    {
-        return PreferredMode(false, recursiveSpendAvailable);
-    }
-
-    public static KagemushaOfflineSpendMode PreferredMode(
+    public static KagemushaOfflineSpendMode? PreferredMode(
         bool recursiveCompactAvailable,
         bool recursiveSpendAvailable)
     {
@@ -895,7 +929,7 @@ public static class KagemushaRecursiveSpendNative
 
         return recursiveSpendAvailable
             ? KagemushaOfflineSpendMode.RecursiveSpendV1
-            : KagemushaOfflineSpendMode.CheckedPrefoldV1;
+            : null;
     }
 
     public static bool CanRedeemWitnessless(string? circuitId, uint hopCount)
@@ -915,8 +949,7 @@ public static class KagemushaRecursiveSpendNative
 
     public static bool IsLineageAppendOutputCircuitId(string? outputCircuitId)
     {
-        return outputCircuitId == RecursiveSpendLineageProofCircuitIdV1
-            || outputCircuitId == RecursiveSpendLineageAppendProofCircuitIdV1;
+        return outputCircuitId == RecursiveSpendLineageAppendProofCircuitIdV1;
     }
 
     public static bool IsSupportedLineageKeyArtifactOpeningLen(int verifierOpeningLen)
@@ -1349,8 +1382,9 @@ public static class KagemushaRecursiveSpendNative
             hopCount,
             hasLineageWitness,
             hasLineageVerifierRecord,
-            lineageVerifierRecordsCount: 0,
-            lineageWitnessHasReservedPreviousProofs: false);
+            lineageVerifierRecordCount: 0,
+            lineageWitnessHasReservedPreviousProofs: false,
+            missingLineageVerifierRecordParameterName: nameof(hasLineageVerifierRecord));
     }
 
     public static void ValidateRedeemLineagePreflight(
@@ -1358,15 +1392,16 @@ public static class KagemushaRecursiveSpendNative
         uint hopCount,
         bool hasLineageWitness,
         bool hasLineageVerifierRecord,
-        int lineageVerifierRecordsCount)
+        int lineageVerifierRecordCount)
     {
         ValidateRedeemLineagePreflight(
             proofCircuitId,
             hopCount,
             hasLineageWitness,
             hasLineageVerifierRecord,
-            lineageVerifierRecordsCount,
-            lineageWitnessHasReservedPreviousProofs: false);
+            lineageVerifierRecordCount,
+            lineageWitnessHasReservedPreviousProofs: false,
+            missingLineageVerifierRecordParameterName: nameof(lineageVerifierRecordCount));
     }
 
     public static void ValidateRedeemLineagePreflight(
@@ -1374,8 +1409,27 @@ public static class KagemushaRecursiveSpendNative
         uint hopCount,
         bool hasLineageWitness,
         bool hasLineageVerifierRecord,
-        int lineageVerifierRecordsCount,
+        int lineageVerifierRecordCount,
         bool lineageWitnessHasReservedPreviousProofs)
+    {
+        ValidateRedeemLineagePreflight(
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord,
+            lineageVerifierRecordCount,
+            lineageWitnessHasReservedPreviousProofs,
+            missingLineageVerifierRecordParameterName: nameof(lineageVerifierRecordCount));
+    }
+
+    private static void ValidateRedeemLineagePreflight(
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord,
+        int lineageVerifierRecordCount,
+        bool lineageWitnessHasReservedPreviousProofs,
+        string missingLineageVerifierRecordParameterName)
     {
         if (RequiresLineageWitnessForRedeem(proofCircuitId, hopCount) && !hasLineageWitness)
         {
@@ -1384,18 +1438,18 @@ public static class KagemushaRecursiveSpendNative
                 nameof(hasLineageWitness));
         }
 
-        if (lineageVerifierRecordsCount < 0)
+        if (lineageVerifierRecordCount < 0)
         {
             throw new ArgumentOutOfRangeException(
-                nameof(lineageVerifierRecordsCount),
-                "lineageVerifierRecordsCount must be non-negative.");
+                nameof(lineageVerifierRecordCount),
+                "lineageVerifierRecords count must be non-negative.");
         }
 
-        if ((uint)lineageVerifierRecordsCount > CompactTokenMaxHops)
+        if ((uint)lineageVerifierRecordCount > CompactTokenMaxHops)
         {
             throw new ArgumentOutOfRangeException(
-                nameof(lineageVerifierRecordsCount),
-                $"lineageVerifierRecordsCount must not exceed {CompactTokenMaxHops}.");
+                nameof(lineageVerifierRecordCount),
+                $"lineageVerifierRecords count must not exceed {CompactTokenMaxHops}.");
         }
 
         if (lineageWitnessHasReservedPreviousProofs && !hasLineageWitness)
@@ -1405,14 +1459,14 @@ public static class KagemushaRecursiveSpendNative
                 nameof(lineageWitnessHasReservedPreviousProofs));
         }
 
-        var hasLineageVerifierRecords = hasLineageVerifierRecord || lineageVerifierRecordsCount > 0;
+        var hasLineageVerifierRecords = hasLineageVerifierRecord || lineageVerifierRecordCount > 0;
         if (IsLineageProofCircuitId(proofCircuitId))
         {
             if (!hasLineageVerifierRecords)
             {
                 throw new ArgumentException(
                     "lineageVerifierRecord is required for reserved-lineage bundles",
-                    nameof(hasLineageVerifierRecord));
+                    missingLineageVerifierRecordParameterName);
             }
         }
         else if (lineageWitnessHasReservedPreviousProofs)
@@ -1421,14 +1475,14 @@ public static class KagemushaRecursiveSpendNative
             {
                 throw new ArgumentException(
                     "lineageVerifierRecord is required for lineage witnesses with reserved-lineage proofs",
-                    nameof(hasLineageVerifierRecord));
+                    missingLineageVerifierRecordParameterName);
             }
         }
         else if (hasLineageVerifierRecords)
         {
             throw new ArgumentException(
                 "lineageVerifierRecord is only valid for reserved-lineage bundles or lineage witnesses with reserved-lineage proofs",
-                hasLineageVerifierRecord ? nameof(hasLineageVerifierRecord) : nameof(lineageVerifierRecordsCount));
+                hasLineageVerifierRecord ? nameof(hasLineageVerifierRecord) : nameof(lineageVerifierRecordCount));
         }
     }
 
@@ -1572,11 +1626,9 @@ public static class KagemushaRecursiveSpendNative
     {
         if (string.IsNullOrEmpty(outputCircuitId))
         {
-            return RecursiveAggregationProofCircuitIdV1;
+            return string.Empty;
         }
-        return outputCircuitId == RecursiveSpendLineageProofCircuitIdV1
-            ? RecursiveSpendLineageAppendProofCircuitIdV1
-            : outputCircuitId;
+        return outputCircuitId!;
     }
 
     public static bool IsSupportedAppendOutputCircuitId(string? outputCircuitId)
@@ -1632,7 +1684,7 @@ public static class KagemushaRecursiveSpendNative
             "verifyResult.chainAdmissionReason");
 
         var witnesslessRedeemSupported = false;
-        var lineageWitnessRequired = false;
+        var lineageWitnessRequiredForRedeem = false;
         if (offset < payload.Length)
         {
             witnesslessRedeemSupported = ReadBundleBoolPayload(
@@ -1641,9 +1693,13 @@ public static class KagemushaRecursiveSpendNative
         }
         if (offset < payload.Length)
         {
-            lineageWitnessRequired = ReadBundleBoolPayload(
-                ReadBundleField(payload, ref offset, flags, "verifyResult.lineageWitnessRequired"),
-                "verifyResult.lineageWitnessRequired");
+            lineageWitnessRequiredForRedeem = ReadBundleBoolPayload(
+                ReadBundleField(
+                    payload,
+                    ref offset,
+                    flags,
+                    "verifyResult.lineageWitnessRequiredForRedeem"),
+                "verifyResult.lineageWitnessRequiredForRedeem");
         }
         if (offset != payload.Length)
         {
@@ -1658,7 +1714,7 @@ public static class KagemushaRecursiveSpendNative
             chainAdmissible,
             chainAdmissionReason,
             witnesslessRedeemSupported,
-            lineageWitnessRequired);
+            lineageWitnessRequiredForRedeem);
     }
 
     public static bool LineageWitnessHasReservedPreviousProof(byte[] lineageWitnessArchive)
@@ -1690,15 +1746,15 @@ public static class KagemushaRecursiveSpendNative
             throw BundleDecodeError("lineageWitness.previousRecursiveProofs");
         }
         var count = BinaryPrimitives.ReadUInt64LittleEndian(previousProofsPayload.AsSpan(0, 8));
-        if (count > int.MaxValue)
-        {
-            throw BundleDecodeError("lineageWitness.previousRecursiveProofs");
-        }
         if (count > CompactTokenMaxHops)
         {
             throw BundleDecodeError(
                 "lineageWitness.previousRecursiveProofs",
                 $"lineageWitness.previousRecursiveProofs count must not exceed {CompactTokenMaxHops}");
+        }
+        if (count > int.MaxValue)
+        {
+            throw BundleDecodeError("lineageWitness.previousRecursiveProofs");
         }
 
         var proofOffset = 8;
@@ -1732,6 +1788,11 @@ public static class KagemushaRecursiveSpendNative
             throw new ArgumentException("bundle must use compact Norito layout", nameof(bundleArchive));
         }
 
+        return ReadBundleSummaryPayload(payload, flags);
+    }
+
+    private static KagemushaRecursiveSpendBundleSummary ReadBundleSummaryPayload(byte[] payload, byte flags)
+    {
         var offset = 0;
         var accumulatorPayload = ReadBundleField(payload, ref offset, flags, "bundle.accumulator");
         var proofPayload = ReadBundleField(payload, ref offset, flags, "bundle.proof");
@@ -2087,70 +2148,325 @@ public static class KagemushaRecursiveSpendNative
         return (copy.AsSpan(payloadOffset, (int)payloadLength).ToArray(), copy[39]);
     }
 
-    private static int ReadVerifiedFoldRecordBundleHopCount(
+    private static void RequireInitRequestRecordBundlePreflight(byte[] requestArchive)
+    {
+        RequireRequestRecordBundleAndPallasPreflight(
+            requestArchive,
+            RecursiveSpendInitRequestWireName,
+            recordBundleFieldIndex: 0,
+            pallasOpenEnvelopesFieldIndex: 1);
+    }
+
+    private static void RequireAppendRequestRecordBundlePreflight(byte[] requestArchive)
+    {
+        var (payload, flags) = KagemushaNoritoArchivePayload(
+            requestArchive,
+            RecursiveSpendAppendRequestWireName,
+            "request",
+            "requestArchive");
+        if (flags != KagemushaNoritoCompactLenFlag)
+        {
+            throw new ArgumentException("request must use compact Norito layout", "requestArchive");
+        }
+
+        var offset = 0;
+        var previousBundlePayload = ReadRecordBundleField(
+            payload,
+            ref offset,
+            flags,
+            "previousBundle",
+            "requestArchive");
+        var recordBundlePayload = ReadRecordBundleField(
+            payload,
+            ref offset,
+            flags,
+            "recordBundle",
+            "requestArchive");
+        var hopCount = ReadVerifiedFoldRecordBundleHopCount(
+            recordBundlePayload,
+            flags,
+            "recordBundle",
+            "requestArchive");
+        var pallasOpenEnvelopesPayload = ReadRecordBundleField(
+            payload,
+            ref offset,
+            flags,
+            "pallasOpenEnvelopes",
+            "requestArchive");
+        var pallasOpenEnvelopes = DecodeByteVecPayload(
+            pallasOpenEnvelopesPayload,
+            "pallasOpenEnvelopes",
+            "requestArchive");
+        RequirePallasOpenEnvelopesArchive(
+            pallasOpenEnvelopes,
+            "requestArchive",
+            "pallasOpenEnvelopes",
+            hopCount,
+            NativeArchiveMaxBytes);
+
+        var previousSummary = ReadBundleSummaryPayload(previousBundlePayload, flags);
+        _ = ReadRecordBundleField(
+            payload,
+            ref offset,
+            flags,
+            "currentNote",
+            "requestArchive");
+        var outputProofCircuitId = DecodeRequestStringPayload(
+            ReadRecordBundleField(
+                payload,
+                ref offset,
+                flags,
+                "outputProofCircuitId",
+                "requestArchive"),
+            flags,
+            "outputProofCircuitId");
+        var previousLineageVerifierRecordSupplied = ReadRequestOptionSupplied(
+            ReadRecordBundleField(
+                payload,
+                ref offset,
+                flags,
+                "previousLineageVerifierRecord",
+                "requestArchive"),
+            flags,
+            "previousLineageVerifierRecord");
+        var previousProofOpenEnvelopesPayload = ReadRecordBundleField(
+            payload,
+            ref offset,
+            flags,
+            "previousProofOpenEnvelopes",
+            "requestArchive");
+        var lineageVerifierKeySupplied = ReadRequestOptionSupplied(
+            ReadRecordBundleField(
+                payload,
+                ref offset,
+                flags,
+                "lineageVerifierKey",
+                "requestArchive"),
+            flags,
+            "lineageVerifierKey");
+        var lineageProvingKeyArchiveSupplied = ReadRequestOptionSupplied(
+            ReadRecordBundleField(
+                payload,
+                ref offset,
+                flags,
+                "lineageProvingKeyArchive",
+                "requestArchive"),
+            flags,
+            "lineageProvingKeyArchive");
+        _ = ReadRecordBundleField(payload, ref offset, flags, "blockHeight", "requestArchive");
+        if (offset != payload.Length)
+        {
+            throw RecordBundleDecodeError("request", "requestArchive", "request has trailing bytes");
+        }
+
+        var previousProofOpenEnvelopes = DecodeByteVecPayload(
+            previousProofOpenEnvelopesPayload,
+            "previousProofOpenEnvelopes",
+            "requestArchive");
+
+        var normalizedOutput = NormalizeAppendOutputCircuitId(outputProofCircuitId);
+        if (!CanSelectAppendOutputCircuitId(
+                previousSummary.ProofCircuitId,
+                normalizedOutput,
+                previousSummary.HopCount))
+        {
+            throw new ArgumentException(
+                "outputProofCircuitId is not valid for the previous bundle",
+                "requestArchive");
+        }
+
+        var appendNeedsLineageKeyArtifacts =
+            RequiresLineageKeyArtifactsForAppendOutput(normalizedOutput);
+        var suppliedLineageKeyMaterial = lineageVerifierKeySupplied || lineageProvingKeyArchiveSupplied;
+        if (suppliedLineageKeyMaterial && !appendNeedsLineageKeyArtifacts)
+        {
+            throw new ArgumentException(
+                "lineageKeyArtifacts are only valid for lineage append output",
+                "requestArchive");
+        }
+
+        var appendNeedsPreviousLineageVerifierRecord =
+            RequiresPreviousLineageVerifierRecordForAppend(previousSummary.ProofCircuitId);
+        if (appendNeedsPreviousLineageVerifierRecord && !previousLineageVerifierRecordSupplied)
+        {
+            throw new ArgumentException(
+                "previousLineageVerifierRecord is required for lineage previous bundles",
+                "requestArchive");
+        }
+        if (!appendNeedsPreviousLineageVerifierRecord && previousLineageVerifierRecordSupplied)
+        {
+            throw new ArgumentException(
+                "previousLineageVerifierRecord is only valid for lineage previous bundles",
+                "requestArchive");
+        }
+
+        var appendNeedsPreviousProofOpenEnvelopes =
+            RequiresPreviousProofOpenEnvelopesForAppend(normalizedOutput, previousSummary.HopCount);
+        if (previousProofOpenEnvelopes.Length > 0 && !appendNeedsPreviousProofOpenEnvelopes)
+        {
+            throw new ArgumentException(
+                "previousProofOpenEnvelopes are only valid for lineage append output",
+                "requestArchive");
+        }
+        if (previousProofOpenEnvelopes.Length > 0)
+        {
+            RequirePallasOpenEnvelopesArchive(
+                previousProofOpenEnvelopes,
+                "requestArchive",
+                "previousProofOpenEnvelopes",
+                RecursivePreviousProofOpenEnvelopesRequiredCountV1,
+                RecursivePreviousProofOpenEnvelopesMaxBytes);
+        }
+        if (appendNeedsPreviousProofOpenEnvelopes && previousProofOpenEnvelopes.Length == 0)
+        {
+            throw new ArgumentException(
+                "previousProofOpenEnvelopes is required for lineage append output",
+                "requestArchive");
+        }
+    }
+
+    private static void RequireRequestRecordBundleAndPallasPreflight(
+        byte[] requestArchive,
+        string requestSchema,
+        int recordBundleFieldIndex,
+        int pallasOpenEnvelopesFieldIndex)
+    {
+        var (payload, flags) = KagemushaNoritoArchivePayload(
+            requestArchive,
+            requestSchema,
+            "request",
+            "requestArchive");
+        if (flags != KagemushaNoritoCompactLenFlag)
+        {
+            throw new ArgumentException("request must use compact Norito layout", "requestArchive");
+        }
+
+        var offset = 0;
+        var currentFieldIndex = 0;
+        while (currentFieldIndex < recordBundleFieldIndex)
+        {
+            _ = ReadRecordBundleField(payload, ref offset, flags, "request", "requestArchive");
+            currentFieldIndex++;
+        }
+
+        var recordBundlePayload = ReadRecordBundleField(
+            payload,
+            ref offset,
+            flags,
+            "recordBundle",
+            "requestArchive");
+        var hopCount = ReadVerifiedFoldRecordBundleHopCount(
+            recordBundlePayload,
+            flags,
+            "recordBundle",
+            "requestArchive");
+        currentFieldIndex++;
+
+        while (currentFieldIndex < pallasOpenEnvelopesFieldIndex)
+        {
+            _ = ReadRecordBundleField(payload, ref offset, flags, "request", "requestArchive");
+            currentFieldIndex++;
+        }
+
+        var pallasOpenEnvelopesPayload = ReadRecordBundleField(
+            payload,
+            ref offset,
+            flags,
+            "pallasOpenEnvelopes",
+            "requestArchive");
+        var pallasOpenEnvelopes = DecodeByteVecPayload(
+            pallasOpenEnvelopesPayload,
+            "pallasOpenEnvelopes",
+            "requestArchive");
+        RequirePallasOpenEnvelopesArchive(
+            pallasOpenEnvelopes,
+            "requestArchive",
+            "pallasOpenEnvelopes",
+            hopCount,
+            NativeArchiveMaxBytes);
+    }
+
+    private static int RequireRecordBundleArchiveHopCount(
         byte[] recordBundleArchive,
         string parameterName)
     {
         var (payload, flags) = KagemushaNoritoArchivePayload(
             recordBundleArchive,
-            VerifiedFoldRecordBundleWireName,
+            RecursiveSpendRecordBundleWireName,
             "recordBundle",
             parameterName);
+        if (flags != KagemushaNoritoCompactLenFlag)
+        {
+            throw new ArgumentException(
+                "recordBundle must use compact Norito layout",
+                parameterName);
+        }
+        return ReadVerifiedFoldRecordBundleHopCount(
+            payload,
+            flags,
+            "recordBundle",
+            parameterName);
+    }
 
+    private static int ReadVerifiedFoldRecordBundleHopCount(
+        byte[] payload,
+        byte flags,
+        string field,
+        string parameterName)
+    {
         var offset = 0;
         var bundlePayload = ReadRecordBundleField(
             payload,
             ref offset,
             flags,
-            "recordBundle.bundle",
+            $"{field}.bundle",
             parameterName);
         _ = ReadRecordBundleField(
             payload,
             ref offset,
             flags,
-            "recordBundle.verifierRecords",
+            $"{field}.verifierRecords",
             parameterName);
         if (offset != payload.Length)
         {
             throw RecordBundleDecodeError(
-                "recordBundle",
-                "recordBundle has trailing bytes",
-                parameterName);
+                field,
+                parameterName,
+                $"{field} has trailing bytes");
         }
 
-        var bundleOffset = 0;
-        bundleOffset = SkipRecordBundleFields(
+        var bundleOffset = SkipRecordBundleFields(
             bundlePayload,
-            bundleOffset,
+            0,
             flags,
             2,
-            "recordBundle.bundle",
+            $"{field}.bundle",
             parameterName);
         var stepsPayload = ReadRecordBundleField(
             bundlePayload,
             ref bundleOffset,
             flags,
-            "recordBundle.steps",
+            $"{field}.steps",
             parameterName);
         if (bundleOffset != bundlePayload.Length)
         {
             throw RecordBundleDecodeError(
-                "recordBundle.bundle",
-                "recordBundle.bundle has trailing bytes",
-                parameterName);
+                $"{field}.bundle",
+                parameterName,
+                $"{field}.bundle has trailing bytes");
         }
 
         var hopCount = ReadVerifiedFoldStepCount(
             stepsPayload,
             flags,
-            "recordBundle.steps",
+            $"{field}.steps",
             parameterName);
-        if (hopCount < 1)
+        if (hopCount == 0)
         {
             throw RecordBundleDecodeError(
-                "recordBundle",
-                "recordBundle must contain at least one fold step",
-                parameterName);
+                field,
+                parameterName,
+                $"{field} must contain at least one fold step");
         }
         return hopCount;
     }
@@ -2163,10 +2479,7 @@ public static class KagemushaRecursiveSpendNative
     {
         if (payload.Length < 8)
         {
-            throw RecordBundleDecodeError(
-                field,
-                $"{field} count is truncated",
-                parameterName);
+            throw RecordBundleDecodeError(field, parameterName);
         }
 
         var count = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
@@ -2174,12 +2487,12 @@ public static class KagemushaRecursiveSpendNative
         {
             throw RecordBundleDecodeError(
                 field,
-                $"{field} fold step count must not exceed {CompactTokenMaxHops}",
-                parameterName);
+                parameterName,
+                $"{field} fold step count must not exceed {CompactTokenMaxHops}");
         }
 
         var offset = 8;
-        for (var index = 0; index < (int)count; index++)
+        for (ulong index = 0; index < count; index++)
         {
             var itemPayload = ReadRecordBundleField(
                 payload,
@@ -2187,10 +2500,9 @@ public static class KagemushaRecursiveSpendNative
                 flags,
                 $"{field}[{index}]",
                 parameterName);
-            var itemOffset = 0;
-            itemOffset = SkipRecordBundleFields(
+            var itemOffset = SkipRecordBundleFields(
                 itemPayload,
-                itemOffset,
+                0,
                 flags,
                 6,
                 $"{field}[{index}]",
@@ -2199,18 +2511,615 @@ public static class KagemushaRecursiveSpendNative
             {
                 throw RecordBundleDecodeError(
                     $"{field}[{index}]",
-                    $"Trailing bytes after {field}[{index}]",
-                    parameterName);
+                    parameterName,
+                    $"{field}[{index}] has trailing bytes");
             }
         }
         if (offset != payload.Length)
         {
             throw RecordBundleDecodeError(
                 field,
-                $"Trailing bytes after {field}",
+                parameterName,
+                $"{field} has trailing bytes");
+        }
+
+        return (int)count;
+    }
+
+    private static byte[] DecodeByteVecPayload(
+        byte[] payload,
+        string field,
+        string parameterName)
+    {
+        if (payload.Length < 8)
+        {
+            throw RecordBundleDecodeError(field, parameterName);
+        }
+        var length = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
+        if (length > int.MaxValue || length != (ulong)(payload.Length - 8))
+        {
+            throw RecordBundleDecodeError(field, parameterName);
+        }
+        return payload.AsSpan(8, (int)length).ToArray();
+    }
+
+    private static bool ReadRequestOptionSupplied(byte[] payload, byte flags, string field)
+    {
+        if (payload.Length == 0)
+        {
+            throw RecordBundleDecodeError(field, "requestArchive");
+        }
+        if (payload[0] == 0)
+        {
+            if (payload.Length != 1)
+            {
+                throw RecordBundleDecodeError(field, "requestArchive", $"{field} option payload has trailing bytes");
+            }
+            return false;
+        }
+        if (payload[0] != 1)
+        {
+            throw RecordBundleDecodeError(field, "requestArchive", $"{field} option tag must be 0 or 1");
+        }
+
+        var offset = 1;
+        _ = ReadRecordBundleField(payload, ref offset, flags, field, "requestArchive");
+        if (offset != payload.Length)
+        {
+            throw RecordBundleDecodeError(field, "requestArchive", $"{field} option payload has trailing bytes");
+        }
+        return true;
+    }
+
+    private static string DecodeRequestStringPayload(byte[] payload, byte flags, string field)
+    {
+        try
+        {
+            var offset = 0;
+            var length = ReadRecordBundleLength(payload, ref offset, flags, field, "requestArchive");
+            if (length != payload.Length - offset)
+            {
+                throw RecordBundleDecodeError(field, "requestArchive");
+            }
+            return StrictUtf8.GetString(payload, offset, length);
+        }
+        catch (DecoderFallbackException)
+        {
+            throw RecordBundleDecodeError(field, "requestArchive");
+        }
+    }
+
+    private static void RequirePallasOpenEnvelopesArchive(
+        byte[] archive,
+        string parameterName,
+        string field,
+        int expectedEnvelopeCount,
+        int maxBytes)
+    {
+        if (archive.Length == 0)
+        {
+            throw new ArgumentException($"{field} must not be empty", parameterName);
+        }
+        if (archive.Length > maxBytes)
+        {
+            throw new ArgumentException(
+                $"{field} must not exceed {maxBytes} bytes",
                 parameterName);
         }
+        if (!PrivacyNative.IsNoritoV1Archive(archive)
+            || !archive.AsSpan(6, 16).SequenceEqual(PallasOpenEnvelopesSchemaHash))
+        {
+            throw new ArgumentException(
+                $"{field} must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive",
+                parameterName);
+        }
+        if (!PrivacyNative.HasNonEmptyPrivacyNoritoPayload(archive))
+        {
+            throw new ArgumentException(
+                $"{field} must contain a non-empty Norito payload",
+                parameterName);
+        }
+        if (archive[39] != KagemushaNoritoCompactLenFlag)
+        {
+            throw new ArgumentException(
+                $"{field} must use compact Norito layout",
+                parameterName);
+        }
+
+        var payloadLength = BinaryPrimitives.ReadUInt64LittleEndian(archive.AsSpan(23, 8));
+        if (payloadLength > int.MaxValue || payloadLength > (ulong)(archive.Length - NoritoHeader.EncodedLength))
+        {
+            throw new ArgumentException($"{field} payload length is invalid", parameterName);
+        }
+        var payloadOffset = archive.Length - (int)payloadLength;
+        var payload = archive.AsSpan(payloadOffset, (int)payloadLength).ToArray();
+        if (payload.Length < 8)
+        {
+            throw new ArgumentException($"{field} envelope count is truncated", parameterName);
+        }
+        var count = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
+        if (count != (ulong)expectedEnvelopeCount)
+        {
+            throw new ArgumentException(
+                $"{field} requires exactly {expectedEnvelopeCount} envelope(s)",
+                parameterName);
+        }
+
+        var offset = 8;
+        for (var index = 0; index < expectedEnvelopeCount; index++)
+        {
+            var envelopePayload = ReadPallasField(
+                payload,
+                ref offset,
+                KagemushaNoritoCompactLenFlag,
+                $"{field}[{index}]",
+                parameterName);
+            ValidatePallasOpenEnvelopePayload(
+                envelopePayload,
+                KagemushaNoritoCompactLenFlag,
+                $"{field}[{index}]",
+                parameterName);
+        }
+        if (offset != payload.Length)
+        {
+            throw new ArgumentException($"Trailing bytes after {field} archive", parameterName);
+        }
+    }
+
+    private static void ValidatePallasOpenEnvelopePayload(
+        byte[] payload,
+        byte flags,
+        string field,
+        string parameterName)
+    {
+        var offset = 0;
+        var paramsN = ReadPallasIpaParams(
+            ReadPallasField(payload, ref offset, flags, $"{field}.params", parameterName),
+            flags,
+            $"{field}.params",
+            parameterName);
+        var publicN = ReadPallasPolyOpenPublic(
+            ReadPallasField(payload, ref offset, flags, $"{field}.public", parameterName),
+            flags,
+            $"{field}.public",
+            parameterName);
+        if (publicN != paramsN)
+        {
+            throw PallasDecodeError(
+                field,
+                parameterName,
+                $"{field} public opening length must match params.n");
+        }
+
+        ReadPallasIpaProof(
+            ReadPallasField(payload, ref offset, flags, $"{field}.proof", parameterName),
+            flags,
+            paramsN,
+            $"{field}.proof",
+            parameterName);
+
+        var transcriptLabel = DecodePallasString(
+            ReadPallasField(payload, ref offset, flags, $"{field}.transcript_label", parameterName),
+            flags,
+            $"{field}.transcript_label",
+            parameterName);
+        if (transcriptLabel.Length == 0)
+        {
+            throw PallasDecodeError(
+                field,
+                parameterName,
+                $"{field} transcript_label must be non-empty");
+        }
+        if (StrictUtf8.GetByteCount(transcriptLabel) > RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes)
+        {
+            throw PallasDecodeError(
+                field,
+                parameterName,
+                $"{field} transcript_label exceeds {RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes} bytes");
+        }
+
+        ReadRequiredPallasMetadataOption(
+            ReadPallasField(payload, ref offset, flags, $"{field}.vk_commitment", parameterName),
+            flags,
+            $"{field}.vk_commitment",
+            parameterName);
+        ReadRequiredPallasMetadataOption(
+            ReadPallasField(payload, ref offset, flags, $"{field}.public_inputs_schema_hash", parameterName),
+            flags,
+            $"{field}.public_inputs_schema_hash",
+            parameterName);
+        ReadRequiredPallasMetadataOption(
+            ReadPallasField(payload, ref offset, flags, $"{field}.domain_tag", parameterName),
+            flags,
+            $"{field}.domain_tag",
+            parameterName);
+
+        if (offset != payload.Length)
+        {
+            throw PallasDecodeError(field, parameterName, $"Trailing bytes after {field}");
+        }
+    }
+
+    private static int ReadPallasIpaParams(
+        byte[] payload,
+        byte flags,
+        string field,
+        string parameterName)
+    {
+        var offset = 0;
+        var version = ReadPallasU16(
+            ReadPallasField(payload, ref offset, flags, $"{field}.version", parameterName),
+            $"{field}.version",
+            parameterName);
+        if (version != 1)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field}.version must be 1");
+        }
+        var curveId = ReadPallasU16(
+            ReadPallasField(payload, ref offset, flags, $"{field}.curve_id", parameterName),
+            $"{field}.curve_id",
+            parameterName);
+        if (curveId != PallasCurveId)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field}.curve_id must be Pallas");
+        }
+        var n = ReadPallasU32(
+            ReadPallasField(payload, ref offset, flags, $"{field}.n", parameterName),
+            $"{field}.n",
+            parameterName);
+        if (n < 2 || (n & (n - 1)) != 0)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field}.n must be a power of two >= 2");
+        }
+        if (n > PallasOpenEnvelopeMaxN)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field}.n exceeds max 2^{PallasOpenEnvelopeMaxK}");
+        }
+        var gCount = ReadPallasFixed32SequenceCount(
+            ReadPallasField(payload, ref offset, flags, $"{field}.g", parameterName),
+            flags,
+            $"{field}.g",
+            n,
+            $"{field}.g length must equal params.n",
+            parameterName);
+        var hCount = ReadPallasFixed32SequenceCount(
+            ReadPallasField(payload, ref offset, flags, $"{field}.h", parameterName),
+            flags,
+            $"{field}.h",
+            n,
+            $"{field}.h length must equal params.n",
+            parameterName);
+        if (gCount != n)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field}.g length must equal params.n");
+        }
+        if (hCount != n)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field}.h length must equal params.n");
+        }
+        _ = ReadPallasFixed32(
+            ReadPallasField(payload, ref offset, flags, $"{field}.u", parameterName),
+            $"{field}.u",
+            parameterName);
+        if (offset != payload.Length)
+        {
+            throw PallasDecodeError(field, parameterName, $"Trailing bytes after {field}");
+        }
+        return n;
+    }
+
+    private static int ReadPallasPolyOpenPublic(
+        byte[] payload,
+        byte flags,
+        string field,
+        string parameterName)
+    {
+        var offset = 0;
+        var version = ReadPallasU16(
+            ReadPallasField(payload, ref offset, flags, $"{field}.version", parameterName),
+            $"{field}.version",
+            parameterName);
+        if (version != 1)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field}.version must be 1");
+        }
+        var curveId = ReadPallasU16(
+            ReadPallasField(payload, ref offset, flags, $"{field}.curve_id", parameterName),
+            $"{field}.curve_id",
+            parameterName);
+        if (curveId != PallasCurveId)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field}.curve_id must be Pallas");
+        }
+        var n = ReadPallasU32(
+            ReadPallasField(payload, ref offset, flags, $"{field}.n", parameterName),
+            $"{field}.n",
+            parameterName);
+        _ = ReadPallasFixed32(
+            ReadPallasField(payload, ref offset, flags, $"{field}.z", parameterName),
+            $"{field}.z",
+            parameterName);
+        _ = ReadPallasFixed32(
+            ReadPallasField(payload, ref offset, flags, $"{field}.t", parameterName),
+            $"{field}.t",
+            parameterName);
+        _ = ReadPallasFixed32(
+            ReadPallasField(payload, ref offset, flags, $"{field}.p_g", parameterName),
+            $"{field}.p_g",
+            parameterName);
+        if (offset != payload.Length)
+        {
+            throw PallasDecodeError(field, parameterName, $"Trailing bytes after {field}");
+        }
+        return n;
+    }
+
+    private static void ReadPallasIpaProof(
+        byte[] payload,
+        byte flags,
+        int n,
+        string field,
+        string parameterName)
+    {
+        var offset = 0;
+        var version = ReadPallasU16(
+            ReadPallasField(payload, ref offset, flags, $"{field}.version", parameterName),
+            $"{field}.version",
+            parameterName);
+        if (version != 1)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field}.version must be 1");
+        }
+
+        var expectedRounds = BitOperations.TrailingZeroCount((uint)n);
+        var lCount = ReadPallasFixed32SequenceCount(
+            ReadPallasField(payload, ref offset, flags, $"{field}.l", parameterName),
+            flags,
+            $"{field}.l",
+            expectedRounds,
+            $"{field} round count mismatch: expected {expectedRounds}, found count prefix",
+            parameterName);
+        var rCount = ReadPallasFixed32SequenceCount(
+            ReadPallasField(payload, ref offset, flags, $"{field}.r", parameterName),
+            flags,
+            $"{field}.r",
+            expectedRounds,
+            $"{field} round count mismatch: expected {expectedRounds}, found count prefix",
+            parameterName);
+        if (lCount != rCount)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field} L/R round count mismatch");
+        }
+        if (lCount != expectedRounds)
+        {
+            throw PallasDecodeError(
+                field,
+                parameterName,
+                $"{field} round count mismatch: expected {expectedRounds}, found {lCount}");
+        }
+        _ = ReadPallasFixed32(
+            ReadPallasField(payload, ref offset, flags, $"{field}.a_final", parameterName),
+            $"{field}.a_final",
+            parameterName);
+        _ = ReadPallasFixed32(
+            ReadPallasField(payload, ref offset, flags, $"{field}.b_final", parameterName),
+            $"{field}.b_final",
+            parameterName);
+        if (offset != payload.Length)
+        {
+            throw PallasDecodeError(field, parameterName, $"Trailing bytes after {field}");
+        }
+    }
+
+    private static byte[] RequireValidPallasOpenEnvelopesArchive(
+        ReadOnlySpan<byte> archive,
+        string parameterName,
+        int expectedEnvelopeCount)
+    {
+        var bytes = RequireValidInputArchive(
+            archive,
+            parameterName,
+            "Pallas open-envelopes archive");
+        ValidatePallasOpenEnvelopesArchive(
+            bytes,
+            parameterName,
+            "pallasOpenEnvelopesArchive",
+            expectedEnvelopeCount);
+        return bytes;
+    }
+
+    private static void ValidatePallasOpenEnvelopesArchive(
+        byte[] archive,
+        string parameterName,
+        string field,
+        int expectedEnvelopeCount)
+    {
+        if (!archive.AsSpan(6, 16).SequenceEqual(PallasOpenEnvelopeVectorSchemaHash))
+        {
+            throw new ArgumentException(
+                $"{field} must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive",
+                parameterName);
+        }
+        RequirePallasOpenEnvelopesArchive(
+            archive,
+            parameterName,
+            field,
+            expectedEnvelopeCount,
+            NativeArchiveMaxBytes);
+    }
+
+    private static int ReadPallasFixed32SequenceCount(
+        byte[] payload,
+        byte flags,
+        string field,
+        int expectedCount,
+        string mismatchMessage,
+        string parameterName)
+    {
+        if (payload.Length < 8)
+        {
+            throw PallasDecodeError(field, parameterName);
+        }
+        var count = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
+        if (count > int.MaxValue)
+        {
+            throw PallasDecodeError(field, parameterName);
+        }
+        if ((int)count != expectedCount)
+        {
+            throw PallasDecodeError(field, parameterName, mismatchMessage);
+        }
+
+        var offset = 8;
+        for (var index = 0; index < (int)count; index++)
+        {
+            var item = ReadPallasField(payload, ref offset, flags, $"{field}[{index}]", parameterName);
+            _ = ReadPallasFixed32(item, $"{field}[{index}]", parameterName);
+        }
+        if (offset != payload.Length)
+        {
+            throw PallasDecodeError(field, parameterName, $"Trailing bytes after {field}");
+        }
         return (int)count;
+    }
+
+    private static void RequirePallasMetadataOption(
+        byte[] payload,
+        byte flags,
+        string field,
+        string parameterName)
+    {
+        if (payload.Length < 1)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field} option tag is truncated");
+        }
+        var tag = payload[0];
+        if (tag == 0)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field} is required");
+        }
+        if (tag != 1)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field} option tag must be 0 or 1");
+        }
+
+        var offset = 1;
+        var length = ReadPallasLength(payload, ref offset, flags, $"{field}.length", parameterName);
+        if (length > payload.Length - offset || length != payload.Length - offset)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field} payload length mismatch");
+        }
+        var value = payload.AsSpan(offset, length).ToArray();
+        _ = ReadPallasFixed32(value, field, parameterName);
+        if (value.All(current => current == 0))
+        {
+            throw PallasDecodeError(field, parameterName, $"{field} must be non-zero");
+        }
+    }
+
+    private static void ReadRequiredPallasMetadataOption(
+        byte[] payload,
+        byte flags,
+        string field,
+        string parameterName)
+    {
+        RequirePallasMetadataOption(payload, flags, field, parameterName);
+    }
+
+    private static byte[] ReadPallasField(
+        byte[] buffer,
+        ref int offset,
+        byte flags,
+        string field,
+        string parameterName)
+    {
+        var length = ReadPallasLength(buffer, ref offset, flags, field, parameterName);
+        if (length > buffer.Length - offset)
+        {
+            throw PallasDecodeError(field, parameterName);
+        }
+        var result = buffer.AsSpan(offset, length).ToArray();
+        offset += length;
+        return result;
+    }
+
+    private static int ReadPallasLength(
+        byte[] buffer,
+        ref int offset,
+        byte flags,
+        string field,
+        string parameterName)
+    {
+        try
+        {
+            return ReadRecordBundleLength(buffer, ref offset, flags, field, parameterName);
+        }
+        catch (ArgumentException)
+        {
+            throw PallasDecodeError(field, parameterName);
+        }
+    }
+
+    private static ushort ReadPallasU16(byte[] payload, string field, string parameterName)
+    {
+        if (payload.Length != 2)
+        {
+            throw PallasDecodeError(field, parameterName);
+        }
+        return BinaryPrimitives.ReadUInt16LittleEndian(payload);
+    }
+
+    private static int ReadPallasU32(byte[] payload, string field, string parameterName)
+    {
+        if (payload.Length != 4)
+        {
+            throw PallasDecodeError(field, parameterName);
+        }
+        var value = BinaryPrimitives.ReadUInt32LittleEndian(payload);
+        if (value > int.MaxValue)
+        {
+            throw PallasDecodeError(field, parameterName);
+        }
+        return (int)value;
+    }
+
+    private static byte[] ReadPallasFixed32(byte[] payload, string field, string parameterName)
+    {
+        if (payload.Length != 32)
+        {
+            throw PallasDecodeError(field, parameterName, $"{field} must be exactly 32 bytes");
+        }
+        return payload;
+    }
+
+    private static string DecodePallasString(
+        byte[] payload,
+        byte flags,
+        string field,
+        string parameterName)
+    {
+        try
+        {
+            var offset = 0;
+            var length = ReadPallasLength(payload, ref offset, flags, field, parameterName);
+            if (length != payload.Length - offset)
+            {
+                throw PallasDecodeError(field, parameterName);
+            }
+            return StrictUtf8.GetString(payload, offset, length);
+        }
+        catch (DecoderFallbackException)
+        {
+            throw PallasDecodeError(field, parameterName);
+        }
+    }
+
+    private static ArgumentException PallasDecodeError(
+        string field,
+        string parameterName,
+        string? message = null)
+    {
+        return new ArgumentException(message ?? field, parameterName);
     }
 
     private static int SkipRecordBundleFields(
@@ -2239,7 +3148,7 @@ public static class KagemushaRecursiveSpendNative
         var length = ReadRecordBundleLength(buffer, ref offset, flags, field, parameterName);
         if (length > buffer.Length - offset)
         {
-            throw RecordBundleDecodeError(field, parameterName: parameterName);
+            throw RecordBundleDecodeError(field, parameterName);
         }
         var result = buffer.AsSpan(offset, length).ToArray();
         offset += length;
@@ -2257,12 +3166,12 @@ public static class KagemushaRecursiveSpendNative
         {
             if (offset + 8 > buffer.Length)
             {
-                throw RecordBundleDecodeError(field, parameterName: parameterName);
+                throw RecordBundleDecodeError(field, parameterName);
             }
             var fixedLength = BinaryPrimitives.ReadUInt64LittleEndian(buffer.AsSpan(offset, 8));
             if (fixedLength > int.MaxValue)
             {
-                throw RecordBundleDecodeError(field, parameterName: parameterName);
+                throw RecordBundleDecodeError(field, parameterName);
             }
             offset += 8;
             return (int)fixedLength;
@@ -2275,13 +3184,13 @@ public static class KagemushaRecursiveSpendNative
         {
             if (offset >= buffer.Length)
             {
-                throw RecordBundleDecodeError(field, parameterName: parameterName);
+                throw RecordBundleDecodeError(field, parameterName);
             }
             var current = buffer[offset++];
             var currentValue = current & 0x7f;
             if (shift >= 63 && currentValue > 1)
             {
-                throw RecordBundleDecodeError(field, parameterName: parameterName);
+                throw RecordBundleDecodeError(field, parameterName);
             }
             value |= (ulong)currentValue << shift;
             if ((current & 0x80) == 0)
@@ -2289,637 +3198,23 @@ public static class KagemushaRecursiveSpendNative
                 var encodedLength = offset - startOffset;
                 if (encodedLength > 1 && value < (1UL << (7 * (encodedLength - 1))))
                 {
-                    throw RecordBundleDecodeError(field, parameterName: parameterName);
+                    throw RecordBundleDecodeError(field, parameterName);
                 }
                 if (value > int.MaxValue)
                 {
-                    throw RecordBundleDecodeError(field, parameterName: parameterName);
+                    throw RecordBundleDecodeError(field, parameterName);
                 }
                 return (int)value;
             }
             shift += 7;
         }
-        throw RecordBundleDecodeError(field, parameterName: parameterName);
+        throw RecordBundleDecodeError(field, parameterName);
     }
 
     private static ArgumentException RecordBundleDecodeError(
         string field,
-        string? message = null,
-        string parameterName = "recordBundleArchive")
-    {
-        return new ArgumentException(message ?? field, parameterName);
-    }
-
-    private static byte[] RequireValidPallasOpenEnvelopesArchive(
-        ReadOnlySpan<byte> archive,
         string parameterName,
-        int expectedEnvelopeCount)
-    {
-        var bytes = RequireValidInputArchive(
-            archive,
-            parameterName,
-            "Pallas open-envelopes archive");
-        ValidatePallasOpenEnvelopesArchive(
-            bytes,
-            parameterName,
-            "pallasOpenEnvelopesArchive",
-            expectedEnvelopeCount);
-        return bytes;
-    }
-
-    private static void ValidatePallasOpenEnvelopesArchive(
-        byte[] archive,
-        string parameterName,
-        string field,
-        int expectedEnvelopeCount)
-    {
-        var (payload, flags) = KagemushaNoritoArchivePayload(
-            archive,
-            PallasOpenEnvelopeVectorSchemaHash,
-            field,
-            parameterName,
-            $"{field} must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive");
-        if (flags != KagemushaNoritoCompactLenFlag)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} must use compact Norito layout",
-                parameterName);
-        }
-        if (payload.Length < 8)
-        {
-            throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-        }
-
-        var count = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
-        if (count != (ulong)expectedEnvelopeCount)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} requires exactly {expectedEnvelopeCount} envelope(s)",
-                parameterName);
-        }
-        if (count > int.MaxValue)
-        {
-            throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-        }
-
-        var offset = 8;
-        for (var index = 0; index < (int)count; index++)
-        {
-            var itemPayload = ReadPallasField(
-                payload,
-                ref offset,
-                flags,
-                $"{field}[{index}]",
-                parameterName);
-            ValidatePallasOpenEnvelopePayload(
-                itemPayload,
-                flags,
-                $"{field}[{index}]",
-                parameterName);
-        }
-        if (offset != payload.Length)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} has trailing bytes",
-                parameterName);
-        }
-    }
-
-    private static void ValidatePallasOpenEnvelopePayload(
-        byte[] payload,
-        byte flags,
-        string field,
-        string parameterName)
-    {
-        var offset = 0;
-        var paramsN = ReadPallasIpaParams(
-            ReadPallasField(payload, ref offset, flags, $"{field}.params", parameterName),
-            flags,
-            $"{field}.params",
-            parameterName);
-        var publicN = ReadPallasPolyOpenPublic(
-            ReadPallasField(payload, ref offset, flags, $"{field}.public", parameterName),
-            flags,
-            $"{field}.public",
-            parameterName);
-        if (publicN != paramsN)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} public opening length mismatch",
-                parameterName);
-        }
-        ReadPallasIpaProof(
-            ReadPallasField(payload, ref offset, flags, $"{field}.proof", parameterName),
-            flags,
-            paramsN,
-            $"{field}.proof",
-            parameterName);
-        var transcriptLabel = DecodePallasString(
-            ReadPallasField(payload, ref offset, flags, $"{field}.transcript_label", parameterName),
-            flags,
-            $"{field}.transcript_label",
-            parameterName);
-        if (transcriptLabel.Length == 0)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} transcript_label must be non-empty",
-                parameterName);
-        }
-        if (StrictUtf8.GetByteCount(transcriptLabel) > RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} transcript_label exceeds {RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes} bytes",
-                parameterName);
-        }
-        ReadRequiredPallasMetadataOption(
-            ReadPallasField(payload, ref offset, flags, $"{field}.vk_commitment", parameterName),
-            flags,
-            $"{field}.vk_commitment",
-            parameterName);
-        ReadRequiredPallasMetadataOption(
-            ReadPallasField(payload, ref offset, flags, $"{field}.public_inputs_schema_hash", parameterName),
-            flags,
-            $"{field}.public_inputs_schema_hash",
-            parameterName);
-        ReadRequiredPallasMetadataOption(
-            ReadPallasField(payload, ref offset, flags, $"{field}.domain_tag", parameterName),
-            flags,
-            $"{field}.domain_tag",
-            parameterName);
-        if (offset != payload.Length)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"Trailing bytes after {field}",
-                parameterName);
-        }
-    }
-
-    private static int ReadPallasIpaParams(
-        byte[] payload,
-        byte flags,
-        string field,
-        string parameterName)
-    {
-        var offset = 0;
-        var version = ReadPallasU16Payload(
-            ReadPallasField(payload, ref offset, flags, $"{field}.version", parameterName),
-            $"{field}.version",
-            parameterName);
-        if (version != 1)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                $"{field}.version",
-                $"{field}.version must be 1",
-                parameterName);
-        }
-        var curveId = ReadPallasU16Payload(
-            ReadPallasField(payload, ref offset, flags, $"{field}.curve_id", parameterName),
-            $"{field}.curve_id",
-            parameterName);
-        if (curveId != PallasCurveId)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                $"{field}.curve_id",
-                $"{field}.curve_id must be Pallas",
-                parameterName);
-        }
-        var rawN = ReadPallasU32Payload(
-            ReadPallasField(payload, ref offset, flags, $"{field}.n", parameterName),
-            $"{field}.n",
-            parameterName);
-        if (rawN > int.MaxValue)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                $"{field}.n",
-                $"{field}.n exceeds max 2^{RecursivePallasOpenEnvelopeMaxK}",
-                parameterName);
-        }
-        var n = (int)rawN;
-        if (n < 2 || (n & (n - 1)) != 0)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                $"{field}.n",
-                $"{field}.n must be a power of two >= 2",
-                parameterName);
-        }
-        if (n > RecursivePallasOpenEnvelopeMaxN)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                $"{field}.n",
-                $"{field}.n exceeds max 2^{RecursivePallasOpenEnvelopeMaxK}",
-                parameterName);
-        }
-        var gCount = ReadPallasFixed32SequenceCount(
-            ReadPallasField(payload, ref offset, flags, $"{field}.g", parameterName),
-            flags,
-            $"{field}.g",
-            parameterName,
-            n,
-            $"{field}.g length must equal params.n");
-        if (gCount != n)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                $"{field}.g",
-                $"{field}.g length must equal params.n",
-                parameterName);
-        }
-        var hCount = ReadPallasFixed32SequenceCount(
-            ReadPallasField(payload, ref offset, flags, $"{field}.h", parameterName),
-            flags,
-            $"{field}.h",
-            parameterName,
-            n,
-            $"{field}.h length must equal params.n");
-        if (hCount != n)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                $"{field}.h",
-                $"{field}.h length must equal params.n",
-                parameterName);
-        }
-        ReadPallasFixed32Payload(
-            ReadPallasField(payload, ref offset, flags, $"{field}.u", parameterName),
-            $"{field}.u",
-            parameterName);
-        if (offset != payload.Length)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"Trailing bytes after {field}",
-                parameterName);
-        }
-        return n;
-    }
-
-    private static int ReadPallasPolyOpenPublic(
-        byte[] payload,
-        byte flags,
-        string field,
-        string parameterName)
-    {
-        var offset = 0;
-        var version = ReadPallasU16Payload(
-            ReadPallasField(payload, ref offset, flags, $"{field}.version", parameterName),
-            $"{field}.version",
-            parameterName);
-        if (version != 1)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                $"{field}.version",
-                $"{field}.version must be 1",
-                parameterName);
-        }
-        var curveId = ReadPallasU16Payload(
-            ReadPallasField(payload, ref offset, flags, $"{field}.curve_id", parameterName),
-            $"{field}.curve_id",
-            parameterName);
-        if (curveId != PallasCurveId)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                $"{field}.curve_id",
-                $"{field}.curve_id must be Pallas",
-                parameterName);
-        }
-        var rawN = ReadPallasU32Payload(
-            ReadPallasField(payload, ref offset, flags, $"{field}.n", parameterName),
-            $"{field}.n",
-            parameterName);
-        if (rawN > int.MaxValue)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                $"{field}.n",
-                $"{field}.n exceeds max 2^{RecursivePallasOpenEnvelopeMaxK}",
-                parameterName);
-        }
-        var n = (int)rawN;
-        ReadPallasFixed32Payload(
-            ReadPallasField(payload, ref offset, flags, $"{field}.z", parameterName),
-            $"{field}.z",
-            parameterName);
-        ReadPallasFixed32Payload(
-            ReadPallasField(payload, ref offset, flags, $"{field}.t", parameterName),
-            $"{field}.t",
-            parameterName);
-        ReadPallasFixed32Payload(
-            ReadPallasField(payload, ref offset, flags, $"{field}.p_g", parameterName),
-            $"{field}.p_g",
-            parameterName);
-        if (offset != payload.Length)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"Trailing bytes after {field}",
-                parameterName);
-        }
-        return n;
-    }
-
-    private static void ReadPallasIpaProof(
-        byte[] payload,
-        byte flags,
-        int n,
-        string field,
-        string parameterName)
-    {
-        var offset = 0;
-        var version = ReadPallasU16Payload(
-            ReadPallasField(payload, ref offset, flags, $"{field}.version", parameterName),
-            $"{field}.version",
-            parameterName);
-        if (version != 1)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                $"{field}.version",
-                $"{field}.version must be 1",
-                parameterName);
-        }
-
-        var expectedRounds = BitOperations.TrailingZeroCount((uint)n);
-        var lCount = ReadPallasFixed32SequenceCount(
-            ReadPallasField(payload, ref offset, flags, $"{field}.l", parameterName),
-            flags,
-            $"{field}.l",
-            parameterName,
-            expectedRounds,
-            $"{field} round count mismatch: expected {expectedRounds}, found count prefix");
-        var rCount = ReadPallasFixed32SequenceCount(
-            ReadPallasField(payload, ref offset, flags, $"{field}.r", parameterName),
-            flags,
-            $"{field}.r",
-            parameterName,
-            expectedRounds,
-            $"{field} round count mismatch: expected {expectedRounds}, found count prefix");
-        if (lCount != rCount)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} L/R round count mismatch",
-                parameterName);
-        }
-        if (lCount != expectedRounds)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} round count mismatch: expected {expectedRounds}, found {lCount}",
-                parameterName);
-        }
-        ReadPallasFixed32Payload(
-            ReadPallasField(payload, ref offset, flags, $"{field}.a_final", parameterName),
-            $"{field}.a_final",
-            parameterName);
-        ReadPallasFixed32Payload(
-            ReadPallasField(payload, ref offset, flags, $"{field}.b_final", parameterName),
-            $"{field}.b_final",
-            parameterName);
-        if (offset != payload.Length)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"Trailing bytes after {field}",
-                parameterName);
-        }
-    }
-
-    private static int ReadPallasFixed32SequenceCount(
-        byte[] payload,
-        byte flags,
-        string field,
-        string parameterName,
-        int expectedCount,
-        string mismatchMessage)
-    {
-        if (payload.Length < 8)
-        {
-            throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-        }
-        var count = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
-        if (count != (ulong)expectedCount)
-        {
-            throw PallasOpenEnvelopeDecodeError(field, mismatchMessage, parameterName);
-        }
-        if (count > int.MaxValue)
-        {
-            throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-        }
-
-        var offset = 8;
-        for (var index = 0; index < (int)count; index++)
-        {
-            ReadPallasFixed32Payload(
-                ReadPallasField(payload, ref offset, flags, $"{field}[{index}]", parameterName),
-                $"{field}[{index}]",
-                parameterName);
-        }
-        if (offset != payload.Length)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"Trailing bytes after {field}",
-                parameterName);
-        }
-        return (int)count;
-    }
-
-    private static byte[] ReadRequiredPallasMetadataOption(
-        byte[] payload,
-        byte flags,
-        string field,
-        string parameterName)
-    {
-        if (payload.Length == 0)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} option tag must be 0 or 1",
-                parameterName);
-        }
-        var tag = payload[0];
-        if (tag != 0 && tag != 1)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} option tag must be 0 or 1",
-                parameterName);
-        }
-        if (tag == 0)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} is required",
-                parameterName);
-        }
-
-        var offset = 1;
-        var length = ReadPallasLength(payload, ref offset, flags, field, parameterName);
-        if (length > payload.Length - offset)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} payload length mismatch",
-                parameterName);
-        }
-        var value = payload.AsSpan(offset, length).ToArray();
-        offset += length;
-        if (offset != payload.Length)
-        {
-            throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-        }
-        if (value.Length != 32)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} must be exactly 32 bytes",
-                parameterName);
-        }
-        if (IsZeroBytes(value))
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} must be non-zero",
-                parameterName);
-        }
-        return value;
-    }
-
-    private static byte[] ReadPallasFixed32Payload(
-        byte[] payload,
-        string field,
-        string parameterName)
-    {
-        if (payload.Length != 32)
-        {
-            throw PallasOpenEnvelopeDecodeError(
-                field,
-                $"{field} must be exactly 32 bytes",
-                parameterName);
-        }
-        return payload.ToArray();
-    }
-
-    private static ushort ReadPallasU16Payload(byte[] payload, string field, string parameterName)
-    {
-        if (payload.Length != 2)
-        {
-            throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-        }
-        return BinaryPrimitives.ReadUInt16LittleEndian(payload);
-    }
-
-    private static uint ReadPallasU32Payload(byte[] payload, string field, string parameterName)
-    {
-        if (payload.Length != 4)
-        {
-            throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-        }
-        return BinaryPrimitives.ReadUInt32LittleEndian(payload);
-    }
-
-    private static string DecodePallasString(
-        byte[] payload,
-        byte flags,
-        string field,
-        string parameterName)
-    {
-        try
-        {
-            var offset = 0;
-            var length = ReadPallasLength(payload, ref offset, flags, field, parameterName);
-            if (length != payload.Length - offset)
-            {
-                throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-            }
-            return StrictUtf8.GetString(payload, offset, length);
-        }
-        catch (DecoderFallbackException)
-        {
-            throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-        }
-    }
-
-    private static byte[] ReadPallasField(
-        byte[] buffer,
-        ref int offset,
-        byte flags,
-        string field,
-        string parameterName)
-    {
-        var length = ReadPallasLength(buffer, ref offset, flags, field, parameterName);
-        if (length > buffer.Length - offset)
-        {
-            throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-        }
-        var result = buffer.AsSpan(offset, length).ToArray();
-        offset += length;
-        return result;
-    }
-
-    private static int ReadPallasLength(
-        byte[] buffer,
-        ref int offset,
-        byte flags,
-        string field,
-        string parameterName)
-    {
-        if ((flags & KagemushaNoritoCompactLenFlag) == 0)
-        {
-            if (offset + 8 > buffer.Length)
-            {
-                throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-            }
-            var fixedLength = BinaryPrimitives.ReadUInt64LittleEndian(buffer.AsSpan(offset, 8));
-            if (fixedLength > int.MaxValue)
-            {
-                throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-            }
-            offset += 8;
-            return (int)fixedLength;
-        }
-
-        ulong value = 0;
-        var shift = 0;
-        var startOffset = offset;
-        for (var index = 0; index < 10; index++)
-        {
-            if (offset >= buffer.Length)
-            {
-                throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-            }
-            var current = buffer[offset++];
-            var currentValue = current & 0x7f;
-            if (shift >= 63 && currentValue > 1)
-            {
-                throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-            }
-            value |= (ulong)currentValue << shift;
-            if ((current & 0x80) == 0)
-            {
-                var encodedLength = offset - startOffset;
-                if (encodedLength > 1 && value < (1UL << (7 * (encodedLength - 1))))
-                {
-                    throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-                }
-                if (value > int.MaxValue)
-                {
-                    throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-                }
-                return (int)value;
-            }
-            shift += 7;
-        }
-        throw PallasOpenEnvelopeDecodeError(field, parameterName: parameterName);
-    }
-
-    private static ArgumentException PallasOpenEnvelopeDecodeError(
-        string field,
-        string? message = null,
-        string parameterName = "pallasOpenEnvelopesArchive")
+        string? message = null)
     {
         return new ArgumentException(message ?? field, parameterName);
     }
@@ -3069,31 +3364,41 @@ public static class KagemushaRecursiveSpendNative
 
     private static string ReadBundleRecursiveProofCircuitId(byte[] payload, byte flags)
     {
+        return ReadRecursiveProofCircuitId(payload, flags, BundleRecursiveProofContext);
+    }
+
+    private static string ReadRecursiveProofCircuitId(
+        byte[] payload,
+        byte flags,
+        RecursiveProofDecodeContext context)
+    {
         var offset = 0;
         var verifierPayload = ReadBundleField(
             payload,
             ref offset,
             flags,
-            "recursiveProof.verifierKeyId");
+            context.VerifierTrailingField);
         var publicInputsPayload = ReadBundleField(
             payload,
             ref offset,
             flags,
-            "recursiveProof.publicInputs");
+            context.ProofPublicInputsField);
         if (publicInputsPayload.Length == 0)
         {
-            throw BundleDecodeError("bundle.proof_public_inputs", "bundle.proof_public_inputs empty");
+            throw BundleDecodeError(
+                context.ProofPublicInputsField,
+                $"{context.ProofPublicInputsField} empty recursive proof inputs");
         }
         var publicInputsHash = ReadBundleFixedBytesFlexible(
-            ReadBundleField(payload, ref offset, flags, "recursiveProof.publicInputsHash"),
+            ReadBundleField(payload, ref offset, flags, context.ProofPublicInputsHashField),
             flags,
             32,
-            "proof.publicInputsHash");
+            context.ProofPublicInputsHashField);
         if (IsZeroBytes(publicInputsHash))
         {
             throw BundleDecodeError(
-                "bundle.proof_public_inputs_hash",
-                "bundle.proof_public_inputs_hash empty");
+                context.ProofPublicInputsHashField,
+                $"{context.ProofPublicInputsHashField} must be non-zero");
         }
         var publicInputsArchive = NoritoCodec.Encode(
             RecursiveAggregationProofPublicInputsWireName,
@@ -3102,51 +3407,52 @@ public static class KagemushaRecursiveSpendNative
         if (!publicInputsHash.AsSpan().SequenceEqual(IrohaHash.Hash(publicInputsArchive)))
         {
             throw BundleDecodeError(
-                "bundle.proof_public_inputs_hash",
-                "bundle.proof_public_inputs_hash mismatch");
+                context.ProofPublicInputsHashField,
+                $"{context.ProofPublicInputsHashField} mismatch");
         }
         var proofBackend = ReadBundleProofBoxBackend(
-            ReadBundleField(payload, ref offset, flags, "recursiveProof.proof"),
-            flags);
+            ReadBundleField(payload, ref offset, flags, context.ProofBoxTrailingField),
+            flags,
+            context);
         if (offset != payload.Length)
         {
-            throw BundleDecodeError("bundle", "recursiveProof has trailing bytes");
+            throw BundleDecodeError(context.TrailingField, $"{context.TrailingField} has trailing bytes");
         }
         if (proofBackend != RecursiveAggregationProofBackend)
         {
             throw BundleDecodeError(
-                "bundle.proof_backend",
-                $"bundle.proof_backend unsupported recursive proof backend: {proofBackend}");
+                context.ProofBackendField,
+                $"{context.ProofBackendField} unsupported recursive proof backend: {proofBackend}");
         }
 
         var verifierOffset = 0;
         var backend = DecodeBundleString(
-            ReadBundleField(verifierPayload, ref verifierOffset, flags, "verifierKeyId.backend"),
+            ReadBundleField(verifierPayload, ref verifierOffset, flags, context.VerifierBackendField),
             flags,
-            "verifierKeyId.backend");
+            context.VerifierBackendField);
         var name = DecodeBundleString(
-            ReadBundleField(verifierPayload, ref verifierOffset, flags, "verifierKeyId.name"),
+            ReadBundleField(verifierPayload, ref verifierOffset, flags, context.VerifierNameField),
             flags,
-            "verifierKeyId.name");
+            context.VerifierNameField);
         if (verifierOffset != verifierPayload.Length)
         {
-            throw BundleDecodeError("bundle", "verifierKeyId has trailing bytes");
+            throw BundleDecodeError(context.VerifierTrailingField, $"{context.VerifierTrailingField} has trailing bytes");
         }
 
-        RequireBundlePortableId(backend, "verifierKeyId.backend");
+        RequireBundlePortableId(backend, context.VerifierBackendField);
         if (backend != RecursiveAggregationProofBackend)
         {
             throw BundleDecodeError(
-                "bundle.proof_backend",
-                $"bundle.proof_backend unsupported recursive proof backend: {backend}");
+                context.ProofBackendField,
+                $"{context.ProofBackendField} unsupported recursive proof backend: {backend}");
         }
         if (proofBackend != backend)
         {
             throw BundleDecodeError(
-                "bundle.proof_backend",
-                $"bundle.proof_backend recursive proof backend mismatch: {proofBackend}");
+                context.ProofBackendField,
+                $"{context.ProofBackendField} recursive proof backend mismatch: {proofBackend}");
         }
-        RequireBundlePortableId(name, "verifierKeyId");
+        RequireBundlePortableId(name, context.VerifierNameField);
         return name;
     }
 
@@ -3176,75 +3482,34 @@ public static class KagemushaRecursiveSpendNative
         return left.Length.CompareTo(right.Length);
     }
 
-    private static string ReadBundleProofBoxBackend(byte[] payload, byte flags)
+    private static string ReadBundleProofBoxBackend(
+        byte[] payload,
+        byte flags,
+        RecursiveProofDecodeContext context)
     {
         var offset = 0;
         var backend = DecodeBundleString(
-            ReadBundleField(payload, ref offset, flags, "proof.backend"),
+            ReadBundleField(payload, ref offset, flags, context.ProofBackendField),
             flags,
-            "proof.backend");
+            context.ProofBackendField);
         var proofBytes = DecodeBundleByteVec(
-            ReadBundleField(payload, ref offset, flags, "proof.bytes"),
-            "proof.bytes");
+            ReadBundleField(payload, ref offset, flags, context.ProofBytesField),
+            context.ProofBytesField);
         if (offset != payload.Length)
         {
-            throw BundleDecodeError("bundle", "proof has trailing bytes");
+            throw BundleDecodeError(context.ProofBoxTrailingField, $"{context.ProofBoxTrailingField} has trailing bytes");
         }
-        RequireBundlePortableId(backend, "proof.backend");
+        RequireBundlePortableId(backend, context.ProofBackendField);
         if (proofBytes.Length == 0)
         {
-            throw BundleDecodeError("bundle.proof_bytes", "bundle.proof_bytes empty");
+            throw BundleDecodeError(context.ProofBytesField, $"{context.ProofBytesField} empty recursive proof");
         }
         return backend;
     }
 
     private static string ReadLineagePreviousRecursiveProofCircuitId(byte[] payload, byte flags)
     {
-        var offset = 0;
-        var verifierPayload = ReadBundleField(
-            payload,
-            ref offset,
-            flags,
-            "lineageWitness.previousRecursiveProofs.verifierKeyId");
-        offset = SkipBundleFields(
-            payload,
-            offset,
-            flags,
-            3,
-            "lineageWitness.previousRecursiveProofs");
-        if (offset != payload.Length)
-        {
-            throw BundleDecodeError("lineageWitness.previousRecursiveProofs");
-        }
-
-        var verifierOffset = 0;
-        var backend = DecodeBundleString(
-            ReadBundleField(
-                verifierPayload,
-                ref verifierOffset,
-                flags,
-                "lineageWitness.previousRecursiveProofs.verifierKeyId.backend"),
-            flags,
-            "lineageWitness.previousRecursiveProofs.verifierKeyId.backend");
-        var name = DecodeBundleString(
-            ReadBundleField(
-                verifierPayload,
-                ref verifierOffset,
-                flags,
-                "lineageWitness.previousRecursiveProofs.verifierKeyId.name"),
-            flags,
-            "lineageWitness.previousRecursiveProofs.verifierKeyId.name");
-        if (verifierOffset != verifierPayload.Length)
-        {
-            throw BundleDecodeError("lineageWitness.previousRecursiveProofs.verifierKeyId");
-        }
-
-        RequireBundlePortableId(backend, "lineageWitness.previousRecursiveProofs.verifierKeyId.backend");
-        if (backend != RecursiveAggregationProofBackend)
-        {
-            throw BundleDecodeError("lineageWitness.previousRecursiveProofs.verifierKeyId.backend");
-        }
-        RequireBundlePortableId(name, "lineageWitness.previousRecursiveProofs.verifierKeyId.name");
+        var name = ReadRecursiveProofCircuitId(payload, flags, LineagePreviousProofContext);
         if (!IsSupportedPreviousProofCircuitId(name))
         {
             throw BundleDecodeError("lineageWitness.previousRecursiveProofs.verifierKeyId.name");
@@ -3307,23 +3572,7 @@ public static class KagemushaRecursiveSpendNative
             return payload.ToArray();
         }
 
-        try
-        {
-            return ReadBundleConstVecPayload(payload, flags, 0, expectedSize, field);
-        }
-        catch (ArgumentException)
-        {
-            if (payload.Length < 8)
-            {
-                throw BundleDecodeError(field);
-            }
-            var count = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
-            if (count != (ulong)expectedSize)
-            {
-                throw BundleDecodeError(field);
-            }
-            return ReadBundleConstVecPayload(payload, flags, 8, expectedSize, field);
-        }
+        return ReadBundleConstVecPayload(payload, flags, 0, expectedSize, field);
     }
 
     private static byte[] ReadBundleConstVecPayload(
@@ -3339,15 +3588,19 @@ public static class KagemushaRecursiveSpendNative
         while (offset < payload.Length)
         {
             var fieldPayload = ReadBundleField(payload, ref offset, flags, field);
-            if (fieldPayload.Length != 1 || index >= expectedSize)
+            if (fieldPayload.Length != 1)
             {
-                throw BundleDecodeError(field);
+                throw BundleDecodeError(field, $"{field} byte field length must be 1");
+            }
+            if (index >= expectedSize)
+            {
+                throw BundleDecodeError(field, $"{field} must be exactly {expectedSize} bytes");
             }
             output[index++] = fieldPayload[0];
         }
         if (index != expectedSize)
         {
-            throw BundleDecodeError(field);
+            throw BundleDecodeError(field, $"{field} must be exactly {expectedSize} bytes");
         }
         return output;
     }
@@ -3821,7 +4074,8 @@ public static class KagemushaRecursiveSpendNative
         return new KagemushaRecursiveSpendArchive(Call(
             requestArchive,
             "connect_norito_kagemusha_recursive_spend_init",
-            NativeInit));
+            NativeInit,
+            RequireInitRequestRecordBundlePreflight));
     }
 
     public static KagemushaRecursiveSpendArchive Append(ReadOnlySpan<byte> requestArchive)
@@ -3829,7 +4083,8 @@ public static class KagemushaRecursiveSpendNative
         return new KagemushaRecursiveSpendArchive(Call(
             requestArchive,
             "connect_norito_kagemusha_recursive_spend_append",
-            NativeAppend));
+            NativeAppend,
+            RequireAppendRequestRecordBundlePreflight));
     }
 
     public static KagemushaRecursiveSpendTransitionProfileArchive TransitionProfileInit(
@@ -3838,7 +4093,8 @@ public static class KagemushaRecursiveSpendNative
         return new KagemushaRecursiveSpendTransitionProfileArchive(Call(
             requestArchive,
             "connect_norito_kagemusha_recursive_spend_transition_profile_init",
-            NativeTransitionProfileInit));
+            NativeTransitionProfileInit,
+            RequireInitRequestRecordBundlePreflight));
     }
 
     public static KagemushaRecursiveSpendTransitionProfileArchive TransitionProfileAppend(
@@ -3847,7 +4103,8 @@ public static class KagemushaRecursiveSpendNative
         return new KagemushaRecursiveSpendTransitionProfileArchive(Call(
             requestArchive,
             "connect_norito_kagemusha_recursive_spend_transition_profile_append",
-            NativeTransitionProfileAppend));
+            NativeTransitionProfileAppend,
+            RequireAppendRequestRecordBundlePreflight));
     }
 
     public static KagemushaRecursiveSpendLineageAppendBoundaryArchive LineageAppendBoundary(
@@ -3971,7 +4228,24 @@ public static class KagemushaRecursiveSpendNative
         uint hopCount,
         bool hasLineageWitness,
         bool hasLineageVerifierRecord,
-        int lineageVerifierRecordsCount,
+        int lineageVerifierRecordCount)
+    {
+        ValidateRedeemLineagePreflight(
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord,
+            lineageVerifierRecordCount);
+        return Redeem(requestArchive);
+    }
+
+    public static KagemushaRecursiveSpendRedeemInstructionArchive Redeem(
+        ReadOnlySpan<byte> requestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord,
+        int lineageVerifierRecordCount,
         bool lineageWitnessHasReservedPreviousProofs)
     {
         ValidateRedeemLineagePreflight(
@@ -3979,7 +4253,7 @@ public static class KagemushaRecursiveSpendNative
             hopCount,
             hasLineageWitness,
             hasLineageVerifierRecord,
-            lineageVerifierRecordsCount,
+            lineageVerifierRecordCount,
             lineageWitnessHasReservedPreviousProofs);
         return Redeem(requestArchive);
     }
@@ -4012,7 +4286,7 @@ public static class KagemushaRecursiveSpendNative
         uint hopCount,
         bool hasLineageWitness,
         bool hasLineageVerifierRecord,
-        int lineageVerifierRecordsCount,
+        int lineageVerifierRecordCount,
         bool lineageWitnessHasReservedPreviousProofs,
         string? publicAmount,
         string? currentNoteAmount,
@@ -4023,8 +4297,32 @@ public static class KagemushaRecursiveSpendNative
             hopCount,
             hasLineageWitness,
             hasLineageVerifierRecord,
-            lineageVerifierRecordsCount,
+            lineageVerifierRecordCount,
             lineageWitnessHasReservedPreviousProofs);
+        ValidateRedeemChangeOutputPreflight(
+            publicAmount,
+            currentNoteAmount,
+            hasChangeOutput);
+        return Redeem(requestArchive);
+    }
+
+    public static KagemushaRecursiveSpendRedeemInstructionArchive Redeem(
+        ReadOnlySpan<byte> requestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord,
+        int lineageVerifierRecordCount,
+        string? publicAmount,
+        string? currentNoteAmount,
+        bool hasChangeOutput)
+    {
+        ValidateRedeemLineagePreflight(
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord,
+            lineageVerifierRecordCount);
         ValidateRedeemChangeOutputPreflight(
             publicAmount,
             currentNoteAmount,
@@ -4085,7 +4383,32 @@ public static class KagemushaRecursiveSpendNative
         uint hopCount,
         bool hasLineageWitness,
         bool hasLineageVerifierRecord,
-        int lineageVerifierRecordsCount,
+        int lineageVerifierRecordCount,
+        string? publicAmount,
+        string? currentNoteAmount,
+        ReadOnlySpan<byte> changeOutput)
+    {
+        ValidateRedeemLineagePreflight(
+            proofCircuitId,
+            hopCount,
+            hasLineageWitness,
+            hasLineageVerifierRecord,
+            lineageVerifierRecordCount);
+        ValidateRedeemChangeOutputPreflight(
+            publicAmount,
+            currentNoteAmount,
+            hasChangeOutput: true);
+        ValidateRedeemChangeOutputBytes(changeOutput);
+        return Redeem(requestArchive);
+    }
+
+    public static KagemushaRecursiveSpendRedeemInstructionArchive Redeem(
+        ReadOnlySpan<byte> requestArchive,
+        string? proofCircuitId,
+        uint hopCount,
+        bool hasLineageWitness,
+        bool hasLineageVerifierRecord,
+        int lineageVerifierRecordCount,
         bool lineageWitnessHasReservedPreviousProofs,
         string? publicAmount,
         string? currentNoteAmount,
@@ -4096,7 +4419,7 @@ public static class KagemushaRecursiveSpendNative
             hopCount,
             hasLineageWitness,
             hasLineageVerifierRecord,
-            lineageVerifierRecordsCount,
+            lineageVerifierRecordCount,
             lineageWitnessHasReservedPreviousProofs);
         ValidateRedeemChangeOutputPreflight(
             publicAmount,
@@ -4192,13 +4515,21 @@ public static class KagemushaRecursiveSpendNative
         ReadOnlySpan<byte> recordBundleArchive,
         ReadOnlySpan<byte> pallasOpenEnvelopesArchive)
     {
-        var (recordBundle, hopCount) = RequireValidRecordBundleArchiveWithHopCount(
+        var recordBundle = RequireValidRecordBundleArchive(
             recordBundleArchive,
-            nameof(recordBundleArchive));
-        var pallasOpenEnvelopes = RequireValidPallasOpenEnvelopesArchive(
+            nameof(recordBundleArchive),
+            "Record bundle archive",
+            out var hopCount);
+        var pallasOpenEnvelopes = RequireValidInputArchive(
             pallasOpenEnvelopesArchive,
             nameof(pallasOpenEnvelopesArchive),
-            hopCount);
+            "Pallas open-envelopes archive");
+        RequirePallasOpenEnvelopesArchive(
+            pallasOpenEnvelopes,
+            nameof(pallasOpenEnvelopesArchive),
+            "pallasOpenEnvelopes",
+            hopCount,
+            NativeArchiveMaxBytes);
         try
         {
             if (!IsRecursiveAggregationProofBundleProverAvailable())
@@ -4228,13 +4559,21 @@ public static class KagemushaRecursiveSpendNative
         ReadOnlySpan<byte> pallasOpenEnvelopesArchive,
         ReadOnlySpan<byte> recursiveCompactKeyArtifactsArchive)
     {
-        var (recordBundle, hopCount) = RequireValidRecordBundleArchiveWithHopCount(
+        var recordBundle = RequireValidRecordBundleArchive(
             recordBundleArchive,
-            nameof(recordBundleArchive));
-        var pallasOpenEnvelopes = RequireValidPallasOpenEnvelopesArchive(
+            nameof(recordBundleArchive),
+            "Record bundle archive",
+            out var hopCount);
+        var pallasOpenEnvelopes = RequireValidInputArchive(
             pallasOpenEnvelopesArchive,
             nameof(pallasOpenEnvelopesArchive),
-            hopCount);
+            "Pallas open-envelopes archive");
+        RequirePallasOpenEnvelopesArchive(
+            pallasOpenEnvelopes,
+            nameof(pallasOpenEnvelopesArchive),
+            "pallasOpenEnvelopes",
+            hopCount,
+            NativeArchiveMaxBytes);
         var recursiveCompactKeyArtifacts = RequireValidInputArchive(
             recursiveCompactKeyArtifactsArchive,
             nameof(recursiveCompactKeyArtifactsArchive),
@@ -4969,7 +5308,8 @@ public static class KagemushaRecursiveSpendNative
     private static byte[] Call(
         ReadOnlySpan<byte> requestArchive,
         string symbol,
-        NativeArchiveCall nativeCall)
+        NativeArchiveCall nativeCall,
+        Action<byte[]>? requestPreflight = null)
     {
         byte[]? request = null;
         try
@@ -4978,6 +5318,7 @@ public static class KagemushaRecursiveSpendNative
                 requestArchive,
                 nameof(requestArchive),
                 "Request archive");
+            requestPreflight?.Invoke(request);
 
             RequireAbi();
 
@@ -5136,21 +5477,47 @@ public static class KagemushaRecursiveSpendNative
 
     private static byte[] RequireValidRecordBundleArchive(
         ReadOnlySpan<byte> archive,
-        string parameterName)
+        string parameterName,
+        string displayName)
     {
-        return RequireValidRecordBundleArchiveWithHopCount(archive, parameterName).Bytes;
+        return RequireValidRecordBundleArchive(
+            archive,
+            parameterName,
+            displayName,
+            out _);
     }
 
-    private static (byte[] Bytes, int HopCount) RequireValidRecordBundleArchiveWithHopCount(
+    private static byte[] RequireValidRecordBundleArchive(
         ReadOnlySpan<byte> archive,
         string parameterName)
     {
-        var bytes = RequireValidInputArchive(
+        return RequireValidRecordBundleArchive(
             archive,
             parameterName,
             "Record bundle archive");
-        var hopCount = ReadVerifiedFoldRecordBundleHopCount(bytes, parameterName);
-        return (bytes, hopCount);
+    }
+
+    private static (byte[] RecordBundle, int HopCount) RequireValidRecordBundleArchiveWithHopCount(
+        ReadOnlySpan<byte> archive,
+        string parameterName)
+    {
+        var recordBundle = RequireValidRecordBundleArchive(
+            archive,
+            parameterName,
+            "Record bundle archive",
+            out var hopCount);
+        return (recordBundle, hopCount);
+    }
+
+    private static byte[] RequireValidRecordBundleArchive(
+        ReadOnlySpan<byte> archive,
+        string parameterName,
+        string displayName,
+        out int hopCount)
+    {
+        var bytes = RequireValidInputArchive(archive, parameterName, displayName);
+        hopCount = RequireRecordBundleArchiveHopCount(bytes, parameterName);
+        return bytes;
     }
 
     private static void RequireAbi()

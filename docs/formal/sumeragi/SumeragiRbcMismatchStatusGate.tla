@@ -313,8 +313,7 @@ SafetyAnchors ==
   /\ SaturationAnchors
 
 RbcMismatchStatusExactness ==
-  /\ \A candidate \in Candidates:
-    ImplementationActions(candidate) = SpecActions(candidate)
+  /\ AllRbcMismatchCandidatesMatchSpec
   /\ SafetyAnchors
 
 RbcMismatchStatusCorrectnessEnvelope ==

@@ -1547,10 +1547,12 @@ final class TxBuilderTests: XCTestCase {
     func testBuildSignedTransferWithValidationFeeCreatesTwoInstructionEnvelopeWithPolicyMetadata() throws {
         let keypair = try makeFixtureKeypair()
         let sponsorKeypair = try Keypair.generate()
-        let authority = AccountId.make(publicKey: keypair.publicKey)
-        let feeSponsor = AccountId.make(publicKey: sponsorKeypair.publicKey)
-        let destination = AccountId.make(publicKey: Data(repeating: 0x33, count: 32))
-        let treasury = AccountId.make(publicKey: Data(repeating: 0x44, count: 32))
+        let destinationKeypair = try Keypair.generate()
+        let treasuryKeypair = try Keypair.generate()
+        let authority = try AccountId.makeI105(publicKey: keypair.publicKey)
+        let feeSponsor = try AccountId.makeI105(publicKey: sponsorKeypair.publicKey)
+        let destination = try AccountId.makeI105(publicKey: destinationKeypair.publicKey)
+        let treasury = try AccountId.makeI105(publicKey: treasuryKeypair.publicKey)
         let policyHash = String(repeating: "AB", count: 32)
         let principal = TransferRequest(chainId: Self.fixtureChainId,
                                         authority: authority,
@@ -1573,21 +1575,65 @@ final class TxBuilderTests: XCTestCase {
         sdk.creationTimeProvider = { Self.fixtureCreationTimeMs }
 
         let envelope = try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)
-        let payload = try XCTUnwrap(envelope.payload)
 
         XCTAssertEqual(envelope.transactionHash.count, 32)
         XCTAssertEqual(envelope.norito.first, 1)
         XCTAssertFalse(envelope.signedTransaction.isEmpty)
-        XCTAssertEqual(asciiOccurrenceCount("iroha.transfer", in: payload), 2)
-        XCTAssertTrue(dataContainsASCII(IrohaValidationFeeTransactionMetadataKey.policyVersion, in: payload))
-        XCTAssertTrue(dataContainsASCII(IrohaValidationFeeTransactionMetadataKey.policyHash, in: payload))
-        XCTAssertTrue(dataContainsASCII(IrohaValidationFeeTransactionMetadataKey.instructionIndex, in: payload))
-        XCTAssertTrue(dataContainsASCII(policyHash.lowercased(), in: payload))
-        XCTAssertTrue(dataContainsASCII("client_trace", in: payload))
-        XCTAssertTrue(dataContainsASCII("fee_sponsor", in: payload))
-        XCTAssertTrue(dataContainsASCII(feeSponsor, in: payload))
-        XCTAssertTrue(dataContainsASCII("memo", in: payload))
-        XCTAssertTrue(dataContainsASCII("invoice-123", in: payload))
+
+        guard NoritoNativeBridge.shared.isAvailable else {
+            throw XCTSkip("NoritoBridge native decoder not linked")
+        }
+        let json = try XCTUnwrap(sdk.decodeSignedTransaction(envelope: envelope))
+        XCTAssertTrue(json.contains("\"instructions\""), json)
+        XCTAssertGreaterThanOrEqual(asciiOccurrenceCount("transfer_asset", in: Data(json.utf8)), 2, json)
+        XCTAssertTrue(json.contains(IrohaValidationFeeTransactionMetadataKey.policyVersion), json)
+        XCTAssertTrue(json.contains(IrohaValidationFeeTransactionMetadataKey.policyHash), json)
+        XCTAssertTrue(json.contains(IrohaValidationFeeTransactionMetadataKey.instructionIndex), json)
+        XCTAssertTrue(json.contains(policyHash.lowercased()), json)
+        XCTAssertTrue(json.contains("client_trace"), json)
+        XCTAssertTrue(json.contains("\"fee_sponsor\""), json)
+        XCTAssertTrue(json.contains(feeSponsor), json)
+        XCTAssertTrue(json.contains("\"memo\""), json)
+        XCTAssertTrue(json.contains("invoice-123"), json)
+    }
+
+    func testBuildSignedTransferWithValidationFeePreservesExplicitMemoMetadata() throws {
+        let keypair = try makeFixtureKeypair()
+        let destinationKeypair = try Keypair.generate()
+        let treasuryKeypair = try Keypair.generate()
+        let authority = try AccountId.makeI105(publicKey: keypair.publicKey)
+        let destination = try AccountId.makeI105(publicKey: destinationKeypair.publicKey)
+        let treasury = try AccountId.makeI105(publicKey: treasuryKeypair.publicKey)
+        let descriptionMemo = "description-memo"
+        let explicitMemo = "explicit-memo"
+        let principal = TransferRequest(chainId: Self.fixtureChainId,
+                                        authority: authority,
+                                        assetDefinitionId: "\(Self.fixtureAssetDefinition)#dataspace:42",
+                                        quantity: "12.34",
+                                        destination: destination,
+                                        description: descriptionMemo,
+                                        ttlMs: 120_000,
+                                        nonce: 10)
+        let request = ValidationFeeTransferRequest(
+            principal: principal,
+            feeQuantity: "0.10",
+            treasuryAccountId: treasury,
+            policyVersion: 7,
+            policyHashHex: String(repeating: "ab", count: 32),
+            transactionMetadata: ["memo": .string(explicitMemo)]
+        )
+        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
+        sdk.creationTimeProvider = { Self.fixtureCreationTimeMs }
+
+        let envelope = try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)
+
+        guard NoritoNativeBridge.shared.isAvailable else {
+            throw XCTSkip("NoritoBridge native decoder not linked")
+        }
+        let json = try XCTUnwrap(sdk.decodeSignedTransaction(envelope: envelope))
+        XCTAssertTrue(json.contains("\"memo\""), json)
+        XCTAssertTrue(json.contains(explicitMemo), json)
+        XCTAssertFalse(json.contains(descriptionMemo), json)
     }
 
     func testBuildSignedTransferWithValidationFeeRejectsMalformedPolicyHash() throws {
@@ -1611,6 +1657,33 @@ final class TxBuilderTests: XCTestCase {
 
         XCTAssertThrowsError(try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)) { error in
             XCTAssertEqual(error as? ValidationFeeTransferRequestError, .malformedPolicyHash("abc"))
+        }
+    }
+
+    func testBuildSignedTransferWithValidationFeeRejectsMalformedFeeSponsor() throws {
+        let keypair = try makeFixtureKeypair()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let malformedFeeSponsor = " \(authority)"
+        let principal = TransferRequest(chainId: Self.fixtureChainId,
+                                        authority: authority,
+                                        assetDefinitionId: Self.fixtureAssetDefinition,
+                                        quantity: "1",
+                                        destination: authority,
+                                        description: nil,
+                                        feeSponsor: malformedFeeSponsor,
+                                        ttlMs: 120_000)
+        let request = ValidationFeeTransferRequest(
+            principal: principal,
+            feeQuantity: "0.10",
+            treasuryAccountId: authority,
+            policyVersion: 1,
+            policyHashHex: String(repeating: "ab", count: 32)
+        )
+        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
+
+        XCTAssertThrowsError(try sdk.buildSignedTransferWithValidationFee(request: request, keypair: keypair)) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedAccountId(field: "feeSponsor", value: malformedFeeSponsor))
         }
     }
 

@@ -1571,13 +1571,13 @@ final class OfflineTransferWidgetTests: XCTestCase {
 
     private static func validReceiveRequestTextPayload() throws -> String {
         try OfflineNoteTransferTextPayloadCodec.encodeReceiveRequest(
-            OfflineReceiveRequestPayload(
+            try OfflineReceiveRequestPayload(
                 invoiceId: "invoice-1",
                 accountId: "recipient@pob.cbsi",
                 assetDefinitionId: "sbd",
                 amount: "1.00",
                 recipientKeyCertificate: OfflineCompactKeyCertificate(
-                    platform: "ios",
+                    platform: OfflineNoteV2Constants.iosAppAttestPlatform,
                     keyId: "key-1",
                     deviceId: "device-1",
                     accountId: "recipient@pob.cbsi",

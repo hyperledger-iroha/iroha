@@ -301,7 +301,7 @@ def create_lineage_artifact_files(root: Path) -> None:
     for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS:
         path = root / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(f"lineage artifact {artifact}\n".encode("utf-8"))
+        path.write_bytes(lineage_artifact_bytes(artifact))
 
 
 def create_lineage_artifact_files_for_profile(root: Path, profile: str) -> None:
@@ -314,7 +314,13 @@ def create_lineage_artifact_files_for_profile(root: Path, profile: str) -> None:
     for artifact in artifacts:
         path = root / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(f"generated {profile} lineage artifact {artifact}\n".encode("utf-8"))
+        path.write_bytes(lineage_artifact_bytes(artifact, profile=profile))
+
+
+def lineage_artifact_bytes(artifact: str, *, profile: str | None = None) -> bytes:
+    seed = f"{profile or 'full'}:{artifact}".encode("utf-8")
+    digest = hashlib.sha256(seed).digest()
+    return b"KGLN\x00\x01" + digest + digest[::-1]
 
 
 def write_lineage_staged_run_report(
@@ -325,7 +331,14 @@ def write_lineage_staged_run_report(
     elapsed_seconds: float = 14400.0,
     key_log_size_overrides: dict[str, int] | None = None,
     proof_log_size_bytes: int | None = None,
+    max_rss_bytes: int = 0,
+    rss_limit_bytes: int | None = None,
+    terminated_for_rss_limit: bool = False,
 ) -> Path:
+    if rss_limit_bytes is None:
+        rss_limit_bytes = lineage_staged_runner.resource_guard.rss_limit_bytes_from_gb(
+            lineage_staged_runner.DEFAULT_MAX_RSS_GB
+        )
     proof_log = root / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
     if proof_log_size_bytes is None:
         proof_log_size_bytes = proof_log.stat().st_size
@@ -358,6 +371,9 @@ def write_lineage_staged_run_report(
             "record_archive_proof"
         ],
         "proof_log_size_bytes": proof_log_size_bytes,
+        "max_rss_bytes": max_rss_bytes,
+        "rss_limit_bytes": rss_limit_bytes,
+        "terminated_for_rss_limit": terminated_for_rss_limit,
     }
     path = root / lineage_finalizer.RUN_REPORT_FILENAME
     path.write_text(
@@ -390,7 +406,14 @@ def write_lineage_execution_report(
     log_name: str | None = None,
     log_sha256: str | None = None,
     elapsed_seconds: float = 1.0,
+    max_rss_bytes: int = 0,
+    rss_limit_bytes: int | None = None,
+    terminated_for_rss_limit: bool = False,
 ) -> Path:
+    if rss_limit_bytes is None:
+        rss_limit_bytes = lineage_staged_runner.resource_guard.rss_limit_bytes_from_gb(
+            lineage_staged_runner.DEFAULT_MAX_RSS_GB
+        )
     if profile == "proof":
         phase = "lineage proof command"
         command = command or lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
@@ -417,6 +440,9 @@ def write_lineage_execution_report(
         "log_path": log_name,
         "log_sha256": log_sha256,
         "log_size_bytes": log_path.stat().st_size,
+        "max_rss_bytes": max_rss_bytes,
+        "rss_limit_bytes": rss_limit_bytes,
+        "terminated_for_rss_limit": terminated_for_rss_limit,
     }
     path = root / lineage_staged_runner.LINEAGE_EXECUTION_REPORT_FILENAMES[profile]
     path.write_text(
@@ -446,7 +472,14 @@ def write_compact_key_staged_run_report(
     command: str | None = None,
     elapsed_seconds: float = 1.0,
     generator_log_size_bytes: int | None = None,
+    max_rss_bytes: int = 0,
+    rss_limit_bytes: int | None = None,
+    terminated_for_rss_limit: bool = False,
 ) -> Path:
+    if rss_limit_bytes is None:
+        rss_limit_bytes = compact_key_staged_runner.resource_guard.rss_limit_bytes_from_gb(
+            compact_key_staged_runner.DEFAULT_MAX_RSS_GB
+        )
     log_path = root / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
     if generator_log_size_bytes is None:
         generator_log_size_bytes = log_path.stat().st_size
@@ -457,6 +490,9 @@ def write_compact_key_staged_run_report(
         "elapsed_seconds": elapsed_seconds,
         "generator_log_path": readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME,
         "generator_log_size_bytes": generator_log_size_bytes,
+        "max_rss_bytes": max_rss_bytes,
+        "rss_limit_bytes": rss_limit_bytes,
+        "terminated_for_rss_limit": terminated_for_rss_limit,
     }
     path = root / compact_key_finalizer.RUN_REPORT_FILENAME
     path.write_text(
@@ -481,7 +517,14 @@ def write_compact_key_execution_report(
     generator_log_size_bytes: int | None = None,
     generator_log_sha256: str | None = None,
     elapsed_seconds: float = 1.0,
+    max_rss_bytes: int = 0,
+    rss_limit_bytes: int | None = None,
+    terminated_for_rss_limit: bool = False,
 ) -> Path:
+    if rss_limit_bytes is None:
+        rss_limit_bytes = compact_key_staged_runner.resource_guard.rss_limit_bytes_from_gb(
+            compact_key_staged_runner.DEFAULT_MAX_RSS_GB
+        )
     log_path = root / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
     if generator_log_size_bytes is None:
         generator_log_size_bytes = log_path.stat().st_size
@@ -496,6 +539,9 @@ def write_compact_key_execution_report(
         "generator_log_path": readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME,
         "generator_log_sha256": generator_log_sha256,
         "generator_log_size_bytes": generator_log_size_bytes,
+        "max_rss_bytes": max_rss_bytes,
+        "rss_limit_bytes": rss_limit_bytes,
+        "terminated_for_rss_limit": terminated_for_rss_limit,
     }
     path = root / compact_key_staged_runner.EXECUTION_REPORT_FILENAME
     path.write_text(
@@ -1248,6 +1294,36 @@ def build_release_bundle_from_fixture(
     )
 
 
+def verify_existing_release_bundle_after_manifest_mutation(
+    mutate_manifest: Callable[[dict[str, Any]], None],
+) -> tuple[int, int, str]:
+    """Build a ready release bundle, mutate its manifest, then verify it."""
+
+    with tempfile.TemporaryDirectory() as temp:
+        fixture = create_ready_release_bundle_fixture(Path(temp))
+        bundle_root = fixture["bundle_root"]
+        assert isinstance(bundle_root, Path)
+        out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            status = release_bundle.main(release_bundle_args(fixture))
+        manifest = json.loads(out.read_text(encoding="utf-8"))
+        mutate_manifest(manifest)
+        write_json(out, manifest)
+        stderr = io.StringIO()
+
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            verify_status = release_bundle.main(
+                [
+                    *release_bundle_args(fixture),
+                    "--verify-existing",
+                    "dist/kagemusha-production-release-bundle.json",
+                ]
+            )
+
+    return status, verify_status, stderr.getvalue()
+
+
 def first_dynamic_d2d_release_bundle_artifact(
     manifest: dict[str, Any],
 ) -> tuple[str, str]:
@@ -1266,6 +1342,32 @@ def first_dynamic_d2d_release_bundle_artifact(
 class KagemushaProductionReadinessTest(unittest.TestCase):
     def setUp(self) -> None:
         restore_path_type_method_shadows()
+        self.staged_runner_lock_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.staged_runner_lock_dir.cleanup)
+        isolated_lock_file = (
+            Path(self.staged_runner_lock_dir.name) / "kagemusha-heavy-job.lock"
+        )
+        self.compact_default_lock_patcher = mock.patch.object(
+            compact_key_staged_runner,
+            "DEFAULT_RESOURCE_LOCK_FILE",
+            isolated_lock_file,
+        )
+        self.lineage_default_lock_patcher = mock.patch.object(
+            lineage_staged_runner,
+            "DEFAULT_RESOURCE_LOCK_FILE",
+            isolated_lock_file,
+        )
+        self.compact_default_lock_patcher.start()
+        self.lineage_default_lock_patcher.start()
+        self.addCleanup(self.lineage_default_lock_patcher.stop)
+        self.addCleanup(self.compact_default_lock_patcher.stop)
+        self.heavy_job_conflict_patcher = mock.patch.object(
+            compact_key_staged_runner.resource_guard,
+            "validate_no_conflicting_heavy_jobs",
+            return_value=[],
+        )
+        self.heavy_job_conflict_mock = self.heavy_job_conflict_patcher.start()
+        self.addCleanup(self.heavy_job_conflict_patcher.stop)
 
     def tearDown(self) -> None:
         restore_path_type_method_shadows()
@@ -1295,6 +1397,404 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     ],
                 )
                 self.assertNotIn(constant, rendered)
+
+    def test_staged_resource_report_fields_fail_closed(self) -> None:
+        guard = compact_key_staged_runner.resource_guard
+        base = {
+            "max_rss_bytes": 0,
+            "rss_limit_bytes": 1,
+            "terminated_for_rss_limit": False,
+        }
+        cases = (
+            (
+                "missing max RSS",
+                {"rss_limit_bytes": 1, "terminated_for_rss_limit": False},
+                "staged report is missing max_rss_bytes",
+            ),
+            (
+                "negative max RSS",
+                {**base, "max_rss_bytes": -1},
+                "staged report max_rss_bytes must be a non-negative integer",
+            ),
+            (
+                "zero RSS limit",
+                {**base, "rss_limit_bytes": 0},
+                "staged report rss_limit_bytes must be a positive integer",
+            ),
+            (
+                "non-boolean termination flag",
+                {**base, "terminated_for_rss_limit": "false"},
+                "staged report terminated_for_rss_limit must be a boolean",
+            ),
+            (
+                "over limit without termination",
+                {**base, "max_rss_bytes": 2, "rss_limit_bytes": 1},
+                (
+                    "staged report max_rss_bytes must not exceed rss_limit_bytes "
+                    "unless terminated"
+                ),
+            ),
+            (
+                "terminated publishable report",
+                {**base, "terminated_for_rss_limit": True},
+                (
+                    "staged report terminated_for_rss_limit must be false for "
+                    "publishable evidence"
+                ),
+            ),
+        )
+        for label, document, expected in cases:
+            with self.subTest(label=label):
+                self.assertEqual(
+                    guard.validate_report_resource_fields(
+                        document,
+                        "staged report",
+                        require_not_terminated=True,
+                    ),
+                    [expected],
+                )
+
+        self.assertEqual(
+            guard.validate_report_resource_fields(
+                {
+                    "max_rss_bytes": 2,
+                    "rss_limit_bytes": 1,
+                    "terminated_for_rss_limit": True,
+                },
+                "staged report",
+                require_not_terminated=False,
+            ),
+            [],
+        )
+
+    def test_staged_resource_guard_counts_descendant_rss(self) -> None:
+        resource_guard = compact_key_staged_runner.resource_guard
+        completed = resource_guard.subprocess.CompletedProcess(
+            ["ps"],
+            0,
+            stdout=(
+                " 10 1 10 100\n"
+                " 11 10 10 200\n"
+                " 12 11 10 300\n"
+                " 13 1 13 400\n"
+                " malformed row\n"
+                " 14 10 10 not-rss\n"
+            ),
+        )
+
+        with mock.patch.object(
+            resource_guard.subprocess,
+            "run",
+            return_value=completed,
+        ):
+            rss_bytes = resource_guard.rss_bytes_for_pid(10)
+
+        self.assertEqual(rss_bytes, (100 + 200 + 300) * 1024)
+
+    def test_staged_resource_guard_counts_owned_process_group_after_parent_exit(
+        self,
+    ) -> None:
+        resource_guard = compact_key_staged_runner.resource_guard
+        completed = resource_guard.subprocess.CompletedProcess(
+            ["ps"],
+            0,
+            stdout=(
+                " 11 1 10 200\n"
+                " 12 11 10 300\n"
+                " 13 1 13 400\n"
+            ),
+        )
+
+        with mock.patch.object(
+            resource_guard.subprocess,
+            "run",
+            return_value=completed,
+        ):
+            rss_bytes = resource_guard.rss_bytes_for_pid(10)
+
+        self.assertEqual(rss_bytes, (200 + 300) * 1024)
+
+    def test_staged_resource_guard_falls_back_to_direct_pid_rss(self) -> None:
+        resource_guard = compact_key_staged_runner.resource_guard
+        process_tree_failure = resource_guard.subprocess.CompletedProcess(
+            ["ps"],
+            1,
+            stdout="",
+        )
+        direct_pid_success = resource_guard.subprocess.CompletedProcess(
+            ["ps"],
+            0,
+            stdout=" 321\n",
+        )
+
+        with mock.patch.object(
+            resource_guard.subprocess,
+            "run",
+            side_effect=[process_tree_failure, direct_pid_success],
+        ) as run:
+            rss_bytes = resource_guard.rss_bytes_for_pid(10)
+
+        self.assertEqual(rss_bytes, 321 * 1024)
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            [resource_guard.PS_COMMAND, "-o", "rss=", "-p", "10"],
+        )
+        self.assertEqual(run.call_args_list[1].kwargs["encoding"], "utf-8")
+        self.assertEqual(run.call_args_list[1].kwargs["errors"], "replace")
+
+    def test_staged_resource_guard_terminates_owned_process_group(self) -> None:
+        resource_guard = compact_key_staged_runner.resource_guard
+        killpg_calls: list[tuple[int, int]] = []
+
+        class FakeProcess:
+            pid = 777
+
+            def __init__(self) -> None:
+                self.terminated = False
+                self.killed = False
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def kill(self) -> None:
+                self.killed = True
+
+            def wait(self, timeout: float | None = None) -> int:
+                del timeout
+                return -15
+
+        process = FakeProcess()
+
+        def fake_killpg(pgid: int, sig: int) -> None:
+            killpg_calls.append((pgid, sig))
+            if sig == 0:
+                raise ProcessLookupError
+
+        with mock.patch.object(
+            resource_guard.os,
+            "killpg",
+            side_effect=fake_killpg,
+        ):
+            resource_guard.terminate_owned_process(process)
+
+        self.assertFalse(process.terminated)
+        self.assertFalse(process.killed)
+        self.assertEqual(
+            killpg_calls,
+            [
+                (process.pid, resource_guard.signal.SIGTERM),
+                (process.pid, 0),
+            ],
+        )
+
+    def test_staged_resource_guard_kills_residual_group_after_parent_reaped(
+        self,
+    ) -> None:
+        resource_guard = compact_key_staged_runner.resource_guard
+        killpg_calls: list[tuple[int, int]] = []
+
+        class FakeProcess:
+            pid = 778
+
+            def __init__(self) -> None:
+                self.terminated = False
+                self.killed = False
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def kill(self) -> None:
+                self.killed = True
+
+            def wait(self, timeout: float | None = None) -> int:
+                del timeout
+                return 0
+
+        process = FakeProcess()
+
+        def fake_killpg(pgid: int, sig: int) -> None:
+            killpg_calls.append((pgid, sig))
+
+        with mock.patch.object(
+            resource_guard.os,
+            "killpg",
+            side_effect=fake_killpg,
+        ):
+            resource_guard.terminate_owned_process(process)
+
+        self.assertFalse(process.terminated)
+        self.assertFalse(process.killed)
+        self.assertEqual(
+            killpg_calls,
+            [
+                (process.pid, resource_guard.signal.SIGTERM),
+                (process.pid, 0),
+                (process.pid, resource_guard.signal.SIGKILL),
+            ],
+        )
+
+    def test_staged_resource_guard_terminates_residual_group_after_child_exit(
+        self,
+    ) -> None:
+        resource_guard = compact_key_staged_runner.resource_guard
+        terminated: list[int] = []
+
+        class FakeProcess:
+            pid = 888
+
+            def wait(self, timeout: float | None = None) -> int:
+                del timeout
+                return 0
+
+            def terminate(self) -> None:
+                raise AssertionError("custom terminator should be used")
+
+            def kill(self) -> None:
+                raise AssertionError("custom terminator should be used")
+
+        with tempfile.TemporaryDirectory() as temp:
+            log_path = Path(temp) / "guard.log"
+            with log_path.open("wb") as log_handle, mock.patch.object(
+                resource_guard.time,
+                "monotonic",
+                side_effect=[0.0, 0.125],
+            ):
+                result = resource_guard.run_with_resource_guard(
+                    process=FakeProcess(),
+                    log_handle=log_handle,
+                    heartbeat_label="compact-keygen",
+                    started_monotonic=0.0,
+                    heartbeat_interval_seconds=300.0,
+                    max_rss_bytes=1024,
+                    rss_sample_interval_seconds=5.0,
+                    rss_sampler=lambda _pid: 512,
+                    process_terminator=lambda process: terminated.append(process.pid),
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(result.exit_code, resource_guard.RSS_LIMIT_EXIT_CODE)
+        self.assertEqual(result.resource_summary.max_rss_bytes, 512)
+        self.assertTrue(result.resource_summary.terminated_for_rss_limit)
+        self.assertEqual(terminated, [888])
+        self.assertIn("process-group-residual", log_text)
+        self.assertIn("rss_bytes=512", log_text)
+
+    def test_staged_resource_guard_detects_running_heavy_jobs(self) -> None:
+        resource_guard = compact_key_staged_runner.resource_guard
+        completed = resource_guard.subprocess.CompletedProcess(
+            ["ps"],
+            0,
+            stdout=(
+                " 100 1 100 10 scripts/kagemusha_run_recursive_compact_keygen_staged.py --repo-root /repo\n"
+                " 101 100 100 200 iroha app zk kagemusha recursive-compact-key-artifacts --pk-out x\n"
+                " 102 1 102 300 cargo test -p iroha_core "
+                "kagemusha_recursive_spend_lineage_init_append_from_record_archives_proves_reserved_lineage_output\n"
+                " 103 1 103 400 unrelated process\n"
+                " 104 1 104 500 /opt/Python scripts/kagemusha_run_lineage_proof_staged.py --repo-root /repo\n"
+                " 105 1 105 600 /repo/target/debug/iroha app zk kagemusha lineage-key-artifacts --pk-out y\n"
+            ),
+        )
+
+        with mock.patch.object(
+            resource_guard.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            jobs = resource_guard.find_running_heavy_jobs(exclude_pids={100})
+
+        self.assertEqual([job.pid for job in jobs], [101, 102, 104, 105])
+        self.assertEqual(jobs[0].rss_bytes, 200 * 1024)
+        self.assertEqual(jobs[1].process_group_id, 102)
+        self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(run.call_args.kwargs["errors"], "replace")
+
+    def test_staged_resource_guard_ignores_marker_text_in_unrelated_commands(
+        self,
+    ) -> None:
+        resource_guard = compact_key_staged_runner.resource_guard
+        completed = resource_guard.subprocess.CompletedProcess(
+            ["ps"],
+            0,
+            stdout=(
+                " 200 1 200 10 rg -n scripts/kagemusha_run_recursive_compact_keygen_staged.py\n"
+                " 201 1 201 20 /bin/zsh -lc rg -n scripts/kagemusha_run_lineage_proof_staged.py\n"
+                " 202 1 202 30 python -c print('scripts/kagemusha_run_lineage_proof_staged.py')\n"
+                " 203 1 203 40 rg iroha app zk kagemusha recursive-compact-key-artifacts\n"
+                " 204 1 204 50 rg "
+                "kagemusha_recursive_spend_lineage_init_append_from_record_archives_proves_reserved_lineage_output\n"
+            ),
+        )
+
+        with mock.patch.object(
+            resource_guard.subprocess,
+            "run",
+            return_value=completed,
+        ):
+            jobs = resource_guard.find_running_heavy_jobs()
+
+        self.assertEqual(jobs, [])
+
+    def test_compact_key_staged_runner_rejects_conflicting_legacy_heavy_job(
+        self,
+    ) -> None:
+        self.heavy_job_conflict_mock.return_value = [
+            "another Kagemusha staged heavy job is already running outside this guard"
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "compact.exit"),
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not launch during conflict")
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(errors, self.heavy_job_conflict_mock.return_value)
+
+    def test_lineage_proof_staged_runner_rejects_conflicting_legacy_heavy_job(
+        self,
+    ) -> None:
+        self.heavy_job_conflict_mock.return_value = [
+            "another Kagemusha staged heavy job is already running outside this guard"
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "lineage.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "lineage.elapsed"),
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not launch during conflict")
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=forbidden_runner,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(errors, self.heavy_job_conflict_mock.return_value)
 
     def test_android_capture_command_gate_rejects_process_management(self) -> None:
         cases = (
@@ -7687,6 +8187,54 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("lineage_proof_evidence_artifact_placeholder", rendered)
         self.assertIn("kagemusha_release_lineage_artifact_placeholder", rendered)
 
+    def test_kagemusha_release_bundle_rejects_all_placeholder_lineage_prefixes(
+        self,
+    ) -> None:
+        for marker in readiness.LINEAGE_ARTIFACT_PLACEHOLDER_PREFIXES:
+            with self.subTest(marker=marker):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = create_ready_release_bundle_fixture(Path(temp))
+                    bundle_root = fixture["bundle_root"]
+                    lineage_proof_evidence = fixture["lineage_evidence"]
+                    summary_path = fixture["summary_path"]
+                    assert isinstance(bundle_root, Path)
+                    assert isinstance(lineage_proof_evidence, Path)
+                    assert isinstance(summary_path, Path)
+                    artifact = (
+                        bundle_root
+                        / "artifacts"
+                        / "kagemusha"
+                        / "lineage-init-len128.pk"
+                    )
+                    placeholder = marker + b"lineage-init-len128.pk\n"
+                    artifact.write_bytes(placeholder)
+                    placeholder_sha256 = hashlib.sha256(placeholder).hexdigest()
+                    lineage_evidence = json.loads(
+                        lineage_proof_evidence.read_text(encoding="utf-8")
+                    )
+                    lineage_evidence["artifacts"][artifact.name] = placeholder_sha256
+                    lineage_evidence["artifact_size_bytes"][artifact.name] = len(
+                        placeholder
+                    )
+                    write_json(lineage_proof_evidence, lineage_evidence)
+                    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                    summary["lineage_proof_evidence"]["artifact_sha256"][
+                        artifact.name
+                    ] = placeholder_sha256
+                    summary["lineage_proof_evidence"]["artifact_size_bytes"][
+                        artifact.name
+                    ] = len(placeholder)
+                    write_json(summary_path, summary)
+                    stderr = io.StringIO()
+
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = release_bundle.main(release_bundle_args(fixture))
+
+                self.assertEqual(status, 1)
+                rendered = stderr.getvalue()
+                self.assertIn("lineage_proof_evidence_artifact_placeholder", rendered)
+                self.assertIn("kagemusha_release_lineage_artifact_placeholder", rendered)
+
     def test_kagemusha_release_bundle_rejects_placeholder_compact_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             fixture = create_ready_release_bundle_fixture(Path(temp))
@@ -7838,7 +8386,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
-            manifest["generated_at_utc"] = "2026-01-08T00:00:00Z"
+            manifest["generated_at_utc"] = manifest["readiness_summary"][
+                "generated_at_utc"
+            ]
             write_json(out, manifest)
             stdout = io.StringIO()
 
@@ -7854,6 +8404,150 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(verify_status, 0)
         self.assertIn("[kagemusha-release-bundle] verified", stdout.getvalue())
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_manifest_timestamp_before_evidence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["generated_at_utc"] = "2026-01-08T00:00:00Z"
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_timestamp_bounds",
+            rendered,
+        )
+        self.assertIn("must not predate bound release evidence", rendered)
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_readiness_summary_timestamp_binding_drift(
+        self,
+    ) -> None:
+        def mutate(manifest: dict[str, Any]) -> None:
+            manifest["readiness_summary"][
+                "generated_at_utc"
+            ] = readiness.DEFAULT_MIN_SIGNED_AT_UTC
+
+        status, verify_status, rendered = (
+            verify_existing_release_bundle_after_manifest_mutation(mutate)
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_value_binding",
+            rendered,
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_missing_readiness_summary_section(
+        self,
+    ) -> None:
+        def mutate(manifest: dict[str, Any]) -> None:
+            del manifest["readiness_summary"]
+
+        status, verify_status, rendered = (
+            verify_existing_release_bundle_after_manifest_mutation(mutate)
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn("kagemusha_release_bundle_manifest_missing_field", rendered)
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_nonobject_readiness_summary_section(
+        self,
+    ) -> None:
+        def mutate(manifest: dict[str, Any]) -> None:
+            manifest["readiness_summary"] = "2026-01-08T00:00:00Z"
+
+        status, verify_status, rendered = (
+            verify_existing_release_bundle_after_manifest_mutation(mutate)
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_shape",
+            rendered,
+        )
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_missing_readiness_summary_timestamp(
+        self,
+    ) -> None:
+        def mutate(manifest: dict[str, Any]) -> None:
+            del manifest["readiness_summary"]["generated_at_utc"]
+
+        status, verify_status, rendered = (
+            verify_existing_release_bundle_after_manifest_mutation(mutate)
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_missing_field",
+            rendered,
+        )
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_timestamp",
+            rendered,
+        )
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_noncanonical_readiness_summary_timestamp(
+        self,
+    ) -> None:
+        def mutate(manifest: dict[str, Any]) -> None:
+            manifest["readiness_summary"][
+                "generated_at_utc"
+            ] = "2026-01-08T00:00:00+00:00"
+
+        status, verify_status, rendered = (
+            verify_existing_release_bundle_after_manifest_mutation(mutate)
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_timestamp",
+            rendered,
+        )
+        self.assertIn("canonical UTC YYYY-MM-DDTHH:MM:SSZ", rendered)
+        self.assertNotIn("Traceback", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_future_dated_readiness_summary_timestamp(
+        self,
+    ) -> None:
+        def mutate(manifest: dict[str, Any]) -> None:
+            manifest["readiness_summary"][
+                "generated_at_utc"
+            ] = "2999-01-01T00:00:00Z"
+
+        status, verify_status, rendered = (
+            verify_existing_release_bundle_after_manifest_mutation(mutate)
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_section_future_dated",
+            rendered,
+        )
+        self.assertNotIn("Traceback", rendered)
 
     def test_kagemusha_release_bundle_verify_existing_rejects_compact_generated_at_section_binding_drift(
         self,
@@ -11718,7 +12412,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
             manifest["abi6_reserved_lineage"]["modes"][
-                "fallback_when_recursive_unavailable"
+                "preferred_when_recursive_unavailable"
             ] = "operator_override_v1"
             write_json(out, manifest)
             stderr = io.StringIO()
@@ -11755,7 +12449,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "compact_token_max_hops"
             ] = "forged-abi6-limit-do-not-leak"
             manifest["abi6_reserved_lineage"]["modes"][
-                "fallback_when_recursive_unavailable"
+                "preferred_when_recursive_unavailable"
             ] = "forged_abi6_mode_do_not_leak"
             write_json(out, manifest)
             stderr = io.StringIO()
@@ -16376,7 +17070,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             assert isinstance(summary_path, Path)
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             summary["abi6_reserved_lineage"]["modes"][
-                "fallback_when_recursive_unavailable"
+                "preferred_when_recursive_unavailable"
             ] = ""
             summary["lineage_proof_evidence"]["circuit_ids"]["append"] = True
             write_json(summary_path, summary)
@@ -23041,6 +23735,95 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in summary["blockers"]},
         )
 
+    def test_freshness_invalid_signed_evidence_does_not_satisfy_android_matrix_coverage(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "stale",
+                "2026-06-05T23:59:59Z",
+                readiness.parse_utc_timestamp(
+                    readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    "test cutoff",
+                )[0],
+                None,
+                "android_signed_evidence_stale",
+            ),
+            (
+                "future",
+                "2026-06-06T00:05:01Z",
+                None,
+                readiness.parse_utc_timestamp(
+                    "2026-06-06T00:05:00Z",
+                    "test max timestamp",
+                )[0],
+                "android_signed_evidence_future_dated",
+            ),
+        )
+        for name, signed_at_utc, min_signed_at, max_signed_at, expected_code in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp) / "slots"
+                    root.mkdir(parents=True)
+                    trusted, signer_digest = create_direct_android_trusted_signer(
+                        Path(temp)
+                    )
+                    transports = tuple(
+                        sorted(slot_helpers.device_lab.D2D_PAYMENT_TRANSPORTS)
+                    )
+                    bindings = direct_android_d2d_transcript_bindings(
+                        transports,
+                        primary_transport=transports[0],
+                    )
+                    report = direct_android_signed_evidence_report(
+                        signed_at_utc=signed_at_utc,
+                        signed_evidence_signer_public_key_sha256=signer_digest,
+                        d2d_payment_transport=transports[0],
+                        d2d_payment_transcript_path=bindings[transports[0]]["path"],
+                        d2d_payment_transcript_sha256=bindings[transports[0]][
+                            "sha256"
+                        ],
+                        d2d_payment_transports=list(transports),
+                        d2d_payment_transcripts=bindings,
+                    )
+
+                    with mock.patch.object(
+                        readiness,
+                        "_slot_reports",
+                        return_value=([report], []),
+                    ):
+                        summary = readiness.check_android_device_lab(
+                            root,
+                            trusted,
+                            min_signed_at=min_signed_at,
+                            max_signed_at=max_signed_at,
+                        )
+
+                self.assertFalse(summary["ok"])
+                codes = {item["code"] for item in summary["blockers"]}
+                self.assertIn(expected_code, codes)
+                self.assertIn("android_device_lab_standard_matrix_missing", codes)
+                self.assertIn("android_device_lab_d2d_transport_matrix_missing", codes)
+                self.assertEqual(summary["covered_device_families"], [])
+                self.assertEqual(
+                    summary["missing_device_families"],
+                    list(slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
+                )
+                self.assertEqual(summary["covered_d2d_payment_transports"], [])
+                self.assertEqual(
+                    summary["missing_d2d_payment_transports"],
+                    list(readiness.ANDROID_REQUIRED_D2D_PAYMENT_TRANSPORTS),
+                )
+                self.assertEqual(
+                    summary["covered_d2d_payment_transports_by_family"],
+                    {
+                        family: []
+                        for family in (
+                            slot_helpers.device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES
+                        )
+                    },
+                )
+
     def test_android_signed_evidence_freshness_redacts_secret_slot_after_sanitize(
         self,
     ) -> None:
@@ -24911,7 +25694,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
@@ -24996,7 +25779,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
@@ -25029,7 +25812,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": limits,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                     "token=abi6-mode-secret": "must stay hidden",
                 },
                 "token=abi6-manifest-secret": "must stay hidden",
@@ -25175,7 +25958,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "transition_profile"
             ] = "token=abi6-domain-value-secret"
             manifest["modes"][
-                "fallback_when_recursive_unavailable"
+                "preferred_when_recursive_unavailable"
             ] = "token=abi6-mode-value-secret"
             manifest["operations"][0]["name"] = "token=abi6-operation-value-secret"
             manifest["operations"][0]["input_archives"] = [
@@ -25206,7 +25989,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "abi6_manifest_proof_circuit_ids",
                 "abi6_manifest_limit",
                 "abi6_manifest_domains",
-                "abi6_manifest_fallback_mode",
+                "abi6_manifest_recursive_unavailable_mode",
                 "abi6_manifest_modes",
                 "abi6_manifest_operation_inventory",
                 "abi6_manifest_hop_policy",
@@ -26801,7 +27584,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                     "modes": {
                         "preferred_when_recursive_available": "recursive_spend_v1",
-                        "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                        "preferred_when_recursive_unavailable": None,
                     },
                 }
                 write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
@@ -26840,7 +27623,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(external_manifest, manifest)
@@ -26884,7 +27667,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(manifest_path, manifest)
@@ -26950,7 +27733,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(manifest_path, manifest)
@@ -27007,7 +27790,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
@@ -27044,7 +27827,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "limits": readiness.EXPECTED_ABI6_LIMIT_VALUES,
                 "modes": {
                     "preferred_when_recursive_available": "recursive_spend_v1",
-                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    "preferred_when_recursive_unavailable": None,
                 },
             }
             write_json(external_manifest, manifest)
@@ -29445,6 +30228,41 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertTrue(result["ok"], result["blockers"])
         self.assertEqual(result["state"], "compact_key_artifacts_validated")
 
+    def test_compact_key_staged_finalizer_rejects_rss_terminated_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            write_compact_key_staged_run_report(
+                staged_artifact_dir,
+                max_rss_bytes=101,
+                rss_limit_bytes=100,
+                terminated_for_rss_limit=True,
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_finalizer.main(
+                    compact_key_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            (
+                "staged recursive compact key run report terminated_for_rss_limit "
+                "must be false for publishable evidence"
+            ),
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME).exists())
+
     def test_compact_key_staged_finalizer_rejects_missing_publish_dir_under_symlinked_parent(
         self,
     ) -> None:
@@ -31161,11 +31979,21 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(exit_text, "0\n")
         self.assertEqual(report["schema"], compact_key_staged_runner.STAGED_RUN_REPORT_SCHEMA)
         self.assertEqual(report["exit_code"], 0)
+        self.assertEqual(report["max_rss_bytes"], 0)
+        self.assertEqual(
+            report["rss_limit_bytes"],
+            compact_key_staged_runner.resource_guard.rss_limit_bytes_from_gb(
+                compact_key_staged_runner.DEFAULT_MAX_RSS_GB
+            ),
+        )
+        self.assertFalse(report["terminated_for_rss_limit"])
         self.assertEqual(
             execution_report["schema"],
             compact_key_staged_runner.EXECUTION_REPORT_SCHEMA,
         )
         self.assertEqual(execution_report["exit_code"], 0)
+        self.assertEqual(execution_report["max_rss_bytes"], 0)
+        self.assertFalse(execution_report["terminated_for_rss_limit"])
         self.assertEqual(
             execution_report["generator_log_size_bytes"],
             report["generator_log_size_bytes"],
@@ -31224,6 +32052,42 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertFalse(temp_generator_log_exists)
         self.assertFalse(temp_execution_report_exists)
+
+    def test_compact_key_staged_runner_rejects_concurrent_heavy_job_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lock_file = root / "kagemusha-heavy.lock"
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--resource-lock-file",
+                    str(lock_file),
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not launch while heavy-job lock is held")
+
+            with compact_key_staged_runner.resource_guard.acquire_heavy_job_lock(
+                lock_file
+            ):
+                status, errors = compact_key_staged_runner.run_staged_keygen(
+                    args,
+                    runner=forbidden_runner,
+                )
+
+        self.assertEqual(status, 1)
+        self.assertTrue(
+            any(
+                "another Kagemusha staged heavy job is already running" in error
+                for error in errors
+            )
+        )
 
     def test_compact_key_staged_runner_resume_reruns_on_noncanonical_exit_marker(
         self,
@@ -31449,6 +32313,62 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             execution_report["generator_log_sha256"],
             generator_log_sha256,
         )
+
+    def test_compact_key_staged_runner_resume_rebuilds_placeholder_key_artifact(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            create_compact_key_artifact_files(staged_artifact_dir)
+            placeholder_artifact = staged_artifact_dir / "recursive-compact-len4.pk"
+            placeholder_artifact.write_bytes(
+                b"recursive compact key artifact recursive-compact-len4.pk\n"
+            )
+            write_compact_key_execution_report(staged_artifact_dir)
+            write_compact_key_staged_run_report(staged_artifact_dir)
+            exit_file.write_text("0\n", encoding="utf-8")
+            args = compact_key_staged_runner.parse_args(
+                [
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--resume-keygen",
+                ]
+            )
+            calls: list[list[str]] = []
+
+            def fake_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                calls.append(command)
+                self.assertEqual(cwd, staged_artifact_dir.parent.parent)
+                artifact_root = cwd / "artifacts" / "kagemusha"
+                create_compact_key_artifact_files_without_log(artifact_root)
+                write_compact_key_generator_log_to(artifact_root, log_path)
+                return 0
+
+            status, errors = compact_key_staged_runner.run_staged_keygen(
+                args,
+                runner=fake_runner,
+            )
+            regenerated_artifact = placeholder_artifact.read_bytes()
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            calls,
+            [
+                compact_key_staged_runner.shlex.split(
+                    compact_key_staged_runner.DEFAULT_COMPACT_KEY_COMMAND
+                )
+            ],
+        )
+        self.assertNotEqual(
+            regenerated_artifact,
+            b"recursive compact key artifact recursive-compact-len4.pk\n",
+        )
+        self.assertTrue(regenerated_artifact.startswith(b"KCGK\x00\x01"))
 
     def test_compact_key_staged_runner_rejects_replace_with_resume_keygen(
         self,
@@ -32642,8 +33562,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     cwd: Path,
                     stdout: object,
                     stderr: object,
+                    env: dict[str, str],
+                    start_new_session: bool,
                 ) -> None:
                     calls.append((command, cwd, stderr))
+                    test_case.assertTrue(start_new_session)
+                    test_case.assertNotIn(
+                        readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV,
+                        env,
+                    )
                     test_case.assertIsNot(
                         stdout,
                         compact_key_staged_runner.subprocess.PIPE,
@@ -32664,14 +33591,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "fsync",
                 side_effect=lambda fd: fsync_fds.append(fd),
             ):
-                status = compact_key_staged_runner._run_command_to_log(
+                result = compact_key_staged_runner._run_command_to_log(
                     ["iroha", "compact"],
                     root,
                     log_path,
                 )
             log_bytes = log_path.read_bytes()
 
-        self.assertEqual(status, 23)
+        self.assertEqual(result.exit_code, 23)
         self.assertEqual(log_bytes, b"compact child output\n")
         self.assertEqual(fsync_fds, stdout_fds)
         self.assertEqual(
@@ -32702,7 +33629,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             log_path = root / "compact-keygen.log"
 
             with mock.patch.dict(os.environ, {"PATH": ""}):
-                status = compact_key_staged_runner._run_command_to_log(
+                result = compact_key_staged_runner._run_command_to_log(
                     ["iroha", "probe"],
                     repo_root,
                     log_path,
@@ -32710,8 +33637,85 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 )
             log_text = log_path.read_text(encoding="utf-8")
 
-        self.assertEqual(status, 17)
+        self.assertEqual(result.exit_code, 17)
         self.assertEqual(log_text, "compact local iroha probe\n")
+
+    def test_compact_key_staged_runner_scrubs_runtime_keygen_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo_root = root / "repo"
+            local_bin = repo_root / "target" / "debug"
+            local_bin.mkdir(parents=True)
+            local_iroha = local_bin / "iroha"
+            local_iroha.write_text(
+                (
+                    "#!/bin/sh\n"
+                    "if [ \"${IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN+x}\" = x ]; then\n"
+                    "  printf 'compact runtime keygen env leaked\\n'\n"
+                    "  exit 64\n"
+                    "fi\n"
+                    "printf 'compact runtime keygen env scrubbed\\n'\n"
+                    "exit 0\n"
+                ),
+                encoding="utf-8",
+            )
+            local_iroha.chmod(0o700)
+            log_path = root / "compact-keygen.log"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "PATH": "",
+                    readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV: "1",
+                },
+            ):
+                result = compact_key_staged_runner._run_command_to_log(
+                    ["iroha", "probe"],
+                    repo_root,
+                    log_path,
+                    executable_repo_root=repo_root,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(log_text, "compact runtime keygen env scrubbed\n")
+
+    def test_compact_key_staged_runner_scrubs_runtime_keygen_env_without_repo_root(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            probe = root / "compact-probe.sh"
+            probe.write_text(
+                (
+                    "#!/bin/sh\n"
+                    "if [ \"${IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN+x}\" = x ]; then\n"
+                    "  printf 'compact direct runtime keygen env leaked\\n'\n"
+                    "  exit 64\n"
+                    "fi\n"
+                    "printf 'compact direct runtime keygen env scrubbed\\n'\n"
+                    "exit 0\n"
+                ),
+                encoding="utf-8",
+            )
+            probe.chmod(0o700)
+            log_path = root / "compact-keygen.log"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV: "1",
+                },
+            ):
+                result = compact_key_staged_runner._run_command_to_log(
+                    [str(probe)],
+                    root,
+                    log_path,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(log_text, "compact direct runtime keygen env scrubbed\n")
 
     def test_compact_key_staged_runner_explicit_iroha_bin_precedes_stale_release(
         self,
@@ -32738,7 +33742,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             log_path = root / "compact-keygen.log"
 
             with mock.patch.dict(os.environ, {"PATH": ""}):
-                status = compact_key_staged_runner._run_command_to_log(
+                result = compact_key_staged_runner._run_command_to_log(
                     ["iroha", "probe"],
                     repo_root,
                     log_path,
@@ -32747,7 +33751,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 )
             log_text = log_path.read_text(encoding="utf-8")
 
-        self.assertEqual(status, 17)
+        self.assertEqual(result.exit_code, 17)
         self.assertEqual(log_text, "current compact iroha probe\n")
 
     def test_compact_key_staged_runner_rejects_symlinked_iroha_bin(self) -> None:
@@ -33001,7 +34005,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     cwd: Path,
                     stdout: object,
                     stderr: object,
+                    env: dict[str, str],
+                    start_new_session: bool,
                 ) -> None:
+                    del env
+                    if not start_new_session:
+                        raise AssertionError("staged child must be isolated")
                     self.command = command
                     self.stdout = stdout
                     stdout.write(b"compact child start\n")
@@ -33024,8 +34033,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 compact_key_staged_runner.os,
                 "fsync",
                 side_effect=lambda fd: fsync_fds.append(fd),
+            ), mock.patch.object(
+                compact_key_staged_runner.time,
+                "monotonic",
+                side_effect=[0.0, 0.0, 0.001, 0.001],
             ):
-                status = compact_key_staged_runner._run_command_to_log(
+                result = compact_key_staged_runner._run_command_to_log(
                     ["iroha", "compact"],
                     root,
                     log_path,
@@ -33033,7 +34046,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 )
             log_text = log_path.read_text(encoding="utf-8")
 
-        self.assertEqual(status, 0)
+        self.assertEqual(result.exit_code, 0)
         self.assertEqual(wait_timeouts, [0.001, 0.001])
         self.assertIn("compact child start\n", log_text)
         self.assertIn(
@@ -33042,6 +34055,84 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertIn("compact child done\n", log_text)
         self.assertGreaterEqual(len(fsync_fds), 2)
+
+    def test_compact_key_staged_runner_terminates_child_over_rss_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            log_path = root / "compact-keygen.log"
+            instances: list[Any] = []
+
+            class FakePopen:
+                pid = 4242
+
+                def __init__(
+                    self,
+                    command: list[str],
+                    cwd: Path,
+                    stdout: object,
+                    stderr: object,
+                    env: dict[str, str],
+                    start_new_session: bool,
+                ) -> None:
+                    del cwd, stderr, env
+                    if not start_new_session:
+                        raise AssertionError("staged child must be isolated")
+                    self.command = command
+                    self.stdout = stdout
+                    self.terminated = False
+                    self.killed = False
+                    instances.append(self)
+                    stdout.write(b"compact child start\n")
+
+                def wait(self, timeout: float | None = None) -> int:
+                    if self.terminated:
+                        return -15
+                    raise compact_key_staged_runner.subprocess.TimeoutExpired(
+                        self.command,
+                        timeout,
+                    )
+
+                def terminate(self) -> None:
+                    self.terminated = True
+
+                def kill(self) -> None:
+                    self.killed = True
+
+            with mock.patch.object(
+                compact_key_staged_runner.subprocess,
+                "Popen",
+                FakePopen,
+            ), mock.patch.object(
+                compact_key_staged_runner.time,
+                "monotonic",
+                side_effect=[0.0, 0.0, 1.0],
+            ):
+                result = compact_key_staged_runner._run_command_to_log(
+                    ["iroha", "compact"],
+                    root,
+                    log_path,
+                    heartbeat_interval_seconds=60.0,
+                    max_rss_bytes=100,
+                    rss_sample_interval_seconds=1.0,
+                    rss_sampler=lambda _pid: 101,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            result.exit_code,
+            compact_key_staged_runner.resource_guard.RSS_LIMIT_EXIT_CODE,
+        )
+        self.assertEqual(result.resource_summary.max_rss_bytes, 101)
+        self.assertEqual(result.resource_summary.rss_limit_bytes, 100)
+        self.assertTrue(result.resource_summary.terminated_for_rss_limit)
+        self.assertTrue(instances[0].terminated)
+        self.assertFalse(instances[0].killed)
+        self.assertIn(
+            "[kagemusha-staged-runner] compact-keygen rss-limit",
+            log_text,
+        )
+        self.assertIn("rss_bytes=101", log_text)
+        self.assertIn("rss_limit_bytes=100", log_text)
 
     def test_compact_key_staged_runner_removes_temp_log_on_spawn_failure(
         self,
@@ -33214,6 +34305,45 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn(str(evidence_path), stdout.getvalue())
         self.assertTrue(result["ok"], result["blockers"])
         self.assertEqual(result["state"], "production_width_proof_passed")
+
+    def test_lineage_proof_staged_finalizer_rejects_rss_terminated_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(staged_artifact_dir)
+            write_passing_lineage_proof_log(
+                staged_artifact_dir
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+            write_lineage_staged_run_report(
+                staged_artifact_dir,
+                max_rss_bytes=101,
+                rss_limit_bytes=100,
+                terminated_for_rss_limit=True,
+            )
+            exit_file = root / "staged.exit"
+            exit_file.write_text("0\n", encoding="utf-8")
+            artifact_dir = root / "published"
+
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = lineage_finalizer.main(
+                    lineage_finalizer_args(
+                        staged_artifact_dir=staged_artifact_dir,
+                        exit_file=exit_file,
+                        artifact_dir=artifact_dir,
+                    )
+                )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            (
+                "staged lineage proof run report terminated_for_rss_limit must "
+                "be false for publishable evidence"
+            ),
+            stderr.getvalue(),
+        )
+        self.assertFalse((artifact_dir / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME).exists())
 
     def test_lineage_proof_staged_finalizer_rejects_missing_publish_dir_under_symlinked_parent(
         self,
@@ -35425,6 +36555,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(report["schema"], lineage_staged_runner.STAGED_RUN_REPORT_SCHEMA)
         self.assertEqual(report["exit_code"], 0)
         self.assertEqual(report["elapsed_seconds"], 4.25)
+        self.assertEqual(report["max_rss_bytes"], 0)
+        self.assertEqual(
+            report["rss_limit_bytes"],
+            lineage_staged_runner.resource_guard.rss_limit_bytes_from_gb(
+                lineage_staged_runner.DEFAULT_MAX_RSS_GB
+            ),
+        )
+        self.assertFalse(report["terminated_for_rss_limit"])
         self.assertEqual(
             init_execution_report["schema"],
             lineage_staged_runner.EXECUTION_REPORT_SCHEMA,
@@ -35432,6 +36570,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(init_execution_report["exit_code"], 0)
         self.assertEqual(append_execution_report["exit_code"], 0)
         self.assertEqual(proof_execution_report["exit_code"], 0)
+        self.assertEqual(init_execution_report["max_rss_bytes"], 0)
+        self.assertFalse(init_execution_report["terminated_for_rss_limit"])
+        self.assertEqual(proof_execution_report["max_rss_bytes"], 0)
+        self.assertFalse(proof_execution_report["terminated_for_rss_limit"])
         self.assertEqual(proof_execution_report["elapsed_seconds"], 4.25)
         self.assertEqual(
             report["proof_log_path"],
@@ -35538,6 +36680,45 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(init_execution_report["exit_code"], 0)
         self.assertFalse(init_temp_log_exists)
         self.assertFalse(proof_temp_execution_report_exists)
+
+    def test_lineage_proof_staged_runner_rejects_concurrent_heavy_job_lock(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            lock_file = root / "kagemusha-heavy.lock"
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(root / "lineage.exit"),
+                    "--elapsed-seconds-file",
+                    str(root / "lineage.elapsed"),
+                    "--resource-lock-file",
+                    str(lock_file),
+                ]
+            )
+
+            def forbidden_runner(_command: list[str], _cwd: Path, _log_path: Path) -> int:
+                raise AssertionError("runner must not launch while heavy-job lock is held")
+
+            with lineage_staged_runner.resource_guard.acquire_heavy_job_lock(lock_file):
+                status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                    args,
+                    runner=forbidden_runner,
+                )
+
+        self.assertEqual(status, 1)
+        self.assertTrue(
+            any(
+                "another Kagemusha staged heavy job is already running" in error
+                for error in errors
+            )
+        )
 
     def test_lineage_proof_staged_runner_redacts_control_duplicate_execution_key(
         self,
@@ -35848,6 +37029,83 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(run_report["exit_code"], 0)
         self.assertEqual(exit_text, "0\n")
         self.assertEqual(append_log_text, "regenerated append lineage keys\n")
+
+    def test_lineage_proof_staged_runner_resume_regenerates_placeholder_init_phase(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            staged_artifact_dir = root / "staged" / "artifacts" / "kagemusha"
+            exit_file = root / "staged.exit"
+            elapsed_file = root / "staged.elapsed"
+            create_lineage_artifact_files_for_profile(staged_artifact_dir, "init")
+            placeholder_artifact = staged_artifact_dir / "lineage-init-len128.pk"
+            placeholder_artifact.write_bytes(
+                b"lineage artifact lineage-init-len128.pk\n"
+            )
+            (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
+            ).write_text("generated init lineage keys\n", encoding="utf-8")
+            write_lineage_execution_report(staged_artifact_dir, "init")
+            args = lineage_staged_runner.parse_args(
+                [
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--staged-artifact-dir",
+                    str(staged_artifact_dir),
+                    "--exit-file",
+                    str(exit_file),
+                    "--elapsed-seconds-file",
+                    str(elapsed_file),
+                    "--resume-key-artifacts",
+                ]
+            )
+            calls: list[list[str]] = []
+            init_command = lineage_staged_runner.shlex.split(
+                lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["init"]
+            )
+            append_command = lineage_staged_runner.shlex.split(
+                lineage_staged_runner.LINEAGE_KEY_ARTIFACT_COMMANDS["append"]
+            )
+            proof_command = lineage_staged_runner.shlex.split(
+                lineage_staged_runner.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+            )
+
+            def fake_runner(command: list[str], cwd: Path, log_path: Path) -> int:
+                calls.append(command)
+                expected_cwd = REPO_ROOT if command == proof_command else root / "staged"
+                self.assertEqual(cwd, expected_cwd)
+                if command == init_command:
+                    create_lineage_artifact_files_for_profile(staged_artifact_dir, "init")
+                    log_path.write_text("regenerated init lineage keys\n", encoding="utf-8")
+                    return 0
+                if command == append_command:
+                    create_lineage_artifact_files_for_profile(staged_artifact_dir, "append")
+                    log_path.write_text("generated append lineage keys\n", encoding="utf-8")
+                    return 0
+                write_passing_lineage_proof_log(log_path)
+                return 0
+
+            status, errors = lineage_staged_runner.run_staged_lineage_proof(
+                args,
+                runner=fake_runner,
+                monotonic=mock.Mock(side_effect=[1.0, 2.0, 3.0]),
+            )
+            regenerated_artifact = placeholder_artifact.read_bytes()
+            init_log_text = (
+                staged_artifact_dir
+                / lineage_staged_runner.LINEAGE_KEY_ARTIFACT_LOG_FILENAMES["init"]
+            ).read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(calls, [init_command, append_command, proof_command])
+        self.assertEqual(
+            regenerated_artifact,
+            lineage_artifact_bytes("lineage-init-len128.pk", profile="init"),
+        )
+        self.assertEqual(init_log_text, "regenerated init lineage keys\n")
 
     def test_lineage_proof_staged_runner_resume_replaces_killed_append_phase(
         self,
@@ -37501,8 +38759,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     cwd: Path,
                     stdout: object,
                     stderr: object,
+                    env: dict[str, str],
+                    start_new_session: bool,
                 ) -> None:
                     calls.append((command, cwd, stderr))
+                    test_case.assertTrue(start_new_session)
+                    test_case.assertNotIn(
+                        readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV,
+                        env,
+                    )
                     test_case.assertIsNot(
                         stdout,
                         lineage_staged_runner.subprocess.PIPE,
@@ -37523,14 +38788,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "fsync",
                 side_effect=lambda fd: fsync_fds.append(fd),
             ):
-                status = lineage_staged_runner._run_command_to_log(
+                result = lineage_staged_runner._run_command_to_log(
                     ["iroha", "lineage"],
                     root,
                     log_path,
                 )
             log_bytes = log_path.read_bytes()
 
-        self.assertEqual(status, 31)
+        self.assertEqual(result.exit_code, 31)
         self.assertEqual(log_bytes, b"lineage child output\n")
         self.assertEqual(fsync_fds, stdout_fds)
         self.assertEqual(
@@ -37561,7 +38826,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             log_path = root / "lineage-proof.log"
 
             with mock.patch.dict(os.environ, {"PATH": ""}):
-                status = lineage_staged_runner._run_command_to_log(
+                result = lineage_staged_runner._run_command_to_log(
                     ["iroha", "probe"],
                     repo_root,
                     log_path,
@@ -37569,8 +38834,85 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 )
             log_text = log_path.read_text(encoding="utf-8")
 
-        self.assertEqual(status, 19)
+        self.assertEqual(result.exit_code, 19)
         self.assertEqual(log_text, "lineage local iroha probe\n")
+
+    def test_lineage_proof_staged_runner_scrubs_runtime_keygen_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo_root = root / "repo"
+            local_bin = repo_root / "target" / "debug"
+            local_bin.mkdir(parents=True)
+            local_iroha = local_bin / "iroha"
+            local_iroha.write_text(
+                (
+                    "#!/bin/sh\n"
+                    "if [ \"${IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN+x}\" = x ]; then\n"
+                    "  printf 'lineage runtime keygen env leaked\\n'\n"
+                    "  exit 64\n"
+                    "fi\n"
+                    "printf 'lineage runtime keygen env scrubbed\\n'\n"
+                    "exit 0\n"
+                ),
+                encoding="utf-8",
+            )
+            local_iroha.chmod(0o700)
+            log_path = root / "lineage-proof.log"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "PATH": "",
+                    readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV: "1",
+                },
+            ):
+                result = lineage_staged_runner._run_command_to_log(
+                    ["iroha", "probe"],
+                    repo_root,
+                    log_path,
+                    executable_repo_root=repo_root,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(log_text, "lineage runtime keygen env scrubbed\n")
+
+    def test_lineage_proof_staged_runner_scrubs_runtime_keygen_env_without_repo_root(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            probe = root / "lineage-probe.sh"
+            probe.write_text(
+                (
+                    "#!/bin/sh\n"
+                    "if [ \"${IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN+x}\" = x ]; then\n"
+                    "  printf 'lineage direct runtime keygen env leaked\\n'\n"
+                    "  exit 64\n"
+                    "fi\n"
+                    "printf 'lineage direct runtime keygen env scrubbed\\n'\n"
+                    "exit 0\n"
+                ),
+                encoding="utf-8",
+            )
+            probe.chmod(0o700)
+            log_path = root / "lineage-proof.log"
+
+            with mock.patch.dict(
+                os.environ,
+                {
+                    readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV: "1",
+                },
+            ):
+                result = lineage_staged_runner._run_command_to_log(
+                    [str(probe)],
+                    root,
+                    log_path,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(log_text, "lineage direct runtime keygen env scrubbed\n")
 
     def test_lineage_proof_staged_runner_explicit_iroha_bin_precedes_stale_release(
         self,
@@ -37597,7 +38939,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             log_path = root / "lineage-proof.log"
 
             with mock.patch.dict(os.environ, {"PATH": ""}):
-                status = lineage_staged_runner._run_command_to_log(
+                result = lineage_staged_runner._run_command_to_log(
                     ["iroha", "probe"],
                     repo_root,
                     log_path,
@@ -37606,7 +38948,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 )
             log_text = log_path.read_text(encoding="utf-8")
 
-        self.assertEqual(status, 19)
+        self.assertEqual(result.exit_code, 19)
         self.assertEqual(log_text, "current lineage iroha probe\n")
 
     def test_lineage_proof_staged_runner_rejects_symlinked_iroha_bin(self) -> None:
@@ -37718,7 +39060,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     cwd: Path,
                     stdout: object,
                     stderr: object,
+                    env: dict[str, str],
+                    start_new_session: bool,
                 ) -> None:
+                    del env
+                    if not start_new_session:
+                        raise AssertionError("staged child must be isolated")
                     self.command = command
                     self.stdout = stdout
                     stdout.write(b"lineage child start\n")
@@ -37741,8 +39088,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 lineage_staged_runner.os,
                 "fsync",
                 side_effect=lambda fd: fsync_fds.append(fd),
+            ), mock.patch.object(
+                lineage_staged_runner.time,
+                "monotonic",
+                side_effect=[0.0, 0.0, 0.001, 0.001],
             ):
-                status = lineage_staged_runner._run_command_to_log(
+                result = lineage_staged_runner._run_command_to_log(
                     ["iroha", "lineage"],
                     root,
                     log_path,
@@ -37750,7 +39101,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 )
             log_text = log_path.read_text(encoding="utf-8")
 
-        self.assertEqual(status, 0)
+        self.assertEqual(result.exit_code, 0)
         self.assertEqual(wait_timeouts, [0.001, 0.001])
         self.assertIn("lineage child start\n", log_text)
         self.assertIn(
@@ -37759,6 +39110,84 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertIn("lineage child done\n", log_text)
         self.assertGreaterEqual(len(fsync_fds), 2)
+
+    def test_lineage_proof_staged_runner_terminates_child_over_rss_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            log_path = root / "lineage-proof.log"
+            instances: list[Any] = []
+
+            class FakePopen:
+                pid = 4343
+
+                def __init__(
+                    self,
+                    command: list[str],
+                    cwd: Path,
+                    stdout: object,
+                    stderr: object,
+                    env: dict[str, str],
+                    start_new_session: bool,
+                ) -> None:
+                    del cwd, stderr, env
+                    if not start_new_session:
+                        raise AssertionError("staged child must be isolated")
+                    self.command = command
+                    self.stdout = stdout
+                    self.terminated = False
+                    self.killed = False
+                    instances.append(self)
+                    stdout.write(b"lineage child start\n")
+
+                def wait(self, timeout: float | None = None) -> int:
+                    if self.terminated:
+                        return -15
+                    raise lineage_staged_runner.subprocess.TimeoutExpired(
+                        self.command,
+                        timeout,
+                    )
+
+                def terminate(self) -> None:
+                    self.terminated = True
+
+                def kill(self) -> None:
+                    self.killed = True
+
+            with mock.patch.object(
+                lineage_staged_runner.subprocess,
+                "Popen",
+                FakePopen,
+            ), mock.patch.object(
+                lineage_staged_runner.time,
+                "monotonic",
+                side_effect=[0.0, 0.0, 1.0],
+            ):
+                result = lineage_staged_runner._run_command_to_log(
+                    ["iroha", "lineage"],
+                    root,
+                    log_path,
+                    heartbeat_interval_seconds=60.0,
+                    max_rss_bytes=100,
+                    rss_sample_interval_seconds=1.0,
+                    rss_sampler=lambda _pid: 101,
+                )
+            log_text = log_path.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            result.exit_code,
+            lineage_staged_runner.resource_guard.RSS_LIMIT_EXIT_CODE,
+        )
+        self.assertEqual(result.resource_summary.max_rss_bytes, 101)
+        self.assertEqual(result.resource_summary.rss_limit_bytes, 100)
+        self.assertTrue(result.resource_summary.terminated_for_rss_limit)
+        self.assertTrue(instances[0].terminated)
+        self.assertFalse(instances[0].killed)
+        self.assertIn(
+            "[kagemusha-staged-runner] lineage-proof rss-limit",
+            log_text,
+        )
+        self.assertIn("rss_bytes=101", log_text)
+        self.assertIn("rss_limit_bytes=100", log_text)
 
     def test_lineage_proof_staged_runner_removes_temp_log_on_spawn_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -41374,6 +42803,55 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in result["blockers"]},
         )
 
+    def test_lineage_proof_evidence_rejects_placeholder_local_artifact_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            artifact = evidence_path.parent / "lineage-init-len128.pk"
+            placeholder = b"lineage artifact lineage-init-len128.pk\n"
+            artifact.write_bytes(placeholder)
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifacts"][artifact.name] = hashlib.sha256(placeholder).hexdigest()
+            evidence["artifact_size_bytes"][artifact.name] = len(placeholder)
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "lineage_proof_evidence_artifact_placeholder",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(readiness.LINEAGE_ARTIFACT_PLACEHOLDER_ERROR, json.dumps(result))
+        self.assertNotIn(artifact.name, result["artifact_sha256"])
+        self.assertNotIn(artifact.name, result["artifact_size_bytes"])
+
+    def test_lineage_proof_evidence_rejects_all_placeholder_prefixes(self) -> None:
+        for marker in readiness.LINEAGE_ARTIFACT_PLACEHOLDER_PREFIXES:
+            with self.subTest(marker=marker):
+                with tempfile.TemporaryDirectory() as temp:
+                    evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+                    artifact = evidence_path.parent / "lineage-init-len128.pk"
+                    placeholder = marker + b"lineage-init-len128.pk\n"
+                    artifact.write_bytes(placeholder)
+                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    evidence["artifacts"][artifact.name] = hashlib.sha256(
+                        placeholder
+                    ).hexdigest()
+                    evidence["artifact_size_bytes"][artifact.name] = len(placeholder)
+                    write_json(evidence_path, evidence)
+
+                    result = readiness.check_lineage_proof_evidence(evidence_path)
+
+                self.assertFalse(result["ok"])
+                self.assertIn(
+                    "lineage_proof_evidence_artifact_placeholder",
+                    {item["code"] for item in result["blockers"]},
+                )
+                self.assertNotIn(artifact.name, result["artifact_sha256"])
+                self.assertNotIn(artifact.name, result["artifact_size_bytes"])
+
     def test_lineage_proof_evidence_rejects_all_zero_local_artifact_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
@@ -42546,7 +44024,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(evidence["artifact_size_bytes"], expected_sizes)
         self.assertEqual(
             evidence["artifacts"]["lineage-init-len128.vk"],
-            hashlib.sha256(b"lineage artifact lineage-init-len128.vk\n").hexdigest(),
+            hashlib.sha256(lineage_artifact_bytes("lineage-init-len128.vk")).hexdigest(),
         )
         self.assertEqual(
             evidence["tests"]["record_archive_proof"]["log_sha256"],
@@ -43213,6 +44691,81 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "lineage artifact lineage-append-len128.pk must be non-empty",
             stderr.getvalue(),
         )
+
+    def test_lineage_proof_evidence_helper_rejects_placeholder_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            create_lineage_artifact_files(artifact_dir)
+            (artifact_dir / "lineage-append-len128.pk").write_bytes(
+                b"lineage artifact lineage-append-len128.pk\n"
+            )
+            proof_log = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                "record_archive_proof"
+            ]
+            write_passing_lineage_proof_log(proof_log)
+            out = artifact_dir / "lineage-proof-evidence.json"
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--proof-log",
+                        str(proof_log),
+                        "--elapsed-seconds",
+                        "14400.5",
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(readiness.LINEAGE_ARTIFACT_PLACEHOLDER_ERROR, stderr.getvalue())
+
+    def test_lineage_proof_evidence_helper_rejects_all_placeholder_prefixes(
+        self,
+    ) -> None:
+        for marker in readiness.LINEAGE_ARTIFACT_PLACEHOLDER_PREFIXES:
+            with self.subTest(marker=marker):
+                with tempfile.TemporaryDirectory() as temp:
+                    artifact_dir = Path(temp) / "artifacts"
+                    create_lineage_artifact_files(artifact_dir)
+                    (artifact_dir / "lineage-append-len128.pk").write_bytes(
+                        marker + b"lineage-append-len128.pk\n"
+                    )
+                    proof_log = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                        "record_archive_proof"
+                    ]
+                    write_passing_lineage_proof_log(proof_log)
+                    out = artifact_dir / "lineage-proof-evidence.json"
+                    stderr = io.StringIO()
+
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = evidence_helper.main(
+                            [
+                                "--artifact-dir",
+                                str(artifact_dir),
+                                "--proof-log",
+                                str(proof_log),
+                                "--elapsed-seconds",
+                                "14400.5",
+                                "--generated-at-utc",
+                                readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                                "--out",
+                                str(out),
+                            ]
+                        )
+
+                self.assertEqual(status, 1)
+                self.assertFalse(out.exists())
+                self.assertIn(
+                    readiness.LINEAGE_ARTIFACT_PLACEHOLDER_ERROR,
+                    stderr.getvalue(),
+                )
 
     def test_lineage_proof_evidence_helper_rejects_all_zero_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

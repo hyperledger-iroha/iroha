@@ -77,20 +77,25 @@ def test_duplicate_required_kind_fails() -> None:
             default_required=DEFAULT,
         )
     except ValueError as error:
-        assert "duplicate required evidence kind" in str(error)
+        diagnostic = str(error)
+        assert "duplicate required evidence kind" in diagnostic
+        assert "feed_collector" not in diagnostic
     else:  # pragma: no cover - defensive
         raise AssertionError("duplicate required kind was accepted")
 
 
 def test_unknown_required_kind_fails() -> None:
+    unknown_kind = "unknown-private-key-placeholder"
     try:
         parse_required_kinds(
-            ["unknown"],
+            [unknown_kind],
             allowed_kinds=ALLOWED,
             default_required=DEFAULT,
         )
     except ValueError as error:
-        assert "unknown required evidence kind `unknown`" in str(error)
+        diagnostic = str(error)
+        assert "unknown required evidence kind" in diagnostic
+        assert unknown_kind not in diagnostic
     else:  # pragma: no cover - defensive
         raise AssertionError("unknown required kind was accepted")
 
@@ -155,9 +160,17 @@ def test_malformed_default_required_kinds_fail() -> None:
         (("feed_collector", ""), "must be non-empty canonical strings"),
         (("feed_collector", " billing_cycle"), "must be non-empty canonical strings"),
         (("feed_collector", "billing\ncycle"), "must be non-empty canonical strings"),
-        (("feed_collector", "unknown"), "unknown default required evidence kind"),
+        (
+            ("feed_collector", "default-private-key-placeholder"),
+            "unknown default required evidence kind",
+        ),
         (("feed_collector", "feed_collector"), "duplicate default required evidence kind"),
     ):
+        unknown_default = (
+            default_required[1]
+            if isinstance(default_required, tuple) and len(default_required) > 1
+            else None
+        )
         try:
             parse_required_kinds(
                 [],
@@ -165,6 +178,11 @@ def test_malformed_default_required_kinds_fail() -> None:
                 default_required=default_required,
             )
         except ValueError as error:
-            assert expected in str(error)
+            diagnostic = str(error)
+            assert expected in diagnostic
+            if expected == "unknown default required evidence kind":
+                assert unknown_default not in diagnostic
+            if expected == "duplicate default required evidence kind":
+                assert "feed_collector" not in diagnostic
         else:  # pragma: no cover - defensive
             raise AssertionError("malformed default required kinds were accepted")

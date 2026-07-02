@@ -9,7 +9,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use ed25519_dalek::VerifyingKey;
 use hex::{FromHexError, encode as hex_encode};
 use iroha_crypto::soranet::{
     certificate::{CertificateError, CertificateValidationPhase, RelayCertificateBundleV2},
@@ -22,7 +21,10 @@ use norito::{
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
-use crate::config::{ConfigError, GuardDirectoryConfig};
+use crate::{
+    checked_ed25519_verifying_key_from_bytes,
+    config::{ConfigError, GuardDirectoryConfig},
+};
 
 /// Result of resolving the relay entry from a guard directory snapshot.
 #[derive(Debug)]
@@ -74,6 +76,8 @@ pub enum GuardDirectoryError {
         #[source]
         source: ed25519_dalek::SignatureError,
     },
+    #[error("issuer public key in `{path}` has invalid material: {reason}")]
+    IssuerKeyMaterial { path: PathBuf, reason: String },
     #[error("relay certificate signature validation failed: {0}")]
     Certificate(#[from] CertificateError),
     #[error(
@@ -229,12 +233,13 @@ pub fn load_guard_entry(
             path: path.clone(),
             fingerprint: hex_encode(bundle.certificate.issuer_fingerprint),
         })?;
-    let ed25519 = VerifyingKey::from_bytes(&issuer.ed25519_public).map_err(|source| {
-        GuardDirectoryError::IssuerKey {
-            path: path.clone(),
-            source,
-        }
-    })?;
+    let ed25519 =
+        checked_ed25519_verifying_key_from_bytes(&issuer.ed25519_public).map_err(|reason| {
+            GuardDirectoryError::IssuerKeyMaterial {
+                path: path.clone(),
+                reason,
+            }
+        })?;
     bundle.verify(&ed25519, &issuer.mldsa65_public, validation_phase)?;
 
     Ok(GuardDirectoryEntry {

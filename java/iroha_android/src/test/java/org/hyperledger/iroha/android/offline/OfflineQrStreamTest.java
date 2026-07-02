@@ -11,7 +11,7 @@ public final class OfflineQrStreamTest {
     recoversMissingChunk();
     rejectsBadChecksum();
     textCodecRoundTrip();
-    textCodecRejectsLegacyVersionedPrefix();
+    textCodecRejectsRetiredVersionedPrefix();
     sakuraStormPlaybackSkinMatchesPreset();
     sakuraStormScanSessionPresetRecoversDroppedFrame();
     System.out.println("[IrohaAndroid] OfflineQrStreamTest passed.");
@@ -92,13 +92,33 @@ public final class OfflineQrStreamTest {
     assertArrayEquals(payload, decoded, "text codec payload mismatch");
   }
 
-  private static void textCodecRejectsLegacyVersionedPrefix() {
+  private static void textCodecRejectsRetiredVersionedPrefix() {
     final byte[] payload = makePayload(128);
-    final String legacy =
+    final String encoded =
+        OfflineQrStream.TextCodec.encode(payload, OfflineQrStream.FrameEncoding.BASE64);
+    final String retiredPrefix =
         "iroha:qr-old:" + java.util.Base64.getEncoder().encodeToString(payload);
+    assertArrayEquals(
+        payload,
+        OfflineQrStream.TextCodec.decode(encoded, OfflineQrStream.FrameEncoding.BASE64),
+        "text codec exact payload mismatch");
+    boolean paddedPrefixThrew = false;
+    try {
+      OfflineQrStream.TextCodec.decode(" " + encoded, OfflineQrStream.FrameEncoding.BASE64);
+    } catch (IllegalArgumentException error) {
+      paddedPrefixThrew = true;
+    }
+    assertTrue(paddedPrefixThrew, "whitespace-wrapped QR prefix should be rejected");
+    boolean paddedSuffixThrew = false;
+    try {
+      OfflineQrStream.TextCodec.decode(encoded + "\n", OfflineQrStream.FrameEncoding.BASE64);
+    } catch (IllegalArgumentException error) {
+      paddedSuffixThrew = true;
+    }
+    assertTrue(paddedSuffixThrew, "whitespace-wrapped QR payload should be rejected");
     boolean threw = false;
     try {
-      OfflineQrStream.TextCodec.decode(legacy, OfflineQrStream.FrameEncoding.BASE64);
+      OfflineQrStream.TextCodec.decode(retiredPrefix, OfflineQrStream.FrameEncoding.BASE64);
     } catch (IllegalArgumentException error) {
       threw = true;
     }

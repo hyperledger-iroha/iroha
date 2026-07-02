@@ -242,6 +242,9 @@ impl AliasProofBundleV1 {
             if signature.signature.is_empty() {
                 return Err(AliasProofBundleValidationError::EmptyCouncilSignature { index });
             }
+            if crate::inert_bytes(&signature.signature) {
+                return Err(AliasProofBundleValidationError::InertCouncilSignature { index });
+            }
         }
 
         Ok(())
@@ -264,6 +267,8 @@ pub enum AliasProofBundleValidationError {
     EmptyCouncilSigner { index: usize },
     #[error("council signature at index {index} must not be empty")]
     EmptyCouncilSignature { index: usize },
+    #[error("council signature at index {index} must not be all zero")]
+    InertCouncilSignature { index: usize },
 }
 
 /// Domain separator applied when hashing alias leaves.
@@ -413,6 +418,25 @@ pub fn verify_alias_proof_bundle(
             });
         }
         let signer_hex = hex::encode(signature.signer);
+        crate::checked_ed25519_verifying_key_from_bytes(&signature.signer).map_err(|reason| {
+            AliasProofVerificationError::InvalidSignerPublicKey {
+                index,
+                reason: format!("signer {signer_hex}: {reason}"),
+            }
+        })?;
+        let signature_bytes: [u8; ed25519_dalek::SIGNATURE_LENGTH] =
+            signature.signature.as_slice().try_into().map_err(|err| {
+                AliasProofVerificationError::SignatureVerificationFailed {
+                    index,
+                    reason: format!("signer {signer_hex}: invalid signature material: {err}"),
+                }
+            })?;
+        crate::checked_ed25519_signature_from_bytes(&signature_bytes).map_err(|reason| {
+            AliasProofVerificationError::SignatureVerificationFailed {
+                index,
+                reason: format!("signer {signer_hex}: {reason}"),
+            }
+        })?;
         let public_key =
             PublicKey::from_bytes(Algorithm::Ed25519, &signature.signer).map_err(|err| {
                 AliasProofVerificationError::InvalidSignerPublicKey {
@@ -420,7 +444,12 @@ pub fn verify_alias_proof_bundle(
                     reason: format!("signer {signer_hex}: {err}"),
                 }
             })?;
-        let sig = Signature::from_bytes(&signature.signature);
+        let sig = Signature::try_from_bytes(&signature.signature).map_err(|err| {
+            AliasProofVerificationError::SignatureVerificationFailed {
+                index,
+                reason: format!("signer {signer_hex}: invalid signature material: {err}"),
+            }
+        })?;
         sig.verify(&public_key, message.as_ref()).map_err(|err| {
             AliasProofVerificationError::SignatureVerificationFailed {
                 index,
@@ -665,6 +694,16 @@ mod tests {
 
     use super::*;
 
+    const SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn sample_alias_binding() -> AliasBindingV1 {
         AliasBindingV1 {
             alias: "docs/main".into(),
@@ -871,6 +910,40 @@ mod tests {
             err,
             AliasProofVerificationError::SignatureVerificationFailed { .. }
         ));
+    }
+
+    #[test]
+    fn alias_proof_bundle_verification_rejects_all_zero_signature_material() {
+        let (mut bundle, _) = signed_alias_proof_bundle();
+        bundle.council_signatures[0].signature.fill(0);
+        let err = verify_alias_proof_bundle(&bundle).expect_err("verification must fail");
+        assert!(matches!(
+            err,
+            AliasProofVerificationError::Validation(
+                AliasProofBundleValidationError::InertCouncilSignature { .. }
+            )
+        ));
+    }
+
+    #[test]
+    fn alias_proof_bundle_verification_rejects_malformed_signature_r() {
+        for (label, replacement_r, expected_reason) in [
+            ("small-order", SMALL_ORDER_R, "small-order"),
+            ("noncanonical", NONCANONICAL_R, "not a canonical"),
+        ] {
+            let (mut bundle, _) = signed_alias_proof_bundle();
+            bundle.council_signatures[0].signature[..32].copy_from_slice(&replacement_r);
+
+            let err = verify_alias_proof_bundle(&bundle).expect_err("verification must fail");
+            assert!(
+                matches!(
+                    &err,
+                    AliasProofVerificationError::SignatureVerificationFailed { reason, .. }
+                        if reason.contains(expected_reason)
+                ),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

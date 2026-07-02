@@ -4,11 +4,9 @@ direction: ltr
 source: docs/source/sorafs_reference_sdk_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ded823ae930ce511e40d74f4978ee6b5fc53748a6773a429463a17d2410e17f4
-source_last_modified: "2026-06-25T17:49:59+00:00"
+source_hash: 7e9c34cbfceac1e89516ae6a15641eda4fe53d815a77cf11049a9c09221069d1
+source_last_modified: "2026-07-01T19:09:43.575488+00:00"
 translation_last_reviewed: 2026-06-25
-title: SoraFS Reference SDK & Validator
-summary: SF-11 implementation status for reference validators, CLI and FFI surfaces, release packaging, and remaining live-release evidence.
 ---
 
 # SoraFS Reference SDK & Validator
@@ -33,8 +31,14 @@ fail-closed SF-11 release evidence gate for those artifacts, including
 cross-artifact `release_manifest_digest_hex` binding from release archives,
 downstream packages, cookbook smoke, FFI/header contract, and governance
 approval evidence back to a valid signed manifest in the same bundle, and
+payload-free summary anchors for the release archive index, signed release-key
+fingerprint, downstream package index, cookbook smoke output, header digest,
+and FFI contract digest so final production readiness can tether those release
+artifacts to their owning evidence rows. The
 `scripts/run_sorafs_reference_sdk_release_evidence.py` provides the reviewed
-collection planner/runner. The JavaScript SDK already exposes the Rust-backed
+collection planner/runner with dry-run `evidence_contract` output for each
+selected release evidence schema and required payload field. The JavaScript SDK
+already exposes the Rust-backed
 orderbook and PDP reference validators from both the package root and
 `@iroha/iroha-js/sorafs`; the Python SDK exposes the same orderbook and PDP
 outcome contract from `iroha_python.sorafs` and the package root.
@@ -373,8 +377,59 @@ convert decoded or raw Norito payloads into the shared validation functions.
   smoke runner that emits `ValidationOutcomeV1` JSON for committed fixtures.
 - Implemented: portal reference SDK error catalogue at
   `docs/portal/docs/sorafs/reference-sdk/errors.md`.
-- Remaining: publish operator, metrics, and binding-generation guides once the
-  release artifacts and downstream packages are cut.
+- Implemented: the operator, metrics, and binding-generation guides below cover
+  the local release helper, `ValidationOutcomeV1` telemetry contract, checked C
+  header, and downstream package evidence handoff. Final release-specific URLs,
+  signatures, and package versions remain SF-11 release evidence.
+
+### Operator Guide
+
+1. Build or package one target at a time with
+   `scripts/package_sorafs_validate_release.sh`, keeping generated output under
+   an untracked `dist/sorafs-validate-release/<target>/` directory. Commit only
+   `dist/.gitkeep`.
+2. For each supported target, archive the helper-generated binary, release
+   archive, `.sha256` files, manifest JSON, optional manifest signature, FFI
+   header copy, and smoke-output hash. Do not persist runtime signing seeds,
+   release private keys, tokens, or raw payload fixtures in release evidence.
+3. Run `docs/examples/sorafs_reference_sdk/run_reference_sdk_cookbook.sh` against
+   the staged binaries by setting `SORAFS_VALIDATE_BIN` and
+   `SORANET_TRUSTLESS_VERIFIER_BIN`. Attach only the outcome digests and
+   payload-free smoke summary to SF-11 evidence.
+4. Before promotion, run
+   `scripts/run_sorafs_reference_sdk_release_evidence.py
+   @scripts/examples/sorafs_reference_sdk_release_collection.args.example
+   --dry-run` to capture the exact verifier command, thresholds, and
+   `evidence_contract` schema/field requirements, then execute the runner
+   against reviewed evidence paths.
+
+### Metrics Guide
+
+`sorafs-validate` commands accept `--telemetry-out <path>` and write the raw
+`ValidationOutcomeV1` JSON contract. Operators should translate those files into
+counter-style telemetry keyed by `status`, `code`, `category`, validator command
+family, and every stable entry in `telemetry_tags`. Keep `docs_url`, `action`,
+and bounded `context` fields as log attributes for triage, but do not export raw
+payload bytes, signed payloads, archive contents, signing keys, or response
+bodies as metric labels. The release smoke bundle should retain the telemetry
+file hashes and aggregate pass/fail counts; the SF-11 gate rejects raw smoke
+output in evidence.
+
+### Binding-Generation Guide
+
+`crates/sorafs_manifest/include/sorafs_reference.h` is the source contract for
+native SDK bindings. Regenerate or review downstream bindings whenever that
+header changes, and run `ci/check_sorafs_reference_ffi_header.sh` before
+publishing. Each binding must pass byte slices and labels without changing
+Norito bytes, must decode the returned `SorafsReferenceFfiBuffer` as
+`ValidationOutcomeV1` JSON, and must release it with
+`sorafs_reference_free_buffer`. Bindings must mirror the checked selector
+constants for bundle, orderbook, repair, PoP, hedging, and proof-stream
+profiles; unknown selector values should surface the returned
+`ValidationOutcomeV1` error instead of mapping to local exceptions. Release
+evidence for downstream packages must include package name/version, target
+platform, exported selector inventory, package checksum, smoke result digest,
+and the `release_manifest_digest_hex` it was built against.
 
 ## Packaging & Release
 - Rust APIs currently ship through `sorafs_manifest::reference` and
@@ -409,21 +464,56 @@ release archives, signed manifests, downstream bindings, cookbook smoke,
 FFI/header contract, and governance approval. It fails closed on stale evidence,
 raw archive, binary, manifest, package, smoke-output, transaction, token,
 secret, or private-key material, missing x86_64/aarch64 macOS and Linux release
-targets, missing binary/archive checksums, missing deterministic-archive proof,
-tracked generated `dist/*` artifacts beyond `dist/.gitkeep`, unsigned or
-unverified release manifests, missing governed release-key fingerprints, missing
+targets, duplicate release-target entries, `target_count` values that do not
+match the unique target list, missing binary/archive checksums, missing
+deterministic-archive proof, tracked generated `dist/*` artifacts beyond
+`dist/.gitkeep`, unsigned or unverified release manifests, missing governed
+release-key fingerprints, missing
 JavaScript/Python/Kotlin/JVM/Java Android/Swift package publication evidence,
+duplicate downstream-package entries, `package_count` values that do not match
+the unique package list,
 SDK export or `ValidationOutcomeV1` drift, missing native bridge/header binding,
 failed published-archive cookbook smoke, missing fixture bundle or manifest/CAR
 replay, smoke duration above threshold, FFI header drift, and governance packets
 not bound to the governed release key roster, targets, downstream packages,
 smoke evidence, and a `release_manifest_digest_hex` matching a valid signed
-manifest artifact in the same bundle. Release-manifest binding failures are
-recorded on the offending artifact before required-kind validity is computed,
-so the JSON summary matches the fail-closed release decision.
+manifest artifact in the same bundle. Signed manifests also publish a
+`policy_digest_hex`, governance approval must reference that same digest, and
+the gate summary emits `valid_policy_digests` only from valid signed-manifest
+artifacts. Valid downstream release-archive, downstream-binding,
+cookbook-smoke, FFI/header-contract, and governance-approval references now
+publish their reviewed `release_manifest_digest_hex` values as
+`valid_release_manifest_reference_digests`; the aggregate
+production-readiness gate accepts those reference digests only as payload-free
+metadata tethered to recognized artifact fingerprints. Release-manifest and
+policy binding failures are recorded on the
+offending artifact before required-kind validity is computed, so the JSON
+summary matches the fail-closed release decision. The runner's dry-run plan
+includes an `evidence_contract` map that operators can review before collecting
+release evidence, and the runner validates the schema-closed collection-plan
+envelope, required kinds, thresholds, external evidence map, evidence contract,
+and command steps before dry-run output or verifier execution.
+The shared runner plan guard also rejects non-canonical nested required-kind,
+threshold, external-evidence, evidence-contract, and command-step shapes before
+dry-run output or verifier execution. Narrowed
+`--require-kind` release runs also reject evidence supplied for excluded kinds
+before the plan is rendered or the verifier starts.
+`scripts/build_sorafs_reference_sdk_release_canary.py` is the checked-in
+payload-free SF-11 release evidence builder for reviewed release-archive,
+signed-manifest, downstream-binding, cookbook-smoke, FFI/header-contract, and
+governance-approval artifacts. It requires complete target and downstream
+package coverage where applicable, duplicate-free target/package inventories
+whose count fields match their unique entries, release-manifest digest bindings,
+threshold-reviewed smoke duration, signed-manifest policy digests,
+governed-release approval markers, and checker-backed validation before
+atomically writing JSON without following output symlinks. The release-archive
+and signed-manifest response-file examples are
+`scripts/examples/sorafs_reference_sdk_release_archive_canary.args.example` and
+`scripts/examples/sorafs_reference_sdk_signed_manifest_canary.args.example`.
 
 The release evidence scripts have focused Python coverage in:
 
+- `scripts/tests/build_sorafs_reference_sdk_release_canary_test.py`
 - `scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py`
 - `scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py`
 
@@ -444,10 +534,15 @@ Implemented locally:
 - Release-packaging helper that stages binary/archive/manifest digests and
   optional detached manifest signatures under untracked
   `dist/sorafs-validate-release/`.
-- Fail-closed SF-11 release evidence gate, collection planner, operator argfile
-  templates, and focused tests for release archives, signed manifests,
-  downstream bindings, cookbook smoke, FFI/header contract, and governance
-  approval, including cross-artifact signed-manifest digest binding.
+- Published operator, metrics, and binding-generation guidance for packaging,
+  telemetry extraction, C FFI header synchronization, downstream selector
+  parity, and SF-11 release evidence handoff.
+- Fail-closed SF-11 release evidence gate, collection planner with dry-run
+  `evidence_contract` schema/field output, operator argfile templates, and
+  focused tests for release archives, signed manifests, downstream bindings,
+  cookbook smoke, FFI/header contract, and governance approval, including
+  cross-artifact signed-manifest digest and policy-digest binding plus
+  aggregate-ready release-manifest reference digest metadata.
 
 Remaining production gates:
 - Run the packaging helper for the supported release targets and publish signed

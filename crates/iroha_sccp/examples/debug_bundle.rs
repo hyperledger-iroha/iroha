@@ -3,11 +3,23 @@
 use std::io::{self, Read};
 
 use iroha_sccp::{
-    NexusSccpMessageProofV1, SCCP_DOMAIN_SORA, decode_nexus_bridge_finality_proof,
-    decode_sccp_source_chain_proof_envelope, sccp_message_source_domain,
-    sccp_message_target_domain, sccp_message_transparent_public_inputs,
+    NexusSccpMessageProofV1, SCCP_DOMAIN_SORA, SccpSourceAdapterProofV1,
+    build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready,
+    decode_nexus_bridge_finality_proof, decode_sccp_source_chain_proof_envelope,
+    decode_sccp_source_consensus_proof, sccp_evm_family_mainnet_source_verifier_material_v1,
+    sccp_message_source_domain, sccp_message_target_domain, sccp_message_transparent_public_inputs,
+    sccp_message_transparent_public_inputs_with_source_verifier_material,
+    sccp_source_adapter_ready_with_material_for_domain,
+    sccp_source_verifier_material_from_evidence,
+    sccp_source_verifier_material_from_message_bundle_evidence, sccp_source_verifier_material_hash,
+    sccp_source_verifier_material_is_production_ready,
+    sccp_source_verifier_material_uses_builtin_placeholder_components,
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material,
+    verify_message_bundle_structure, verify_message_bundle_structure_with_source_verifier_material,
     verify_nexus_bridge_finality_proof_structure, verify_sccp_payload_structure,
+    verify_sccp_source_chain_proof_envelope_production_with_material,
     verify_sccp_source_chain_proof_envelope_structure,
+    verify_sccp_source_chain_proof_envelope_structure_with_material,
 };
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -112,6 +124,219 @@ fn main() {
             "source_proof.structure={}",
             verify_sccp_source_chain_proof_envelope_structure(&source_proof)
         );
+        println!(
+            "bundle.structure={}",
+            verify_message_bundle_structure(&bundle)
+        );
+        let material_from_bundle =
+            sccp_source_verifier_material_from_message_bundle_evidence(&bundle);
+        println!("material.from_bundle={}", material_from_bundle.is_some());
+        let consensus = decode_sccp_source_consensus_proof(&source_proof.consensus_proof);
+        println!("consensus.decode={}", consensus.is_some());
+        if let Some(consensus) = consensus {
+            if let SccpSourceAdapterProofV1::BscValidatorSetReceipt(adapter) =
+                &consensus.adapter_proof
+            {
+                println!(
+                    "bsc.validator_set_hash={}",
+                    hex_encode(&adapter.validator_set_hash)
+                );
+                println!(
+                    "bsc.commit_seal_hash={}",
+                    hex_encode(&adapter.commit_seal_hash)
+                );
+                println!(
+                    "bsc.receipt_trie_proof_hash={}",
+                    hex_encode(&adapter.receipt_trie_proof_hash)
+                );
+                println!("bsc.receipts_root={}", hex_encode(&adapter.receipts_root));
+            }
+            let material =
+                sccp_source_verifier_material_from_evidence(&consensus.verifier_evidence);
+            println!("material.from_evidence={}", material.is_some());
+            if let Some(material) = material {
+                println!("material.source_domain={}", material.source_domain);
+                println!("material.placeholder={}", material.placeholder_material);
+                println!(
+                    "material.hash={}",
+                    hex_encode(&sccp_source_verifier_material_hash(&material))
+                );
+                println!(
+                    "material.uses_builtin={}",
+                    sccp_source_verifier_material_uses_builtin_placeholder_components(&material)
+                );
+                println!(
+                    "material.production_ready={}",
+                    sccp_source_verifier_material_is_production_ready(&material)
+                );
+                println!(
+                    "material.ready_with_material={}",
+                    sccp_source_adapter_ready_with_material_for_domain(
+                        material.source_domain,
+                        &material
+                    )
+                );
+                println!(
+                    "material.source_trust_anchor_id={}",
+                    material.source_trust_anchor_id
+                );
+                println!(
+                    "material.source_trust_anchor_hash={}",
+                    hex_encode(&material.source_trust_anchor_hash)
+                );
+                println!(
+                    "material.consensus_verifier_id={}",
+                    material.consensus_verifier_id
+                );
+                println!(
+                    "material.consensus_verifier_hash={}",
+                    hex_encode(&material.consensus_verifier_hash)
+                );
+                println!(
+                    "material.message_inclusion_verifier_id={}",
+                    material.message_inclusion_verifier_id
+                );
+                println!(
+                    "material.message_inclusion_verifier_hash={}",
+                    hex_encode(&material.message_inclusion_verifier_hash)
+                );
+                println!(
+                    "material.finality_policy_id={}",
+                    material.finality_policy_id
+                );
+                println!(
+                    "material.finality_policy_hash={}",
+                    hex_encode(&material.finality_policy_hash)
+                );
+                println!(
+                    "material.source_bridge_emitter_id={}",
+                    material.source_bridge_emitter_id
+                );
+                println!(
+                    "material.source_bridge_emitter_address_len={}",
+                    material.source_bridge_emitter_address.len()
+                );
+                println!(
+                    "material.source_bridge_emitter_code_hash={}",
+                    hex_encode(&material.source_bridge_emitter_code_hash)
+                );
+                println!(
+                    "material.source_bridge_network_id={}",
+                    hex_encode(&material.source_bridge_network_id)
+                );
+                println!(
+                    "material.source_bridge_owner_address={}",
+                    hex_encode(&material.source_bridge_owner_address)
+                );
+                println!(
+                    "material.source_bridge_config_hash={}",
+                    hex_encode(&material.source_bridge_config_hash)
+                );
+                println!(
+                    "evidence.source_bridge_network_id={}",
+                    hex_encode(&consensus.verifier_evidence.source_bridge_network_id)
+                );
+                println!(
+                    "evidence.source_bridge_owner_address={}",
+                    hex_encode(&consensus.verifier_evidence.source_bridge_owner_address)
+                );
+                println!(
+                    "evidence.source_bridge_config_hash={}",
+                    hex_encode(&consensus.verifier_evidence.source_bridge_config_hash)
+                );
+                println!(
+                    "evidence.source_adapter_deployment_hash={}",
+                    hex_encode(&consensus.verifier_evidence.source_adapter_deployment_hash)
+                );
+                println!(
+                    "evidence.source_adapter_deployment_receipt_hash={}",
+                    hex_encode(
+                        &consensus
+                            .verifier_evidence
+                            .source_adapter_deployment_receipt_hash
+                    )
+                );
+                if let Some(mut expected) =
+                    sccp_evm_family_mainnet_source_verifier_material_v1(material.source_domain)
+                {
+                    expected.source_bridge_emitter_address =
+                        material.source_bridge_emitter_address.clone();
+                    expected.source_bridge_emitter_code_hash =
+                        material.source_bridge_emitter_code_hash;
+                    println!(
+                        "expected.source_trust_anchor_hash={}",
+                        hex_encode(&expected.source_trust_anchor_hash)
+                    );
+                    println!(
+                        "expected.consensus_verifier_hash={}",
+                        hex_encode(&expected.consensus_verifier_hash)
+                    );
+                    println!(
+                        "expected.message_inclusion_verifier_hash={}",
+                        hex_encode(&expected.message_inclusion_verifier_hash)
+                    );
+                    println!(
+                        "expected.finality_policy_hash={}",
+                        hex_encode(&expected.finality_policy_hash)
+                    );
+                    println!(
+                        "expected.hash={}",
+                        hex_encode(&sccp_source_verifier_material_hash(&expected))
+                    );
+                    println!(
+                        "expected.production_ready={}",
+                        sccp_source_verifier_material_is_production_ready(&expected)
+                    );
+                }
+                println!(
+                    "source_proof.structure.material={}",
+                    verify_sccp_source_chain_proof_envelope_structure_with_material(
+                        &source_proof,
+                        &material
+                    )
+                );
+                println!(
+                    "source_proof.production.material={}",
+                    verify_sccp_source_chain_proof_envelope_production_with_material(
+                        &source_proof,
+                        &material
+                    )
+                );
+                println!(
+                    "bundle.structure.material={}",
+                    verify_message_bundle_structure_with_source_verifier_material(
+                        &bundle, &material
+                    )
+                );
+                println!(
+                    "public_inputs.material_some={}",
+                    sccp_message_transparent_public_inputs_with_source_verifier_material(
+                        &bundle, &material
+                    )
+                    .is_some()
+                );
+                println!(
+                    "production.with_material={}",
+                    verified_sccp_message_source_chain_proof_envelope_for_production_with_material(
+                        &bundle, &material
+                    )
+                    .is_some()
+                );
+                let artifact =
+                    build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready(
+                        &bundle,
+                        &material,
+                        true,
+                    );
+                println!("artifact.material={}", artifact.is_some());
+                if let Some(artifact) = artifact {
+                    println!(
+                        "artifact.submission_kind={}",
+                        artifact.submission_package.submission_kind
+                    );
+                }
+            }
+        }
         return;
     }
     let Some(finality) = decode_nexus_bridge_finality_proof(&bundle.finality_proof) else {

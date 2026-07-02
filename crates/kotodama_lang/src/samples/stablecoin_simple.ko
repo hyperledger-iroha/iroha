@@ -20,7 +20,7 @@ seiyaku StablecoinSimple {
                          min_ratio_bps: int,
                          mint_amount: int) permission(Admin) {
     // move collateral in
-    transfer_asset(user, vault_account, collateral_asset, collateral_amount);
+    transfer_asset(user, vault_account, collateral_asset, collateral_amount, dataspace_id("0"));
     // health check
     let value = collateral_amount * price;
     let post_ratio = (value * 10_000) / mint_amount;

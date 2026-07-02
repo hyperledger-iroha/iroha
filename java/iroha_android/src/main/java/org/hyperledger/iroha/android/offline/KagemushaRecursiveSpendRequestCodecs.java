@@ -453,7 +453,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         decoder.remaining() == 0
             ? false
             : readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBool);
-    final boolean lineageWitnessRequired =
+    final boolean lineageWitnessRequiredForRedeem =
         decoder.remaining() == 0
             ? false
             : readField(decoder, KagemushaRecursiveSpendRequestCodecs::readBool);
@@ -466,7 +466,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         chainAdmissible,
         chainAdmissionReason,
         witnesslessRedeemSupported,
-        lineageWitnessRequired);
+        lineageWitnessRequiredForRedeem);
   }
 
   public static SpendBundleSummary decodeBundle(final byte[] archive) {
@@ -1046,7 +1046,6 @@ public final class KagemushaRecursiveSpendRequestCodecs {
     public final boolean chainAdmissible;
     public final String chainAdmissionReason;
     public final boolean witnesslessRedeemSupported;
-    public final boolean lineageWitnessRequired;
     public final boolean lineageWitnessRequiredForRedeem;
 
     public VerifySpendResult(
@@ -1057,7 +1056,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
         final boolean chainAdmissible,
         final String chainAdmissionReason,
         final boolean witnesslessRedeemSupported,
-        final boolean lineageWitnessRequired) {
+        final boolean lineageWitnessRequiredForRedeem) {
       this.valid = valid;
       this.hopCount = hopCount;
       this.encodedBytes = encodedBytes;
@@ -1065,8 +1064,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
       this.chainAdmissible = chainAdmissible;
       this.chainAdmissionReason = Objects.requireNonNull(chainAdmissionReason, "chainAdmissionReason");
       this.witnesslessRedeemSupported = witnesslessRedeemSupported;
-      this.lineageWitnessRequired = lineageWitnessRequired;
-      this.lineageWitnessRequiredForRedeem = lineageWitnessRequired;
+      this.lineageWitnessRequiredForRedeem = lineageWitnessRequiredForRedeem;
     }
   }
 
@@ -1303,11 +1301,7 @@ public final class KagemushaRecursiveSpendRequestCodecs {
               child -> {
                 final String normalized =
                     KagemushaRecursiveSpendProver.normalizeAppendOutputCircuitId(value.outputProofCircuitId);
-                writeString(
-                    child,
-                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1.equals(normalized)
-                        ? ""
-                        : normalized);
+                writeString(child, normalized);
               });
           writeField(
               encoder,
@@ -2347,11 +2341,11 @@ public final class KagemushaRecursiveSpendRequestCodecs {
 
   private static void requireAccumulatorAsset(final String asset) {
     require(
-        AssetDefinitionIdEncoder.isCanonicalAddress(asset) || isHexAssetDefinitionFallback(asset),
+        AssetDefinitionIdEncoder.isCanonicalAddress(asset) || isRawHexAssetDefinitionLiteral(asset),
         "bundle.accumulator.asset");
   }
 
-  private static boolean isHexAssetDefinitionFallback(final String asset) {
+  private static boolean isRawHexAssetDefinitionLiteral(final String asset) {
     if (asset.length() != 36 || !asset.startsWith("hex:")) {
       return false;
     }

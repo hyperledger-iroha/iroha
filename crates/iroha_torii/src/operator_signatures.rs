@@ -38,7 +38,7 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::actual::ToriiOperatorSignatures;
-use iroha_crypto::{KeyPair, PublicKey, Signature};
+use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore},
     rngs::OsRng,
@@ -50,6 +50,65 @@ const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
+
+fn validate_operator_signature_for_public_key(
+    signature: &Signature,
+    public_key: &PublicKey,
+) -> Result<(), OperatorSignatureError> {
+    if !matches!(public_key.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        return Ok(());
+    }
+    validate_operator_ed25519_signature_payload(signature.payload())
+}
+
+fn validate_operator_ed25519_signature_payload(
+    signature: &[u8],
+) -> Result<(), OperatorSignatureError> {
+    if signature.len() != ed25519_dalek::SIGNATURE_LENGTH {
+        return Err(OperatorSignatureError::invalid_header(
+            HEADER_OPERATOR_SIGNATURE,
+        ));
+    }
+    let r_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = signature
+        .get(..ed25519_dalek::PUBLIC_KEY_LENGTH)
+        .ok_or_else(|| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE))?
+        .try_into()
+        .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE))?;
+    if !operator_ed25519_compressed_y_is_canonical(&r_bytes) {
+        return Err(OperatorSignatureError::invalid_header(
+            HEADER_OPERATOR_SIGNATURE,
+        ));
+    }
+    let r_point = ed25519_dalek::VerifyingKey::from_bytes(&r_bytes)
+        .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE))?;
+    if r_point.is_weak() {
+        return Err(OperatorSignatureError::invalid_header(
+            HEADER_OPERATOR_SIGNATURE,
+        ));
+    }
+    Ok(())
+}
+
+fn operator_ed25519_compressed_y_is_canonical(
+    bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
+) -> bool {
+    const ED25519_FIELD_MODULUS_LE: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    let mut y = *bytes;
+    y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
+    for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
+        match y[idx].cmp(&ED25519_FIELD_MODULUS_LE[idx]) {
+            std::cmp::Ordering::Less => return true,
+            std::cmp::Ordering::Greater => return false,
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+    false
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct OperatorSignatureError {
@@ -362,7 +421,9 @@ impl OperatorSignatures {
         let signature_bytes = BASE64_STANDARD
             .decode(signature_str)
             .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE))?;
-        let signature = Signature::from_bytes(&signature_bytes);
+        let signature = Signature::try_from_bytes(&signature_bytes)
+            .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE))?;
+        validate_operator_signature_for_public_key(&signature, &public_key)?;
 
         self.ensure_freshness(timestamp_ms, nonce, &public_key)?;
 
@@ -545,6 +606,17 @@ mod tests {
             .expect("generate checked operator signature fixture keypair")
     }
 
+    const ED25519_SMALL_ORDER_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const ED25519_NONCANONICAL_IDENTITY: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     #[test]
     fn operator_signatures_rejects_replay() {
         let key_pair = checked_ed25519_keypair();
@@ -634,6 +706,96 @@ mod tests {
 
         auth.authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .expect("valid signature");
+    }
+
+    #[test]
+    fn operator_signatures_reject_all_zero_signature_header() {
+        let key_pair = checked_ed25519_keypair();
+        let cfg = ToriiOperatorSignatures {
+            enabled: true,
+            allow_node_key: false,
+            allowed_public_keys: vec![key_pair.public_key().clone()],
+            max_clock_skew: Duration::from_secs(60),
+            nonce_ttl: Duration::from_secs(300),
+            replay_cache_capacity: NonZeroUsize::new(64).unwrap(),
+        };
+        let auth = OperatorSignatures::new(
+            cfg,
+            checked_ed25519_keypair().public_key().clone(),
+            1024,
+            crate::routing::MaybeTelemetry::disabled(),
+        );
+        let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
+        let body = b"{\"foo\":1}";
+        let mut headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body)
+            .expect("operator signature headers");
+        headers.insert(
+            HEADER_OPERATOR_SIGNATURE,
+            BASE64_STANDARD
+                .encode([0u8; 64])
+                .parse()
+                .expect("all-zero signature header"),
+        );
+
+        let error = auth
+            .authorize_bytes(&headers, &crate::Method::POST, &uri, body)
+            .expect_err("all-zero signature header must fail");
+
+        assert_eq!(error.code, "operator_signature_invalid");
+    }
+
+    #[test]
+    fn operator_signatures_reject_malformed_ed25519_signature_r_before_backend() {
+        let key_pair = checked_ed25519_keypair();
+        let cfg = ToriiOperatorSignatures {
+            enabled: true,
+            allow_node_key: false,
+            allowed_public_keys: vec![key_pair.public_key().clone()],
+            max_clock_skew: Duration::from_secs(60),
+            nonce_ttl: Duration::from_secs(300),
+            replay_cache_capacity: NonZeroUsize::new(64).unwrap(),
+        };
+        let auth = OperatorSignatures::new(
+            cfg,
+            checked_ed25519_keypair().public_key().clone(),
+            1024,
+            crate::routing::MaybeTelemetry::disabled(),
+        );
+        let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
+        let body = b"{\"foo\":1}";
+
+        for (label, replacement_r) in [
+            ("small-order", ED25519_SMALL_ORDER_POINT),
+            ("noncanonical", ED25519_NONCANONICAL_IDENTITY),
+        ] {
+            let mut headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body)
+                .expect("operator signature headers");
+            let signature_str = headers
+                .get(HEADER_OPERATOR_SIGNATURE)
+                .expect("signature header")
+                .to_str()
+                .expect("signature header is text");
+            let mut signature_bytes = BASE64_STANDARD
+                .decode(signature_str)
+                .expect("decode generated signature");
+            signature_bytes[..ed25519_dalek::PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
+            headers.insert(
+                HEADER_OPERATOR_SIGNATURE,
+                BASE64_STANDARD
+                    .encode(signature_bytes)
+                    .parse()
+                    .expect("malformed signature header"),
+            );
+
+            let error = auth
+                .authorize_bytes(&headers, &crate::Method::POST, &uri, body)
+                .expect_err("malformed signature header must fail");
+
+            assert_eq!(
+                error.code, "operator_signature_invalid",
+                "{label} signature R must fail at header admission"
+            );
+        }
     }
 
     #[test]

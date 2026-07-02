@@ -44,7 +44,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::{actual::AppApi as AppApiConfig, defaults};
 use iroha_core::state::{State as CoreState, WorldReadOnly};
-use iroha_crypto::{Hash, PublicKey, Signature};
+use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 use iroha_data_model::{
     ValidationFail,
     account::{AccountController, AccountId},
@@ -480,7 +480,98 @@ fn decode_signature_value(
             "invalid base64 in {context}"
         )))
     })?;
-    Ok(Signature::from_bytes(&signature_bytes))
+    Signature::try_from_bytes(&signature_bytes).map_err(|_| {
+        crate::Error::Query(ValidationFail::NotPermitted(format!(
+            "invalid {context} payload"
+        )))
+    })
+}
+
+fn verify_app_auth_signature(
+    signature: &Signature,
+    signer: &PublicKey,
+    message: &[u8],
+    signature_context: &'static str,
+) -> Result<(), crate::Error> {
+    validate_app_auth_signature_for_signer(signature, signer, signature_context)?;
+    signature.verify(signer, message).map_err(|_| {
+        crate::Error::Query(ValidationFail::NotPermitted(
+            "query signature failed verification".to_owned(),
+        ))
+    })
+}
+
+fn validate_app_auth_signature_for_signer(
+    signature: &Signature,
+    signer: &PublicKey,
+    signature_context: &'static str,
+) -> Result<(), crate::Error> {
+    if !matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        return Ok(());
+    }
+    validate_app_auth_ed25519_signature_payload(signature.payload(), signature_context)
+}
+
+fn validate_app_auth_ed25519_signature_payload(
+    signature: &[u8],
+    signature_context: &'static str,
+) -> Result<(), crate::Error> {
+    if signature.len() != ed25519_dalek::SIGNATURE_LENGTH {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
+            "invalid {signature_context}: Ed25519 signatures must be {} bytes",
+            ed25519_dalek::SIGNATURE_LENGTH
+        ))));
+    }
+    let r_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = signature
+        .get(..ed25519_dalek::PUBLIC_KEY_LENGTH)
+        .ok_or_else(|| {
+            crate::Error::Query(ValidationFail::NotPermitted(format!(
+                "invalid {signature_context}: Ed25519 signature R missing"
+            )))
+        })?
+        .try_into()
+        .map_err(|_| {
+            crate::Error::Query(ValidationFail::NotPermitted(format!(
+                "invalid {signature_context}: Ed25519 signature R has invalid length"
+            )))
+        })?;
+    if !app_auth_ed25519_compressed_y_is_canonical(&r_bytes) {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
+            "invalid {signature_context}: Ed25519 signature R is not canonical"
+        ))));
+    }
+    let r_point = ed25519_dalek::VerifyingKey::from_bytes(&r_bytes).map_err(|err| {
+        crate::Error::Query(ValidationFail::NotPermitted(format!(
+            "invalid {signature_context}: Ed25519 signature R is not canonical: {err}"
+        )))
+    })?;
+    if r_point.is_weak() {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
+            "invalid {signature_context}: Ed25519 signature R is small-order"
+        ))));
+    }
+    Ok(())
+}
+
+fn app_auth_ed25519_compressed_y_is_canonical(
+    bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
+) -> bool {
+    const ED25519_FIELD_MODULUS_LE: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    let mut y = *bytes;
+    y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
+    for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
+        match y[idx].cmp(&ED25519_FIELD_MODULUS_LE[idx]) {
+            std::cmp::Ordering::Less => return true,
+            std::cmp::Ordering::Greater => return false,
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+    false
 }
 
 fn decode_witness_value(
@@ -512,6 +603,7 @@ fn verify_single_signature_authorization(
     account: &AccountId,
     signature: &Signature,
     message: &[u8],
+    signature_context: &'static str,
 ) -> Result<PublicKey, crate::Error> {
     let world = state.world_view();
     let account_entry = world.account(account).map_err(|_| {
@@ -522,13 +614,8 @@ fn verify_single_signature_authorization(
 
     match account_entry.id.controller() {
         AccountController::Single(pk) => {
-            if signature.verify(pk, message).is_ok() {
-                Ok(pk.clone())
-            } else {
-                Err(crate::Error::Query(ValidationFail::NotPermitted(
-                    "query signature failed verification".to_owned(),
-                )))
-            }
+            verify_app_auth_signature(signature, pk, message, signature_context)?;
+            Ok(pk.clone())
         }
         AccountController::Multisig(_) => Err(crate::Error::Query(ValidationFail::NotPermitted(
             "multisig accounts must use X-Iroha-Witness".to_owned(),
@@ -585,11 +672,12 @@ fn verify_multisig_witness_authorization(
                         "{witness_context} includes a signer outside the account multisig policy"
                     ))));
                 };
-                signature.verify(signer, &message).map_err(|_| {
-                    crate::Error::Query(ValidationFail::NotPermitted(
-                        "query signature failed verification".to_owned(),
-                    ))
-                })?;
+                verify_app_auth_signature(
+                    signature,
+                    signer,
+                    &message,
+                    "canonical body witness signature payload",
+                )?;
                 total_weight = total_weight.saturating_add(u32::from(*weight));
                 verified_signers.push(signer.clone());
             }
@@ -691,8 +779,13 @@ pub(crate) fn verify_canonical_body_request(
                 auth.timestamp_ms,
                 auth.nonce,
             );
-            let signer =
-                verify_single_signature_authorization(state, &account, &signature, &message)?;
+            let signer = verify_single_signature_authorization(
+                state,
+                &account,
+                &signature,
+                &message,
+                "signature_base64 payload",
+            )?;
             check_replay(&account, auth.nonce, &replay_cache)?;
             Ok(VerifiedCanonicalRequest {
                 account,
@@ -879,11 +972,12 @@ pub fn verify_canonical_request(
                                 .to_owned(),
                         )));
                     };
-                    signature.verify(signer, &message).map_err(|_| {
-                        crate::Error::Query(ValidationFail::NotPermitted(
-                            "query signature failed verification".to_owned(),
-                        ))
-                    })?;
+                    verify_app_auth_signature(
+                        signature,
+                        signer,
+                        &message,
+                        "X-Iroha-Witness signature payload",
+                    )?;
                     total_weight = total_weight.saturating_add(u32::from(*weight));
                     verified_signers.push(signer.clone());
                 }
@@ -951,7 +1045,11 @@ pub fn verify_canonical_request(
             "invalid base64 in X-Iroha-Signature".to_owned(),
         ))
     })?;
-    let signature = Signature::from_bytes(&signature_bytes);
+    let signature = Signature::try_from_bytes(&signature_bytes).map_err(|_| {
+        crate::Error::Query(ValidationFail::NotPermitted(
+            "invalid X-Iroha-Signature payload".to_owned(),
+        ))
+    })?;
     let message = canonical_request_signature_message(method, uri, body, timestamp_ms, &nonce);
 
     let world = state.world_view();
@@ -963,13 +1061,8 @@ pub fn verify_canonical_request(
 
     let signer = match account_entry.id.controller() {
         AccountController::Single(pk) => {
-            if signature.verify(pk, &message).is_ok() {
-                pk.clone()
-            } else {
-                return Err(crate::Error::Query(ValidationFail::NotPermitted(
-                    "query signature failed verification".to_owned(),
-                )));
-            }
+            verify_app_auth_signature(&signature, pk, &message, "X-Iroha-Signature payload")?;
+            pk.clone()
         }
         AccountController::Multisig(_) => {
             return Err(crate::Error::Query(ValidationFail::NotPermitted(
@@ -1016,6 +1109,15 @@ mod tests {
     use super::*;
 
     const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
+    const ED25519_SMALL_ORDER_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const ED25519_NONCANONICAL_IDENTITY: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
 
     fn minimal_state_with_account(account: &AccountId) -> Arc<State> {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -1238,6 +1340,166 @@ mod tests {
                 assert!(msg.contains("signature"))
             }
             other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_rejects_all_zero_signature_payload_before_backend() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let account = ALICE_ID.clone();
+        let state = minimal_state_with_account(&account);
+        let method = Method::GET;
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
+            .parse()
+            .expect("uri");
+        let timestamp_ms = now_unix_ms();
+        let nonce = "all-zero-signature";
+        let account_literal = account.canonical_i105().expect("i105 account");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_ACCOUNT,
+            axum::http::HeaderValue::from_str(&account_literal).unwrap(),
+        );
+        headers.insert(
+            HEADER_SIGNATURE,
+            axum::http::HeaderValue::from_str(&BASE64_STANDARD.encode([0u8; 64])).unwrap(),
+        );
+        headers.insert(
+            HEADER_TIMESTAMP_MS,
+            axum::http::HeaderValue::from_str(&timestamp_ms.to_string()).unwrap(),
+        );
+        headers.insert(HEADER_NONCE, axum::http::HeaderValue::from_static(nonce));
+
+        let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
+            .expect_err("inert signature payload must fail");
+        match err {
+            crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
+                assert!(
+                    msg.contains("X-Iroha-Signature payload"),
+                    "unexpected all-zero signature rejection: {msg}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_rejects_malformed_ed25519_signature_payload_before_backend() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let account = ALICE_ID.clone();
+        let state = minimal_state_with_account(&account);
+        let method = Method::GET;
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=1")
+            .parse()
+            .expect("uri");
+        let timestamp_ms = now_unix_ms();
+        let message =
+            canonical_request_signature_message(&method, &uri, &[], timestamp_ms, "invalid-r");
+        let valid_signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
+        let account_literal = account.canonical_i105().expect("i105 account");
+
+        for (label, replacement_r, expected) in [
+            (
+                "small-order",
+                ED25519_SMALL_ORDER_POINT,
+                "Ed25519 signature R is small-order",
+            ),
+            (
+                "noncanonical",
+                ED25519_NONCANONICAL_IDENTITY,
+                "Ed25519 signature R is not canonical",
+            ),
+        ] {
+            let nonce = format!("invalid-r-{label}");
+            let mut payload = valid_signature.payload().to_vec();
+            payload[..ed25519_dalek::PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                HEADER_ACCOUNT,
+                axum::http::HeaderValue::from_str(&account_literal).unwrap(),
+            );
+            headers.insert(
+                HEADER_SIGNATURE,
+                axum::http::HeaderValue::from_str(&BASE64_STANDARD.encode(&payload)).unwrap(),
+            );
+            headers.insert(
+                HEADER_TIMESTAMP_MS,
+                axum::http::HeaderValue::from_str(&timestamp_ms.to_string()).unwrap(),
+            );
+            headers.insert(
+                HEADER_NONCE,
+                axum::http::HeaderValue::from_str(&nonce).unwrap(),
+            );
+
+            let err = verify_canonical_request(&state, &headers, &method, &uri, &[], None)
+                .expect_err("malformed Ed25519 signature R must fail before backend verify");
+            match err {
+                crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
+                    assert!(
+                        msg.contains("X-Iroha-Signature payload") && msg.contains(expected),
+                        "{label} signature failed with unexpected error: {msg}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn body_auth_rejects_malformed_ed25519_signature_payload_before_backend() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let account = ALICE_ID.clone();
+        let state = minimal_state_with_account(&account);
+        let method = Method::POST;
+        let uri: Uri = "/v1/offline/issuer/refill".parse().expect("uri");
+        let unsigned_body = br#"{"request":"refill"}"#;
+        let timestamp_ms = now_unix_ms();
+        let nonce = "body-auth-invalid-r";
+        let message =
+            canonical_request_signature_message(&method, &uri, unsigned_body, timestamp_ms, nonce);
+        let valid_signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
+        let account_literal = account.canonical_i105().expect("i105 account");
+
+        for (label, replacement_r, expected) in [
+            (
+                "small-order",
+                ED25519_SMALL_ORDER_POINT,
+                "Ed25519 signature R is small-order",
+            ),
+            (
+                "noncanonical",
+                ED25519_NONCANONICAL_IDENTITY,
+                "Ed25519 signature R is not canonical",
+            ),
+        ] {
+            let mut payload = valid_signature.payload().to_vec();
+            payload[..ed25519_dalek::PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
+            let signature_b64 = BASE64_STANDARD.encode(&payload);
+            let auth = CanonicalRequestBodyAuth {
+                account_id: &account_literal,
+                timestamp_ms,
+                nonce,
+                proof: CanonicalRequestBodyProof::SignatureBase64(&signature_b64),
+            };
+
+            let err = verify_canonical_body_request(
+                &state,
+                auth,
+                &method,
+                &uri,
+                unsigned_body,
+                Some(&account),
+            )
+            .expect_err("body malformed Ed25519 signature R must fail before backend verify");
+            match err {
+                crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
+                    assert!(
+                        msg.contains("signature_base64 payload") && msg.contains(expected),
+                        "{label} body signature failed with unexpected error: {msg}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
         }
     }
 
@@ -1588,6 +1850,69 @@ mod tests {
                 signer_two.public_key().clone()
             ]
         );
+    }
+
+    #[test]
+    fn verify_rejects_malformed_multisig_witness_signature_r_before_backend() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let signer_one = checked_app_auth_key_fixture();
+        let policy = MultisigPolicy::new(
+            1,
+            vec![MultisigMember::new(signer_one.public_key().clone(), 1).expect("member")],
+        )
+        .expect("policy");
+        let account = AccountId::new_multisig(policy);
+        let state = minimal_state_with_account(&account);
+        let method = Method::POST;
+        let uri: Uri = "/v1/soracloud/deploy?view=full".parse().expect("uri");
+        let timestamp_ms = now_unix_ms();
+        let nonce = "invalid-r-multisig-witness";
+
+        for (label, replacement_r, expected) in [
+            (
+                "small-order",
+                ED25519_SMALL_ORDER_POINT,
+                "Ed25519 signature R is small-order",
+            ),
+            (
+                "noncanonical",
+                ED25519_NONCANONICAL_IDENTITY,
+                "Ed25519 signature R is not canonical",
+            ),
+        ] {
+            let mut witness = multisig_witness(
+                &account,
+                &method,
+                &uri,
+                b"{\"deploy\":true}",
+                timestamp_ms,
+                nonce,
+                &[&signer_one],
+            );
+            let mut payload = witness.signatures[0].signature.payload().to_vec();
+            payload[..ed25519_dalek::PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
+            witness.signatures[0].signature = Signature::from_bytes(&payload);
+            let headers = witness_headers(&account, &witness);
+
+            let err = verify_canonical_request(
+                &state,
+                &headers,
+                &method,
+                &uri,
+                b"{\"deploy\":true}",
+                None,
+            )
+            .expect_err("malformed witness signature R must fail before backend verify");
+            match err {
+                crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
+                    assert!(
+                        msg.contains("X-Iroha-Witness signature payload") && msg.contains(expected),
+                        "{label} witness signature failed with unexpected error: {msg}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
     }
 
     #[test]

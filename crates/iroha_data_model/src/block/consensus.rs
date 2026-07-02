@@ -2269,6 +2269,10 @@ pub struct SumeragiV1StatusWire {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "first-release consensus status wire exposes independent telemetry flags without compatibility aliases"
+)]
 pub struct SumeragiStatusWire {
     /// Canonical first-release consensus state.
     #[norito(default)]
@@ -2488,8 +2492,26 @@ pub struct SumeragiStatusWire {
     pub tx_queue_depth: u64,
     /// Configured transaction queue capacity.
     pub tx_queue_capacity: u64,
+    /// Estimated retained transaction queue bytes.
+    #[norito(default)]
+    pub tx_queue_retained_bytes: u64,
+    /// Configured retained transaction queue byte budget.
+    #[norito(default)]
+    pub tx_queue_max_retained_bytes: u64,
     /// Whether the transaction queue is saturated.
     pub tx_queue_saturated: bool,
+    /// Whether the transaction queue is saturated by transaction count.
+    #[norito(default)]
+    pub tx_queue_saturated_by_count: bool,
+    /// Whether the transaction queue is saturated by retained bytes.
+    #[norito(default)]
+    pub tx_queue_saturated_by_bytes: bool,
+    /// Whether the oldest queued transaction exceeded the queue age budget.
+    #[norito(default)]
+    pub tx_queue_saturated_by_age: bool,
+    /// Oldest queued transaction age in milliseconds.
+    #[norito(default)]
+    pub tx_queue_oldest_queued_age_ms: u64,
     /// Epoch length in blocks (`NPoS` mode; zero when not applicable).
     #[norito(default)]
     pub epoch_length_blocks: u64,

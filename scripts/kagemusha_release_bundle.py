@@ -239,6 +239,7 @@ RELEASE_BUNDLE_ALLOWED_TOP_LEVEL_KEYS = frozenset(
         "generated_at_utc",
         "ready",
         "evidence",
+        "readiness_summary",
         "abi6_reserved_lineage",
         "abi7_recursive_compact",
         "lineage_key_release_tooling",
@@ -297,6 +298,7 @@ RELEASE_BUNDLE_MAP_EVIDENCE_KEYS = frozenset(
 )
 RELEASE_BUNDLE_EVIDENCE_ENTRY_FIELDS = frozenset(("path", "sha256", "size_bytes"))
 RELEASE_BUNDLE_ALLOWED_SECTION_KEYS: dict[str, frozenset[str]] = {
+    "readiness_summary": frozenset(("generated_at_utc",)),
     "abi6_reserved_lineage": frozenset(
         (
             "manifest_path",
@@ -498,6 +500,9 @@ def _blocked_release_bundle_manifest(
         "generated_at_utc": readiness.utc_now(),
         "ready": False,
         "evidence": {},
+        "readiness_summary": {
+            "generated_at_utc": None,
+        },
         "abi6_reserved_lineage": {
             "manifest_path": None,
             "schema": None,
@@ -990,7 +995,7 @@ def _bundle_path(raw_path: str | Path, bundle_root: Path) -> Path:
 
 
 def _device_lab_root_arg_values(args: argparse.Namespace) -> list[str]:
-    """Return CLI Android root values, preserving the legacy default."""
+    """Return CLI Android root values, preserving the configured default."""
 
     raw = getattr(args, "device_lab_root", None)
     if raw is None:
@@ -3239,8 +3244,15 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 or any(
                     not isinstance(key, str)
                     or not key
-                    or not isinstance(item, str)
-                    or not item
+                    or (
+                        not (
+                            section_name == "abi6_reserved_lineage"
+                            and field == "modes"
+                            and key == "preferred_when_recursive_unavailable"
+                            and item is None
+                        )
+                        and (not isinstance(item, str) or not item)
+                    )
                     for key, item in value.items()
                 )
             ):
@@ -5449,6 +5461,7 @@ def _check_release_bundle_expected_section_value_binding(
 
     blockers: list[dict[str, Any]] = []
     fields_by_section = {
+        "readiness_summary": ("generated_at_utc",),
         "abi6_reserved_lineage": (
             "manifest_path",
             "schema",
@@ -5769,7 +5782,7 @@ def _expected_release_bundle_section_map_keys(
         if field == "modes":
             return {
                 "preferred_when_recursive_available",
-                "fallback_when_recursive_unavailable",
+                "preferred_when_recursive_unavailable",
             }
     if section_name == "lineage_proof_evidence":
         if field == "circuit_ids":
@@ -5895,7 +5908,7 @@ def _check_release_bundle_section_shapes(
             )
         expected_abi6_modes = {
             "preferred_when_recursive_available": "recursive_spend_v1",
-            "fallback_when_recursive_unavailable": "checked_prefold_v1",
+            "preferred_when_recursive_unavailable": None,
         }
         if abi6.get("modes") != expected_abi6_modes:
             blockers.append(
@@ -6021,6 +6034,7 @@ def _check_release_bundle_section_shapes(
                 )
 
     for section_name in (
+        "readiness_summary",
         "lineage_proof_evidence",
         "compact_key_evidence",
         "localnet_lifecycle_evidence",
@@ -6072,6 +6086,8 @@ def _check_release_bundle_section_shapes(
                             ),
                         )
                     )
+        if section_name == "readiness_summary":
+            continue
         sha256_map_fields = ["artifact_sha256"]
         if section_name == "lineage_proof_evidence":
             sha256_map_fields.append("test_log_sha256")
@@ -6473,8 +6489,77 @@ def _check_release_bundle_android_section_shape(
     return blockers
 
 
+def _parse_release_bundle_canonical_timestamp(
+    value: Any,
+    label: str,
+) -> dt.datetime | None:
+    if not isinstance(value, str) or not device_lab.SIGNED_AT_UTC_RE.fullmatch(value):
+        return None
+    parsed, parse_blocker = readiness.parse_utc_timestamp(value, label)
+    if parse_blocker is not None:
+        return None
+    return parsed
+
+
+def _release_bundle_latest_evidence_timestamp(
+    bundle: dict[str, Any],
+) -> tuple[dt.datetime | None, str | None]:
+    latest_timestamp: dt.datetime | None = None
+    latest_field: str | None = None
+
+    def note(value: Any, field: str) -> None:
+        nonlocal latest_timestamp, latest_field
+        parsed = _parse_release_bundle_canonical_timestamp(value, field)
+        if parsed is None:
+            return
+        if latest_timestamp is None or parsed > latest_timestamp:
+            latest_timestamp = parsed
+            latest_field = field
+
+    for section_name in (
+        "readiness_summary",
+        "lineage_proof_evidence",
+        "compact_key_evidence",
+        "localnet_lifecycle_evidence",
+    ):
+        section = bundle.get(section_name)
+        if isinstance(section, dict):
+            note(
+                section.get("generated_at_utc"),
+                f"{section_name}.generated_at_utc",
+            )
+
+    android = bundle.get("android_device_lab")
+    if isinstance(android, dict):
+        signed_evidence = android.get("signed_evidence")
+        if isinstance(signed_evidence, dict):
+            for raw_slot, entry in signed_evidence.items():
+                if not isinstance(raw_slot, str) or not isinstance(entry, dict):
+                    continue
+                note(
+                    entry.get("signed_at_utc"),
+                    f"android_device_lab.signed_evidence.{raw_slot}.signed_at_utc",
+                )
+        slots = android.get("slots")
+        if isinstance(slots, list):
+            for entry in slots:
+                if not isinstance(entry, dict):
+                    continue
+                slot = entry.get("slot")
+                kagemusha = entry.get("kagemusha")
+                if not isinstance(slot, str) or not isinstance(kagemusha, dict):
+                    continue
+                note(
+                    kagemusha.get("signed_at_utc"),
+                    f"android_device_lab.slots.{slot}.kagemusha.signed_at_utc",
+                )
+
+    return latest_timestamp, latest_field
+
+
 def _check_release_bundle_manifest_shape(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
+    bundle_generated_at_timestamp: dt.datetime | None = None
     if _contains_secret_string(bundle):
         blockers.append(
             _blocker(
@@ -6545,6 +6630,7 @@ def _check_release_bundle_manifest_shape(bundle: dict[str, Any]) -> list[dict[st
                 parse_blocker["code"] = "kagemusha_release_bundle_manifest_timestamp"
                 blockers.append(parse_blocker)
             elif generated_at_timestamp is not None:
+                bundle_generated_at_timestamp = generated_at_timestamp
                 max_generated_at = dt.datetime.now(dt.timezone.utc).replace(
                     microsecond=0,
                 ) + dt.timedelta(
@@ -6597,6 +6683,26 @@ def _check_release_bundle_manifest_shape(bundle: dict[str, Any]) -> list[dict[st
     blockers.extend(_check_release_bundle_section_shapes(bundle))
     blockers.extend(_check_release_bundle_android_section_shape(bundle))
     blockers.extend(_check_release_bundle_cross_section_shape(bundle))
+    evidence_generated_at_timestamp, evidence_generated_at_field = (
+        _release_bundle_latest_evidence_timestamp(bundle)
+    )
+    if (
+        bundle_generated_at_timestamp is not None
+        and evidence_generated_at_timestamp is not None
+        and bundle_generated_at_timestamp < evidence_generated_at_timestamp
+    ):
+        blockers.append(
+            _blocker(
+                "kagemusha_release_bundle_manifest_timestamp_bounds",
+                "Kagemusha release bundle generated_at_utc must not predate bound release evidence",
+                field="generated_at_utc",
+                evidence_field=evidence_generated_at_field,
+                min_generated_at_utc=evidence_generated_at_timestamp.isoformat().replace(
+                    "+00:00",
+                    "Z",
+                ),
+            )
+        )
     return blockers
 
 
@@ -6890,6 +6996,9 @@ def build_release_bundle(
         "generated_at_utc": readiness.utc_now(),
         "ready": not blockers,
         "evidence": evidence_entries,
+        "readiness_summary": {
+            "generated_at_utc": summary.get("generated_at") if summary else None,
+        },
         "abi6_reserved_lineage": {
             "manifest_path": abi6.get("manifest_path"),
             "schema": abi6.get("schema"),
@@ -7157,6 +7266,9 @@ def verify_release_bundle(
             "generated_at_utc": readiness.utc_now(),
             "ready": False,
             "evidence": {},
+            "readiness_summary": {
+                "generated_at_utc": None,
+            },
             "blockers": blockers,
         }
     verification = {
@@ -7665,6 +7777,9 @@ def main(argv: list[str] | None = None) -> int:
             "generated_at_utc": readiness.utc_now(),
             "ready": False,
             "evidence": {},
+            "readiness_summary": {
+                "generated_at_utc": None,
+            },
             "blockers": path_blockers,
         }
         blockers = path_blockers

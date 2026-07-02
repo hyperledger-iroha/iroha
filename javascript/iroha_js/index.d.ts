@@ -228,6 +228,14 @@ export interface CryptoKeyPair {
   distid?: string | null;
 }
 
+export type RecoveryPhraseWordCount = 12 | 24;
+
+export interface RecoveryPhrase {
+  readonly phrase: string;
+  readonly words: readonly string[];
+  readonly wordCount: RecoveryPhraseWordCount;
+}
+
 export interface KeyPair extends CryptoKeyPair {
   algorithm: "ed25519";
 }
@@ -511,6 +519,7 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   validationFeePolicyVersion?: number | string | bigint | null;
   validationFeePolicyHash?: string | null;
   validationFeeInstructionIndex?: number | string | bigint | null;
+  validationFeeTransferEntryIndex?: number | string | bigint | null;
   privateKey?: string | BinaryLike | null;
   privateKeyHex?: string | null;
   privateKeyMultihash?: string | null;
@@ -526,6 +535,7 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   validation_fee_policy_version?: number | string | bigint | null;
   validation_fee_policy_hash?: string | null;
   validation_fee_instruction_index?: number | string | bigint | null;
+  validation_fee_transfer_entry_index?: number | string | bigint | null;
   private_key?: string | BinaryLike | null;
   private_key_hex?: string | null;
   private_key_multihash?: string | null;
@@ -545,6 +555,7 @@ export interface MultisigProposePayload {
   validation_fee_policy_version?: string;
   validation_fee_policy_hash?: string;
   validation_fee_instruction_index?: string;
+  validation_fee_transfer_entry_index?: string;
   private_key?: string | BinaryLike;
 }
 
@@ -815,6 +826,12 @@ export const SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1: "submit_sccp_messag
 export const SCCP_ZERO_HASH_V1: string;
 export const SCCP_TON_CONTRACT_PROOF_BACKEND_V1: "ton-contract-v1";
 export const SCCP_TON_MESSAGE_BODY_BOC_V1: string;
+export const SCCP_TON_SUBMIT_CHUNK_OP_V1: number;
+export const SCCP_TON_SUBMIT_CHUNK_FINALIZE_OP_V1: number;
+export const SCCP_TON_CHUNKED_MESSAGE_SCHEMA_VERSION_V1: 1;
+export const SCCP_TON_CHUNKED_MESSAGE_DEFAULT_CHUNK_BYTES_V1: number;
+export const SCCP_TON_CHUNKED_MESSAGE_MAX_CHUNK_BYTES_V1: number;
+export const SCCP_TON_WALLET_PAYLOAD_SAFE_BYTES_V1: number;
 export const SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1: string;
 export const SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-ton-shard-state-light-client-v1";
 export const SCCP_TON_MASTERCHAIN_CONFIG_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-ton-masterchain-config-v1";
@@ -830,6 +847,7 @@ export const SCCP_TAIRA_CHAIN_ID_V1: "809574f5-fee7-5e69-bfcf-52451e42d50f";
 export const SCCP_TAIRA_NETWORK_PREFIX_V1: 369;
 export const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: "taira_tron_xor";
 export const SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1: "taira_bsc_xor";
+export const SCCP_TAIRA_TON_XOR_ROUTE_ID_V1: "taira_ton_xor";
 export const SCCP_TAIRA_XOR_ASSET_KEY_V1: "xor";
 export const SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1: 256;
 export const SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1: "ivm_proved_record_sccp_message_v1";
@@ -903,6 +921,14 @@ export interface TairaXorBscTransferPayloadInput
   evm_recipient?: string;
 }
 
+export interface TairaXorTonTransferPayloadInput
+  extends TairaXorTransferPayloadInput {
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  tonRecipient?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  ton_recipient?: string;
+}
+
 export interface TairaXorTronToTairaTransferPayloadInput {
   routeId?: string;
   route_id?: string;
@@ -957,6 +983,37 @@ export interface TairaXorBscToTairaTransferPayloadInput {
   nonce: string | number | bigint;
 }
 
+export interface TairaXorTonToTairaTransferPayloadInput {
+  routeId?: string;
+  route_id?: string;
+  assetKey?: string;
+  asset_key?: string;
+  assetId?: string;
+  asset_id?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  tonSender?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  ton_sender?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  sender?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  senderAddress?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  sender_address?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+  nonce: string | number | bigint;
+}
+
 export interface TairaXorTronToTairaSettlementFragment {
   entrypoint?: "finalize_inbound";
   route?: "taira_tron_xor";
@@ -973,6 +1030,18 @@ export interface TairaXorBscToTairaSettlementFragment {
   entrypoint?: "finalize_inbound";
   route?: "taira_bsc_xor";
   route_id?: "taira_bsc_xor";
+  payload?: never;
+  payload_json?: never;
+  payloadJson?: never;
+  payload_bytes?: never;
+  payloadBytes?: never;
+  [key: string]: unknown;
+}
+
+export interface TairaXorTonToTairaSettlementFragment {
+  entrypoint?: "finalize_inbound";
+  route?: "taira_ton_xor";
+  route_id?: "taira_ton_xor";
   payload?: never;
   payload_json?: never;
   payloadJson?: never;
@@ -1047,6 +1116,36 @@ export interface TairaXorBscToTairaSourceProofPackageInput {
   settlement_defaults?: TairaXorBscToTairaSettlementFragment;
 }
 
+export interface TairaXorTonToTairaSourceProofPackageInput {
+  proofPackage?: Record<string, unknown>;
+  proof_package?: Record<string, unknown>;
+  txId?: string;
+  txID?: string;
+  transactionHash?: string;
+  transaction_hash?: string;
+  transactionId?: string;
+  transaction_id?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  tonSender?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  ton_sender?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  sender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+  settlementDefaults?: TairaXorTonToTairaSettlementFragment;
+  settlement_defaults?: TairaXorTonToTairaSettlementFragment;
+}
+
 export interface BscPlaceholderSourceChainProofEnvelopeInput {
   messageId?: string;
   message_id?: string;
@@ -1056,6 +1155,10 @@ export interface BscPlaceholderSourceChainProofEnvelopeInput {
   commitment_root?: string;
   sourceEventDigest?: string;
   source_event_digest?: string;
+  sourceBridgeEmitterAddress?: string | BinaryLike | number[];
+  source_bridge_emitter_address?: string | BinaryLike | number[];
+  sourceBridgeEmitterCodeHash?: string | BinaryLike | number[];
+  source_bridge_emitter_code_hash?: string | BinaryLike | number[];
   receipt?: Record<string, unknown>;
   block?: Record<string, unknown>;
   blockReceipts?: readonly Record<string, unknown>[];
@@ -1072,6 +1175,60 @@ export interface BscPlaceholderSourceChainProofEnvelopeInput {
   finality_block_hash?: string;
   blockHash?: string;
   block_hash?: string;
+  sourceVerifierMaterial?: Record<string, unknown>;
+  source_verifier_material?: Record<string, unknown>;
+  bscSourceVerifierMaterial?: Record<string, unknown>;
+  bsc_source_verifier_material?: Record<string, unknown>;
+  sccpSourceVerifierMaterial?: Record<string, unknown>;
+  sccp_source_verifier_material?: Record<string, unknown>;
+  sourceAdapterEngineDeployment?: Record<string, unknown>;
+  source_adapter_engine_deployment?: Record<string, unknown>;
+  sourceAdapterDeployment?: Record<string, unknown>;
+  source_adapter_deployment?: Record<string, unknown>;
+  bscSourceAdapterEngineDeployment?: Record<string, unknown>;
+  bsc_source_adapter_engine_deployment?: Record<string, unknown>;
+  bscSourceAdapterDeployment?: Record<string, unknown>;
+  bsc_source_adapter_deployment?: Record<string, unknown>;
+  sourceTrustAnchorHash?: string;
+  source_trust_anchor_hash?: string;
+  sourceBridgeNetworkId?: string;
+  source_bridge_network_id?: string;
+  sourceBridgeOwnerAddress?: string | BinaryLike | number[];
+  source_bridge_owner_address?: string | BinaryLike | number[];
+  sourceBridgeConfigHash?: string;
+  source_bridge_config_hash?: string;
+  sourceAdapterDeploymentHash?: string;
+  source_adapter_deployment_hash?: string;
+  sourceAdapterEngineDeploymentHash?: string;
+  source_adapter_engine_deployment_hash?: string;
+  sourceAdapterDeploymentReceiptHash?: string;
+  source_adapter_deployment_receipt_hash?: string;
+  deploymentReceiptHash?: string;
+  deployment_receipt_hash?: string;
+  sourceValidatorPrivateKeys?:
+    | string
+    | BinaryLike
+    | number[]
+    | readonly (string | BinaryLike | number[])[];
+  source_validator_private_keys?:
+    | string
+    | BinaryLike
+    | number[]
+    | readonly (string | BinaryLike | number[])[];
+  validatorPrivateKeys?:
+    | string
+    | BinaryLike
+    | number[]
+    | readonly (string | BinaryLike | number[])[];
+  validator_private_keys?:
+    | string
+    | BinaryLike
+    | number[]
+    | readonly (string | BinaryLike | number[])[];
+  sourceValidatorPowers?: readonly (string | number | bigint)[];
+  source_validator_powers?: readonly (string | number | bigint)[];
+  validatorPowers?: readonly (string | number | bigint)[];
+  validator_powers?: readonly (string | number | bigint)[];
 }
 
 export interface BscPlaceholderSourceChainProofEnvelopeResult {
@@ -1084,8 +1241,42 @@ export interface BscPlaceholderSourceChainProofEnvelopeResult {
   readonly finalityHeight: string;
   readonly finalityBlockHash: string;
   readonly receiptsRoot: string;
+  readonly validatorSetHash: string;
   readonly receiptRootIndex: string;
   readonly syntheticRootMarker: boolean;
+}
+
+export interface TonTestnetPlaceholderSourceChainProofEnvelopeInput {
+  messageId?: string;
+  message_id?: string;
+  payloadHash?: string;
+  payload_hash?: string;
+  commitmentRoot?: string;
+  commitment_root?: string;
+  txId?: string;
+  txID?: string;
+  transactionHash?: string;
+  transaction_hash?: string;
+  transactionId?: string;
+  transaction_id?: string;
+  finalityHeight?: string | number | bigint;
+  finality_height?: string | number | bigint;
+  finalityBlockHash?: string;
+  finality_block_hash?: string;
+  blockHash?: string;
+  block_hash?: string;
+}
+
+export interface TonTestnetPlaceholderSourceChainProofEnvelopeResult {
+  readonly sourceProofHex: string;
+  readonly sourceProofBytes: Uint8Array;
+  readonly sourceEventDigest: string;
+  readonly sourceEventLeafHash: string;
+  readonly receiptOrMessageRoot: string;
+  readonly finalityHeight: string;
+  readonly finalityBlockHash: string;
+  readonly finalizedHeaderHash: string;
+  readonly txId: string;
 }
 
 export interface TairaXorTronToTairaBoundSourceProofPackage {
@@ -1109,6 +1300,21 @@ export interface TairaXorBscToTairaBoundSourceProofPackage {
     Record<string, unknown> & {
       entrypoint: "finalize_inbound";
       route: "taira_bsc_xor";
+    }
+  >;
+  readonly sourceEventDigest: string;
+  readonly txId: string;
+  readonly messageId: string;
+  readonly commitmentRoot: string;
+  readonly amount: string;
+}
+
+export interface TairaXorTonToTairaBoundSourceProofPackage {
+  readonly messageBundle: Record<string, unknown>;
+  readonly settlement: Readonly<
+    Record<string, unknown> & {
+      entrypoint: "finalize_inbound";
+      route: "taira_ton_xor";
     }
   >;
   readonly sourceEventDigest: string;
@@ -1192,6 +1398,14 @@ export interface TairaXorBscSccpRecordDescriptorInput
   evm_recipient?: string;
 }
 
+export interface TairaXorTonSccpRecordDescriptorInput
+  extends TairaXorSccpRecordDescriptorInput {
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  tonRecipient?: string;
+  /** Canonical TON raw address in 0:<64 lowercase hex> form. */
+  ton_recipient?: string;
+}
+
 export interface TairaXorSccpRecordDescriptor {
   readonly version: 1;
   readonly kind: "TairaXorSccpRecordDescriptor";
@@ -1229,6 +1443,11 @@ export interface TairaXorBscSccpRecordDescriptor
   readonly route_id: "taira_bsc_xor";
 }
 
+export interface TairaXorTonSccpRecordDescriptor
+  extends Omit<TairaXorSccpRecordDescriptor, "route_id"> {
+  readonly route_id: "taira_ton_xor";
+}
+
 export interface TairaXorSccpBurnRecordInput
   extends TairaXorSccpRecordDescriptorInput {
   descriptor?: TairaXorSccpRecordDescriptor;
@@ -1261,6 +1480,22 @@ export interface TairaXorBscSccpBurnRecordInput
   authority?: string;
 }
 
+export interface TairaXorTonSccpBurnRecordInput
+  extends TairaXorTonSccpRecordDescriptorInput {
+  descriptor?: TairaXorTonSccpRecordDescriptor;
+  recordDescriptor?: TairaXorTonSccpRecordDescriptor;
+  record_descriptor?: TairaXorTonSccpRecordDescriptor;
+  settlementAssetDefinitionId?: string;
+  settlement_asset_definition_id?: string;
+  settlementAsset?: string;
+  settlement_asset?: string;
+  settlementAmount?: string;
+  settlement_amount?: string;
+  burnAmount?: string;
+  burn_amount?: string;
+  authority?: string;
+}
+
 export interface TairaXorSccpBurnRecordContractPayload {
   readonly version: 1;
   readonly entrypoint: "burn_and_record";
@@ -1277,6 +1512,11 @@ export interface TairaXorSccpBurnRecordContractPayload {
 export interface TairaXorBscSccpBurnRecordContractPayload
   extends Omit<TairaXorSccpBurnRecordContractPayload, "descriptor"> {
   readonly descriptor: Readonly<TairaXorBscSccpRecordDescriptor>;
+}
+
+export interface TairaXorTonSccpBurnRecordContractPayload
+  extends Omit<TairaXorSccpBurnRecordContractPayload, "descriptor"> {
+  readonly descriptor: Readonly<TairaXorTonSccpRecordDescriptor>;
 }
 
 export interface TairaXorSccpBurnRecordZkIvmRequestInput
@@ -1325,6 +1565,29 @@ export interface TairaXorBscSccpBurnRecordZkIvmRequestInput
   metadata?: Record<string, JsonValue>;
 }
 
+export interface TairaXorTonSccpBurnRecordZkIvmRequestInput
+  extends TairaXorTonSccpBurnRecordInput {
+  vkRef?: { backend?: string; name?: string };
+  vk_ref?: { backend?: string; name?: string };
+  bytecode?: string;
+  artifactB64?: string;
+  artifact_b64?: string;
+  contractArtifact?: {
+    artifact_b64?: string;
+    artifactB64?: string;
+    bytecode?: string;
+  };
+  contract_artifact?: {
+    artifact_b64?: string;
+    artifactB64?: string;
+    bytecode?: string;
+  };
+  artifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
+  gasLimit?: string | number | bigint;
+  gas_limit?: string | number | bigint;
+  metadata?: Record<string, JsonValue>;
+}
+
 export interface TairaXorSccpBurnRecordZkIvmRequest {
   readonly version: 1;
   readonly route_id: "taira_tron_xor";
@@ -1347,6 +1610,16 @@ export interface TairaXorBscSccpBurnRecordZkIvmRequest
   readonly route_id: "taira_bsc_xor";
   readonly descriptor: Readonly<TairaXorBscSccpRecordDescriptor>;
   readonly contract: Readonly<TairaXorBscSccpBurnRecordContractPayload>;
+}
+
+export interface TairaXorTonSccpBurnRecordZkIvmRequest
+  extends Omit<
+    TairaXorSccpBurnRecordZkIvmRequest,
+    "route_id" | "descriptor" | "contract"
+  > {
+  readonly route_id: "taira_ton_xor";
+  readonly descriptor: Readonly<TairaXorTonSccpRecordDescriptor>;
+  readonly contract: Readonly<TairaXorTonSccpBurnRecordContractPayload>;
 }
 
 export interface SccpTokenAddPayload {
@@ -4213,6 +4486,70 @@ export interface TonSccpMessageBodyInputBase extends TonSccpProofRequestInput {
   manifest?: TonSccpManifestInput;
   queryId?: string | number | bigint;
   query_id?: string | number | bigint;
+}
+
+export interface TonSccpMessageBodyBytesInput {
+  publicInputsBytes?: BinaryLike;
+  public_inputs_bytes?: BinaryLike;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  bundleBytes?: BinaryLike;
+  bundle_bytes?: BinaryLike;
+  metadataBytes?: BinaryLike;
+  metadata_bytes?: BinaryLike;
+  queryId?: string | number | bigint;
+  query_id?: string | number | bigint;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+}
+
+export interface TonSccpChunkedMessageBodyInput {
+  messageBodyBocBytes?: BinaryLike;
+  message_body_boc_bytes?: BinaryLike;
+  messageBodyBocHex?: string;
+  message_body_boc_hex?: string;
+  messageId?: string;
+  message_id?: string;
+  queryId?: string | number | bigint;
+  query_id?: string | number | bigint;
+  statementHash?: string;
+  statement_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  chunkSize?: number;
+  chunk_size?: number;
+}
+
+export interface TonSccpChunkedUploadMessage {
+  readonly index: number;
+  readonly offset: number;
+  readonly length: number;
+  readonly chunkHash: string;
+  readonly payloadBocHex: string;
+  readonly payloadBocBytes: Uint8Array;
+}
+
+export interface TonSccpChunkedFinalizeMessage {
+  readonly payloadBocHex: string;
+  readonly payloadBocBytes: Uint8Array;
+}
+
+export interface TonSccpChunkedMessageBodyPlan {
+  readonly version: 1;
+  readonly protocol: "ton_sccp_chunked_message_body_boc_v1";
+  readonly opChunk: number;
+  readonly opFinalize: number;
+  readonly messageId: string;
+  readonly queryId: string;
+  readonly totalBytes: number;
+  readonly chunkSize: number;
+  readonly chunkCount: number;
+  readonly bodyHash: string;
+  readonly chunkRoot: string;
+  readonly uploadMessages: ReadonlyArray<TonSccpChunkedUploadMessage>;
+  readonly finalizeMessage: TonSccpChunkedFinalizeMessage;
 }
 
 export type TonSccpMessageBodyInput = TonSccpMessageBodyInputBase &
@@ -7149,6 +7486,12 @@ export function canonicalSccpTonSubmissionMetadataBytes(
 export function buildSccpTonMessageBodyBoc(
   input: TonSccpMessageBodyInput,
 ): Uint8Array;
+export function buildSccpTonMessageBodyBocFromBytes(
+  input: TonSccpMessageBodyBytesInput,
+): Uint8Array;
+export function buildSccpTonChunkedMessageBodyBocsFromBytes(
+  input: TonSccpChunkedMessageBodyInput,
+): TonSccpChunkedMessageBodyPlan;
 export function tonConfigValidatorSetPayloadFromProofBoc(
   input: BinaryLike,
 ): Uint8Array | null;
@@ -7259,9 +7602,15 @@ export function evmSccpSourceEventTopic(): string;
 export function canonicalEvmReceiptRootMptValue(
   receiptRoot: string,
 ): Uint8Array;
+export function buildBscSourceChainProofEnvelope(
+  input: BscPlaceholderSourceChainProofEnvelopeInput,
+): BscPlaceholderSourceChainProofEnvelopeResult;
 export function buildBscPlaceholderSourceChainProofEnvelope(
   input: BscPlaceholderSourceChainProofEnvelopeInput,
 ): BscPlaceholderSourceChainProofEnvelopeResult;
+export function buildTonTestnetPlaceholderSourceChainProofEnvelope(
+  input: TonTestnetPlaceholderSourceChainProofEnvelopeInput,
+): TonTestnetPlaceholderSourceChainProofEnvelopeResult;
 export function canonicalEthSyncCommitteePayloadBytes(
   input: EthSyncCommitteePayloadInput,
 ): Uint8Array;
@@ -8031,6 +8380,7 @@ export interface TairaXorBscBurnToTairaAccountCallDataInput
 
 export function tairaXorRouteIdHash(routeId?: string): string;
 export function tairaXorBscRouteIdHash(routeId?: string): string;
+export function tairaXorTonRouteIdHash(routeId?: string): string;
 export function tairaXorAssetKeyHash(assetKey?: string): string;
 export function buildTairaXorTransferPayload(
   input: TairaXorTransferPayloadInput,
@@ -8038,11 +8388,17 @@ export function buildTairaXorTransferPayload(
 export function buildTairaXorBscTransferPayload(
   input: TairaXorBscTransferPayloadInput,
 ): Readonly<SccpTransferPayload>;
+export function buildTairaXorTonTransferPayload(
+  input: TairaXorTonTransferPayloadInput,
+): Readonly<SccpTransferPayload>;
 export function buildTairaXorTronToTairaTransferPayload(
   input: TairaXorTronToTairaTransferPayloadInput,
 ): Readonly<SccpTransferPayload>;
 export function buildTairaXorBscToTairaTransferPayload(
   input: TairaXorBscToTairaTransferPayloadInput,
+): Readonly<SccpTransferPayload>;
+export function buildTairaXorTonToTairaTransferPayload(
+  input: TairaXorTonToTairaTransferPayloadInput,
 ): Readonly<SccpTransferPayload>;
 export function buildTairaXorSccpRecordDescriptor(
   input: TairaXorSccpRecordDescriptorInput,
@@ -8050,6 +8406,9 @@ export function buildTairaXorSccpRecordDescriptor(
 export function buildTairaXorBscSccpRecordDescriptor(
   input: TairaXorBscSccpRecordDescriptorInput,
 ): Readonly<TairaXorBscSccpRecordDescriptor>;
+export function buildTairaXorTonSccpRecordDescriptor(
+  input: TairaXorTonSccpRecordDescriptorInput,
+): Readonly<TairaXorTonSccpRecordDescriptor>;
 export function buildRecordSccpMessageInstructionBytes(
   payloadBytes: BinaryLike | number[],
 ): Uint8Array;
@@ -8059,12 +8418,18 @@ export function buildTairaXorSccpBurnRecordContractPayload(
 export function buildTairaXorBscSccpBurnRecordContractPayload(
   input: TairaXorBscSccpBurnRecordInput,
 ): Readonly<TairaXorBscSccpBurnRecordContractPayload>;
+export function buildTairaXorTonSccpBurnRecordContractPayload(
+  input: TairaXorTonSccpBurnRecordInput,
+): Readonly<TairaXorTonSccpBurnRecordContractPayload>;
 export function buildTairaXorSccpBurnRecordZkIvmRequest(
   input: TairaXorSccpBurnRecordZkIvmRequestInput,
 ): Readonly<TairaXorSccpBurnRecordZkIvmRequest>;
 export function buildTairaXorBscSccpBurnRecordZkIvmRequest(
   input: TairaXorBscSccpBurnRecordZkIvmRequestInput,
 ): Readonly<TairaXorBscSccpBurnRecordZkIvmRequest>;
+export function buildTairaXorTonSccpBurnRecordZkIvmRequest(
+  input: TairaXorTonSccpBurnRecordZkIvmRequestInput,
+): Readonly<TairaXorTonSccpBurnRecordZkIvmRequest>;
 export function tairaXorCanonicalTransferPayloadBytes(
   input: TairaXorTransferPayloadInput,
 ): Uint8Array;
@@ -8079,11 +8444,25 @@ export function tairaXorBscTransferMessageId(
   input: TairaXorBscTransferPayloadInput,
   options?: { prefix?: boolean },
 ): string;
+export function tairaXorTonCanonicalTransferPayloadBytes(
+  input: TairaXorTonTransferPayloadInput,
+): Uint8Array;
+export function tairaXorTonTransferMessageId(
+  input: TairaXorTonTransferPayloadInput,
+  options?: { prefix?: boolean },
+): string;
 export function tairaXorBscToTairaCanonicalTransferPayloadBytes(
   input: TairaXorBscToTairaTransferPayloadInput,
 ): Uint8Array;
 export function tairaXorBscToTairaTransferMessageId(
   input: TairaXorBscToTairaTransferPayloadInput,
+  options?: { prefix?: boolean },
+): string;
+export function tairaXorTonToTairaCanonicalTransferPayloadBytes(
+  input: TairaXorTonToTairaTransferPayloadInput,
+): Uint8Array;
+export function tairaXorTonToTairaTransferMessageId(
+  input: TairaXorTonToTairaTransferPayloadInput,
   options?: { prefix?: boolean },
 ): string;
 export function tairaXorTronToTairaCanonicalTransferPayloadBytes(
@@ -8132,6 +8511,9 @@ export function bindTairaXorTronToTairaSourceProofPackage(
 export function bindTairaXorBscToTairaSourceProofPackage(
   input: TairaXorBscToTairaSourceProofPackageInput,
 ): Readonly<TairaXorBscToTairaBoundSourceProofPackage>;
+export function bindTairaXorTonToTairaSourceProofPackage(
+  input: TairaXorTonToTairaSourceProofPackageInput,
+): Readonly<TairaXorTonToTairaBoundSourceProofPackage>;
 export function normalizeSccpSourceVerifierMaterial(
   input: SccpSourceVerifierMaterialInput,
 ): SccpSourceVerifierMaterial;
@@ -13733,7 +14115,7 @@ export type ToriiSccpPlatformSubmissionPayload =
       kind: "ton_internal_message";
       value: {
         messageBodyBoc: string;
-        queryId: number;
+        queryId: string;
         destinationBinding: ToriiSccpDestinationBinding;
         destinationBindingHash: string;
         proofBytes: string;
@@ -15935,18 +16317,71 @@ export interface DeployContractRequest {
   leaseExpiryMs?: number | null;
 }
 
-export interface DeployContractResponse {
-  ok: boolean;
-  contract_alias: string | null;
-  contract_address: string | null;
+export interface DeployContractReceiptContract {
+  name: string;
+  contract_alias: string;
+  contract_address: string;
   previous_contract_address: string | null;
   upgraded: boolean;
-  dataspace: string | null;
-  deploy_nonce: number | null;
-  tx_hash_hex: string | null;
-  pipeline_status?: ToriiPipelineTransactionStatus | null;
+  dataspace: string;
+  deploy_nonce: number;
   code_hash_hex: string;
   abi_hash_hex: string;
+  tx_hash_hex: string | null;
+  pipeline_status?: ToriiPipelineTransactionStatus | null;
+  status: string;
+}
+
+export interface DeployContractInitCallReceipt {
+  id: string;
+  contract_alias: string;
+  entrypoint: string | null;
+  tx_hash_hex: string | null;
+  pipeline_status?: ToriiPipelineTransactionStatus | null;
+  status: string;
+}
+
+export interface DeployContractAssertionReceipt {
+  id: string;
+  contract_alias: string;
+  entrypoint: string | null;
+  status: string;
+  actual_result?: unknown;
+  expected_result?: unknown;
+  error?: string | null;
+}
+
+export interface DeployContractOperationReceipt {
+  operation_kind: string;
+  status: string;
+  transport: string;
+  dataspace: string;
+  contract_alias: string | null;
+  contract_address: string | null;
+  code_hash_hex: string | null;
+  abi_hash_hex: string | null;
+  tx_hash_hex: string | null;
+  entrypoint: string | null;
+  entrypoint_hash_hex: string | null;
+  gas_limit: number | null;
+  gas_used: number | null;
+  gas_asset_id: string | null;
+  fee_sponsor: string | null;
+  payload_digest_hex: string;
+}
+
+export interface DeployContractResponse {
+  ok: boolean;
+  bundle_name: string;
+  bundle_digest: string;
+  chain_fingerprint: string;
+  dry_run: boolean;
+  completed_stages: string[];
+  failure_point: string | null;
+  contracts: DeployContractReceiptContract[];
+  init_calls: DeployContractInitCallReceipt[];
+  assertions: DeployContractAssertionReceipt[];
+  operation_receipt?: DeployContractOperationReceipt | null;
 }
 
 export interface SetContractAliasRequest {
@@ -17235,9 +17670,7 @@ export interface ConfidentialTransferProofInputV2 {
   amount: NumericLike;
   rhoHex?: string;
   rho?: BinaryLike;
-  diversifierHex?: string;
-  diversifier_hex?: string;
-  diversifier?: BinaryLike;
+  diversifierHex: string;
   leafIndex?: number;
   leaf_index?: number;
 }
@@ -19187,6 +19620,26 @@ export function verifyEd25519(
   publicKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): boolean;
 
+export function normalizeRecoveryPhrase(phrase: string): RecoveryPhrase;
+
+export function validateRecoveryPhrase(phrase: string): boolean;
+
+export function generateRecoveryPhrase(
+  wordCount?: RecoveryPhraseWordCount,
+): RecoveryPhrase;
+
+export function entropyToRecoveryPhrase(
+  entropy: ArrayBufferView | ArrayBuffer | Buffer,
+): RecoveryPhrase;
+
+export function recoveryPhraseToEntropy(phrase: string): Buffer;
+
+export function deriveEd25519SeedFromRecoveryPhrase(phrase: string): Buffer;
+
+export function ed25519SeedToRecoveryPhrase(
+  privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+): RecoveryPhrase;
+
 export function canonicalQueryString(
   query?: string | URLSearchParams | null,
 ): string;
@@ -19274,9 +19727,8 @@ export function deriveConfidentialKeysetFromHex(
 
 export function deriveConfidentialOwnerTagV2(
   spendKey: ArrayBufferView | ArrayBuffer | Buffer,
-  options?: {
-    diversifierHex?: string;
-    diversifier?: ArrayBufferView | ArrayBuffer | Buffer;
+  options: {
+    diversifierHex: string;
   },
 ): Buffer;
 
@@ -19311,7 +19763,6 @@ export function deriveConfidentialNullifierV2(input: {
 
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: "recursive_compact_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
-export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: "checked_prefold_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: "kagemusha-recursive-compact-v1";
@@ -19354,8 +19805,7 @@ export class KagemushaRecursiveSpendRequestCodecError extends Error {
 }
 export type KagemushaOfflineSpendMode =
   | "recursive_compact_v1"
-  | "recursive_spend_v1"
-  | "checked_prefold_v1";
+  | "recursive_spend_v1";
 export type KagemushaRecursiveSpendLineageKeyArtifactOpeningLen =
   | 2
   | 4
@@ -19379,14 +19829,15 @@ export interface KagemushaRecursiveSpendLineageKeyArtifacts {
   readonly isInitArtifact: boolean;
   readonly isAppendArtifact: boolean;
 }
+export function preferredKagemushaOfflineSpendMode(): KagemushaOfflineSpendMode | null;
 export function preferredKagemushaOfflineSpendMode(
-  recursiveSpendAvailable?: boolean,
-  recursiveCompactAvailable?: boolean,
-): KagemushaOfflineSpendMode;
+  recursiveCompactAvailable: boolean,
+  recursiveSpendAvailable: boolean,
+): KagemushaOfflineSpendMode | null;
 export function preferredKagemushaOfflineSpendModeForCapabilities(
   recursiveCompactAvailable: boolean,
   recursiveSpendAvailable: boolean,
-): KagemushaOfflineSpendMode;
+): KagemushaOfflineSpendMode | null;
 export function canRedeemKagemushaRecursiveSpendWitnessless(
   proofCircuitId: string,
   hopCount: number,
@@ -19615,8 +20066,6 @@ export interface KagemushaRecursiveSpendVerifyResult {
   readonly chain_admission_reason: string;
   readonly witnesslessRedeemSupported: boolean;
   readonly witnessless_redeem_supported: boolean;
-  readonly lineageWitnessRequired: boolean;
-  readonly lineage_witness_required: boolean;
   readonly lineageWitnessRequiredForRedeem: boolean;
   readonly lineage_witness_required_for_redeem: boolean;
 }
@@ -19763,6 +20212,8 @@ export interface MultisigProposeNoritoRequest {
   validationFeePolicyHash?: string | null;
   validation_fee_instruction_index?: string | null;
   validationFeeInstructionIndex?: string | null;
+  validation_fee_transfer_entry_index?: string | null;
+  validationFeeTransferEntryIndex?: string | null;
   instructions: Array<object | string | ArrayBufferView | ArrayBuffer | Buffer>;
 }
 export function noritoEncodeMultisigProposeRequest(

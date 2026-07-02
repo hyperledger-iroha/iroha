@@ -20,6 +20,30 @@ public enum ToriiOfflineTransferDirection: String, Codable, Sendable {
     case outgoing
 }
 
+private enum ToriiOfflineCashModelValidation {
+    static func requireExactNonEmptyText(_ value: String, field: String) throws {
+        guard !value.isEmpty,
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            throw OfflineNotePayloadError.invalidField(field)
+        }
+    }
+
+    static func requireCanonicalSignatureBase64(_ value: String, field: String) throws {
+        guard let signature = OfflineNoteTextPayloadEncoding.decodeExactBase64(value),
+              signature.count == 64 else {
+            throw OfflineNotePayloadError.invalidField(field)
+        }
+    }
+
+    static func canonicalNonNegativeAmount(_ value: String, field: String) throws -> String {
+        let canonical = try ToriiOfflineCashCodec.canonicalAmountString(value)
+        guard !canonical.hasPrefix("-") else {
+            throw OfflineNotePayloadError.invalidField(field)
+        }
+        return canonical
+    }
+}
+
 public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
     public let platform: String
     public let attestationKeyId: String
@@ -43,7 +67,27 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         iosTeamId: String? = nil,
         iosBundleId: String? = nil,
         iosEnvironment: String? = nil
-    ) {
+    ) throws {
+        guard Self.supportedFirstReleasePlatforms.contains(platform) else {
+            throw OfflineNotePayloadError.invalidField("platform")
+        }
+        guard Self.isExactNonEmptyText(attestationKeyId) else {
+            throw OfflineNotePayloadError.invalidField("attestation_key_id")
+        }
+        guard Self.isExactNonEmptyText(deviceId) else {
+            throw OfflineNotePayloadError.invalidField("device_id")
+        }
+        guard Self.isExactNonEmptyText(offlinePublicKey) else {
+            throw OfflineNotePayloadError.invalidField("offline_public_key")
+        }
+        try Self.requireOptionalExactNonEmptyText(assertionPublicKey, field: "assertion_public_key")
+        try Self.requireOptionalExactNonEmptyText(iosTeamId, field: "ios_team_id")
+        try Self.requireOptionalExactNonEmptyText(iosBundleId, field: "ios_bundle_id")
+        if let iosEnvironment,
+           iosEnvironment != "production",
+           iosEnvironment != "development" {
+            throw OfflineNotePayloadError.invalidField("ios_environment")
+        }
         self.platform = platform
         self.attestationKeyId = attestationKeyId
         self.deviceId = deviceId
@@ -69,6 +113,25 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         case iosEnvironment = "ios_environment"
     }
 
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            platform: container.decode(String.self, forKey: .platform),
+            attestationKeyId: container.decode(String.self, forKey: .attestationKeyId),
+            deviceId: container.decode(String.self, forKey: .deviceId),
+            offlinePublicKey: container.decode(String.self, forKey: .offlinePublicKey),
+            assertionPublicKey: container.decodeIfPresent(String.self, forKey: .assertionPublicKey),
+            attestationReportBase64: container.decode(String.self, forKey: .attestationReportBase64),
+            attestationReceipt: container.decodeIfPresent(
+                ToriiOfflineAttestationReceipt.self,
+                forKey: .attestationReceipt
+            ),
+            iosTeamId: container.decodeIfPresent(String.self, forKey: .iosTeamId),
+            iosBundleId: container.decodeIfPresent(String.self, forKey: .iosBundleId),
+            iosEnvironment: container.decodeIfPresent(String.self, forKey: .iosEnvironment)
+        )
+    }
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(platform, forKey: .platform)
@@ -81,6 +144,21 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         try container.encodeIfPresent(iosTeamId, forKey: .iosTeamId)
         try container.encodeIfPresent(iosBundleId, forKey: .iosBundleId)
         try container.encodeIfPresent(iosEnvironment, forKey: .iosEnvironment)
+    }
+
+    private static let supportedFirstReleasePlatforms: Set<String> = [
+        OfflineNoteV2Constants.iosAppAttestPlatform,
+        OfflineNoteV2Constants.androidKeyMintPlatform,
+    ]
+
+    private static func requireOptionalExactNonEmptyText(_ value: String?, field: String) throws {
+        if let value, !isExactNonEmptyText(value) {
+            throw OfflineNotePayloadError.invalidField(field)
+        }
+    }
+
+    private static func isExactNonEmptyText(_ value: String) -> Bool {
+        !value.isEmpty && value.trimmingCharacters(in: .whitespacesAndNewlines) == value
     }
 }
 
@@ -131,7 +209,20 @@ public struct ToriiOfflineDeviceProof: Codable, Sendable, Equatable {
         challengeHashHex: String,
         assertionBase64: String,
         counter: UInt64? = nil
-    ) {
+    ) throws {
+        guard Self.supportedFirstReleasePlatforms.contains(platform) else {
+            throw OfflineNotePayloadError.invalidField("platform")
+        }
+        guard Self.isExactNonEmptyText(attestationKeyId) else {
+            throw OfflineNotePayloadError.invalidField("attestation_key_id")
+        }
+        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
+            challengeHashHex,
+            field: "challenge_hash_hex"
+        )
+        guard OfflineNoteTextPayloadEncoding.decodeExactBase64(assertionBase64) != nil else {
+            throw OfflineNotePayloadError.invalidField("assertion_base64")
+        }
         self.platform = platform
         self.attestationKeyId = attestationKeyId
         self.challengeHashHex = challengeHashHex
@@ -145,6 +236,26 @@ public struct ToriiOfflineDeviceProof: Codable, Sendable, Equatable {
         case challengeHashHex = "challenge_hash_hex"
         case assertionBase64 = "assertion_base64"
         case counter
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            platform: container.decode(String.self, forKey: .platform),
+            attestationKeyId: container.decode(String.self, forKey: .attestationKeyId),
+            challengeHashHex: container.decode(String.self, forKey: .challengeHashHex),
+            assertionBase64: container.decode(String.self, forKey: .assertionBase64),
+            counter: container.decodeIfPresent(UInt64.self, forKey: .counter)
+        )
+    }
+
+    private static let supportedFirstReleasePlatforms: Set<String> = [
+        OfflineNoteV2Constants.iosAppAttestPlatform,
+        OfflineNoteV2Constants.androidKeyMintPlatform,
+    ]
+
+    private static func isExactNonEmptyText(_ value: String) -> Bool {
+        !value.isEmpty && value.trimmingCharacters(in: .whitespacesAndNewlines) == value
     }
 }
 
@@ -179,12 +290,35 @@ public struct ToriiOfflineSpendAuthorization: Codable, Sendable, Equatable, Iden
         deviceBinding: ToriiOfflineDeviceBinding,
         issuerSignatureBase64: String
     ) throws {
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(
+            authorizationId,
+            field: "authorization_id"
+        )
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(lineageId, field: "lineage_id")
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(verdictId, field: "verdict_id")
+        guard refreshAtMs >= issuedAtMs else {
+            throw OfflineNotePayloadError.invalidField("refresh_at_ms")
+        }
+        guard expiresAtMs > issuedAtMs else {
+            throw OfflineNotePayloadError.invalidField("expires_at_ms")
+        }
+        try ToriiOfflineCashModelValidation.requireCanonicalSignatureBase64(
+            issuerSignatureBase64,
+            field: "issuer_signature_base64"
+        )
         self.authorizationId = authorizationId
         self.lineageId = lineageId
         self.accountId = accountId
         self.verdictId = verdictId
-        self.policyMaxBalance = try ToriiOfflineCashCodec.canonicalAmountString(policyMaxBalance)
-        self.policyMaxTxValue = try ToriiOfflineCashCodec.canonicalAmountString(policyMaxTxValue)
+        self.policyMaxBalance = try ToriiOfflineCashModelValidation.canonicalNonNegativeAmount(
+            policyMaxBalance,
+            field: "max_balance"
+        )
+        self.policyMaxTxValue = try ToriiOfflineCashModelValidation.canonicalNonNegativeAmount(
+            policyMaxTxValue,
+            field: "max_tx_value"
+        )
         self.issuedAtMs = issuedAtMs
         self.refreshAtMs = refreshAtMs
         self.expiresAtMs = expiresAtMs
@@ -258,13 +392,38 @@ public struct ToriiOfflineCashState: Codable, Sendable, Equatable, Identifiable 
         authorization: ToriiOfflineSpendAuthorization,
         issuerSignatureBase64: String
     ) throws {
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(lineageId, field: "lineage_id")
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(deviceId, field: "device_id")
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(
+            offlinePublicKey,
+            field: "offline_public_key"
+        )
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(
+            assetDefinitionId,
+            field: "asset_definition_id"
+        )
+        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(
+            serverStateHash,
+            field: "server_state_hash"
+        )
+        try ToriiOfflineCashModelValidation.requireCanonicalSignatureBase64(
+            issuerSignatureBase64,
+            field: "issuer_signature_base64"
+        )
         self.lineageId = lineageId
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
         self.assetDefinitionId = assetDefinitionId
-        self.balance = try ToriiOfflineCashCodec.canonicalAmountString(balance)
-        self.lockedBalance = try ToriiOfflineCashCodec.canonicalAmountString(lockedBalance)
+        self.balance = try ToriiOfflineCashModelValidation.canonicalNonNegativeAmount(
+            balance,
+            field: "balance"
+        )
+        self.lockedBalance = try ToriiOfflineCashModelValidation.canonicalNonNegativeAmount(
+            lockedBalance,
+            field: "locked_balance"
+        )
         self.serverRevision = serverRevision
         self.serverStateHash = serverStateHash
         self.pendingLocalRevision = pendingLocalRevision
@@ -321,7 +480,23 @@ public struct ToriiOfflineRevocationBundle: Codable, Sendable, Equatable {
         blacklistedAccountIds: [String] = [],
         assetSendLimits: [ToriiOfflineAssetSendLimit] = [],
         issuerSignatureBase64: String
-    ) {
+    ) throws {
+        guard expiresAtMs > issuedAtMs else {
+            throw OfflineNotePayloadError.invalidField("expires_at_ms")
+        }
+        for verdictId in verdictIds {
+            try ToriiOfflineCashModelValidation.requireExactNonEmptyText(verdictId, field: "verdict_id")
+        }
+        for accountId in blacklistedAccountIds {
+            try ToriiOfflineCashModelValidation.requireExactNonEmptyText(
+                accountId,
+                field: "blacklisted_account_id"
+            )
+        }
+        try ToriiOfflineCashModelValidation.requireCanonicalSignatureBase64(
+            issuerSignatureBase64,
+            field: "issuer_signature_base64"
+        )
         self.issuedAtMs = issuedAtMs
         self.expiresAtMs = expiresAtMs
         self.verdictIds = verdictIds
@@ -332,12 +507,20 @@ public struct ToriiOfflineRevocationBundle: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        issuedAtMs = try container.decode(UInt64.self, forKey: .issuedAtMs)
-        expiresAtMs = try container.decode(UInt64.self, forKey: .expiresAtMs)
-        verdictIds = try container.decode([String].self, forKey: .verdictIds)
-        blacklistedAccountIds = try container.decodeIfPresent([String].self, forKey: .blacklistedAccountIds) ?? []
-        assetSendLimits = try container.decodeIfPresent([ToriiOfflineAssetSendLimit].self, forKey: .assetSendLimits) ?? []
-        issuerSignatureBase64 = try container.decode(String.self, forKey: .issuerSignatureBase64)
+        try self.init(
+            issuedAtMs: container.decode(UInt64.self, forKey: .issuedAtMs),
+            expiresAtMs: container.decode(UInt64.self, forKey: .expiresAtMs),
+            verdictIds: container.decode([String].self, forKey: .verdictIds),
+            blacklistedAccountIds: container.decodeIfPresent(
+                [String].self,
+                forKey: .blacklistedAccountIds
+            ) ?? [],
+            assetSendLimits: container.decodeIfPresent(
+                [ToriiOfflineAssetSendLimit].self,
+                forKey: .assetSendLimits
+            ) ?? [],
+            issuerSignatureBase64: container.decode(String.self, forKey: .issuerSignatureBase64)
+        )
     }
 
     public func isExpired(nowMs: UInt64 = ToriiOfflineCashCodec.currentTimestampMs()) -> Bool {
@@ -345,28 +528,18 @@ public struct ToriiOfflineRevocationBundle: Codable, Sendable, Equatable {
     }
 
     public func blacklistsAccount(_ accountId: String) -> Bool {
-        let normalized = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return false }
-        return blacklistedAccountIds.contains {
-            $0.trimmingCharacters(in: .whitespacesAndNewlines) == normalized
-        }
+        guard !accountId.isEmpty else { return false }
+        return blacklistedAccountIds.contains(accountId)
     }
 
     public func revokesVerdict(_ verdictId: String?) -> Bool {
-        let normalized = verdictId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !normalized.isEmpty else { return false }
-        return verdictIds.contains {
-            $0.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(normalized) == .orderedSame
-        }
+        guard let verdictId, !verdictId.isEmpty else { return false }
+        return verdictIds.contains(verdictId)
     }
 
     public func sendLimit(assetDefinitionId: String) -> ToriiOfflineAssetSendLimit? {
-        let normalized = assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return nil }
-        return assetSendLimits.first {
-            $0.assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines)
-                .caseInsensitiveCompare(normalized) == .orderedSame
-        }
+        guard !assetDefinitionId.isEmpty else { return nil }
+        return assetSendLimits.first { $0.assetDefinitionId == assetDefinitionId }
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -389,9 +562,19 @@ public struct ToriiOfflineAssetSendLimit: Codable, Sendable, Equatable {
         dailySendLimit: String,
         monthlySendLimit: String
     ) throws {
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(
+            assetDefinitionId,
+            field: "asset_definition_id"
+        )
         self.assetDefinitionId = assetDefinitionId
-        self.dailySendLimit = try ToriiOfflineCashCodec.canonicalAmountString(dailySendLimit)
-        self.monthlySendLimit = try ToriiOfflineCashCodec.canonicalAmountString(monthlySendLimit)
+        self.dailySendLimit = try ToriiOfflineCashModelValidation.canonicalNonNegativeAmount(
+            dailySendLimit,
+            field: "daily_send_limit"
+        )
+        self.monthlySendLimit = try ToriiOfflineCashModelValidation.canonicalNonNegativeAmount(
+            monthlySendLimit,
+            field: "monthly_send_limit"
+        )
     }
 
     public init(from decoder: Decoder) throws {
@@ -462,6 +645,39 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         senderSignatureBase64: String,
         createdAtMs: UInt64
     ) throws {
+        guard version == 1 else {
+            throw OfflineNotePayloadError.invalidField("version")
+        }
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(transferId, field: "transfer_id")
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(lineageId, field: "lineage_id")
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(accountId, field: "account_id")
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(deviceId, field: "device_id")
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(
+            offlinePublicKey,
+            field: "offline_public_key"
+        )
+        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(preStateHash, field: "pre_state_hash")
+        _ = try OfflineNoteTextPayloadEncoding.requireHashHex(postStateHash, field: "post_state_hash")
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(
+            counterpartyLineageId,
+            field: "counterparty_lineage_id"
+        )
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(
+            counterpartyAccountId,
+            field: "counterparty_account_id"
+        )
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(
+            counterpartyDeviceId,
+            field: "counterparty_device_id"
+        )
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(
+            counterpartyOfflinePublicKey,
+            field: "counterparty_offline_public_key"
+        )
+        try ToriiOfflineCashModelValidation.requireCanonicalSignatureBase64(
+            senderSignatureBase64,
+            field: "sender_signature_base64"
+        )
         self.version = version
         self.transferId = transferId
         self.direction = direction
@@ -469,10 +685,22 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
-        self.preBalance = try ToriiOfflineCashCodec.canonicalAmountString(preBalance)
-        self.postBalance = try ToriiOfflineCashCodec.canonicalAmountString(postBalance)
-        self.preLockedBalance = try ToriiOfflineCashCodec.canonicalAmountString(preLockedBalance)
-        self.postLockedBalance = try ToriiOfflineCashCodec.canonicalAmountString(postLockedBalance)
+        self.preBalance = try ToriiOfflineCashModelValidation.canonicalNonNegativeAmount(
+            preBalance,
+            field: "pre_balance"
+        )
+        self.postBalance = try ToriiOfflineCashModelValidation.canonicalNonNegativeAmount(
+            postBalance,
+            field: "post_balance"
+        )
+        self.preLockedBalance = try ToriiOfflineCashModelValidation.canonicalNonNegativeAmount(
+            preLockedBalance,
+            field: "pre_locked_balance"
+        )
+        self.postLockedBalance = try ToriiOfflineCashModelValidation.canonicalNonNegativeAmount(
+            postLockedBalance,
+            field: "post_locked_balance"
+        )
         self.preStateHash = preStateHash
         self.postStateHash = postStateHash
         self.localRevision = localRevision
@@ -480,7 +708,10 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         self.counterpartyAccountId = counterpartyAccountId
         self.counterpartyDeviceId = counterpartyDeviceId
         self.counterpartyOfflinePublicKey = counterpartyOfflinePublicKey
-        self.amount = try ToriiOfflineCashCodec.canonicalAmountString(amount)
+        self.amount = try ToriiOfflineCashModelValidation.canonicalNonNegativeAmount(
+            amount,
+            field: "amount"
+        )
         self.authorization = authorization
         self.deviceProof = deviceProof
         self.senderSignatureBase64 = senderSignatureBase64
@@ -605,6 +836,11 @@ public enum ToriiOfflineCashCodec {
         } catch {
             throw ToriiOfflineAmountError.invalidAmount(rawValue)
         }
+    }
+
+    private static func exactNonEmptyText(_ value: String, field: String) throws -> String {
+        try ToriiOfflineCashModelValidation.requireExactNonEmptyText(value, field: field)
+        return value
     }
 
     public static func addAmounts(_ lhs: String, _ rhs: String) throws -> String {
@@ -736,15 +972,20 @@ public enum ToriiOfflineCashCodec {
             RevocationBundleUnsignedPayload(
                 issuedAtMs: bundle.issuedAtMs,
                 expiresAtMs: bundle.expiresAtMs,
-                verdictIds: bundle.verdictIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.sorted(),
-                blacklistedAccountIds: bundle.blacklistedAccountIds
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .sorted(),
+                verdictIds: try bundle.verdictIds.map { value in
+                    try exactNonEmptyText(value, field: "verdict_id")
+                }.sorted(),
+                blacklistedAccountIds: try bundle.blacklistedAccountIds.map { value in
+                    try exactNonEmptyText(value, field: "blacklisted_account_id")
+                }.sorted(),
                 assetSendLimits: try bundle.assetSendLimits
                     .sorted(by: { $0.assetDefinitionId < $1.assetDefinitionId })
                     .map { limit in
                         RevocationBundleAssetSendLimit(
-                            assetDefinitionId: limit.assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines),
+                            assetDefinitionId: try exactNonEmptyText(
+                                limit.assetDefinitionId,
+                                field: "asset_definition_id"
+                            ),
                             dailySendLimit: try canonicalAmountString(limit.dailySendLimit),
                             monthlySendLimit: try canonicalAmountString(limit.monthlySendLimit)
                         )

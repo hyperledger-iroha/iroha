@@ -1453,6 +1453,21 @@ public final class EthereumMainnetSccp {
     }
   }
 
+  private static void requireEvmReceiptLogNotRemoved(
+      final Map<String, Object> log, final String label, final String removedMessage) {
+    if (!log.containsKey("removed")) {
+      return;
+    }
+    final Object removed = log.get("removed");
+    if (Boolean.FALSE.equals(removed)) {
+      return;
+    }
+    if (Boolean.TRUE.equals(removed)) {
+      throw new IllegalArgumentException(removedMessage);
+    }
+    throw new IllegalArgumentException(label + ".removed must be a boolean");
+  }
+
   private static InboundEvidence callbackEvidenceSnapshot(final InboundEvidence evidence) {
     return new InboundEvidence(
         evidence.sourceDomain(),
@@ -1591,9 +1606,8 @@ public final class EthereumMainnetSccp {
         throw new IllegalArgumentException("receipt.logs[" + index + "] must be an object");
       }
       final Map<String, Object> log = (Map<String, Object>) logInput;
-      if (Boolean.TRUE.equals(log.get("removed"))) {
-        throw new IllegalArgumentException("receipt.logs must not contain removed logs");
-      }
+      requireEvmReceiptLogNotRemoved(
+          log, "receipt.logs[" + index + "]", "receipt.logs must not contain removed logs");
       final String logAddress =
           normalizeRpcHex(log.get("address"), "receipt.logs[" + index + "].address", 20, true);
       if (!(log.get("topics") instanceof List)) {

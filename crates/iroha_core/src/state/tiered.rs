@@ -1509,12 +1509,13 @@ impl TieredStateBackend {
     /// Validate lane snapshot geometry changes that can fail without mutating tiered state.
     ///
     /// # Errors
-    /// Returns an error if a required tiered snapshot, relabel, or retirement path is blocked by
-    /// an incompatible filesystem entry.
+    /// Returns an error if a required tiered snapshot, replacement, relabel, or retirement path is
+    /// blocked by an incompatible filesystem entry.
     pub fn preflight_lane_geometry(
         &self,
         previous: &LaneConfig,
         current: &LaneConfig,
+        replacements: &[(&LaneConfigEntry, &LaneConfigEntry)],
         relabelled: &[(&LaneConfigEntry, &LaneConfigEntry)],
     ) -> Result<()> {
         if !self.enabled {
@@ -1534,28 +1535,45 @@ impl TieredStateBackend {
         for entry in current.entries() {
             current_map.insert(entry.lane_id, entry);
         }
+        let replacement_ids: BTreeSet<_> = replacements
+            .iter()
+            .map(|(_, current)| current.lane_id)
+            .collect();
 
         let lanes_root = root.join("lanes");
         Self::preflight_dir_path(&lanes_root)?;
 
         for (id, entry) in &current_map {
             let dir = lane_snapshot_dir(&lanes_root, entry);
-            if previous_map.contains_key(id) && dir.exists() {
+            let replaced = replacement_ids.contains(id);
+            if !replaced && previous_map.contains_key(id) && dir.exists() {
                 Self::preflight_dir_path(&dir)?;
                 continue;
             }
-            if previous_map
-                .get(id)
-                .is_some_and(|prev| lane_snapshot_dir(&lanes_root, prev).exists())
+            if !replaced
+                && previous_map
+                    .get(id)
+                    .is_some_and(|prev| lane_snapshot_dir(&lanes_root, prev).exists())
             {
                 continue;
+            }
+            if replaced
+                && previous_map.get(id).is_some_and(|prev| {
+                    let old_dir = lane_snapshot_dir(&lanes_root, prev);
+                    old_dir != dir && dir.exists()
+                })
+            {
+                return Err(eyre::eyre!(
+                    "tiered-state: lane snapshot replacement target already exists: {path}",
+                    path = dir.display()
+                ));
             }
             Self::preflight_dir_path(&dir)?;
         }
 
         let retired_root = root.join("retired").join("lanes");
         for (id, entry) in &previous_map {
-            if current_map.contains_key(id) {
+            if current_map.contains_key(id) && !replacement_ids.contains(id) {
                 continue;
             }
             let dir = lane_snapshot_dir(&lanes_root, entry);
@@ -1590,6 +1608,7 @@ impl TieredStateBackend {
         &mut self,
         previous: &LaneConfig,
         current: &LaneConfig,
+        replacements: &[(&LaneConfigEntry, &LaneConfigEntry)],
     ) -> Result<()> {
         if !self.enabled {
             return Ok(());
@@ -1608,15 +1627,19 @@ impl TieredStateBackend {
         for entry in current.entries() {
             current_map.insert(entry.lane_id, entry);
         }
+        let replacement_ids: BTreeSet<_> = replacements
+            .iter()
+            .map(|(_, current)| current.lane_id)
+            .collect();
 
         let added: Vec<&LaneConfigEntry> = current_map
             .iter()
-            .filter(|(id, _)| !previous_map.contains_key(id))
+            .filter(|(id, _)| !previous_map.contains_key(id) && !replacement_ids.contains(id))
             .map(|(_, entry)| *entry)
             .collect();
         let retired: Vec<&LaneConfigEntry> = previous_map
             .iter()
-            .filter(|(id, _)| !current_map.contains_key(id))
+            .filter(|(id, _)| !current_map.contains_key(id) && !replacement_ids.contains(id))
             .map(|(_, entry)| *entry)
             .collect();
 
@@ -1628,11 +1651,18 @@ impl TieredStateBackend {
             )
         })?;
 
+        for (previous, _) in replacements {
+            self.retire_lane_snapshot_dir(&root, &lanes_root, previous)?;
+        }
+
         for entry in added {
             self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
         }
 
         for entry in current.entries() {
+            if replacement_ids.contains(&entry.lane_id) {
+                continue;
+            }
             let dir = lane_snapshot_dir(&lanes_root, entry);
             if dir.exists() {
                 continue;
@@ -1644,6 +1674,10 @@ impl TieredStateBackend {
                 continue;
             }
             self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
+        }
+
+        for (_, current) in replacements {
+            self.ensure_lane_snapshot_dir(&lanes_root, current)?;
         }
 
         for entry in retired {
@@ -1931,6 +1965,11 @@ impl TieredStateBackend {
             TieredSegment::AccountRoles,
             AccountRole,
             world.account_roles
+        );
+        collect_map!(
+            TieredSegment::SccpOutboundMessages,
+            SccpOutboundMessage,
+            world.sccp_outbound_messages
         );
         collect_map!(TieredSegment::TxSequences, TxSequence, world.tx_sequences);
         collect_map!(
@@ -2559,7 +2598,7 @@ mod measured_bytes_impls {
         },
         bridge::{
             BridgeHashFunction, BridgeIcsProof, BridgeProof, BridgeProofPayload, BridgeProofRange,
-            BridgeProofRecord, BridgeTransparentProof,
+            BridgeProofRecord, BridgeTransparentProof, SccpOutboundMessageRecord,
         },
         common::Owned,
         confidential::ConfidentialStatus,
@@ -3315,6 +3354,15 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for SccpOutboundMessageRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<SccpOutboundMessageRecord>();
+            total = total.saturating_add(self.payload_hash.measured_bytes_extra());
+            total = total.saturating_add(self.recorded_at_height.measured_bytes_extra());
+            total
+        }
+    }
+
     impl MeasuredBytes for ProofRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ProofRecord>();
@@ -3936,6 +3984,7 @@ enum TieredSegment {
     Roles,
     AccountPermissions,
     AccountRoles,
+    SccpOutboundMessages,
     TxSequences,
     VerifyingKeys,
     RuntimeUpgrades,
@@ -3975,6 +4024,7 @@ impl TieredSegment {
             TieredSegment::Roles => "roles",
             TieredSegment::AccountPermissions => "account_permissions",
             TieredSegment::AccountRoles => "account_roles",
+            TieredSegment::SccpOutboundMessages => "sccp_outbound_messages",
             TieredSegment::TxSequences => "tx_sequences",
             TieredSegment::VerifyingKeys => "verifying_keys",
             TieredSegment::RuntimeUpgrades => "runtime_upgrades",
@@ -4024,6 +4074,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "rwas" => TieredSegment::Rwas,
             "roles" => TieredSegment::Roles,
             "account_permissions" => TieredSegment::AccountPermissions,
+            "sccp_outbound_messages" => TieredSegment::SccpOutboundMessages,
             "account_roles" => TieredSegment::AccountRoles,
             "tx_sequences" => TieredSegment::TxSequences,
             "verifying_keys" => TieredSegment::VerifyingKeys,
@@ -4218,6 +4269,7 @@ pub(crate) enum TieredKeyHandle {
     Role(iroha_data_model::role::RoleId),
     AccountPermission(iroha_data_model::account::AccountId),
     AccountRole(crate::role::RoleIdWithOwner),
+    SccpOutboundMessage(iroha_data_model::bridge::SccpOutboundMessageKey),
     TxSequence(iroha_data_model::account::AccountId),
     VerifyingKey(iroha_data_model::proof::VerifyingKeyId),
     RuntimeUpgrade(iroha_data_model::runtime::RuntimeUpgradeId),
@@ -4257,6 +4309,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(_) => TieredSegment::Roles,
             TieredKeyHandle::AccountPermission(_) => TieredSegment::AccountPermissions,
             TieredKeyHandle::AccountRole(_) => TieredSegment::AccountRoles,
+            TieredKeyHandle::SccpOutboundMessage(_) => TieredSegment::SccpOutboundMessages,
             TieredKeyHandle::TxSequence(_) => TieredSegment::TxSequences,
             TieredKeyHandle::VerifyingKey(_) => TieredSegment::VerifyingKeys,
             TieredKeyHandle::RuntimeUpgrade(_) => TieredSegment::RuntimeUpgrades,
@@ -4297,6 +4350,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountPermission(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRole(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::SccpOutboundMessage(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::TxSequence(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::VerifyingKey(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::RuntimeUpgrade(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4359,6 +4413,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
+            TieredKeyHandle::SccpOutboundMessage(id) => fetch!(world.sccp_outbound_messages, id),
             TieredKeyHandle::TxSequence(id) => fetch!(world.tx_sequences, id),
             TieredKeyHandle::VerifyingKey(id) => fetch!(world.verifying_keys, id),
             TieredKeyHandle::RuntimeUpgrade(id) => fetch!(world.runtime_upgrades, id),
@@ -4419,6 +4474,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
+            TieredKeyHandle::SccpOutboundMessage(id) => fetch!(world.sccp_outbound_messages, id),
             TieredKeyHandle::TxSequence(id) => fetch!(world.tx_sequences, id),
             TieredKeyHandle::VerifyingKey(id) => fetch!(world.verifying_keys, id),
             TieredKeyHandle::RuntimeUpgrade(id) => fetch!(world.runtime_upgrades, id),
@@ -4468,6 +4524,15 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::Role(id) => write!(f, "role:{id}"),
             TieredKeyHandle::AccountPermission(id) => write!(f, "account_permission:{id}"),
             TieredKeyHandle::AccountRole(id) => write!(f, "account_role:{id}"),
+            TieredKeyHandle::SccpOutboundMessage(id) => {
+                write!(
+                    f,
+                    "sccp_outbound_message:{}:{}:{}",
+                    id.source_domain,
+                    id.target_domain,
+                    id.message_id.encode_hex::<String>()
+                )
+            }
             TieredKeyHandle::TxSequence(id) => write!(f, "tx_sequence:{id}"),
             TieredKeyHandle::VerifyingKey(id) => write!(f, "verifying_key:{id:?}"),
             TieredKeyHandle::RuntimeUpgrade(id) => write!(f, "runtime_upgrade:{id:?}"),
@@ -4870,6 +4935,44 @@ mod tests {
 
         assert_eq!(entry1.last_mutated_snapshot, manifest.snapshot_index);
         assert_eq!(entry2.last_mutated_snapshot, snapshot1);
+    }
+
+    #[test]
+    fn record_world_snapshot_includes_sccp_outbound_messages() {
+        let temp = tempdir().expect("tmpdir");
+        let mut backend =
+            TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
+        let mut world = World::default();
+        let key = iroha_data_model::bridge::SccpOutboundMessageKey {
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            message_id: [0xA5; 32],
+        };
+        let record = iroha_data_model::bridge::SccpOutboundMessageRecord {
+            payload_hash: [0x5A; 32],
+            recorded_at_height: 42,
+        };
+        world.sccp_outbound_messages.insert(key.clone(), record);
+
+        backend
+            .record_world_snapshot(&world)
+            .expect("snapshot with SCCP outbound outbox");
+        let manifest = backend.last_manifest().expect("manifest recorded");
+        let key_payload = TieredKeyHandle::SccpOutboundMessage(key)
+            .encode_key()
+            .expect("SCCP outbound key encodes");
+        let entry = manifest
+            .hot_entries
+            .iter()
+            .chain(&manifest.cold_entries)
+            .find(|entry| {
+                entry.segment == TieredSegment::SccpOutboundMessages
+                    && entry.key_payload == key_payload
+            })
+            .expect("SCCP outbound replay key should be snapshotted");
+
+        assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
+        assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
     }
 
     #[test]
@@ -5601,7 +5704,7 @@ mod tests {
         let extended_cfg = RuntimeLaneConfig::from_catalog(&extended_catalog);
 
         backend
-            .reconcile_lane_geometry(&initial_cfg, &extended_cfg)
+            .reconcile_lane_geometry(&initial_cfg, &extended_cfg, &[])
             .expect("lane add reconcile");
 
         let lanes_root = temp.path().join("lanes");
@@ -5613,7 +5716,7 @@ mod tests {
         );
 
         backend
-            .reconcile_lane_geometry(&extended_cfg, &initial_cfg)
+            .reconcile_lane_geometry(&extended_cfg, &initial_cfg, &[])
             .expect("lane retire reconcile");
 
         assert!(
@@ -5647,7 +5750,7 @@ mod tests {
         .expect("initial catalog");
         let initial_cfg = RuntimeLaneConfig::from_catalog(&initial_catalog);
         backend
-            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &initial_cfg)
+            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &initial_cfg, &[])
             .expect("provision initial snapshot");
 
         let old_entry = initial_cfg
@@ -5708,7 +5811,7 @@ mod tests {
         .expect("initial catalog");
         let initial_cfg = RuntimeLaneConfig::from_catalog(&initial_catalog);
         backend
-            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &initial_cfg)
+            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &initial_cfg, &[])
             .expect("provision initial snapshot");
         let old_entry = initial_cfg
             .entry(LaneId::SINGLE)
@@ -5731,7 +5834,7 @@ mod tests {
         fs::create_dir_all(&target_dir).expect("seed conflicting relabel target");
 
         let err = backend
-            .preflight_lane_geometry(&initial_cfg, &updated_cfg, &[(old_entry, new_entry)])
+            .preflight_lane_geometry(&initial_cfg, &updated_cfg, &[], &[(old_entry, new_entry)])
             .expect_err("occupied relabel target must fail preflight");
 
         assert!(
@@ -5764,7 +5867,7 @@ mod tests {
                 .expect("two-lane catalog");
         let two_lane_cfg = RuntimeLaneConfig::from_catalog(&two_lane_catalog);
         backend
-            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &two_lane_cfg)
+            .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &two_lane_cfg, &[])
             .expect("provision lane snapshots");
 
         let retired_lane_root = temp.path().join("retired").join("lanes");
@@ -5774,7 +5877,7 @@ mod tests {
         fs::write(&retired_lane_root, b"blocker").expect("retired root blocker");
 
         let err = backend
-            .preflight_lane_geometry(&two_lane_cfg, &RuntimeLaneConfig::default(), &[])
+            .preflight_lane_geometry(&two_lane_cfg, &RuntimeLaneConfig::default(), &[], &[])
             .expect_err("retired root file must fail preflight");
 
         assert!(

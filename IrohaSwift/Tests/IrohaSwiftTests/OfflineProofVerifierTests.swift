@@ -22,12 +22,12 @@ final class OfflineProofVerifierTests: XCTestCase {
         XCTAssertNotNil(Data(base64Encoded: encoded))
     }
 
-    func testCounterpartyVerifierRequiresIosChallengeHash() {
-        let binding = ToriiOfflineDeviceBinding(
-            platform: "ios",
-            attestationKeyId: "",
+    func testCounterpartyVerifierRequiresIosChallengeHash() throws {
+        let binding = try ToriiOfflineDeviceBinding(
+            platform: OfflineNoteV2Constants.iosAppAttestPlatform,
+            attestationKeyId: "attestation-key",
             deviceId: "ios-device",
-            offlinePublicKey: "",
+            offlinePublicKey: "offline-public-key",
             attestationReportBase64: ""
         )
 
@@ -45,35 +45,24 @@ final class OfflineProofVerifierTests: XCTestCase {
         }
     }
 
-    func testCounterpartyVerifierRejectsRemovedPlatformAliasesBeforeDispatch() {
-        for platform in ["ios-appattest", "ios-app-attest"] {
-            let binding = ToriiOfflineDeviceBinding(
+    func testCounterpartyVerifierRejectsRemovedPlatformAliasesAndDispatchesAndroidKeyMint() throws {
+        for platform in ["ios", "ios-app-attest"] {
+            XCTAssertThrowsError(try ToriiOfflineDeviceBinding(
                 platform: platform,
-                attestationKeyId: "",
+                attestationKeyId: "attestation-key",
                 deviceId: "ios-device",
-                offlinePublicKey: "",
+                offlinePublicKey: "offline-public-key",
                 attestationReportBase64: ""
-            )
-
-            XCTAssertThrowsError(
-                try CounterpartyOfflineProofVerifier().verifyDeviceBinding(
-                    accountId: "account",
-                    binding: binding,
-                    expectedChallengeHashHex: nil
-                )
-            ) { error in
-                XCTAssertEqual(
-                    (error as? OfflineProofVerifierError)?.errorDescription,
-                    "Unsupported offline device binding platform."
-                )
+            )) { error in
+                XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("platform"))
             }
         }
 
-        let androidBinding = ToriiOfflineDeviceBinding(
-            platform: "android-keymint",
-            attestationKeyId: "",
+        let androidBinding = try ToriiOfflineDeviceBinding(
+            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+            attestationKeyId: "attestation-key",
             deviceId: "android-device",
-            offlinePublicKey: "",
+            offlinePublicKey: "offline-public-key",
             attestationReportBase64: ""
         )
         XCTAssertThrowsError(
@@ -85,127 +74,83 @@ final class OfflineProofVerifierTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 (error as? OfflineProofVerifierError)?.errorDescription,
-                "Unsupported offline device binding platform."
+                "Offline device binding is incomplete."
             )
         }
     }
 
     func testCounterpartyVerifierRejectsPaddedPlatformBeforeDispatch() {
-        let binding = ToriiOfflineDeviceBinding(
-            platform: " ios",
-            attestationKeyId: "",
+        XCTAssertThrowsError(try ToriiOfflineDeviceBinding(
+            platform: " \(OfflineNoteV2Constants.iosAppAttestPlatform)",
+            attestationKeyId: "attestation-key",
             deviceId: "ios-device",
-            offlinePublicKey: "",
+            offlinePublicKey: "offline-public-key",
             attestationReportBase64: ""
-        )
-
-        XCTAssertThrowsError(
-            try CounterpartyOfflineProofVerifier().verifyDeviceBinding(
-                accountId: "account",
-                binding: binding,
-                expectedChallengeHashHex: nil
-            )
-        ) { error in
-            XCTAssertEqual(
-                (error as? OfflineProofVerifierError)?.errorDescription,
-                "Unsupported offline device binding platform."
-            )
-        }
-
-        let proof = ToriiOfflineDeviceProof(
-            platform: "ios",
-            attestationKeyId: "",
-            challengeHashHex: "",
-            assertionBase64: "",
-            counter: nil
-        )
-        XCTAssertThrowsError(
-            try CounterpartyOfflineProofVerifier().verifyDeviceProof(binding: binding, proof: proof)
-        ) { error in
-            XCTAssertEqual(
-                (error as? OfflineProofVerifierError)?.errorDescription,
-                "Unsupported offline device proof platform."
-            )
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("platform"))
         }
     }
 
     func testCounterpartyVerifierRejectsCaseChangedPlatformBeforeDispatch() {
-        let binding = ToriiOfflineDeviceBinding(
+        XCTAssertThrowsError(try ToriiOfflineDeviceBinding(
             platform: "IOS",
-            attestationKeyId: "",
+            attestationKeyId: "attestation-key",
             deviceId: "ios-device",
-            offlinePublicKey: "",
+            offlinePublicKey: "offline-public-key",
             attestationReportBase64: ""
-        )
-
-        XCTAssertThrowsError(
-            try CounterpartyOfflineProofVerifier().verifyDeviceBinding(
-                accountId: "account",
-                binding: binding,
-                expectedChallengeHashHex: nil
-            )
-        ) { error in
-            XCTAssertEqual(
-                (error as? OfflineProofVerifierError)?.errorDescription,
-                "Unsupported offline device binding platform."
-            )
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("platform"))
         }
 
-        let iosProofBinding = ToriiOfflineDeviceBinding(
-            platform: "ios",
-            attestationKeyId: "",
-            deviceId: "ios-device",
-            offlinePublicKey: "",
-            attestationReportBase64: "not-empty"
-        )
-        let iosProof = ToriiOfflineDeviceProof(
+        XCTAssertThrowsError(try ToriiOfflineDeviceProof(
             platform: "IOS",
-            attestationKeyId: "",
-            challengeHashHex: "",
-            assertionBase64: "",
+            attestationKeyId: "attestation-key",
+            challengeHashHex: Self.hexLowercased(Self.challengeBytes()),
+            assertionBase64: Data("assertion".utf8).base64EncodedString(),
+            counter: nil
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("platform"))
+        }
+
+        XCTAssertThrowsError(try ToriiOfflineDeviceBinding(
+            platform: "Android",
+            attestationKeyId: "attestation-key",
+            deviceId: "android-device",
+            offlinePublicKey: "offline-public-key",
+            attestationReportBase64: ""
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("platform"))
+        }
+
+        XCTAssertThrowsError(try ToriiOfflineDeviceProof(
+            platform: "Android",
+            attestationKeyId: "attestation-key",
+            challengeHashHex: Self.hexLowercased(Self.challengeBytes()),
+            assertionBase64: Data("assertion".utf8).base64EncodedString(),
+            counter: nil
+        )) { error in
+            XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("platform"))
+        }
+    }
+
+    func testIosVerifierRejectsWrongProofPlatformBeforeDispatch() throws {
+        let binding = try ToriiOfflineDeviceBinding(
+            platform: OfflineNoteV2Constants.iosAppAttestPlatform,
+            attestationKeyId: "attestation-key",
+            deviceId: "ios-device",
+            offlinePublicKey: "offline-public-key",
+            attestationReportBase64: "not-used-for-platform-validation"
+        )
+        let proof = try ToriiOfflineDeviceProof(
+            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+            attestationKeyId: "attestation-key",
+            challengeHashHex: Self.hexLowercased(Self.challengeBytes()),
+            assertionBase64: Data("assertion".utf8).base64EncodedString(),
             counter: nil
         )
-        XCTAssertThrowsError(
-            try IosOfflineProofVerifier().verifyDeviceProof(binding: iosProofBinding, proof: iosProof)
-        ) { error in
-            XCTAssertEqual(
-                (error as? OfflineProofVerifierError)?.errorDescription,
-                "Unsupported offline device proof platform."
-            )
-        }
 
-        let androidBinding = ToriiOfflineDeviceBinding(
-            platform: "Android",
-            attestationKeyId: "",
-            deviceId: "",
-            offlinePublicKey: "",
-            attestationReportBase64: ""
-        )
         XCTAssertThrowsError(
-            try AndroidOfflineProofVerifier().verifyDeviceBinding(androidBinding)
-        ) { error in
-            XCTAssertEqual(
-                (error as? OfflineProofVerifierError)?.errorDescription,
-                "Unsupported offline device binding platform."
-            )
-        }
-
-        let androidProof = ToriiOfflineDeviceProof(
-            platform: "Android",
-            attestationKeyId: "",
-            challengeHashHex: "",
-            assertionBase64: "",
-            counter: nil
-        )
-        let exactAndroidBinding = ToriiOfflineDeviceBinding(
-            platform: "android",
-            attestationKeyId: "",
-            deviceId: "",
-            offlinePublicKey: "",
-            attestationReportBase64: ""
-        )
-        XCTAssertThrowsError(
-            try AndroidOfflineProofVerifier().verifyDeviceProof(binding: exactAndroidBinding, proof: androidProof)
+            try IosOfflineProofVerifier().verifyDeviceProof(binding: binding, proof: proof)
         ) { error in
             XCTAssertEqual(
                 (error as? OfflineProofVerifierError)?.errorDescription,
@@ -214,13 +159,13 @@ final class OfflineProofVerifierTests: XCTestCase {
         }
     }
 
-    func testAndroidVerifierRejectsIncompleteBinding() {
-        let binding = ToriiOfflineDeviceBinding(
-            platform: "android",
-            attestationKeyId: "",
-            deviceId: "",
-            offlinePublicKey: "",
-            attestationReportBase64: ""
+    func testAndroidVerifierRejectsWrongBindingPlatformBeforeDispatch() throws {
+        let binding = try ToriiOfflineDeviceBinding(
+            platform: OfflineNoteV2Constants.iosAppAttestPlatform,
+            attestationKeyId: "attestation-key",
+            deviceId: "ios-device",
+            offlinePublicKey: "offline-public-key",
+            attestationReportBase64: "not-used-for-platform-validation"
         )
 
         XCTAssertThrowsError(
@@ -228,32 +173,168 @@ final class OfflineProofVerifierTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 (error as? OfflineProofVerifierError)?.errorDescription,
-                "Offline device binding is incomplete."
+                "Unsupported offline device binding platform."
             )
         }
     }
 
-    func testAndroidVerifierAcceptsLegacyEd25519Proof() throws {
+    func testIosVerifierRejectsNonExactMetadataBeforeDispatch() {
+        func binding(
+            teamId: String = "TEAMID1234",
+            bundleId: String = "jp.co.soramitsu.iroha.offline",
+            environment: String = "production"
+        ) throws -> ToriiOfflineDeviceBinding {
+            try ToriiOfflineDeviceBinding(
+                platform: OfflineNoteV2Constants.iosAppAttestPlatform,
+                attestationKeyId: "attestation-key",
+                deviceId: "ios-device",
+                offlinePublicKey: "offline-public-key",
+                attestationReportBase64: "not-used-for-metadata-validation",
+                iosTeamId: teamId,
+                iosBundleId: bundleId,
+                iosEnvironment: environment
+            )
+        }
+
+        for (invalidBinding, expectedField) in [
+            ({ try binding(teamId: " TEAMID1234") }, "ios_team_id"),
+            ({ try binding(bundleId: "jp.co.soramitsu.iroha.offline\n") }, "ios_bundle_id"),
+            ({ try binding(environment: "Production") }, "ios_environment"),
+            ({ try binding(environment: " production") }, "ios_environment"),
+        ] {
+            XCTAssertThrowsError(try invalidBinding()) { error in
+                XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField(expectedField))
+            }
+        }
+    }
+
+    func testAndroidVerifierRejectsIncompleteBinding() {
+        for (makeBinding, expectedField) in [
+            ({
+                try ToriiOfflineDeviceBinding(
+                    platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+                    attestationKeyId: "",
+                    deviceId: "android-device",
+                    offlinePublicKey: "offline-public-key",
+                    attestationReportBase64: ""
+                )
+            }, "attestation_key_id"),
+            ({
+                try ToriiOfflineDeviceBinding(
+                    platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+                    attestationKeyId: "attestation-key",
+                    deviceId: "",
+                    offlinePublicKey: "offline-public-key",
+                    attestationReportBase64: ""
+                )
+            }, "device_id"),
+            ({
+                try ToriiOfflineDeviceBinding(
+                    platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+                    attestationKeyId: "attestation-key",
+                    deviceId: "android-device",
+                    offlinePublicKey: "",
+                    attestationReportBase64: ""
+                )
+            }, "offline_public_key"),
+        ] {
+            XCTAssertThrowsError(try makeBinding()) { error in
+                XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField(expectedField))
+            }
+        }
+    }
+
+    func testAndroidVerifierRejectsRetiredEd25519Proof() throws {
         let privateKey = Curve25519.Signing.PrivateKey()
         let publicKey = privateKey.publicKey.rawRepresentation
         let keyId = Self.sha256Hex(publicKey)
         let challenge = Self.challengeBytes()
         let signature = try privateKey.signature(for: challenge)
-        let binding = ToriiOfflineDeviceBinding(
-            platform: "android",
+        let binding = try ToriiOfflineDeviceBinding(
+            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
             attestationKeyId: keyId,
             deviceId: "android-device",
             offlinePublicKey: publicKey.base64EncodedString(),
+            assertionPublicKey: publicKey.base64EncodedString(),
             attestationReportBase64: "not-used-for-proof"
         )
-        let proof = ToriiOfflineDeviceProof(
-            platform: "android",
+        let proof = try ToriiOfflineDeviceProof(
+            platform: OfflineNoteV2Constants.androidKeyMintPlatform,
             attestationKeyId: keyId,
             challengeHashHex: Self.hexLowercased(challenge),
             assertionBase64: signature.base64EncodedString()
         )
 
-        try AndroidOfflineProofVerifier().verifyDeviceProof(binding: binding, proof: proof)
+        XCTAssertThrowsError(
+            try AndroidOfflineProofVerifier().verifyDeviceProof(binding: binding, proof: proof)
+        ) { error in
+            XCTAssertEqual(
+                (error as? OfflineProofVerifierError)?.errorDescription,
+                "Offline device binding assertion public key is invalid."
+            )
+        }
+    }
+
+    func testAndroidVerifierRejectsNonCanonicalChallengeHashHex() throws {
+        let privateKey = Curve25519.Signing.PrivateKey()
+        let publicKey = privateKey.publicKey.rawRepresentation
+        let keyId = Self.sha256Hex(publicKey)
+        let challenge = Self.challengeBytes()
+        let signature = try privateKey.signature(for: challenge)
+        let canonicalChallenge = Self.hexLowercased(challenge)
+        for nonCanonicalChallenge in [
+            canonicalChallenge.uppercased(),
+            " \(canonicalChallenge)",
+            "\(canonicalChallenge) ",
+        ] {
+            XCTAssertThrowsError(try ToriiOfflineDeviceProof(
+                platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+                attestationKeyId: keyId,
+                challengeHashHex: nonCanonicalChallenge,
+                assertionBase64: signature.base64EncodedString()
+            )) { error in
+                XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("challenge_hash_hex"))
+            }
+        }
+    }
+
+    func testAndroidVerifierRejectsNonCanonicalAttestationKeyId() throws {
+        let offlineKey = Curve25519.Signing.PrivateKey()
+        let assertionKey = P256.Signing.PrivateKey()
+        let assertionPublicKey = assertionKey.publicKey.x963Representation
+        let keyId = Self.sha256Hex(assertionPublicKey)
+        let challenge = Self.challengeBytes()
+        let signature = try assertionKey.signature(for: challenge).derRepresentation
+        let challengeHash = Self.hexLowercased(challenge)
+
+        for (bindingKeyId, proofKeyId) in [
+            (keyId.uppercased(), keyId.uppercased()),
+            (keyId, keyId.uppercased()),
+        ] {
+            let binding = try ToriiOfflineDeviceBinding(
+                platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+                attestationKeyId: bindingKeyId,
+                deviceId: "android-device",
+                offlinePublicKey: offlineKey.publicKey.rawRepresentation.base64EncodedString(),
+                assertionPublicKey: assertionPublicKey.base64EncodedString(),
+                attestationReportBase64: "not-used-for-proof"
+            )
+            let proof = try ToriiOfflineDeviceProof(
+                platform: OfflineNoteV2Constants.androidKeyMintPlatform,
+                attestationKeyId: proofKeyId,
+                challengeHashHex: challengeHash,
+                assertionBase64: signature.base64EncodedString()
+            )
+
+            XCTAssertThrowsError(
+                try AndroidOfflineProofVerifier().verifyDeviceProof(binding: binding, proof: proof)
+            ) { error in
+                XCTAssertEqual(
+                    (error as? OfflineProofVerifierError)?.errorDescription,
+                    "Offline device proof does not match the device binding."
+                )
+            }
+        }
     }
 
     func testAndroidKeyMintProofUsesAssertionPublicKey() throws {
@@ -263,7 +344,7 @@ final class OfflineProofVerifierTests: XCTestCase {
         let keyId = Self.sha256Hex(assertionPublicKey)
         let challenge = Self.challengeBytes()
         let signature = try assertionKey.signature(for: challenge).derRepresentation
-        let binding = ToriiOfflineDeviceBinding(
+        let binding = try ToriiOfflineDeviceBinding(
             platform: "android-keymint",
             attestationKeyId: keyId,
             deviceId: "android-keymint-device",
@@ -271,7 +352,7 @@ final class OfflineProofVerifierTests: XCTestCase {
             assertionPublicKey: assertionPublicKey.base64EncodedString(),
             attestationReportBase64: "not-used-for-proof"
         )
-        let proof = ToriiOfflineDeviceProof(
+        let proof = try ToriiOfflineDeviceProof(
             platform: "android-keymint",
             attestationKeyId: keyId,
             challengeHashHex: Self.hexLowercased(challenge),
@@ -288,7 +369,7 @@ final class OfflineProofVerifierTests: XCTestCase {
         let keyId = Self.sha256Hex(assertionPublicKey)
         let challenge = Self.challengeBytes()
         let signature = try assertionKey.signature(for: challenge).derRepresentation
-        let binding = ToriiOfflineDeviceBinding(
+        let binding = try ToriiOfflineDeviceBinding(
             platform: "android-keymint",
             attestationKeyId: keyId,
             deviceId: "android-keymint-device",
@@ -296,7 +377,7 @@ final class OfflineProofVerifierTests: XCTestCase {
             assertionPublicKey: nil,
             attestationReportBase64: "not-used-for-proof"
         )
-        let proof = ToriiOfflineDeviceProof(
+        let proof = try ToriiOfflineDeviceProof(
             platform: "android-keymint",
             attestationKeyId: keyId,
             challengeHashHex: Self.hexLowercased(challenge),
@@ -321,7 +402,7 @@ final class OfflineProofVerifierTests: XCTestCase {
         let keyId = Self.sha256Hex(verifierPublicKey)
         let challenge = Self.challengeBytes()
         let signature = try signingKey.signature(for: challenge).derRepresentation
-        let binding = ToriiOfflineDeviceBinding(
+        let binding = try ToriiOfflineDeviceBinding(
             platform: "android-keymint",
             attestationKeyId: keyId,
             deviceId: "android-keymint-device",
@@ -329,7 +410,7 @@ final class OfflineProofVerifierTests: XCTestCase {
             assertionPublicKey: verifierPublicKey.base64EncodedString(),
             attestationReportBase64: "not-used-for-proof"
         )
-        let proof = ToriiOfflineDeviceProof(
+        let proof = try ToriiOfflineDeviceProof(
             platform: "android-keymint",
             attestationKeyId: keyId,
             challengeHashHex: Self.hexLowercased(challenge),

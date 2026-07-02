@@ -63,7 +63,6 @@ use iroha_data_model::{
     },
     oracle::KeyedHash,
     peer::{Peer, PeerId},
-    smart_contract::{ContractAddress, ContractAlias},
     sorafs::{
         capacity::ProviderId, pin_registry::StorageClass as SorafsStorageClass,
         pricing::PricingScheduleRecord,
@@ -2407,6 +2406,8 @@ pub struct Concurrency {
     pub scheduler_stack_bytes: usize,
     /// Stack size (bytes) for prover worker threads.
     pub prover_stack_bytes: usize,
+    /// Stack size (bytes) for Sumeragi helper threads.
+    pub sumeragi_stack_bytes: usize,
     /// Guest stack size (bytes) for IVM instances.
     pub guest_stack_bytes: u64,
     /// Gas→stack multiplier (bytes of stack available per unit of gas).
@@ -2423,6 +2424,7 @@ impl Concurrency {
             rayon_global_threads: defaults::concurrency::RAYON_GLOBAL,
             scheduler_stack_bytes: defaults::concurrency::SCHEDULER_STACK_BYTES,
             prover_stack_bytes: defaults::concurrency::PROVER_STACK_BYTES,
+            sumeragi_stack_bytes: defaults::concurrency::SUMERAGI_STACK_BYTES,
             guest_stack_bytes: defaults::concurrency::GUEST_STACK_BYTES,
             gas_to_stack_multiplier: defaults::concurrency::GAS_TO_STACK_MULTIPLIER,
         }
@@ -2442,6 +2444,18 @@ impl Concurrency {
         if self.scheduler_stack_bytes == 0 || self.prover_stack_bytes == 0 {
             return Err(Report::new(ParseError::InvalidConcurrencyConfig)
                 .attach("scheduler_stack_bytes and prover_stack_bytes must be non-zero"));
+        }
+        if self.sumeragi_stack_bytes < defaults::concurrency::SUMERAGI_STACK_BYTES_MIN
+            || self.sumeragi_stack_bytes > defaults::concurrency::SUMERAGI_STACK_BYTES_MAX
+        {
+            return Err(
+                Report::new(ParseError::InvalidConcurrencyConfig).attach(format!(
+                    "sumeragi_stack_bytes must be in [{}, {}], got {}",
+                    defaults::concurrency::SUMERAGI_STACK_BYTES_MIN,
+                    defaults::concurrency::SUMERAGI_STACK_BYTES_MAX,
+                    self.sumeragi_stack_bytes
+                )),
+            );
         }
         if self.gas_to_stack_multiplier == 0 {
             return Err(Report::new(ParseError::InvalidConcurrencyConfig)
@@ -2592,25 +2606,12 @@ pub struct NexusFees {
     pub fee_receipts_activation_height: u64,
     /// Whether sponsored fees are settled by an external public-Nexus reconciler instead of local WSV asset debits.
     pub external_settlement_enabled: bool,
-    /// Burn fees at or after this block timestamp; earlier blocks use legacy fee transfer semantics.
+    /// Retained for configuration compatibility; direct Nexus fee settlement burns immediately.
     pub burn_from_unix_timestamp_ms: u64,
     /// How fees are settled after they are computed.
     pub settlement_mode: NexusFeeSettlementMode,
     /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
     pub successful_claim_fee_exempt_authorities: Vec<String>,
-    /// Contract calls eligible for fee sponsorship.
-    pub sponsored_contract_operation_allowlist: Vec<SponsoredContractOperationAllowlistEntry>,
-}
-
-/// Sponsored contract operation allowlist entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SponsoredContractOperationAllowlistEntry {
-    /// Contract alias that must match the call target, if set.
-    pub contract_alias: Option<ContractAlias>,
-    /// Contract address that must match the call target, if set.
-    pub contract_address: Option<ContractAddress>,
-    /// Contract entrypoints eligible for sponsorship under this target rule.
-    pub entrypoints: BTreeSet<String>,
 }
 
 /// Settlement mode for Nexus fee debits.
@@ -2629,21 +2630,6 @@ impl NexusFees {
         self.settlement_mode == NexusFeeSettlementMode::LaneRelayBurn
             && block_height >= self.fee_receipts_activation_height
     }
-}
-
-fn default_sponsored_contract_operation_allowlist() -> Vec<SponsoredContractOperationAllowlistEntry>
-{
-    vec![SponsoredContractOperationAllowlistEntry {
-        contract_alias: Some(
-            defaults::nexus::fees::DPN_SPONSORED_CONTRACT_ALIAS
-                .parse()
-                .expect("default DPN sponsored contract alias must be valid"),
-        ),
-        contract_address: None,
-        entrypoints: defaults::nexus::fees::dpn_sponsored_contract_entrypoints()
-            .into_iter()
-            .collect(),
-    }]
 }
 
 impl Default for NexusFees {
@@ -2666,8 +2652,6 @@ impl Default for NexusFees {
             burn_from_unix_timestamp_ms: defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS,
             settlement_mode: NexusFeeSettlementMode::Direct,
             successful_claim_fee_exempt_authorities: Vec::new(),
-            sponsored_contract_operation_allowlist: default_sponsored_contract_operation_allowlist(
-            ),
         }
     }
 }
@@ -3090,6 +3074,8 @@ pub struct Nexus {
     pub dataspace_catalog: DataSpaceCatalog,
     /// Default fee sponsor account literal for each data space.
     pub dataspace_fee_sponsors: BTreeMap<DataSpaceId, String>,
+    /// Default fee sponsor policy name for each data space.
+    pub dataspace_fee_sponsor_policies: BTreeMap<DataSpaceId, Name>,
     /// Lane routing policy.
     pub routing_policy: LaneRoutingPolicy,
     /// Lane manifest registry configuration.
@@ -3126,6 +3112,7 @@ impl Default for Nexus {
             lane_config: LaneConfig::default(),
             dataspace_catalog: DataSpaceCatalog::default(),
             dataspace_fee_sponsors: BTreeMap::new(),
+            dataspace_fee_sponsor_policies: BTreeMap::new(),
             routing_policy: LaneRoutingPolicy::default(),
             registry: LaneRegistry::default(),
             governance: GovernanceCatalog::default(),
@@ -3162,6 +3149,7 @@ impl Nexus {
         self.lane_catalog != LaneCatalog::default()
             || self.dataspace_catalog != DataSpaceCatalog::default()
             || !self.dataspace_fee_sponsors.is_empty()
+            || !self.dataspace_fee_sponsor_policies.is_empty()
             || self.routing_policy != LaneRoutingPolicy::default()
     }
 }
@@ -8032,7 +8020,7 @@ pub struct Zk {
 }
 
 /// Configured SCCP source-chain verifier material.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 pub struct SccpSourceVerifierMaterial {
     /// Material format version.
     pub version: u8,
@@ -8083,7 +8071,7 @@ pub struct SccpSourceVerifierMaterial {
 }
 
 /// Configured SCCP source adapter engine deployment material.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 pub struct SccpSourceAdapterEngineDeployment {
     /// Material format version.
     pub version: u8,
@@ -8158,7 +8146,7 @@ pub struct SccpSourceAdapterEngineDeployment {
 }
 
 /// Configured SCCP destination verifier rollout material.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 pub struct SccpDestinationRollout {
     /// Material format version.
     pub version: u8,
@@ -8233,7 +8221,7 @@ pub struct SccpDestinationRollout {
 }
 
 /// Configured SCCP governed route allowlist material.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, norito::JsonSerialize, norito::JsonDeserialize)]
 pub struct SccpRouteAllowlist {
     /// Material format version.
     pub version: u8,
@@ -8401,6 +8389,8 @@ pub struct SccpRouteManifest {
     pub sccp_tron_source_bridge_address: String,
     /// Destination verifier contract address. The field name is legacy-compatible.
     pub tron_verifier_address: String,
+    /// TON verifier internal message value in nanoTON.
+    pub ton_finalize_message_value_nano: Option<String>,
     /// Hex-encoded verifier code digest.
     pub verifier_code_hash: String,
     /// Hex-encoded verifier key digest.
@@ -8413,6 +8403,12 @@ pub struct SccpRouteManifest {
     pub native_evm_prover_bundle_hash: Option<String>,
     /// Optional canonical native EVM prover bundle JSON.
     pub native_evm_prover_bundle: Option<iroha_primitives::json::Json>,
+    /// Optional source verifier material used to verify counterparty-to-TAIRA messages.
+    pub source_verifier_material: Option<iroha_primitives::json::Json>,
+    /// Optional source adapter engine deployment evidence used by counterparty-to-TAIRA proofs.
+    pub source_adapter_engine_deployment: Option<iroha_primitives::json::Json>,
+    /// Optional source adapter engine descriptor used by counterparty-to-TAIRA proofs.
+    pub source_adapter_engine: Option<iroha_primitives::json::Json>,
     /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
     pub destination_browser_prover: Option<SccpRouteBrowserProverManifestRef>,
     /// Optional route-bound counterparty-to-TAIRA browser prover manifest reference.
@@ -9233,6 +9229,48 @@ mod tests_npos_timeouts {
         let err = cfg
             .validate()
             .expect_err("zero multiplier should be invalid");
+        assert!(matches!(
+            err.current_context(),
+            ParseError::InvalidConcurrencyConfig
+        ));
+    }
+
+    #[test]
+    fn concurrency_validate_rejects_too_small_sumeragi_stack() {
+        let mut cfg = Concurrency::from_defaults();
+        cfg.sumeragi_stack_bytes = defaults::concurrency::SUMERAGI_STACK_BYTES_MIN - 1;
+
+        let err = cfg
+            .validate()
+            .expect_err("Sumeragi stack below minimum must fail");
+        assert!(matches!(
+            err.current_context(),
+            ParseError::InvalidConcurrencyConfig
+        ));
+    }
+
+    #[test]
+    fn concurrency_validate_rejects_known_unsafe_sumeragi_stack() {
+        let mut cfg = Concurrency::from_defaults();
+        cfg.sumeragi_stack_bytes = 32 * 1024 * 1024;
+
+        let err = cfg
+            .validate()
+            .expect_err("known unsafe Sumeragi stack size must fail");
+        assert!(matches!(
+            err.current_context(),
+            ParseError::InvalidConcurrencyConfig
+        ));
+    }
+
+    #[test]
+    fn concurrency_validate_rejects_excessive_sumeragi_stack() {
+        let mut cfg = Concurrency::from_defaults();
+        cfg.sumeragi_stack_bytes = defaults::concurrency::SUMERAGI_STACK_BYTES_MAX + 1;
+
+        let err = cfg
+            .validate()
+            .expect_err("Sumeragi stack above maximum must fail");
         assert!(matches!(
             err.current_context(),
             ParseError::InvalidConcurrencyConfig

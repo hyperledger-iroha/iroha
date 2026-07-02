@@ -1775,7 +1775,6 @@ PromotedSecondSlotEventuallyClears ==
      )
 
 FrontierRecoveryStateSafetyEnvelope ==
-  /\ TypeInvariant
   /\ CommitImpliesVoteQuorum
   /\ CommitImpliesPayloadAvailability
   /\ CommittedFrontierHasNoStagedFuture

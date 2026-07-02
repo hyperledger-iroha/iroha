@@ -334,6 +334,12 @@ HEX32_E = "0x" + "ee" * 32
 HEX32_F = "0x" + "12" * 32
 HEX32_G = "0x" + "56" * 32
 HEX32_H = "0x" + "78" * 32
+GOVERNED_SOLANA_TOWER_REPLAY_HASH = "0x" + "b7" * 32
+GOVERNED_SOLANA_ACCOUNTSDB_LATTICE_HASH = "0x" + "c8" * 32
+GOVERNED_SOLANA_BANK_FORK_CHOICE_HASH = "0x" + "d9" * 32
+GOVERNED_TON_MASTERCHAIN_CONFIG_HASH = "0x" + "26" * 32
+GOVERNED_TON_VALIDATOR_SET_TRANSITION_HASH = "0x" + "27" * 32
+GOVERNED_TON_SHARD_ACCOUNTS_DICTIONARY_HASH = "0x" + "28" * 32
 SOURCE_EVENT_DIGEST = "0x" + "34" * 32
 SOURCE_BRIDGE_ADDRESS = "0x" + "44" * 20
 ETHEREUM_FINALITY_BRANCH = [
@@ -8553,18 +8559,27 @@ def test_derives_source_material_and_deployment_record_hashes_for_ui_tooling() -
 
     audited_solana_deployment = {
         **sample_source_record_input(SCCP_DOMAIN_SOL),
-        "solana_tower_replay_verifier_hash": "0x" + "bb" * 32,
-        "solana_full_accountsdb_lattice_verifier_hash": "0x" + "cc" * 32,
-        "solana_bank_fork_choice_verifier_hash": "0x" + "dd" * 32,
+        "solana_tower_replay_verifier_hash": GOVERNED_SOLANA_TOWER_REPLAY_HASH,
+        "solana_full_accountsdb_lattice_verifier_hash": (
+            GOVERNED_SOLANA_ACCOUNTSDB_LATTICE_HASH
+        ),
+        "solana_bank_fork_choice_verifier_hash": GOVERNED_SOLANA_BANK_FORK_CHOICE_HASH,
     }
     assert (
         sccp_source_adapter_engine_deployment_hash(audited_solana_deployment)
-        == "0x97e5c4196aff6387b9d973e663de3ce9345e1d8c3de89d22505b2197e282dc61"
+        == "0xb5a584c5885140ccacffef3b87b1919a2cb7f832869fca9294dfbdd413717e90"
     )
     assert (
         sccp_solana_full_light_client_gate_hash(audited_solana_deployment)
-        == "0xe23b2c175909e222c1ebe371661bda8c0687cf8d7e7acf2b62957a51c420be02"
+        == "0xfaa3db315129651b8cd9bc9d4297a5d0503eb5fefbe1a6664a90de3407aaa98b"
     )
+    with pytest.raises(ValueError, match="governed Solana full-light-client audit"):
+        sccp_source_adapter_deployment_binding_from_deployment(
+            {
+                **audited_solana_deployment,
+                "solana_tower_replay_verifier_hash": "0x" + "b8" * 32,
+            }
+        )
     assert (
         sccp_solana_full_light_client_gate_hash(
             {
@@ -8647,17 +8662,21 @@ def test_derives_source_material_and_deployment_record_hashes_for_ui_tooling() -
 
     audited_ton_deployment = {
         **sample_source_record_input(SCCP_DOMAIN_TON),
-        "ton_masterchain_config_verifier_hash": "0x" + "bb" * 32,
-        "ton_validator_set_transition_verifier_hash": "0x" + "cc" * 32,
-        "ton_shard_accounts_dictionary_verifier_hash": "0x" + "dd" * 32,
+        "ton_masterchain_config_verifier_hash": GOVERNED_TON_MASTERCHAIN_CONFIG_HASH,
+        "ton_validator_set_transition_verifier_hash": (
+            GOVERNED_TON_VALIDATOR_SET_TRANSITION_HASH
+        ),
+        "ton_shard_accounts_dictionary_verifier_hash": (
+            GOVERNED_TON_SHARD_ACCOUNTS_DICTIONARY_HASH
+        ),
     }
     assert (
         sccp_source_adapter_engine_deployment_hash(audited_ton_deployment)
-        == "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07"
+        == "0x260e2d8bf0d8f68e1888962b7ceff604788ef07cceb78d6b6b008f60039683b3"
     )
     assert (
         sccp_ton_full_light_client_gate_hash(audited_ton_deployment)
-        == "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48"
+        == "0x1518fbca4f8fd96756ef5318530fdcb2f0c131f00e0236bbd0dc885baaf8196b"
     )
     derived_ton_binding = sccp_source_adapter_deployment_binding_from_deployment(
         audited_ton_deployment
@@ -8673,11 +8692,18 @@ def test_derives_source_material_and_deployment_record_hashes_for_ui_tooling() -
             "deployment_receipt_hash"
         ],
     }
-    with pytest.raises(ValueError, match="TON audit verifier hashes"):
+    with pytest.raises(ValueError, match="governed TON full-light-client audit"):
         sccp_source_adapter_deployment_binding_from_deployment(
             {
                 **audited_ton_deployment,
                 "ton_masterchain_config_verifier_hash": SCCP_ZERO_HASH_V1,
+            }
+        )
+    with pytest.raises(ValueError, match="governed TON full-light-client audit"):
+        sccp_source_adapter_deployment_binding_from_deployment(
+            {
+                **audited_ton_deployment,
+                "ton_masterchain_config_verifier_hash": "0x" + "2a" * 32,
             }
         )
     with pytest.raises(ValueError, match="role-separated"):
@@ -9874,9 +9900,13 @@ def test_builds_ton_sccp_proof_request_with_relay_and_deployment_binding() -> No
 
     audited_ton_deployment = {
         **sample_source_record_input(SCCP_DOMAIN_TON),
-        "ton_masterchain_config_verifier_hash": "0x" + "bb" * 32,
-        "ton_validator_set_transition_verifier_hash": "0x" + "cc" * 32,
-        "ton_shard_accounts_dictionary_verifier_hash": "0x" + "dd" * 32,
+        "ton_masterchain_config_verifier_hash": GOVERNED_TON_MASTERCHAIN_CONFIG_HASH,
+        "ton_validator_set_transition_verifier_hash": (
+            GOVERNED_TON_VALIDATOR_SET_TRANSITION_HASH
+        ),
+        "ton_shard_accounts_dictionary_verifier_hash": (
+            GOVERNED_TON_SHARD_ACCOUNTS_DICTIONARY_HASH
+        ),
     }
     deployment_derived_request = build_ton_sccp_proof_request(
         sample_ton_request_input(

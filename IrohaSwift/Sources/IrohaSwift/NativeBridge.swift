@@ -73,14 +73,16 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "69e406aca3672add2345c400cc20778d1ac1a35882f423e2be1e8136fbfcac92",
-        "ios-arm64": "26bb800e9dce021ef38306caef70dbba7928dd99c6612801fb1bbc520b52b7a9",
-        "ios-arm64_x86_64-simulator": "d0f651e6dc837bff7e92b05c9bf1e3a2988fc6995cabee6e3aaa269a01ecd1b5"
+        "macos-arm64": "8e55486f3f923faa51267bfd8135b646306f88fa10d2aab361202b0612f3eb84",
+        "ios-arm64": "4fe82654eea21bfeabe393e9bafd2dd9fd8a3797fda2db8cddfc4deaa533cb02",
+        "ios-arm64_x86_64-simulator": "f833d7ebaf99ccfc5c4ee36d3f86cde752fdc749f7ba4a1723e1fa3406a3100e"
     ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
-        "connect_norito_encode_transfer_signed_transaction"
+        "connect_norito_encode_transfer_signed_transaction",
+        "connect_norito_encode_transfer_instruction_box",
+        "connect_norito_encode_validation_fee_transfer_signed_transaction"
     ]
 
     private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32
@@ -91,7 +93,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 12
+        return 14
     }
 
     static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
@@ -830,6 +832,40 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UInt8,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?,
+        UnsafeMutablePointer<UInt8>?,
+        UInt
+    ) -> Int32
+    private typealias EncodeTransferInstructionBoxFn = @convention(c) (
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?
+    ) -> Int32
+    private typealias EncodeValidationFeeTransferFn = @convention(c) (
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UInt64,
+        UInt64,
+        UInt8,
+        UInt32,
+        UInt8,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UInt64,
+        UnsafePointer<CChar>?, UInt,
+        UInt64,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?,
@@ -2010,6 +2046,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeTransferWithFeeSponsorFn: EncodeTransferWithFeeSponsorFn? = nil
     private var encodeTransferWithAlgFn: EncodeTransferWithAlgFn? = nil
     private var encodeTransferWithFeeSponsorWithAlgFn: EncodeTransferWithFeeSponsorWithAlgFn? = nil
+    private var encodeTransferInstructionBoxFn: EncodeTransferInstructionBoxFn? = nil
+    private var encodeValidationFeeTransferFn: EncodeValidationFeeTransferFn? = nil
     private var encodeMintFn: EncodeMintFn? = nil
     private var encodeMintWithAlgFn: EncodeMintWithAlgFn? = nil
     private var encodeShieldFn: EncodeShieldFn? = nil
@@ -2368,9 +2406,27 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.encodeTransferWithAlgFn = connect_norito_encode_transfer_signed_transaction_alg
         self.encodeTransferWithFeeSponsorWithAlgFn =
             connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg
+        let staticHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL)
+        if let encodeValidationFeeSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_validation_fee_transfer_signed_transaction") }) {
+            self.encodeValidationFeeTransferFn = unsafeBitCast(
+                encodeValidationFeeSymbol,
+                to: EncodeValidationFeeTransferFn.self
+            )
+        } else {
+            self.encodeValidationFeeTransferFn = nil
+        }
         self.encodeMintFn = connect_norito_encode_mint_signed_transaction
         self.encodeMintWithAlgFn = connect_norito_encode_mint_signed_transaction_alg
-        let staticHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL)
+        if let instructionBoxSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_encode_transfer_instruction_box")
+        }) {
+            self.encodeTransferInstructionBoxFn = unsafeBitCast(
+                instructionBoxSymbol,
+                to: EncodeTransferInstructionBoxFn.self
+            )
+        } else {
+            self.encodeTransferInstructionBoxFn = nil
+        }
         loadPrivacySymbols(from: staticHandle)
         if let issueNoteSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_issue_offline_note_signed_transaction") }) {
             self.encodeIssueOfflineNoteFn = unsafeBitCast(issueNoteSymbol, to: EncodeOfflineNoteTxFn.self)
@@ -2698,6 +2754,22 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 )
             } else {
                 self.encodeTransferWithFeeSponsorWithAlgFn = nil
+            }
+            if let encodeInstructionBoxSymbol = dlsym(handle, "connect_norito_encode_transfer_instruction_box") {
+                self.encodeTransferInstructionBoxFn = unsafeBitCast(
+                    encodeInstructionBoxSymbol,
+                    to: EncodeTransferInstructionBoxFn.self
+                )
+            } else {
+                self.encodeTransferInstructionBoxFn = nil
+            }
+            if let encodeValidationFeeSymbol = dlsym(handle, "connect_norito_encode_validation_fee_transfer_signed_transaction") {
+                self.encodeValidationFeeTransferFn = unsafeBitCast(
+                    encodeValidationFeeSymbol,
+                    to: EncodeValidationFeeTransferFn.self
+                )
+            } else {
+                self.encodeValidationFeeTransferFn = nil
             }
             if let mintSymbol = dlsym(handle, "connect_norito_encode_mint_signed_transaction") {
                 self.encodeMintFn = unsafeBitCast(mintSymbol, to: EncodeMintFn.self)
@@ -3506,6 +3578,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeTransferWithFeeSponsorFn = nil
             self.encodeTransferWithAlgFn = nil
             self.encodeTransferWithFeeSponsorWithAlgFn = nil
+            self.encodeTransferInstructionBoxFn = nil
+            self.encodeValidationFeeTransferFn = nil
             self.encodeMintFn = nil
             self.encodeMintWithAlgFn = nil
             self.encodeIssueOfflineNoteFn = nil
@@ -5063,20 +5137,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
     ) throws -> NativeSignedTransaction? {
+        let normalizedFeeSponsor = try feeSponsor.map {
+            try TransactionInputValidator.sanitizeAccountId($0, field: "feeSponsor")
+        }
         #if canImport(Darwin)
         guard let freeFn else { return nil }
         let ttlValue = ttlMs ?? 0
         let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
         let nonceValue = nonce ?? 0
         let nonceFlag: UInt8 = nonce == nil ? 0 : 1
-        let normalizedFeeSponsor: String?
-        if let rawFeeSponsor = feeSponsor?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !rawFeeSponsor.isEmpty
-        {
-            normalizedFeeSponsor = rawFeeSponsor
-        } else {
-            normalizedFeeSponsor = nil
-        }
         let requiresFeeSponsorBridge = normalizedFeeSponsor != nil
         let useAlg = algorithm != .ed25519
         if useAlg {
@@ -5208,6 +5277,173 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                 }
                             }
                             return encodeTransferCall(nil, 0)
+                        }
+                    }
+                }
+            }
+        }
+        }
+
+        if status != 0 {
+            if let signedPtr { freeFn(signedPtr) }
+            try throwOnStatus(status)
+            return nil
+        }
+        guard let signedPtr else { return nil }
+
+        let signedData = Data(bytes: signedPtr, count: Int(signedLen))
+        freeFn(signedPtr)
+        let hashData = Data(hashBytes)
+        return NativeSignedTransaction(signedBytes: signedData, hash: hashData)
+        #else
+        return nil
+        #endif
+    }
+
+    public func encodeTransferInstructionBox(
+        authority: String,
+        assetDefinitionId: String,
+        quantity: String,
+        destination: String
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let freeFn, let encodeTransferInstructionBoxFn else { return nil }
+
+        var instructionPtr: UnsafeMutablePointer<UInt8>? = nil
+        var instructionLen: UInt = 0
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            authority.withCString { authorityPtr in
+                assetDefinitionId.withCString { assetPtr in
+                    quantity.withCString { quantityPtr in
+                        destination.withCString { destinationPtr in
+                            self.withSignedOutputs(
+                                signedPtr: &instructionPtr,
+                                signedLen: &instructionLen
+                            ) { instructionPtrPtr, instructionLenPtr in
+                                encodeTransferInstructionBoxFn(
+                                    authorityPtr,
+                                    UInt(authority.utf8.count),
+                                    assetPtr,
+                                    UInt(assetDefinitionId.utf8.count),
+                                    quantityPtr,
+                                    UInt(quantity.utf8.count),
+                                    destinationPtr,
+                                    UInt(destination.utf8.count),
+                                    instructionPtrPtr,
+                                    instructionLenPtr
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if status != 0 {
+            if let instructionPtr { freeFn(instructionPtr) }
+            try throwOnStatus(status)
+            return nil
+        }
+        guard let instructionPtr else { return nil }
+
+        let data = Data(bytes: instructionPtr, count: Int(instructionLen))
+        freeFn(instructionPtr)
+        return data
+        #else
+        return nil
+        #endif
+    }
+
+    func encodeValidationFeeTransfer(
+        chainId: String,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        nonce: UInt32? = nil,
+        principalAssetDefinitionId: String,
+        principalQuantity: String,
+        destination: String,
+        feeAssetDefinitionId: String,
+        feeQuantity: String,
+        treasury: String,
+        policyVersion: UInt64,
+        policyHashHex: String,
+        feeInstructionIndex: UInt64,
+        feeSponsor: String? = nil,
+        memo: String? = nil,
+        transactionMetadataJSON: Data,
+        privateKey: Data
+    ) throws -> NativeSignedTransaction? {
+        let normalizedFeeSponsor = try feeSponsor.map {
+            try TransactionInputValidator.sanitizeAccountId($0, field: "feeSponsor")
+        }
+        #if canImport(Darwin)
+        guard let freeFn, let encodeValidationFeeTransferFn else { return nil }
+        let ttlValue = ttlMs ?? 0
+        let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
+        let nonceValue = nonce ?? 0
+        let nonceFlag: UInt8 = nonce == nil ? 0 : 1
+
+        var signedPtr: UnsafeMutablePointer<UInt8>? = nil
+        var signedLen: UInt = 0
+        var hashBytes = [UInt8](repeating: 0, count: 32)
+        let hashLength = UInt(hashBytes.count)
+
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
+            authority.withCString { authorityPtr in
+                principalAssetDefinitionId.withCString { principalAssetPtr in
+                    principalQuantity.withCString { principalQuantityPtr in
+                        destination.withCString { destinationPtr in
+                            feeAssetDefinitionId.withCString { feeAssetPtr in
+                                feeQuantity.withCString { feeQuantityPtr in
+                                    treasury.withCString { treasuryPtr in
+                                        policyHashHex.withCString { policyHashPtr in
+                                            withOptionalCString(normalizedFeeSponsor) { feeSponsorPtr, feeSponsorLen in
+                                                withOptionalCString(memo) { memoPtr, memoLen in
+                                                    withOptionalCStringData(transactionMetadataJSON.isEmpty ? nil : transactionMetadataJSON) { metadataPtr, metadataLen in
+                                                        privateKey.withUnsafeBytes { keyBuffer -> Int32 in
+                                                            hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
+                                                                guard let hashPtr = hashBuffer.baseAddress else {
+                                                                    return -1
+                                                                }
+                                                                return self.withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
+                                                                    encodeValidationFeeTransferFn(
+                                                                        chainPtr, UInt(chainId.utf8.count),
+                                                                        authorityPtr, UInt(authority.utf8.count),
+                                                                        creationTimeMs,
+                                                                        ttlValue,
+                                                                        ttlFlag,
+                                                                        nonceValue,
+                                                                        nonceFlag,
+                                                                        principalAssetPtr, UInt(principalAssetDefinitionId.utf8.count),
+                                                                        principalQuantityPtr, UInt(principalQuantity.utf8.count),
+                                                                        destinationPtr, UInt(destination.utf8.count),
+                                                                        feeAssetPtr, UInt(feeAssetDefinitionId.utf8.count),
+                                                                        feeQuantityPtr, UInt(feeQuantity.utf8.count),
+                                                                        treasuryPtr, UInt(treasury.utf8.count),
+                                                                        policyVersion,
+                                                                        policyHashPtr, UInt(policyHashHex.utf8.count),
+                                                                        feeInstructionIndex,
+                                                                        feeSponsorPtr, feeSponsorLen,
+                                                                        memoPtr, memoLen,
+                                                                        metadataPtr, metadataLen,
+                                                                        keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
+                                                                        signedPtrPtr,
+                                                                        signedLenPtr,
+                                                                        hashPtr,
+                                                                        hashLength
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

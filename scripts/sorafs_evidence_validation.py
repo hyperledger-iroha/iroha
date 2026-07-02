@@ -13,12 +13,59 @@ from sorafs_checker_preflight import record_artifact_error
 from sorafs_evidence_fingerprint import artifact_fingerprint
 from sorafs_evidence_paths import is_explicit_evidence_path
 from sorafs_evidence_sensitivity import visit_sensitive_fields
+from sorafs_path_identity import resolve_path_identity
 
 
 _T = TypeVar("_T")
 
 SHA256_HEX_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 UNKNOWN_REQUIRED_EVIDENCE_KIND = "<unknown>"
+
+
+def is_archive_portable_artifact_path(label: str) -> bool:
+    """Return whether an artifact label is portable inside release archives."""
+
+    if (
+        not label
+        or label != label.strip()
+        or label.startswith(("/", "\\"))
+        or "\\" in label
+        or any(ord(character) < 32 or ord(character) == 127 for character in label)
+    ):
+        return False
+    if len(label) >= 2 and label[1] == ":" and label[0].isalpha():
+        return False
+    return all(part and part not in {".", ".."} for part in label.split("/"))
+
+
+def archive_artifact_path_label(path: Path, evidence_dirs: list[Path]) -> Path:
+    """Return an archive-portable label for a rollout evidence artifact."""
+
+    for directory in evidence_dirs:
+        resolution_errors: list[str] = []
+        resolved_path = resolve_path_identity(
+            path,
+            resolution_errors,
+            label="evidence path",
+        )
+        resolved_directory = resolve_path_identity(
+            directory,
+            resolution_errors,
+            label="evidence directory",
+        )
+        if resolved_path is None or resolved_directory is None:
+            continue
+        try:
+            relative_path = resolved_path.relative_to(resolved_directory)
+        except ValueError:
+            continue
+        label = relative_path.as_posix()
+        if is_archive_portable_artifact_path(label):
+            return Path(label)
+    name_label = path.name
+    if is_archive_portable_artifact_path(name_label):
+        return Path(name_label)
+    return Path("evidence.json")
 
 
 def _require_error_list(errors: Any) -> list[str]:
@@ -284,7 +331,7 @@ def require_known_schema(
         return None
     kind = schema_to_kind.get(schema)
     if kind is None:
-        errors.append(f"schema `{schema}` is not a recognized {artifact_label}")
+        errors.append(f"schema is not a recognized {artifact_label}")
         return None
     return kind
 
@@ -441,8 +488,7 @@ def build_required_evidence_summary(
     )
     if duplicate_kind_names:
         errors.append(
-            f"{evidence_label} required evidence kinds must not contain duplicates "
-            f"{duplicate_kind_names}"
+            f"{evidence_label} required evidence kinds must not contain duplicates"
         )
         return required
     if isinstance(artifacts_by_kind, Mapping):
@@ -464,9 +510,7 @@ def build_required_evidence_summary(
         )
         if malformed_artifact_bucket:
             row_errors.append(f"required `{name}` artifacts must be a sequence")
-            errors.append(
-                f"required {name} {evidence_label} artifacts must be a sequence"
-            )
+            errors.append(f"{evidence_label} required artifacts must be a sequence")
             artifacts = []
         else:
             artifacts = _evidence_artifact_rows(raw_artifacts)
@@ -476,7 +520,7 @@ def build_required_evidence_summary(
                     f"required `{name}` artifacts must be a sequence of artifact objects"
                 )
                 errors.append(
-                    f"required {name} {evidence_label} artifacts must be a sequence "
+                    f"{evidence_label} required artifacts must be a sequence "
                     "of artifact objects"
                 )
                 artifacts = []
@@ -489,7 +533,7 @@ def build_required_evidence_summary(
         )
         if schema_label is None:
             row_errors.append(f"required `{name}` schema must be configured")
-            errors.append(f"required {name} {evidence_label} schema must be configured")
+            errors.append(f"{evidence_label} required schema must be configured")
             schema = None
         else:
             schema = schema_label
@@ -507,9 +551,9 @@ def build_required_evidence_summary(
             "errors": row_errors,
         }
         if not present and not malformed_artifact_bucket:
-            errors.append(f"missing required {name} {evidence_label} evidence")
+            errors.append(f"missing required {evidence_label} evidence")
         elif not artifacts_valid and not malformed_artifact_bucket:
-            errors.append(f"{name} {evidence_label} evidence has invalid artifact(s)")
+            errors.append(f"{evidence_label} evidence has invalid artifact(s)")
 
     deployment_error_count = len(errors)
     deployment_context: dict[str, str] = {}
@@ -799,6 +843,24 @@ def missing_required_evidence_values(
     ]
 
 
+def _diagnostic_mentions_missing_value(message: Any, value: Any) -> bool:
+    """Return whether a generated diagnostic embeds the missing evidence value."""
+
+    if not isinstance(message, str):
+        return False
+    try:
+        value_label = str(value)
+    except Exception:
+        return False
+    if (
+        not value_label.strip()
+        or value_label != value_label.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in value_label)
+    ):
+        return False
+    return value_label in message
+
+
 def record_missing_required_evidence_value_errors(
     required: dict[str, dict[str, Any]],
     kind_name: str,
@@ -832,7 +894,14 @@ def record_missing_required_evidence_value_errors(
             message_errors,
             label_name="validation missing required evidence message",
         )
-        errors.append(message_label or message_errors[0])
+        if message_label is None:
+            errors.append(message_errors[0])
+        elif _diagnostic_mentions_missing_value(message_label, value):
+            errors.append(
+                "validation missing required evidence message must not include missing value"
+            )
+        else:
+            errors.append(message_label)
     return missing_values
 
 
@@ -981,7 +1050,7 @@ def record_consistent_evidence_value(
     if previous is None:
         values[key_label] = value_label
     elif previous != value_label:
-        error = f"{context_label}.{key_label} `{value_label}` does not match `{previous}`"
+        error = f"{context_label}.{key_label} does not match previous value"
         if error not in errors:
             errors.append(error)
 
@@ -1009,8 +1078,6 @@ def record_consistent_deployment_context(
     fingerprint = evidence_artifact_fingerprint(artifact)
     for key in ("deployment_id", "environment"):
         value = fingerprint.get(key)
-        if value == "":
-            continue
         if not isinstance(value, str):
             error = f"{context_label}.{key} must be a string"
         else:
@@ -1033,7 +1100,7 @@ def record_consistent_deployment_context(
                 continue
             if previous == value_label:
                 continue
-            error = f"{context_label}.{key} `{value_label}` does not match `{previous}`"
+            error = f"{context_label}.{key} does not match previous value"
         if isinstance(artifact, dict):
             record_artifact_error(artifact, error, errors)
         elif error not in errors:
@@ -1045,19 +1112,19 @@ def deployment_context_summary(values: Any) -> dict[str, str]:
 
     if not isinstance(values, Mapping):
         return {}
-    summary: dict[str, str] = {}
-    for key in ("deployment_id", "environment"):
-        value = values.get(key)
-        if value is None:
-            continue
-        value_label = _require_validation_label(
-            value,
-            [],
-            label_name=f"deployment context {key}",
-        )
-        if value_label is not None:
-            summary[key] = value_label
-    return summary
+    deployment_id = _require_validation_label(
+        values.get("deployment_id"),
+        [],
+        label_name="deployment context deployment_id",
+    )
+    environment = _require_validation_label(
+        values.get("environment"),
+        [],
+        label_name="deployment context environment",
+    )
+    if deployment_id is None or environment is None:
+        return {}
+    return {"deployment_id": deployment_id, "environment": environment}
 
 
 def record_observed_evidence_value(values: set[Any], value: Any) -> None:
@@ -1896,6 +1963,32 @@ def count_evidence_artifacts(
             return 0
         artifact_count += len(artifact_rows)
     return artifact_count
+
+
+def recognized_evidence_artifacts(
+    artifacts_by_kind: Any,
+) -> list[dict[str, Any]]:
+    """Return flattened recognized evidence artifacts with explicit kind labels."""
+
+    if not isinstance(artifacts_by_kind, Mapping):
+        return []
+    recognized: list[dict[str, Any]] = []
+    for kind_name, artifacts in artifacts_by_kind.items():
+        kind_label = _require_validation_label(
+            kind_name,
+            [],
+            label_name="recognized evidence kind",
+        )
+        if kind_label is None:
+            return []
+        artifact_rows = _evidence_artifact_rows(artifacts)
+        if artifact_rows is None:
+            return []
+        for artifact in artifact_rows:
+            row = dict(artifact)
+            row["kind"] = kind_label
+            recognized.append(row)
+    return recognized
 
 
 def count_recognized_evidence_artifacts(
@@ -2827,31 +2920,87 @@ def require_string_in(
 
 ALLOWED_ROLLOUT_ENVIRONMENTS = {"prod", "production", "release", "staging"}
 FORBIDDEN_ROLLOUT_DEPLOYMENT_MARKERS = {
+    "alpha",
+    "benchmark",
+    "beta",
+    "burnin",
+    "canary",
     "changeme",
+    "chaos",
+    "candidate",
+    "cutover",
     "demo",
     "dev",
+    "dogfood",
+    "drill",
     "example",
+    "failover",
+    "fallback",
+    "fixture",
     "local",
+    "lab",
+    "labs",
     "localnet",
     "mock",
     "placeholder",
+    "perf",
+    "performance",
+    "pre",
     "preprod",
     "preview",
+    "pilot",
     "qa",
+    "poc",
+    "rc",
     "sample",
     "sandbox",
+    "scratch",
+    "scaletest",
+    "shadow",
+    "smoke",
+    "stg",
+    "soak",
+    "stress",
+    "stub",
+    "switchover",
+    "temp",
+    "temporary",
     "test",
     "testnet",
+    "tmp",
+    "trial",
+    "training",
     "uat",
+    "wip",
     "zero",
 }
 FORBIDDEN_ROLLOUT_DEPLOYMENT_COMPACT_MARKERS = {
+    "alpha",
+    "benchmark",
+    "beta",
+    "bluegreen",
+    "burnin",
+    "canary",
     "changeme",
+    "chaos",
+    "cutover",
+    "fallback",
     "development",
+    "dryrun",
     "dummy",
     "example",
+    "darklaunch",
+    "dogfood",
+    "dressrehearsal",
+    "drill",
+    "experiment",
+    "experimental",
     "fake",
+    "failover",
+    "fixture",
+    "greenblue",
     "localnet",
+    "loadtest",
     "mock",
     "nonprod",
     "nonproduction",
@@ -2860,21 +3009,126 @@ FORBIDDEN_ROLLOUT_DEPLOYMENT_COMPACT_MARKERS = {
     "notprod",
     "notproductionready",
     "placeholder",
+    "perf",
+    "performance",
+    "pilot",
+    "poc",
     "preprod",
+    "preview",
+    "prerelease",
+    "proofofconcept",
+    "prototype",
+    "releasecandidate",
     "replacebeforedeploy",
     "replacebeforeproduction",
     "replacebeforeprod",
     "replacebeforerelease",
     "replaceme",
+    "rollback",
+    "rollforward",
     "sample",
     "sandbox",
+    "scratch",
+    "scaletest",
+    "gameday",
+    "rehearsal",
+    "shadow",
+    "smoke",
+    "stg",
+    "soak",
+    "stress",
+    "stub",
+    "switchover",
+    "temporary",
     "testnet",
     "testing",
     "todo",
+    "trial",
+    "training",
+    "wip",
 }
+ROLLOUT_DEPLOYMENT_REVIEW_LABELS = frozenset({"prod", "production", "release"})
+FORBIDDEN_ROLLOUT_DEPLOYMENT_JOINED_MARKERS = frozenset(
+    {
+        "alpha",
+        "benchmark",
+        "beta",
+        "bluegreen",
+        "burnin",
+        "canary",
+        "chaos",
+        "cutover",
+        "darklaunch",
+        "demo",
+        "dev",
+        "dogfood",
+        "dressrehearsal",
+        "drill",
+        "failover",
+        "fallback",
+        "fixture",
+        "gameday",
+        "greenblue",
+        "lab",
+        "labs",
+        "loadtest",
+        "local",
+        "localnet",
+        "mock",
+        "perf",
+        "performance",
+        "pre",
+        "preprod",
+        "preview",
+        "pilot",
+        "poc",
+        "qa",
+        "prototype",
+        "candidate",
+        "rc",
+        "sandbox",
+        "scratch",
+        "scaletest",
+        "rehearsal",
+        "rollback",
+        "rollforward",
+        "shadow",
+        "smoke",
+        "stage",
+        "staging",
+        "stg",
+        "soak",
+        "stress",
+        "stub",
+        "switchover",
+        "temp",
+        "temporary",
+        "test",
+        "testnet",
+        "tmp",
+        "trial",
+        "training",
+        "uat",
+        "wip",
+        "zero",
+    }
+)
 ROLLOUT_DEPLOYMENT_ID_PATTERN = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$"
 )
+ASCII_DIGITS = "0123456789"
+
+
+def numbered_rollout_marker_token(
+    token: str,
+    markers: Collection[str],
+) -> str | None:
+    """Return the marker hidden behind numeric prefix/suffix aliases."""
+
+    stripped = token.strip(ASCII_DIGITS)
+    if stripped != token and stripped in markers:
+        return stripped
+    return None
 
 
 def _require_canonical_payload_string(
@@ -2925,10 +3179,53 @@ def require_rollout_deployment_id(
         return ""
     tokens = [token for token in re.split(r"[._-]+", value.lower()) if token]
     compact = "".join(tokens)
+    token_forbidden = {
+        token for token in tokens if token in FORBIDDEN_ROLLOUT_DEPLOYMENT_MARKERS
+    }
+    token_forbidden |= {
+        marker
+        for token in tokens
+        if (
+            marker := numbered_rollout_marker_token(
+                token,
+                FORBIDDEN_ROLLOUT_DEPLOYMENT_MARKERS,
+            )
+        )
+        is not None
+    }
+    joined_forbidden = {
+        marker
+        for marker in FORBIDDEN_ROLLOUT_DEPLOYMENT_JOINED_MARKERS
+        for label in ROLLOUT_DEPLOYMENT_REVIEW_LABELS
+        for joined in (f"{marker}{label}", f"{label}{marker}")
+        if marker not in tokens and joined in compact
+        if not any(
+            token != marker and (token.startswith(marker) or marker.startswith(token))
+            for token in token_forbidden
+        )
+    }
+    numbered_joined_forbidden = {
+        marker
+        for marker in FORBIDDEN_ROLLOUT_DEPLOYMENT_JOINED_MARKERS
+        for label in ROLLOUT_DEPLOYMENT_REVIEW_LABELS
+        if re.search(
+            rf"(?:{re.escape(marker)}[0-9]+{re.escape(label)}|"
+            rf"{re.escape(label)}{re.escape(marker)}[0-9]+)",
+            compact,
+        )
+    }
     compact_forbidden = {
         marker
         for marker in FORBIDDEN_ROLLOUT_DEPLOYMENT_COMPACT_MARKERS
         if marker in compact
+    } | joined_forbidden | numbered_joined_forbidden
+    compact_forbidden = {
+        marker
+        for marker in compact_forbidden
+        if not any(
+            marker != token and marker.startswith(token)
+            for token in token_forbidden
+        )
     }
     compact_forbidden = {
         marker
@@ -2938,8 +3235,7 @@ def require_rollout_deployment_id(
         )
     }
     forbidden = sorted(
-        {token for token in tokens if token in FORBIDDEN_ROLLOUT_DEPLOYMENT_MARKERS}
-        | compact_forbidden
+        token_forbidden | compact_forbidden
     )
     if forbidden:
         errors.append(
@@ -4237,3 +4533,91 @@ def require_string_coverage(
     for required in required_labels:
         if required not in present:
             errors.append(f"{array_name} must include {value_label} `{required}`")
+
+
+def _canonical_string_inventory_labels(
+    payload: Mapping[str, Any],
+    array_field: str,
+    field: str,
+    *,
+    allow_scalar_items: bool,
+) -> list[str] | None:
+    """Return canonical inventory labels when every row has canonical shape."""
+
+    items = payload.get(array_field)
+    if not isinstance(items, list):
+        return None
+    value_label = field or "value"
+    labels: list[str] = []
+    for item in items:
+        raw: Any = None
+        if isinstance(item, str) and allow_scalar_items and not field:
+            raw = item
+        elif isinstance(item, Mapping) and field:
+            raw = item.get(field)
+        else:
+            return None
+        row_errors: list[str] = []
+        value = _require_validation_label(
+            raw,
+            row_errors,
+            label_name=f"validation {value_label}",
+        )
+        if value is None:
+            return None
+        labels.append(value)
+    return labels
+
+
+def require_string_inventory_count_match(
+    payload: Mapping[str, Any],
+    array_field: str,
+    count_field: str,
+    errors: list[str],
+    *,
+    field: str = "",
+    allow_scalar_items: bool = True,
+) -> None:
+    """Require a count field to match unique canonical inventory labels."""
+
+    if not isinstance(allow_scalar_items, bool):
+        errors.append("validation allow_scalar_items must be a boolean")
+        return
+    if not isinstance(payload, Mapping):
+        errors.append("payload must be an object")
+        return
+    array_name = _require_validation_label(
+        array_field,
+        errors,
+        label_name="validation array field",
+    )
+    count_name = _require_validation_label(
+        count_field,
+        errors,
+        label_name="validation count field",
+    )
+    if field:
+        field_name = _require_validation_label(
+            field,
+            errors,
+            label_name="validation field",
+        )
+    else:
+        field_name = ""
+    if array_name is None or count_name is None or field_name is None:
+        return
+    labels = _canonical_string_inventory_labels(
+        payload,
+        array_name,
+        field_name,
+        allow_scalar_items=allow_scalar_items,
+    )
+    if labels is None:
+        return
+    unique_labels = set(labels)
+    if len(unique_labels) != len(labels):
+        errors.append(f"{array_name} must not contain duplicate values")
+    count = payload.get(count_name)
+    if isinstance(count, int) and not isinstance(count, bool):
+        if count != len(unique_labels):
+            errors.append(f"{count_name} must match unique {array_name} count")

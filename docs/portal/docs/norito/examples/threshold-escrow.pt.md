@@ -43,6 +43,10 @@ Garantia de pagador único que aceita recargas até um valor alvo exato e, em se
 seiyaku ThresholdEscrow {
   meta { abi_version: 1; }
 
+  const recipient_account_literal: String = "sorauﾛ1PｽNgｿﾘ9ﾏﾕ2ﾕ9ﾄZﾀﾃﾌWwNｸｾヰﾄﾂT3WｺTxｶｵﾎKﾓﾛmｷ4Y6PLN";
+  const escrow_account_literal: String = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
+  const escrow_asset_definition_literal: String = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+
   state AccountId payer_account;
   state AccountId recipient_account;
   state AccountId escrow_account_id;
@@ -73,25 +77,23 @@ seiyaku ThresholdEscrow {
 
   // NOTE:
   // This sample uses permission(Admin) because it releases and refunds funds
-  // from the configured escrow account.
-  kotoage fn open_escrow(recipient: AccountId,
-                         escrow_account: AccountId,
-                         asset_definition: AssetDefinitionId,
-                         target_amount: int) permission(Admin) {
+  // from the configured escrow account. The recipient, escrow account, and
+  // asset definition are fixed literals so the compiler can emit a complete
+  // first-release access set without manual annotations.
+  kotoage fn open_escrow(target_amount: int) permission(Admin) {
     assert_unopened();
     assert(target_amount > 0, "target_amount must be positive");
 
     payer_account = authority();
-    recipient_account = recipient;
-    escrow_account_id = escrow_account;
-    escrow_asset_definition = asset_definition;
+    recipient_account = account_id(recipient_account_literal);
+    escrow_account_id = account_id(escrow_account_literal);
+    escrow_asset_definition = asset_definition(escrow_asset_definition_literal);
     target_amount_value = target_amount;
     funded_amount_value = 0;
     is_open = true;
     is_released = false;
     is_refunded = false;
   }
-
   kotoage fn deposit(amount: int) permission(Admin) {
     assert_open();
     assert_payer();
@@ -100,24 +102,29 @@ seiyaku ThresholdEscrow {
     let next_funded = funded_amount_value + amount;
     assert(next_funded <= target_amount_value, "deposit exceeds target_amount");
 
-    transfer_asset(payer_account, escrow_account_id, escrow_asset_definition, amount);
+    transfer_asset(
+      authority(),
+      account_id(escrow_account_literal),
+      asset_definition(escrow_asset_definition_literal),
+      amount,
+      dataspace_id("0")
+    );
     funded_amount_value = next_funded;
   }
-
   kotoage fn release_if_ready() permission(Admin) {
     assert_open();
     assert(funded_amount_value == target_amount_value, "escrow is not fully funded");
 
     transfer_asset(
-      escrow_account_id,
-      recipient_account,
-      escrow_asset_definition,
-      funded_amount_value
+      account_id(escrow_account_literal),
+      account_id(recipient_account_literal),
+      asset_definition(escrow_asset_definition_literal),
+      funded_amount_value,
+      dataspace_id("0")
     );
     is_open = false;
     is_released = true;
   }
-
   kotoage fn refund() permission(Admin) {
     assert_open();
     assert_payer();
@@ -125,10 +132,11 @@ seiyaku ThresholdEscrow {
     let funded = funded_amount_value;
     if (funded > 0) {
       transfer_asset(
-        escrow_account_id,
-        payer_account,
-        escrow_asset_definition,
-        funded
+        account_id(escrow_account_literal),
+        authority(),
+        asset_definition(escrow_asset_definition_literal),
+        funded,
+        dataspace_id("0")
       );
     }
     is_open = false;

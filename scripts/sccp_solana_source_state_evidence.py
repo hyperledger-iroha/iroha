@@ -146,6 +146,9 @@ def parse_hex_bytes(
 ) -> bytes:
     """Parse a fixed-width hex value."""
 
+    if type(nonzero) is not bool:
+        raise ValueError("Solana source-state fixed hex nonzero must be a boolean")
+
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -153,7 +156,7 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -281,6 +284,8 @@ def solana_source_adapter_verifier_vk_hash(
 ) -> bytes:
     """Compute Rust's canonical OpenVerify vk hash for Solana -> SORA."""
 
+    source_domain = _require_exact_u32(source_domain, "source_domain", ValueError)
+    target_domain = _require_exact_u32(target_domain, "target_domain", ValueError)
     if source_domain != SCCP_DOMAIN_SOL:
         raise ValueError("source_domain must be Solana")
     if target_domain != SCCP_DOMAIN_SORA:
@@ -323,13 +328,14 @@ def solana_source_adapter_verifier_vk_hash(
 def solana_source_verifier_material_record_hash(args: argparse.Namespace) -> bytes:
     """Compute Rust's canonical Solana source verifier material record hash."""
 
-    if args.source_domain != SCCP_DOMAIN_SOL:
+    source_domain = _require_exact_u32(args.source_domain, "source_domain", ValueError)
+    if source_domain != SCCP_DOMAIN_SOL:
         raise ValueError("source_domain must be Solana")
     _reject_template_hashes(args)
     _require_source_role_hash_separation(args)
     payload = bytearray()
     _push_u8(payload, 1)
-    _push_u32(payload, args.source_domain)
+    _push_u32(payload, source_domain)
     _push_vec(payload, b"sol")
     _push_u8(payload, SOURCE_PROOF_PLAN_SOLANA_FINALIZED_TRANSACTION)
     _push_u8(payload, FINALITY_MODEL_SOLANA_FINALIZED_SLOT)
@@ -392,9 +398,11 @@ def solana_source_adapter_engine_deployment_record_hash(
 ) -> bytes:
     """Compute Rust's canonical Solana source-adapter deployment record hash."""
 
-    if args.source_domain != SCCP_DOMAIN_SOL:
+    source_domain = _require_exact_u32(args.source_domain, "source_domain", ValueError)
+    target_domain = _require_exact_u32(args.target_domain, "target_domain", ValueError)
+    if source_domain != SCCP_DOMAIN_SOL:
         raise ValueError("source_domain must be Solana")
-    if args.target_domain != SCCP_DOMAIN_SORA:
+    if target_domain != SCCP_DOMAIN_SORA:
         raise ValueError("target_domain must be SORA")
     _reject_template_hashes(args)
     _require_source_role_hash_separation(args)
@@ -404,8 +412,8 @@ def solana_source_adapter_engine_deployment_record_hash(
         byte_length=32,
     )
     expected_adapter_verifier_vk_hash = solana_source_adapter_verifier_vk_hash(
-        source_domain=args.source_domain,
-        target_domain=args.target_domain,
+        source_domain=source_domain,
+        target_domain=target_domain,
     )
     if adapter_verifier_vk_hash != expected_adapter_verifier_vk_hash:
         raise ValueError(
@@ -415,8 +423,8 @@ def solana_source_adapter_engine_deployment_record_hash(
 
     payload = bytearray()
     _push_u8(payload, 1)
-    _push_u32(payload, args.source_domain)
-    _push_u32(payload, args.target_domain)
+    _push_u32(payload, source_domain)
+    _push_u32(payload, target_domain)
     _push_vec(payload, b"sol")
     _push_u8(payload, SOURCE_PROOF_PLAN_SOLANA_FINALIZED_TRANSACTION)
     _push_u8(payload, FINALITY_MODEL_SOLANA_FINALIZED_SLOT)
@@ -538,14 +546,16 @@ def _require_complete_light_client_evidence_hashes(
 def solana_full_light_client_gate_hash(args: argparse.Namespace) -> bytes | None:
     """Compute the audit hash for the remaining full Solana light-client stack."""
 
+    source_domain = _require_exact_u32(args.source_domain, "source_domain", ValueError)
+    target_domain = _require_exact_u32(args.target_domain, "target_domain", ValueError)
     hashes = _require_complete_light_client_evidence_hashes(args)
     if len(hashes) != len(_light_client_evidence_fields()):
         return None
 
     payload = bytearray()
     _push_u8(payload, 1)
-    _push_u32(payload, args.source_domain)
-    _push_u32(payload, args.target_domain)
+    _push_u32(payload, source_domain)
+    _push_u32(payload, target_domain)
     _push_vec(payload, b"sol")
     _push_u8(payload, SOURCE_PROOF_PLAN_SOLANA_FINALIZED_TRANSACTION)
     _push_u8(payload, FINALITY_MODEL_SOLANA_FINALIZED_SLOT)
@@ -592,9 +602,13 @@ def _toml_line(key: str, value: object) -> str:
     return f"{key} = {rendered}"
 
 
-def _require_exact_u32(value: object, label: str) -> int:
+def _require_exact_u32(
+    value: object,
+    label: str,
+    error_type: type[Exception] = SystemExit,
+) -> int:
     if type(value) is not int or value < 0 or value > 0xFFFFFFFF:
-        raise SystemExit(f"{label} must be an exact u32")
+        raise error_type(f"{label} must be an exact u32")
     return value
 
 
@@ -602,9 +616,15 @@ def _require_solana_sora_lane(args: argparse.Namespace) -> None:
     source_domain = _require_exact_u32(args.source_domain, "source_domain")
     target_domain = _require_exact_u32(args.target_domain, "target_domain")
     if source_domain != SCCP_DOMAIN_SOL:
-        raise SystemExit("Solana production source evidence requires source_domain = 3")
+        raise SystemExit(
+            "Solana production source evidence requires source_domain = "
+            f"SCCP_DOMAIN_SOL ({SCCP_DOMAIN_SOL})"
+        )
     if target_domain != SCCP_DOMAIN_SORA:
-        raise SystemExit("Solana production source evidence requires target_domain = 0")
+        raise SystemExit(
+            "Solana production source evidence requires target_domain = "
+            f"SCCP_DOMAIN_SORA ({SCCP_DOMAIN_SORA})"
+        )
 
 
 def _component_hash_args() -> tuple[str, ...]:
@@ -693,9 +713,20 @@ def _template_component_hashes() -> dict[str, bytes]:
 
 
 def _reject_template_hashes(args: argparse.Namespace) -> None:
-    for field, template_hash in _template_component_hashes().items():
+    template_hashes = _template_component_hashes()
+    for field, template_hash in template_hashes.items():
         if getattr(args, field) == template_hash:
             raise SystemExit(f"{field} must be deployed evidence, not the Solana template hash")
+    for field in _component_hash_args():
+        supplied_hash = getattr(args, field, None)
+        if supplied_hash is None:
+            continue
+        for template_field, template_hash in template_hashes.items():
+            if supplied_hash == template_hash:
+                raise SystemExit(
+                    f"{field} must be deployed evidence, not the Solana "
+                    f"{template_field} template hash"
+                )
 
 
 def _require_canonical_adapter_verifier_vk_hash(args: argparse.Namespace) -> None:
@@ -1126,13 +1157,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded

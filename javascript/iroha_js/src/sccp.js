@@ -131,8 +131,24 @@ export const SCCP_SOLANA_STAKE_HISTORY_SYSVAR_ID =
 export const SCCP_SOLANA_BORSH_INSTRUCTION_V1 = "borsh_instruction_v1";
 export const SCCP_ZERO_HASH_V1 =
   "0x0000000000000000000000000000000000000000000000000000000000000000";
+const SCCP_GOVERNED_SOLANA_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1 = [
+  `0x${"b7".repeat(32)}`,
+  `0x${"c8".repeat(32)}`,
+  `0x${"d9".repeat(32)}`,
+];
+const SCCP_GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1 = [
+  `0x${"26".repeat(32)}`,
+  `0x${"27".repeat(32)}`,
+  `0x${"28".repeat(32)}`,
+];
 export const SCCP_TON_CONTRACT_PROOF_BACKEND_V1 = "ton-contract-v1";
 export const SCCP_TON_MESSAGE_BODY_BOC_V1 = "ton_message_body_boc_v1";
+export const SCCP_TON_SUBMIT_CHUNK_OP_V1 = 0x53434351;
+export const SCCP_TON_SUBMIT_CHUNK_FINALIZE_OP_V1 = 0x53434352;
+export const SCCP_TON_CHUNKED_MESSAGE_SCHEMA_VERSION_V1 = 1;
+export const SCCP_TON_CHUNKED_MESSAGE_DEFAULT_CHUNK_BYTES_V1 = 24 * 1024;
+export const SCCP_TON_CHUNKED_MESSAGE_MAX_CHUNK_BYTES_V1 = 32 * 1024;
+export const SCCP_TON_WALLET_PAYLOAD_SAFE_BYTES_V1 = 48 * 1024;
 export const SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1 =
   "sccp:ton:source-state-verifier:shard-state-light-client-mainnet:v1";
 export const SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1 =
@@ -156,6 +172,7 @@ export const SCCP_TAIRA_CHAIN_ID_V1 = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 export const SCCP_TAIRA_NETWORK_PREFIX_V1 = 369;
 export const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1 = "taira_tron_xor";
 export const SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1 = "taira_bsc_xor";
+export const SCCP_TAIRA_TON_XOR_ROUTE_ID_V1 = "taira_ton_xor";
 export const SCCP_TAIRA_XOR_ASSET_KEY_V1 = "xor";
 export const SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1 = 256;
 export const SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1 =
@@ -213,6 +230,8 @@ const SCCP_BSC_COMMIT_MESSAGE_PREFIX_V1 = "sccp:bsc:commit-message:v1";
 const SCCP_BSC_COMMIT_SEAL_PREFIX_V1 = "sccp:bsc:commit-seal:v1";
 const SCCP_BSC_VALIDATOR_SET_TRANSITION_MESSAGE_PREFIX_V1 =
   "sccp:bsc:validator-set-transition-message:v1";
+const SCCP_BSC_VALIDATOR_SET_TRANSITION_SEAL_PREFIX_V1 =
+  "sccp:bsc:validator-set-transition-seal:v1";
 const SCCP_BSC_VALIDATOR_SET_METADATA_PREFIX_V1 =
   "sccp:bsc:validator-set-metadata:v1";
 const SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1 =
@@ -229,6 +248,8 @@ const SCCP_SOURCE_ADAPTER_TRANSCRIPT_PREFIX_V1 =
   "sccp:source-adapter-transcript:v1";
 const SCCP_SOURCE_VERIFIER_MATERIAL_PREFIX_V1 =
   "sccp:source-verifier-material:v1";
+const SCCP_EVM_FAMILY_SOURCE_VERIFIER_MATERIAL_PREFIX_V1 =
+  "sccp:evm-family:source-verifier-material:v1";
 const SCCP_SOURCE_VERIFIER_EVIDENCE_PREFIX_V1 =
   "sccp:source-verifier-evidence:v1";
 const SCCP_SOLANA_EPOCH_STAKE_ROOT_PREFIX_V1 =
@@ -2862,6 +2883,23 @@ const normalizeTairaBscXorRouteIdInput = (input, label = "routeId") => {
   return routeId;
 };
 
+const normalizeTairaTonXorRouteIdInput = (input, label = "routeId") => {
+  const selected = strictOptionalResultField(
+    input,
+    label,
+    "routeId",
+    "route_id",
+  );
+  const routeId =
+    selected === SCCP_OPTIONAL_FIELD_MISSING
+      ? SCCP_TAIRA_TON_XOR_ROUTE_ID_V1
+      : normalizeNonEmptyString(selected, label);
+  if (routeId !== SCCP_TAIRA_TON_XOR_ROUTE_ID_V1) {
+    throw new TypeError(`${label} must be ${SCCP_TAIRA_TON_XOR_ROUTE_ID_V1}`);
+  }
+  return routeId;
+};
+
 const normalizeTairaXorAssetKeyInput = (input, label = "assetKey") => {
   const selected = strictOptionalResultField(
     input,
@@ -3362,6 +3400,153 @@ export const tairaXorBscCanonicalTransferPayloadBytes = (input) =>
 export const tairaXorBscTransferMessageId = (input, options = {}) =>
   sccpTransferMessageId(buildTairaXorBscTransferPayload(input), options);
 
+export const buildTairaXorTonTransferPayload = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(
+      "TAIRA XOR TON-destination transfer payload input must be an object",
+    );
+  }
+  const routeId = normalizeTairaTonXorRouteIdInput(input);
+  const assetKey = normalizeTairaXorAssetKeyInput(input);
+  const sender = normalizeCanonicalTairaAccountId(
+    strictResultField(
+      input,
+      "sender",
+      "sender",
+      "tairaSender",
+      "taira_sender",
+      "tairaAccountId",
+      "taira_account_id",
+    ),
+    "sender",
+  );
+  const recipient = normalizeTonRawAddress(
+    strictResultField(
+      input,
+      "recipientAddress",
+      "recipientAddress",
+      "recipient_address",
+      "recipient",
+      "tonRecipient",
+      "ton_recipient",
+    ),
+    "recipientAddress",
+  );
+  const amount = normalizeUnsignedBigIntMax(
+    strictResultField(input, "amount", "amount"),
+    "amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (amount === 0n) {
+    throw new RangeError("amount must be greater than zero");
+  }
+  const nonce = normalizeUnsignedBigIntMax(
+    strictResultField(input, "nonce", "nonce"),
+    "nonce",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  return Object.freeze({
+    version: 1,
+    source_domain: SCCP_DOMAIN_SORA,
+    dest_domain: SCCP_DOMAIN_TON,
+    nonce: nonce.toString(),
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: assetKey,
+    amount: amount.toString(),
+    sender_codec: SCCP_CODEC_TEXT_UTF8,
+    sender,
+    recipient_codec: SCCP_CODEC_TON_RAW,
+    recipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: routeId,
+  });
+};
+
+export const tairaXorTonCanonicalTransferPayloadBytes = (input) =>
+  canonicalSccpTransferPayloadBytes(buildTairaXorTonTransferPayload(input));
+
+export const tairaXorTonTransferMessageId = (input, options = {}) =>
+  sccpTransferMessageId(buildTairaXorTonTransferPayload(input), options);
+
+export const buildTairaXorTonToTairaTransferPayload = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(
+      "TAIRA XOR TON-source transfer payload input must be an object",
+    );
+  }
+  const routeId = normalizeTairaTonXorRouteIdInput(input);
+  const assetKey = normalizeTairaXorAssetKeyInput(input);
+  const sender = normalizeTonRawAddress(
+    strictResultField(
+      input,
+      "tonSender",
+      "tonSender",
+      "ton_sender",
+      "sender",
+      "senderAddress",
+      "sender_address",
+    ),
+    "tonSender",
+  );
+  const recipient = normalizeCanonicalTairaAccountId(
+    strictResultField(
+      input,
+      "tairaRecipient",
+      "tairaRecipient",
+      "taira_recipient",
+      "recipient",
+      "tairaAccountId",
+      "taira_account_id",
+    ),
+    "tairaRecipient",
+  );
+  const amount = normalizeUnsignedBigIntMax(
+    strictResultField(input, "amount", "amount"),
+    "amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (amount === 0n) {
+    throw new RangeError("amount must be greater than zero");
+  }
+  const nonce = normalizeUnsignedBigIntMax(
+    strictResultField(input, "nonce", "nonce"),
+    "nonce",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  return Object.freeze({
+    version: 1,
+    source_domain: SCCP_DOMAIN_TON,
+    dest_domain: SCCP_DOMAIN_SORA,
+    nonce: nonce.toString(),
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: assetKey,
+    amount: amount.toString(),
+    sender_codec: SCCP_CODEC_TON_RAW,
+    sender,
+    recipient_codec: SCCP_CODEC_TEXT_UTF8,
+    recipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: routeId,
+  });
+};
+
+export const tairaXorTonToTairaCanonicalTransferPayloadBytes = (input) =>
+  canonicalSccpTransferPayloadBytes(
+    buildTairaXorTonToTairaTransferPayload(input),
+  );
+
+export const tairaXorTonToTairaTransferMessageId = (input, options = {}) =>
+  sccpTransferMessageId(
+    buildTairaXorTonToTairaTransferPayload(input),
+    options,
+  );
+
 export const buildTairaXorSccpRecordDescriptor = (input) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError(
@@ -3520,6 +3705,99 @@ export const buildTairaXorBscSccpRecordDescriptor = (input) => {
     message_kind: "Transfer",
     source_domain: SCCP_DOMAIN_SORA,
     dest_domain: SCCP_DOMAIN_BSC,
+    message_id: messageId,
+    canonical_payload_hex: canonicalPayloadHex,
+    payload,
+    record_instruction: Object.freeze({
+      kind: "RecordSccpMessage",
+      payload_bytes_hex: canonicalPayloadHex,
+    }),
+    execution_requirements: Object.freeze({
+      executable: "IvmProved",
+      overlay_instruction: "RecordSccpMessage",
+      settlement_instruction: "Burn<Numeric, Asset>",
+      settlement_asset_selector: "nexus.fees.fee_asset_id",
+      settlement_asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+      settlement_account_binding: "burn.destination.account == payload.sender",
+      settlement_amount_binding:
+        "sum(whole-unit burns) >= sum(recorded amounts) per sender",
+      proof_gate: "sccp_recording_proof_verified",
+      normal_transaction_supported: false,
+    }),
+  };
+  defineCopiedByteField(
+    descriptor,
+    "canonicalPayloadBytes",
+    canonicalPayloadBytes,
+  );
+  return Object.freeze(descriptor);
+};
+
+export const buildTairaXorTonSccpRecordDescriptor = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(
+      "TAIRA XOR TON SCCP record descriptor input must be an object",
+    );
+  }
+  const tairaContext = normalizeOptionalTairaChainContext(input);
+  const payload = buildTairaXorTonTransferPayload(input);
+  const canonicalPayloadBytes = canonicalSccpTransferPayloadBytes(payload);
+  const canonicalPayloadHex = bytesToHex(canonicalPayloadBytes);
+  const messageId = sccpTransferMessageId(payload);
+
+  const expectedMessageId = strictOptionalResultField(
+    input,
+    "expectedMessageId",
+    "expectedMessageId",
+    "expected_message_id",
+    "messageId",
+    "message_id",
+  );
+  if (expectedMessageId !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const normalizedMessageId = normalizeNonZeroHex32(
+      expectedMessageId,
+      "expectedMessageId",
+    );
+    if (normalizedMessageId !== messageId) {
+      throw new TypeError(
+        "expectedMessageId must match the canonical TAIRA XOR TON message id",
+      );
+    }
+  }
+
+  const expectedPayloadBytes = strictOptionalResultField(
+    input,
+    "expectedCanonicalPayloadBytes",
+    "expectedCanonicalPayloadBytes",
+    "expected_canonical_payload_bytes",
+    "expectedCanonicalPayloadHex",
+    "expected_canonical_payload_hex",
+    "expectedPayloadBytes",
+    "expected_payload_bytes",
+  );
+  if (expectedPayloadBytes !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const normalizedExpectedPayloadBytes = toBytes(
+      expectedPayloadBytes,
+      "expectedCanonicalPayloadBytes",
+    );
+    if (!bytesEqual(normalizedExpectedPayloadBytes, canonicalPayloadBytes)) {
+      throw new TypeError(
+        "expectedCanonicalPayloadBytes must match the canonical TAIRA XOR TON payload bytes",
+      );
+    }
+  }
+
+  const descriptor = {
+    version: 1,
+    kind: "TairaXorSccpRecordDescriptor",
+    execution_kind: SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1,
+    chain_id: tairaContext.chain_id,
+    network_prefix: tairaContext.network_prefix,
+    route_id: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1,
+    asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    message_kind: "Transfer",
+    source_domain: SCCP_DOMAIN_SORA,
+    dest_domain: SCCP_DOMAIN_TON,
     message_id: messageId,
     canonical_payload_hex: canonicalPayloadHex,
     payload,
@@ -3718,6 +3996,92 @@ const normalizeTairaXorBscRecordDescriptor = (input) => {
   return rebuilt;
 };
 
+const normalizeTairaXorTonRecordDescriptor = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(
+      "TAIRA XOR TON SCCP record descriptor must be an object",
+    );
+  }
+  if (
+    input.kind !== undefined &&
+    input.kind !== "TairaXorSccpRecordDescriptor"
+  ) {
+    throw new TypeError("descriptor.kind must be TairaXorSccpRecordDescriptor");
+  }
+  if (input.execution_kind !== SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1) {
+    throw new TypeError(
+      "descriptor.execution_kind must match TAIRA XOR SCCP record execution",
+    );
+  }
+  if (input.route_id !== SCCP_TAIRA_TON_XOR_ROUTE_ID_V1) {
+    throw new TypeError("descriptor.route_id must be taira_ton_xor");
+  }
+  if (input.asset_key !== SCCP_TAIRA_XOR_ASSET_KEY_V1) {
+    throw new TypeError("descriptor.asset_key must be xor");
+  }
+  const payload = input.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new TypeError("descriptor.payload must be an object");
+  }
+  const canonicalPayloadHex = normalizeHexInput(
+    strictResultField(
+      input,
+      "descriptor.canonical_payload_hex",
+      "canonical_payload_hex",
+      "canonicalPayloadHex",
+    ),
+    "descriptor.canonical_payload_hex",
+  );
+  const rebuilt = buildTairaXorTonSccpRecordDescriptor({
+    chainId: input.chain_id,
+    networkPrefix: input.network_prefix,
+    sender: payload.sender,
+    recipientAddress: payload.recipient,
+    amount: payload.amount,
+    nonce: payload.nonce,
+    expectedMessageId: input.message_id,
+    expectedCanonicalPayloadHex: canonicalPayloadHex,
+  });
+  const recordInstruction = input.record_instruction;
+  if (recordInstruction !== undefined && recordInstruction !== null) {
+    if (
+      typeof recordInstruction !== "object" ||
+      Array.isArray(recordInstruction)
+    ) {
+      throw new TypeError("descriptor.record_instruction must be an object");
+    }
+    if (recordInstruction.kind !== "RecordSccpMessage") {
+      throw new TypeError(
+        "descriptor.record_instruction.kind must be RecordSccpMessage",
+      );
+    }
+    const payloadBytesHex = strictResultField(
+      recordInstruction,
+      "descriptor.record_instruction.payload_bytes_hex",
+      "payload_bytes_hex",
+      "payloadBytesHex",
+    );
+    if (payloadBytesHex !== undefined) {
+      const normalizedRecordPayload = normalizeHexInput(
+        payloadBytesHex,
+        "descriptor.record_instruction.payload_bytes_hex",
+      );
+      if (
+        normalizedRecordPayload !==
+        normalizeHexInput(
+          rebuilt.canonical_payload_hex,
+          "descriptor.canonical_payload_hex",
+        )
+      ) {
+        throw new TypeError(
+          "descriptor.record_instruction.payload_bytes_hex must match canonical payload",
+        );
+      }
+    }
+  }
+  return rebuilt;
+};
+
 const tairaXorRecordDescriptorFromInput = (input) => {
   const descriptorInput = strictOptionalResultField(
     input,
@@ -3744,6 +4108,20 @@ const tairaXorBscRecordDescriptorFromInput = (input) => {
     return normalizeTairaXorBscRecordDescriptor(descriptorInput);
   }
   return buildTairaXorBscSccpRecordDescriptor(input);
+};
+
+const tairaXorTonRecordDescriptorFromInput = (input) => {
+  const descriptorInput = strictOptionalResultField(
+    input,
+    "descriptor",
+    "descriptor",
+    "recordDescriptor",
+    "record_descriptor",
+  );
+  if (descriptorInput !== SCCP_OPTIONAL_FIELD_MISSING) {
+    return normalizeTairaXorTonRecordDescriptor(descriptorInput);
+  }
+  return buildTairaXorTonSccpRecordDescriptor(input);
 };
 
 const normalizeTairaXorSettlementAssetDefinitionId = (value) => {
@@ -4245,7 +4623,18 @@ const decodeSccpSourceChainProofSummary = (sourceProofBytes, label) => {
       throw new TypeError(`${label}.inclusion_branch[${index}] must be 32 bytes`);
     }
   });
-  if (sourceEventDigest !== sccpSourceEventDigest(sourceDomain, targetDomain, messageId, payloadHash)) {
+  const genericSourceEventDigest = sccpSourceEventDigest(
+    sourceDomain,
+    targetDomain,
+    messageId,
+    payloadHash,
+  );
+  const acceptsRouteSpecificSourceEventDigest =
+    sourceDomain === SCCP_DOMAIN_BSC && targetDomain === SCCP_DOMAIN_SORA;
+  if (
+    sourceEventDigest !== genericSourceEventDigest &&
+    !acceptsRouteSpecificSourceEventDigest
+  ) {
     throw new TypeError(`${label}.source_event_digest must match source domains and message`);
   }
   return {
@@ -4371,6 +4760,49 @@ export const buildTairaXorBscSccpBurnRecordContractPayload = (input) => {
   normalizeTairaXorBurnRecordAuthority(input, sender);
   const amount = normalizeTairaXorBurnRecordAmount(descriptor.payload.amount);
   const settlementAmount = normalizeTairaXorBscBurnRecordSettlementAmount(
+    input,
+    amount,
+  );
+  const recordInstructionBytes = buildRecordSccpMessageInstructionBytes(
+    descriptor.canonicalPayloadBytes,
+  );
+  const payload = {
+    sender,
+    settlement_asset: settlementAssetDefinitionId,
+    amount: settlementAmount,
+    record_instruction: bytesToHex(recordInstructionBytes),
+  };
+  return Object.freeze({
+    version: 1,
+    entrypoint: SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1,
+    descriptor,
+    payload: Object.freeze(payload),
+    record_instruction_hex: payload.record_instruction,
+  });
+};
+
+export const buildTairaXorTonSccpBurnRecordContractPayload = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(
+      "TAIRA XOR TON burn-record payload input must be an object",
+    );
+  }
+  const descriptor = tairaXorTonRecordDescriptorFromInput(input);
+  const settlementAssetDefinitionId =
+    normalizeTairaXorSettlementAssetDefinitionId(
+      strictResultField(
+        input,
+        "settlementAssetDefinitionId",
+        "settlementAssetDefinitionId",
+        "settlement_asset_definition_id",
+        "settlementAsset",
+        "settlement_asset",
+      ),
+    );
+  const sender = descriptor.payload.sender;
+  normalizeTairaXorBurnRecordAuthority(input, sender);
+  const amount = normalizeTairaXorBurnRecordAmount(descriptor.payload.amount);
+  const settlementAmount = normalizeTairaXorBurnRecordSettlementAmount(
     input,
     amount,
   );
@@ -4546,6 +4978,55 @@ export const buildTairaXorBscSccpBurnRecordZkIvmRequest = (input) => {
   return Object.freeze({
     version: 1,
     route_id: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+    asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    descriptor: contract.descriptor,
+    contract,
+    request: Object.freeze({
+      vkRef,
+      authority,
+      metadata: Object.freeze(metadata),
+      bytecode,
+    }),
+  });
+};
+
+export const buildTairaXorTonSccpBurnRecordZkIvmRequest = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(
+      "TAIRA XOR TON burn-record ZK IVM request input must be an object",
+    );
+  }
+  const contract = buildTairaXorTonSccpBurnRecordContractPayload(input);
+  const vkRef = normalizeTairaXorBurnRecordVkRef(
+    strictResultField(input, "vkRef", "vkRef", "vk_ref"),
+  );
+  const authority = normalizeTairaXorBurnRecordAuthority(
+    input,
+    contract.descriptor.payload.sender,
+  );
+  const bytecode = normalizeTairaXorBurnRecordBytecode(input);
+  const metadataInput = strictOptionalResultField(
+    input,
+    "metadata",
+    "metadata",
+  );
+  if (
+    metadataInput !== SCCP_OPTIONAL_FIELD_MISSING &&
+    (metadataInput === null ||
+      typeof metadataInput !== "object" ||
+      Array.isArray(metadataInput))
+  ) {
+    throw new TypeError("metadata must be an object");
+  }
+  const metadata = {
+    ...(metadataInput === SCCP_OPTIONAL_FIELD_MISSING ? {} : metadataInput),
+    gas_limit: normalizeTairaXorBurnRecordGasLimit(input),
+    contract_entrypoint: SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1,
+    contract_payload: contract.payload,
+  };
+  return Object.freeze({
+    version: 1,
+    route_id: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1,
     asset_key: SCCP_TAIRA_XOR_ASSET_KEY_V1,
     descriptor: contract.descriptor,
     contract,
@@ -7207,8 +7688,8 @@ export const tonShardAccountsLastTransactionHash = (boc, key, keyBitLen) => {
   return transaction?.hash ?? null;
 };
 
-const pushTonSnakeCells = (cells, bytes) => {
-  const data = toBytes(bytes, "TON snake bytes");
+const pushTonBlobCells = (cells, bytes) => {
+  const data = toBytes(bytes, "TON blob bytes");
   const start = cells.length;
   if (data.length === 0) {
     if (cells.length + 1 > SCCP_TON_MAX_BOC_CELLS) {
@@ -7218,21 +7699,36 @@ const pushTonSnakeCells = (cells, bytes) => {
     return start;
   }
   const chunkCount = Math.ceil(data.length / SCCP_TON_MAX_CELL_DATA_BYTES);
-  if (cells.length + chunkCount > SCCP_TON_MAX_BOC_CELLS) {
+  const maxInternalCells = Math.ceil((chunkCount - 1) / (SCCP_TON_MAX_REFS - 1));
+  if (cells.length + chunkCount + maxInternalCells > SCCP_TON_MAX_BOC_CELLS) {
     throw new RangeError("TON BOC contains too many cells");
   }
-  for (let index = 0; index < chunkCount; index += 1) {
-    const chunkStart = index * SCCP_TON_MAX_CELL_DATA_BYTES;
-    const chunk = data.subarray(
-      chunkStart,
-      Math.min(chunkStart + SCCP_TON_MAX_CELL_DATA_BYTES, data.length),
-    );
-    cells.push({
-      data: chunk,
-      refs: index + 1 === chunkCount ? [] : [start + index + 1],
-    });
-  }
-  return start;
+  const pushNode = (chunkStartIndex, chunkEndIndex) => {
+    const nodeIndex = cells.length;
+    cells.push({ data: new Uint8Array(), refs: [] });
+    const nodeChunkCount = chunkEndIndex - chunkStartIndex;
+    if (nodeChunkCount === 1) {
+      const offset = chunkStartIndex * SCCP_TON_MAX_CELL_DATA_BYTES;
+      cells[nodeIndex].data = data.subarray(
+        offset,
+        Math.min(offset + SCCP_TON_MAX_CELL_DATA_BYTES, data.length),
+      );
+      return nodeIndex;
+    }
+    const groupCount = Math.min(SCCP_TON_MAX_REFS, nodeChunkCount);
+    const refs = [];
+    for (let group = 0; group < groupCount; group += 1) {
+      const childStart =
+        chunkStartIndex + Math.floor((nodeChunkCount * group) / groupCount);
+      const childEnd =
+        chunkStartIndex +
+        Math.floor((nodeChunkCount * (group + 1)) / groupCount);
+      refs.push(pushNode(childStart, childEnd));
+    }
+    cells[nodeIndex].refs = refs;
+    return nodeIndex;
+  };
+  return pushNode(0, chunkCount);
 };
 
 const enumCode = (value, table, label) => {
@@ -8050,9 +8546,82 @@ export const buildSccpTonMessageBodyBoc = (input) => {
     queryIdInput === SCCP_OPTIONAL_FIELD_MISSING
       ? sccpTonSubmissionQueryId(publicInputs)
       : queryIdInput;
+  return buildSccpTonMessageBodyBocFromBytes({
+    publicInputsBytes,
+    proofBytes,
+    bundleBytes,
+    metadataBytes,
+    queryId,
+    statementHash,
+    destinationBindingHash,
+  });
+};
+
+export const buildSccpTonMessageBodyBocFromBytes = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON SCCP message body input must be an object");
+  }
+  const publicInputsBytes = toBytes(
+    strictResultField(
+      input,
+      "publicInputsBytes",
+      "publicInputsBytes",
+      "public_inputs_bytes",
+    ),
+    "publicInputsBytes",
+  );
+  const proofBytes = requireNativeRecursiveProofBytes(
+    toBytes(
+      strictResultField(input, "proofBytes", "proofBytes", "proof_bytes"),
+      "proofBytes",
+    ),
+    "proofBytes",
+  );
+  const bundleBytes = requireNativeRecursiveProofBytes(
+    toBytes(
+      strictResultField(input, "bundleBytes", "bundleBytes", "bundle_bytes"),
+      "bundleBytes",
+    ),
+    "bundleBytes",
+  );
+  const metadataInput = strictOptionalResultField(
+    input,
+    "metadataBytes",
+    "metadataBytes",
+    "metadata_bytes",
+  );
+  const metadataBytes =
+    metadataInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? new Uint8Array()
+      : toBytes(metadataInput, "metadataBytes");
+  const queryIdInput = strictResultField(
+    input,
+    "queryId",
+    "queryId",
+    "query_id",
+  );
+  const statementHash = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "statementHash",
+      "statementHash",
+      "statement_hash",
+    ),
+    "statementHash",
+  );
+  const destinationBindingHash = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "destinationBindingHash",
+      "destinationBindingHash",
+      "destination_binding_hash",
+    ),
+    "destinationBindingHash",
+  );
+
   let rootData = new Uint8Array();
   rootData = writeU32Be(rootData, SCCP_TON_SUBMIT_OP_V1);
-  rootData = writeU64Be(rootData, queryId);
+  rootData = writeU64Be(rootData, queryIdInput);
   rootData = writeU16Be(rootData, SCCP_TON_MESSAGE_SCHEMA_VERSION_V1);
   rootData = concatBytes(
     rootData,
@@ -8062,14 +8631,283 @@ export const buildSccpTonMessageBodyBoc = (input) => {
     rootData,
     hexToBytes(destinationBindingHash, "destinationBindingHash", 32),
   );
-
   const cells = [{ data: rootData, refs: [] }];
-  const publicInputsRoot = pushTonSnakeCells(cells, publicInputsBytes);
-  const proofRoot = pushTonSnakeCells(cells, proofBytes);
-  const bundleRoot = pushTonSnakeCells(cells, bundleBytes);
-  const metadataRoot = pushTonSnakeCells(cells, metadataBytes);
+  const publicInputsRoot = pushTonBlobCells(cells, publicInputsBytes);
+  const proofRoot = pushTonBlobCells(cells, proofBytes);
+  const bundleRoot = pushTonBlobCells(cells, bundleBytes);
+  const metadataRoot = pushTonBlobCells(cells, metadataBytes);
   cells[0].refs = [publicInputsRoot, proofRoot, bundleRoot, metadataRoot];
   return encodeTonBocSingleRoot(cells, 0);
+};
+
+const normalizeTonChunkSize = (value) => {
+  const raw =
+    value === SCCP_OPTIONAL_FIELD_MISSING ||
+    value === undefined ||
+    value === null ||
+    value === ""
+      ? SCCP_TON_CHUNKED_MESSAGE_DEFAULT_CHUNK_BYTES_V1
+      : Number(value);
+  if (
+    !Number.isSafeInteger(raw) ||
+    raw <= 0 ||
+    raw > SCCP_TON_CHUNKED_MESSAGE_MAX_CHUNK_BYTES_V1
+  ) {
+    throw new RangeError(
+      `TON SCCP chunk size must be a positive integer no larger than ${SCCP_TON_CHUNKED_MESSAGE_MAX_CHUNK_BYTES_V1} bytes`,
+    );
+  }
+  return raw;
+};
+
+const sccpTonChunkHash = ({
+  messageIdBytes,
+  bodyHashBytes,
+  chunkIndex,
+  chunkOffset,
+  chunk,
+}) => {
+  let payload = textEncoder.encode("sccp:ton:chunk:v1");
+  payload = concatBytes(payload, messageIdBytes, bodyHashBytes);
+  payload = writeU16Be(payload, chunkIndex);
+  payload = writeU32Be(payload, chunkOffset);
+  payload = writeU16Be(payload, chunk.length);
+  payload = concatBytes(payload, chunk);
+  return sha256(payload);
+};
+
+const sccpTonChunkRoot = (chunkHashes) => {
+  if (!Array.isArray(chunkHashes) || chunkHashes.length === 0) {
+    throw new TypeError("TON SCCP chunk hashes must not be empty");
+  }
+  let payload = textEncoder.encode("sccp:ton:chunk-root:v1");
+  payload = writeU16Be(payload, chunkHashes.length);
+  for (const chunkHash of chunkHashes) {
+    payload = concatBytes(payload, toBytes(chunkHash, "chunkHash"));
+  }
+  return sha256(payload);
+};
+
+const buildSccpTonChunkUploadBoc = ({
+  queryId,
+  messageIdBytes,
+  bodyHashBytes,
+  chunkRootBytes,
+  totalBytes,
+  chunkCount,
+  chunkIndex,
+  chunkOffset,
+  chunk,
+  chunkHashBytes,
+}) => {
+  let rootData = new Uint8Array();
+  rootData = writeU32Be(rootData, SCCP_TON_SUBMIT_CHUNK_OP_V1);
+  rootData = writeU64Be(rootData, queryId);
+  rootData = writeU16Be(
+    rootData,
+    SCCP_TON_CHUNKED_MESSAGE_SCHEMA_VERSION_V1,
+  );
+  rootData = concatBytes(rootData, messageIdBytes, bodyHashBytes, chunkRootBytes);
+  let metadata = new Uint8Array();
+  metadata = writeU32Be(metadata, totalBytes);
+  metadata = writeU16Be(metadata, chunkCount);
+  metadata = writeU16Be(metadata, chunkIndex);
+  metadata = writeU32Be(metadata, chunkOffset);
+  metadata = writeU16Be(metadata, chunk.length);
+  metadata = concatBytes(metadata, chunkHashBytes);
+  const cells = [
+    { data: rootData, refs: [] },
+    { data: metadata, refs: [] },
+  ];
+  const chunkRoot = pushTonBlobCells(cells, chunk);
+  cells[0].refs = [1, chunkRoot];
+  return encodeTonBocSingleRoot(cells, 0);
+};
+
+const buildSccpTonChunkFinalizeBoc = ({
+  queryId,
+  messageIdBytes,
+  bodyHashBytes,
+  chunkRootBytes,
+  totalBytes,
+  chunkCount,
+  statementHash,
+  destinationBindingHash,
+}) => {
+  let rootData = new Uint8Array();
+  rootData = writeU32Be(rootData, SCCP_TON_SUBMIT_CHUNK_FINALIZE_OP_V1);
+  rootData = writeU64Be(rootData, queryId);
+  rootData = writeU16Be(
+    rootData,
+    SCCP_TON_CHUNKED_MESSAGE_SCHEMA_VERSION_V1,
+  );
+  rootData = concatBytes(rootData, messageIdBytes, bodyHashBytes, chunkRootBytes);
+  let metadata = new Uint8Array();
+  metadata = writeU32Be(metadata, totalBytes);
+  metadata = writeU16Be(metadata, chunkCount);
+  const context = concatBytes(
+    hexToBytes(statementHash, "statementHash", 32),
+    hexToBytes(destinationBindingHash, "destinationBindingHash", 32),
+  );
+  const cells = [
+    { data: rootData, refs: [1, 2] },
+    { data: metadata, refs: [] },
+    { data: context, refs: [] },
+  ];
+  return encodeTonBocSingleRoot(cells, 0);
+};
+
+export const buildSccpTonChunkedMessageBodyBocsFromBytes = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON SCCP chunked message input must be an object");
+  }
+  const bodyBytes = toBytes(
+    strictResultField(
+      input,
+      "messageBodyBocBytes",
+      "messageBodyBocBytes",
+      "message_body_boc_bytes",
+      "messageBodyBocHex",
+      "message_body_boc_hex",
+    ),
+    "messageBodyBocBytes",
+  );
+  if (bodyBytes.length === 0) {
+    throw new TypeError("messageBodyBocBytes must not be empty");
+  }
+  const messageIdBytes = hexToBytes(
+    normalizeNonZeroHex32(
+      strictResultField(input, "messageId", "messageId", "message_id"),
+      "messageId",
+    ),
+    "messageId",
+    32,
+  );
+  const statementHash = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "statementHash",
+      "statementHash",
+      "statement_hash",
+    ),
+    "statementHash",
+  );
+  const destinationBindingHash = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "destinationBindingHash",
+      "destinationBindingHash",
+      "destination_binding_hash",
+    ),
+    "destinationBindingHash",
+  );
+  const queryIdInput = strictOptionalResultField(
+    input,
+    "queryId",
+    "queryId",
+    "query_id",
+  );
+  const queryId =
+    queryIdInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? new DataView(
+          messageIdBytes.buffer,
+          messageIdBytes.byteOffset,
+          messageIdBytes.byteLength,
+        ).getBigUint64(0, false)
+      : queryIdInput;
+  const chunkSize = normalizeTonChunkSize(
+    strictOptionalResultField(input, "chunkSize", "chunkSize", "chunk_size"),
+  );
+  const chunkCount = Math.ceil(bodyBytes.length / chunkSize);
+  if (chunkCount > 0xffff) {
+    throw new RangeError("TON SCCP chunk count exceeds u16");
+  }
+  const bodyHashBytes = sha256(bodyBytes);
+  const chunks = [];
+  const chunkHashes = [];
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+    const offset = chunkIndex * chunkSize;
+    const chunk = bodyBytes.subarray(
+      offset,
+      Math.min(offset + chunkSize, bodyBytes.length),
+    );
+    const chunkHash = sccpTonChunkHash({
+      messageIdBytes,
+      bodyHashBytes,
+      chunkIndex,
+      chunkOffset: offset,
+      chunk,
+    });
+    chunks.push({
+      chunkIndex,
+      chunkOffset: offset,
+      chunkLength: chunk.length,
+      chunkHash,
+      chunk,
+    });
+    chunkHashes.push(chunkHash);
+  }
+  const chunkRootBytes = sccpTonChunkRoot(chunkHashes);
+  const uploadMessages = chunks.map((entry) => {
+    const payloadBoc = buildSccpTonChunkUploadBoc({
+      queryId,
+      messageIdBytes,
+      bodyHashBytes,
+      chunkRootBytes,
+      totalBytes: bodyBytes.length,
+      chunkCount,
+      chunkIndex: entry.chunkIndex,
+      chunkOffset: entry.chunkOffset,
+      chunk: entry.chunk,
+      chunkHashBytes: entry.chunkHash,
+    });
+    if (payloadBoc.length > SCCP_TON_WALLET_PAYLOAD_SAFE_BYTES_V1) {
+      throw new RangeError(
+        "TON SCCP chunk payload exceeds the wallet-safe payload limit",
+      );
+    }
+    return Object.freeze({
+      index: entry.chunkIndex,
+      offset: entry.chunkOffset,
+      length: entry.chunkLength,
+      chunkHash: bytesToHex(entry.chunkHash),
+      payloadBocHex: bytesToHex(payloadBoc),
+      payloadBocBytes: payloadBoc,
+    });
+  });
+  const finalizePayloadBoc = buildSccpTonChunkFinalizeBoc({
+    queryId,
+    messageIdBytes,
+    bodyHashBytes,
+    chunkRootBytes,
+    totalBytes: bodyBytes.length,
+    chunkCount,
+    statementHash,
+    destinationBindingHash,
+  });
+  if (finalizePayloadBoc.length > SCCP_TON_WALLET_PAYLOAD_SAFE_BYTES_V1) {
+    throw new RangeError(
+      "TON SCCP finalize payload exceeds the wallet-safe payload limit",
+    );
+  }
+  return Object.freeze({
+    version: SCCP_TON_CHUNKED_MESSAGE_SCHEMA_VERSION_V1,
+    protocol: "ton_sccp_chunked_message_body_boc_v1",
+    opChunk: SCCP_TON_SUBMIT_CHUNK_OP_V1,
+    opFinalize: SCCP_TON_SUBMIT_CHUNK_FINALIZE_OP_V1,
+    messageId: bytesToHex(messageIdBytes),
+    queryId: normalizeUnsignedBigInt(queryId, "queryId").toString(10),
+    totalBytes: bodyBytes.length,
+    chunkSize,
+    chunkCount,
+    bodyHash: bytesToHex(bodyHashBytes),
+    chunkRoot: bytesToHex(chunkRootBytes),
+    uploadMessages,
+    finalizeMessage: Object.freeze({
+      payloadBocHex: bytesToHex(finalizePayloadBoc),
+      payloadBocBytes: finalizePayloadBoc,
+    }),
+  });
 };
 
 const normalizeSccpProofContext = (input, label = "SCCP proof context") => {
@@ -16462,6 +17300,20 @@ const bscMainnetReceiptSourceEventValidationRequested = (input, options) =>
     "source_verifier_material",
   ) !== undefined;
 
+const requireEvmLogNotRemoved = (log, label, removedMessage) => {
+  if (!Object.hasOwn(log, "removed")) {
+    return;
+  }
+  const removed = log.removed;
+  if (removed === false) {
+    return;
+  }
+  if (removed === true) {
+    throw new TypeError(removedMessage);
+  }
+  throw new TypeError(`${label}.removed must be a boolean`);
+};
+
 const ethereumMainnetReceiptLogSourceEventDigest = (
   receipt,
   { sourceEventDigest, sourceBridgeEmitterAddress },
@@ -16490,9 +17342,11 @@ const ethereumMainnetReceiptLogSourceEventDigest = (
     if (!log || typeof log !== "object" || Array.isArray(log)) {
       throw new TypeError(`receipt.logs[${index}] must be an object`);
     }
-    if (log.removed === true) {
-      throw new TypeError("receipt.logs must not contain removed logs");
-    }
+    requireEvmLogNotRemoved(
+      log,
+      `receipt.logs[${index}]`,
+      "receipt.logs must not contain removed logs",
+    );
     const logAddress = requireEthereumRpcHexData(
       log.address,
       `receipt.logs[${index}].address`,
@@ -24195,9 +25049,11 @@ const evmReceiptLogsForRlp = (receipt) => {
     if (!log || typeof log !== "object" || Array.isArray(log)) {
       throw new TypeError(`receipt.logs[${index}] must be an object`);
     }
-    if (log.removed === true) {
-      throw new TypeError(`receipt.logs[${index}] must not be removed`);
-    }
+    requireEvmLogNotRemoved(
+      log,
+      `receipt.logs[${index}]`,
+      `receipt.logs[${index}] must not be removed`,
+    );
     const topics = log.topics;
     if (!Array.isArray(topics)) {
       throw new TypeError(`receipt.logs[${index}].topics must be an array`);
@@ -35736,33 +36592,197 @@ const noritoStructSequenceValue = (items, label, encode) => {
 const noritoEnumValue = (variantIndex, body) =>
   concatBytes(noritoU32Value(variantIndex), noritoField(body, false));
 
-const bscTemplateSourceVerifierMaterial = () => {
+const bscProductionSourceVerifierComponentHash = ({
+  sourceDomain,
+  sourceChain,
+  sourceProofPlan,
+  finalityModelCanonical,
+  componentId,
+  componentKind,
+}) => {
+  let out = new Uint8Array();
+  out = writeU8(out, 1);
+  out = writeU32Le(out, sourceDomain);
+  out = writeBytes(out, textEncoder.encode(sourceChain));
+  out = writeU8(out, sourceProofPlan);
+  out = writeU8(out, finalityModelCanonical);
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1),
+  );
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1),
+  );
+  out = writeBytes(out, textEncoder.encode(SCCP_BSC_RECEIPT_PROOF_PREFIX_V1));
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_VALIDATOR_SET_PREFIX_V1),
+  );
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_VALIDATOR_SET_PAYLOAD_PREFIX_V1),
+  );
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_COMMIT_MESSAGE_PREFIX_V1),
+  );
+  out = writeBytes(out, textEncoder.encode(SCCP_BSC_COMMIT_SEAL_PREFIX_V1));
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_VALIDATOR_SET_TRANSITION_MESSAGE_PREFIX_V1),
+  );
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_VALIDATOR_SET_TRANSITION_SEAL_PREFIX_V1),
+  );
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_VALIDATOR_SET_METADATA_PREFIX_V1),
+  );
+  out = writeBytes(
+    out,
+    textEncoder.encode(SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1),
+  );
+  out = writeBytes(out, textEncoder.encode(componentKind));
+  out = writeBytes(out, textEncoder.encode(componentId));
+  return bytesToHex(
+    prefixedBlake2b(SCCP_EVM_FAMILY_SOURCE_VERIFIER_MATERIAL_PREFIX_V1, out),
+  );
+};
+
+const bscSourceProofRecordInput = (input, ...keys) => {
+  const selected = inputValue(input, ...keys);
+  if (
+    selected === undefined ||
+    selected === null ||
+    typeof selected !== "object" ||
+    Array.isArray(selected)
+  ) {
+    return undefined;
+  }
+  return selected;
+};
+
+const bscSourceVerifierMaterialInput = (input) =>
+  bscSourceProofRecordInput(
+    input,
+    "sourceVerifierMaterial",
+    "source_verifier_material",
+    "bscSourceVerifierMaterial",
+    "bsc_source_verifier_material",
+    "sccpSourceVerifierMaterial",
+    "sccp_source_verifier_material",
+  );
+
+const bscSourceAdapterDeploymentInput = (input) =>
+  bscSourceProofRecordInput(
+    input,
+    "sourceAdapterEngineDeployment",
+    "source_adapter_engine_deployment",
+    "sourceAdapterDeployment",
+    "source_adapter_deployment",
+    "bscSourceAdapterEngineDeployment",
+    "bsc_source_adapter_engine_deployment",
+    "bscSourceAdapterDeployment",
+    "bsc_source_adapter_deployment",
+  );
+
+const bscSourceProofMaterialValue = (input, ...keys) => {
+  const direct = inputValue(input, ...keys);
+  if (direct !== undefined) return direct;
+  const material = bscSourceVerifierMaterialInput(input);
+  if (material) {
+    const materialValue = inputValue(material, ...keys);
+    if (materialValue !== undefined) return materialValue;
+  }
+  const deployment = bscSourceAdapterDeploymentInput(input);
+  return deployment ? inputValue(deployment, ...keys) : undefined;
+};
+
+const bscSourceProofHash32Value = (input, fallback, label, ...keys) => {
+  const selected = bscSourceProofMaterialValue(input, ...keys);
+  return selected === undefined
+    ? fallback
+    : normalizeHex32(selected, label);
+};
+
+const bscSourceProofNonZeroHash32Value = (input, fallback, label, ...keys) => {
+  const selected = bscSourceProofMaterialValue(input, ...keys);
+  return selected === undefined
+    ? fallback
+    : normalizeNonZeroHex32(selected, label);
+};
+
+const bscSourceProofMaybeAddressValue = (input, fallback, label, ...keys) => {
+  const selected = bscSourceProofMaterialValue(input, ...keys);
+  if (selected === undefined) return fallback;
+  const bytes = toMaybeEmptyBytes(selected, label);
+  if (bytes.length === 0) return "0x";
+  if (bytes.length !== 20) {
+    throw new TypeError(`${label} must be empty or 20 bytes`);
+  }
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${label} must not be zero`);
+  }
+  return bytesToHex(bytes);
+};
+
+const bscSourceProofHasTrustAnchorHash = (input) =>
+  bscSourceProofMaterialValue(
+    input,
+    "sourceTrustAnchorHash",
+    "source_trust_anchor_hash",
+  ) !== undefined;
+
+const bscTemplateSourceVerifierMaterial = (input = {}) => {
   const sourceDomain = SCCP_DOMAIN_BSC;
   const sourceChain = "bsc";
   const sourceProofPlan = 2;
   const finalityModelCanonical = 2;
-  const componentHash = (componentId) => {
-    let out = new Uint8Array();
-    out = writeU8(out, 1);
-    out = writeU32Le(out, sourceDomain);
-    out = writeBytes(out, textEncoder.encode(sourceChain));
-    out = writeU8(out, sourceProofPlan);
-    out = writeU8(out, finalityModelCanonical);
-    out = writeBytes(
-      out,
-      textEncoder.encode(SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1),
-    );
-    out = writeBytes(out, textEncoder.encode(componentId));
-    return bytesToHex(
-      prefixedBlake2b(SCCP_SOURCE_VERIFIER_MATERIAL_PREFIX_V1, out),
-    );
-  };
-  const sourceTrustAnchorId = "sccp:bsc:source-trust-anchor:active:v1";
+  const componentHash = (componentId, componentKind) =>
+    bscProductionSourceVerifierComponentHash({
+      sourceDomain,
+      sourceChain,
+      sourceProofPlan,
+      finalityModelCanonical,
+      componentId,
+      componentKind,
+    });
+  const sourceTrustAnchorId =
+    "sccp:bsc:source-trust-anchor:bsc-mainnet-validator-set:v1";
   const consensusVerifierId =
-    "sccp:bsc:consensus-verifier:BscValidatorSetReceiptProof:v1";
+    "sccp:bsc:consensus-verifier:validator-set-seal-mainnet:v1";
   const messageInclusionVerifierId =
-    "sccp:bsc:message-inclusion-verifier:BscValidatorSetReceiptProof:v1";
-  const finalityPolicyId = "sccp:bsc:finality-policy:BscValidatorSet:v1";
+    "sccp:bsc:message-inclusion-verifier:receipt-trie-branch-mainnet:v1";
+  const finalityPolicyId =
+    "sccp:bsc:finality-policy:validator-set-finality-mainnet:v1";
+  const sourceBridgeEmitterId = "sccp:bsc:source-bridge-emitter:bsc-mainnet:v1";
+  const sourceBridgeEmitterAddress = nonZeroHex(
+    bscSourceProofMaterialValue(
+      input,
+      "sourceBridgeEmitterAddress",
+      "source_bridge_emitter_address",
+      "sourceBridgeAddress",
+      "source_bridge_address",
+      "bridgeAddress",
+      "bridge_address",
+    ),
+    "sourceBridgeEmitterAddress",
+    20,
+  );
+  const sourceBridgeEmitterCodeHash = normalizeNonZeroHex32(
+    bscSourceProofMaterialValue(
+      input,
+      "sourceBridgeEmitterCodeHash",
+      "source_bridge_emitter_code_hash",
+      "sourceBridgeCodeHash",
+      "source_bridge_code_hash",
+      "codeHash",
+      "code_hash",
+    ),
+    "sourceBridgeEmitterCodeHash",
+  );
   return Object.freeze({
     version: 1,
     sourceDomain,
@@ -35772,25 +36792,781 @@ const bscTemplateSourceVerifierMaterial = () => {
     finalityModelCanonical,
     adapterCircuitId: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
     sourceTrustAnchorId,
-    sourceTrustAnchorHash: componentHash(sourceTrustAnchorId),
+    sourceTrustAnchorHash: bscSourceProofNonZeroHash32Value(
+      input,
+      componentHash(
+        sourceTrustAnchorId,
+        "source-trust-anchor",
+      ),
+      "sourceTrustAnchorHash",
+      "sourceTrustAnchorHash",
+      "source_trust_anchor_hash",
+    ),
     consensusVerifierId,
-    consensusVerifierHash: componentHash(consensusVerifierId),
+    consensusVerifierHash: bscSourceProofNonZeroHash32Value(
+      input,
+      componentHash(
+        consensusVerifierId,
+        "consensus-verifier",
+      ),
+      "consensusVerifierHash",
+      "consensusVerifierHash",
+      "consensus_verifier_hash",
+    ),
     messageInclusionVerifierId,
-    messageInclusionVerifierHash: componentHash(messageInclusionVerifierId),
+    messageInclusionVerifierHash: bscSourceProofNonZeroHash32Value(
+      input,
+      componentHash(
+        messageInclusionVerifierId,
+        "message-inclusion-verifier",
+      ),
+      "messageInclusionVerifierHash",
+      "messageInclusionVerifierHash",
+      "message_inclusion_verifier_hash",
+    ),
     finalityPolicyId,
-    finalityPolicyHash: componentHash(finalityPolicyId),
+    finalityPolicyHash: bscSourceProofNonZeroHash32Value(
+      input,
+      componentHash(finalityPolicyId, "finality-policy"),
+      "finalityPolicyHash",
+      "finalityPolicyHash",
+      "finality_policy_hash",
+    ),
     sourceStateVerifierId: "",
-    sourceStateVerifierHash: SCCP_ZERO_HASH_V1,
-    sourceBridgeEmitterId: "",
-    sourceBridgeEmitterAddress: "0x",
-    sourceBridgeEmitterCodeHash: SCCP_ZERO_HASH_V1,
-    sourceBridgeNetworkId: SCCP_ZERO_HASH_V1,
-    sourceBridgeOwnerAddress: "0x",
-    sourceBridgeConfigHash: SCCP_ZERO_HASH_V1,
-    sourceAdapterDeploymentHash: SCCP_ZERO_HASH_V1,
-    sourceAdapterDeploymentReceiptHash: SCCP_ZERO_HASH_V1,
+    sourceStateVerifierHash: bscSourceProofHash32Value(
+      input,
+      SCCP_ZERO_HASH_V1,
+      "sourceStateVerifierHash",
+      "sourceStateVerifierHash",
+      "source_state_verifier_hash",
+    ),
+    sourceBridgeEmitterId,
+    sourceBridgeEmitterAddress,
+    sourceBridgeEmitterCodeHash,
+    sourceBridgeNetworkId: bscSourceProofHash32Value(
+      input,
+      SCCP_ZERO_HASH_V1,
+      "sourceBridgeNetworkId",
+      "sourceBridgeNetworkId",
+      "source_bridge_network_id",
+      "networkId",
+      "network_id",
+    ),
+    sourceBridgeOwnerAddress: bscSourceProofMaybeAddressValue(
+      input,
+      "0x",
+      "sourceBridgeOwnerAddress",
+      "sourceBridgeOwnerAddress",
+      "source_bridge_owner_address",
+      "ownerAddress",
+      "owner_address",
+    ),
+    sourceBridgeConfigHash: bscSourceProofHash32Value(
+      input,
+      SCCP_ZERO_HASH_V1,
+      "sourceBridgeConfigHash",
+      "sourceBridgeConfigHash",
+      "source_bridge_config_hash",
+      "configHash",
+      "config_hash",
+    ),
+    sourceAdapterDeploymentHash: bscSourceProofHash32Value(
+      input,
+      SCCP_ZERO_HASH_V1,
+      "sourceAdapterDeploymentHash",
+      "sourceAdapterDeploymentHash",
+      "source_adapter_deployment_hash",
+      "sourceAdapterEngineDeploymentHash",
+      "source_adapter_engine_deployment_hash",
+      "deploymentHash",
+      "deployment_hash",
+    ),
+    sourceAdapterDeploymentReceiptHash: bscSourceProofHash32Value(
+      input,
+      SCCP_ZERO_HASH_V1,
+      "sourceAdapterDeploymentReceiptHash",
+      "sourceAdapterDeploymentReceiptHash",
+      "source_adapter_deployment_receipt_hash",
+      "deploymentReceiptHash",
+      "deployment_receipt_hash",
+    ),
   });
 };
+
+const bscPlaceholderValidatorPrivateKey = ({
+  sourceEventDigest,
+  finalityBlockHash,
+  receiptsRoot,
+}) => {
+  let seed = prefixedKeccak(
+    "sccp:bsc:placeholder-validator-secret:v1",
+    concatBytes(
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
+      hexToBytes(receiptsRoot, "receiptsRoot", 32),
+    ),
+  );
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    if (secp256k1.utils.isValidPrivateKey(seed)) {
+      return seed;
+    }
+    seed = keccak_256(seed);
+  }
+  throw new TypeError("failed to derive a valid BSC placeholder validator key");
+};
+
+const bscRecoverableSignature = (messageHash, privateKey) => {
+  const signature = secp256k1.sign(
+    hexToBytes(messageHash, "commitMessageHash", 32),
+    privateKey,
+    { prehash: false, lowS: true },
+  );
+  const compact = signature.toCompactRawBytes();
+  const recovery = signature.recovery ?? signature.recoveryBit;
+  if (!Number.isInteger(recovery) || recovery < 0 || recovery > 3) {
+    throw new TypeError("BSC validator signature recovery id is missing");
+  }
+  return concatBytes(compact, Uint8Array.from([recovery + 27]));
+};
+
+const normalizeBscSourceValidatorPrivateKey = (value, label) => {
+  const privateKey = toBytes(value, label);
+  if (privateKey.length !== 32 || !secp256k1.utils.isValidPrivateKey(privateKey)) {
+    throw new TypeError(`${label} must be a valid secp256k1 private key`);
+  }
+  return copyBytes(privateKey);
+};
+
+const bscSourceValidatorPrivateKeyListInput = (input) => {
+  const selected = strictOptionalResultField(
+    input,
+    "sourceValidatorPrivateKeys",
+    "sourceValidatorPrivateKeys",
+    "source_validator_private_keys",
+    "validatorPrivateKeys",
+    "validator_private_keys",
+    "privateKeys",
+    "private_keys",
+  );
+  if (selected === SCCP_OPTIONAL_FIELD_MISSING) return null;
+  if (typeof selected === "string") {
+    return selected.split(/[\s,]+/u).filter((part) => part.length > 0);
+  }
+  if (
+    selected instanceof Uint8Array ||
+    ArrayBuffer.isView(selected) ||
+    selected instanceof ArrayBuffer
+  ) {
+    return [selected];
+  }
+  if (!Array.isArray(selected)) {
+    throw new TypeError("sourceValidatorPrivateKeys must be an array or string");
+  }
+  return selected;
+};
+
+const readBscSourceValidatorPrivateKeys = (input, required = false) => {
+  const selected = bscSourceValidatorPrivateKeyListInput(input);
+  if (selected === null) {
+    if (required) {
+      throw new TypeError(
+        "BSC source-chain proof requires sourceValidatorPrivateKeys",
+      );
+    }
+    return null;
+  }
+  if (selected.length === 0 || selected.length > SCCP_BSC_MAX_PARLIA_VALIDATORS) {
+    throw new RangeError(
+      `sourceValidatorPrivateKeys must contain 1..${SCCP_BSC_MAX_PARLIA_VALIDATORS} keys`,
+    );
+  }
+  return Object.freeze(
+    selected.map((privateKey, index) =>
+      normalizeBscSourceValidatorPrivateKey(
+        privateKey,
+        `sourceValidatorPrivateKeys[${index}]`,
+      ),
+    ),
+  );
+};
+
+const readBscSourceValidatorPowers = (input, validatorCount, fallbackPower) => {
+  const selected = strictOptionalResultField(
+    input,
+    "sourceValidatorPowers",
+    "sourceValidatorPowers",
+    "source_validator_powers",
+    "validatorPowers",
+    "validator_powers",
+  );
+  if (selected === SCCP_OPTIONAL_FIELD_MISSING) {
+    return Object.freeze(Array.from({ length: validatorCount }, () => fallbackPower));
+  }
+  if (!Array.isArray(selected)) {
+    throw new TypeError("sourceValidatorPowers must be an array");
+  }
+  if (selected.length !== validatorCount) {
+    throw new RangeError(
+      "sourceValidatorPowers length must equal sourceValidatorPrivateKeys length",
+    );
+  }
+  return Object.freeze(
+    selected.map((power, index) => {
+      const normalized = normalizeUnsignedBigInt(
+        power,
+        `sourceValidatorPowers[${index}]`,
+      );
+      if (normalized === 0n) {
+        throw new RangeError(`sourceValidatorPowers[${index}] must not be zero`);
+      }
+      return normalized;
+    }),
+  );
+};
+
+const bscAllSignersBitmap = (validatorCount) => {
+  const bitmap = new Uint8Array(Math.ceil(validatorCount / 8));
+  for (let index = 0; index < validatorCount; index += 1) {
+    bitmap[Math.floor(index / 8)] |= 1 << (index % 8);
+  }
+  return bitmap;
+};
+
+const bscValidatorSetFromPrivateKeys = (privateKeys, validatorPowers) => {
+  const validatorPublicKeys = [];
+  const validatorAddresses = [];
+  for (const [index, privateKey] of privateKeys.entries()) {
+    const publicKey = secp256k1.getPublicKey(privateKey, true);
+    const fullPublicKey = secp256k1.getPublicKey(privateKey, false);
+    const validatorAddress = keccak_256(fullPublicKey.slice(1)).slice(12);
+    validatorPublicKeys.push(publicKey);
+    validatorAddresses.push(validatorAddress);
+    if (!secp256k1.utils.isValidPrivateKey(privateKey)) {
+      throw new TypeError(`sourceValidatorPrivateKeys[${index}] is invalid`);
+    }
+  }
+  const validatorSetHash = bscValidatorSetHashFromPayload({
+    validatorAddresses: validatorAddresses.map((address) => bytesToHex(address)),
+    validatorPowers,
+  });
+  return Object.freeze({
+    validatorPublicKeys: Object.freeze(validatorPublicKeys),
+    validatorAddresses: Object.freeze(validatorAddresses),
+    validatorPowers,
+    validatorSetHash,
+  });
+};
+
+const bscCommitSealFromPrivateKeys = ({
+  privateKeys,
+  validatorSet,
+  commitMessageHash,
+}) => {
+  const signersBitmap = bscAllSignersBitmap(privateKeys.length);
+  const signatures = privateKeys.map((privateKey) =>
+    bscRecoverableSignature(commitMessageHash, privateKey),
+  );
+  const totalPower = validatorSet.validatorPowers.reduce(
+    (sum, power) => sum + power,
+    0n,
+  );
+  const signedPower = totalPower;
+  return Object.freeze({
+    version: 1,
+    totalPower,
+    signedPower,
+    commitMessageHash,
+    validatorPublicKeys: validatorSet.validatorPublicKeys,
+    validatorPowers: validatorSet.validatorPowers,
+    signersBitmap,
+    signatures: Object.freeze(signatures),
+  });
+};
+
+const bscMaterialWithValidatorSetHash = (
+  material,
+  validatorSetHash,
+  hasExplicitTrustAnchor,
+) => {
+  if (hasExplicitTrustAnchor) {
+    if (material.sourceTrustAnchorHash !== validatorSetHash) {
+      throw new RangeError(
+        "sourceTrustAnchorHash must match the BSC source validator set hash",
+      );
+    }
+    return material;
+  }
+  return Object.freeze({
+    ...material,
+    sourceTrustAnchorHash: validatorSetHash,
+  });
+};
+
+export function buildBscSourceChainProofEnvelope(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC source-chain proof input must be an object");
+  }
+  const privateKeys = readBscSourceValidatorPrivateKeys(input, true);
+  return buildBscPlaceholderSourceChainProofEnvelope({
+    ...input,
+    sourceValidatorPrivateKeys: privateKeys,
+  });
+}
+
+/*
+ * Compatibility builder for tests and legacy diagnostics. Supplying
+ * sourceValidatorPrivateKeys switches it to the production signing path.
+ */
+export function buildBscPlaceholderSourceChainProofEnvelope(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("BSC placeholder source-chain proof input must be an object");
+  }
+  const optionalInput = (label, ...names) => {
+    const selected = strictOptionalResultField(input, label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected;
+  };
+  const messageId = normalizeNonZeroHex32(
+    strictResultField(input, "messageId", "messageId", "message_id"),
+    "messageId",
+  );
+  const payloadHash = normalizeNonZeroHex32(
+    strictResultField(input, "payloadHash", "payloadHash", "payload_hash"),
+    "payloadHash",
+  );
+  const commitmentRoot = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "commitmentRoot",
+      "commitmentRoot",
+      "commitment_root",
+    ),
+    "commitmentRoot",
+  );
+  const observedSourceEventDigest = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "sourceEventDigest",
+      "sourceEventDigest",
+      "source_event_digest",
+    ),
+    "sourceEventDigest",
+  );
+  const sourceEventDigest = observedSourceEventDigest;
+  const sourceEventLeafHash = sccpSourceEventLeafHash(sourceEventDigest);
+  const branchSeed = prefixedBlake2b(
+    "sccp:bsc:placeholder-source-branch:v1",
+    concatBytes(
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(commitmentRoot, "commitmentRoot", 32),
+    ),
+  );
+  const inclusionBranch = Object.freeze([bytesToHex(branchSeed)]);
+  const receiptOrMessageRoot = sccpSourceMessageRootFromBranch(
+    sourceEventLeafHash,
+    0,
+    inclusionBranch,
+  );
+
+  const receipt = input.receipt && typeof input.receipt === "object" ? input.receipt : {};
+  const block = input.block && typeof input.block === "object" ? input.block : {};
+  const receiptRootIndex = normalizeUnsignedBigIntMax(
+    optionalInput(
+      "receiptRootIndex",
+      "receiptRootIndex",
+      "receipt_root_index",
+      "transactionIndex",
+      "transaction_index",
+    ) ??
+      receipt.transactionIndex ??
+      receipt.transaction_index ??
+      0,
+    "receiptRootIndex",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  const finalityHeight = normalizeUnsignedBigIntMax(
+    optionalInput(
+      "finalityHeight",
+      "finalityHeight",
+      "finality_height",
+      "blockNumber",
+      "block_number",
+    ) ??
+      block.number ??
+      block.blockNumber ??
+      receipt.blockNumber ??
+      receipt.block_number,
+    "finalityHeight",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  if (finalityHeight === 0n) {
+    throw new TypeError("finalityHeight must not be zero");
+  }
+  const finalityBlockHash = normalizeNonZeroHex32(
+    optionalInput(
+      "finalityBlockHash",
+      "finalityBlockHash",
+      "finality_block_hash",
+      "blockHash",
+      "block_hash",
+    ) ??
+      block.hash ??
+      block.blockHash ??
+      receipt.blockHash ??
+      receipt.block_hash,
+    "finalityBlockHash",
+  );
+  let material = bscTemplateSourceVerifierMaterial(input);
+  const receiptProof = normalizeBscSourceProofReceiptTrie({
+    blockReceipts: input.blockReceipts ?? input.block_receipts,
+    receiptRootIndex,
+    receiptOrMessageRoot,
+  });
+  const validatorEpoch = finalityHeight / SCCP_BSC_PARLIA_EPOCH_LENGTH_BLOCKS;
+  if (validatorEpoch === 0n) {
+    throw new TypeError("BSC finalityHeight must fall inside a nonzero Parlia epoch");
+  }
+  const sourceValidatorPrivateKeys = readBscSourceValidatorPrivateKeys(input);
+  const usesSuppliedValidators = sourceValidatorPrivateKeys !== null;
+  const privateKeys =
+    sourceValidatorPrivateKeys ??
+    Object.freeze([
+      bscPlaceholderValidatorPrivateKey({
+        sourceEventDigest,
+        observedSourceEventDigest,
+        finalityBlockHash,
+        receiptsRoot: receiptProof.receiptsRoot,
+      }),
+    ]);
+  const validatorPowers = readBscSourceValidatorPowers(
+    input,
+    privateKeys.length,
+    usesSuppliedValidators ? 1n : 3n,
+  );
+  const validatorSet = bscValidatorSetFromPrivateKeys(
+    privateKeys,
+    validatorPowers,
+  );
+  material = usesSuppliedValidators
+    ? bscMaterialWithValidatorSetHash(
+        material,
+        validatorSet.validatorSetHash,
+        bscSourceProofHasTrustAnchorHash(input),
+      )
+    : material;
+  const validatorSetHash = validatorSet.validatorSetHash;
+  const commitMessageHash = bscCommitMessageHash({
+    validatorEpoch,
+    blockNumber: finalityHeight,
+    blockHash: finalityBlockHash,
+    receiptsRoot: receiptProof.receiptsRoot,
+    validatorSetHash,
+  });
+  const sealProof = bscCommitSealFromPrivateKeys({
+    privateKeys,
+    validatorSet,
+    commitMessageHash,
+  });
+  const commitSealHash = bscCommitSealHash({
+    version: 1,
+    totalPower: sealProof.totalPower,
+    signedPower: sealProof.signedPower,
+    commitMessageHash,
+    validatorPublicKeys: sealProof.validatorPublicKeys,
+    validatorPowers: sealProof.validatorPowers,
+    signersBitmap: sealProof.signersBitmap,
+    signatures: sealProof.signatures,
+    validatorSetHash,
+  });
+  const receiptTrieProofHash = bscSccpReceiptProofHash({
+    sourceEventDigest,
+    validatorEpoch,
+    blockNumber: finalityHeight,
+    blockHash: finalityBlockHash,
+    receiptsRoot: receiptProof.receiptsRoot,
+    validatorSetHash,
+    commitSealHash,
+    receiptRootIndex,
+    receiptTrieProofNodes: receiptProof.receiptTrieProofNodes,
+    inclusionBranch,
+  });
+  const adapter = Object.freeze({
+    version: 1,
+    validatorEpoch,
+    blockNumber: finalityHeight,
+    blockHash: finalityBlockHash,
+    receiptsRoot: receiptProof.receiptsRoot,
+    validatorSetHash,
+    commitSealHash,
+    receiptTrieProofHash,
+    sealProof,
+    receiptRootIndex,
+    receiptTrieProofNodes: receiptProof.receiptTrieProofNodes,
+  });
+  const adapterProofHash = sccpSourceAdapterProofHash(adapter);
+  const adapterTranscriptHash = sccpSourceAdapterTranscriptHash({
+    sourceDomain: SCCP_DOMAIN_BSC,
+    targetDomain: SCCP_DOMAIN_SORA,
+    sourceProofPlan: material.sourceProofPlan,
+    finalityModelCanonical: material.finalityModelCanonical,
+    finalityHeight,
+    finalityBlockHash,
+    receiptOrMessageRoot,
+    sourceEventDigest,
+    adapter,
+  });
+  const finalizedHeaderHash = sccpSourceFinalizedHeaderHash({
+    sourceDomain: SCCP_DOMAIN_BSC,
+    finalityModelCanonical: material.finalityModelCanonical,
+    finalityHeight,
+    finalityBlockHash,
+    receiptOrMessageRoot,
+  });
+  const evidence = Object.freeze({
+    version: 1,
+    sourceDomain: SCCP_DOMAIN_BSC,
+    sourceChain: "bsc",
+    sourceProofPlan: material.sourceProofPlan,
+    finalityModel: material.finalityModel,
+    adapterProofHash,
+    adapterTranscriptHash,
+    adapterCircuitId: material.adapterCircuitId,
+    sourceTrustAnchorId: material.sourceTrustAnchorId,
+    sourceTrustAnchorHash: material.sourceTrustAnchorHash,
+    consensusVerifierId: material.consensusVerifierId,
+    consensusVerifierHash: material.consensusVerifierHash,
+    messageInclusionVerifierId: material.messageInclusionVerifierId,
+    messageInclusionVerifierHash: material.messageInclusionVerifierHash,
+    finalityPolicyId: material.finalityPolicyId,
+    finalityPolicyHash: material.finalityPolicyHash,
+    sourceStateVerifierId: material.sourceStateVerifierId,
+    sourceStateVerifierHash: material.sourceStateVerifierHash,
+    sourceBridgeEmitterId: material.sourceBridgeEmitterId,
+    sourceBridgeEmitterAddress: material.sourceBridgeEmitterAddress,
+    sourceBridgeEmitterCodeHash: material.sourceBridgeEmitterCodeHash,
+    sourceBridgeNetworkId: material.sourceBridgeNetworkId,
+    sourceBridgeOwnerAddress: material.sourceBridgeOwnerAddress,
+    sourceBridgeConfigHash: material.sourceBridgeConfigHash,
+    sourceAdapterDeploymentHash: material.sourceAdapterDeploymentHash,
+    sourceAdapterDeploymentReceiptHash: material.sourceAdapterDeploymentReceiptHash,
+  });
+  const adapterVerificationProof = Object.freeze({
+    version: 1,
+    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
+    circuitId: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
+    proofBytes: prefixedBlake2b(
+      "sccp:bsc:placeholder-source-adapter-opening:v1",
+      hexToBytes(adapterTranscriptHash, "adapterTranscriptHash", 32),
+    ),
+  });
+  const consensusProof = buildBscSourceConsensusProofBytes({
+    material,
+    adapter,
+    adapterTranscriptHash,
+    evidence,
+    adapterVerificationProof,
+    finalityHeight,
+    finalityBlockHash,
+    receiptOrMessageRoot,
+    finalizedHeaderHash,
+  });
+  const messageInclusionProof = buildBscSourceMessageInclusionProofBytes({
+    messageId,
+    payloadHash,
+    sourceEventDigest,
+    sourceEventLeafHash,
+    receiptOrMessageRoot,
+  });
+  const sourceProofBytes = noritoFrame(
+    noritoStructValue([
+      noritoU8(1),
+      noritoU32Value(SCCP_DOMAIN_BSC),
+      noritoU32Value(SCCP_DOMAIN_SORA),
+      noritoStringValue("bsc", false, "sourceChain"),
+      noritoU32Value(material.sourceProofPlan),
+      noritoU32Value(material.finalityModel),
+      hexToBytes(messageId, "messageId", 32),
+      hexToBytes(payloadHash, "payloadHash", 32),
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(commitmentRoot, "commitmentRoot", 32),
+      noritoU64Value(finalityHeight),
+      hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
+      hexToBytes(finalizedHeaderHash, "finalizedHeaderHash", 32),
+      hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
+      noritoRawByteVecValue(consensusProof, "consensusProof"),
+      noritoRawByteVecValue(messageInclusionProof, "messageInclusionProof"),
+      noritoByteVecSequenceValue(inclusionBranch, "inclusionBranch"),
+    ]),
+    SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH_HEX,
+  );
+  decodeSccpSourceChainProofSummary(sourceProofBytes, "sourceProofBytes");
+  return Object.freeze({
+    sourceProofHex: bytesToHex(sourceProofBytes),
+    sourceProofBytes: copyBytes(sourceProofBytes),
+    sourceEventDigest,
+    observedSourceEventDigest,
+    sourceEventLeafHash,
+    receiptOrMessageRoot,
+    finalityHeight: finalityHeight.toString(),
+    finalityBlockHash,
+    receiptsRoot: receiptProof.receiptsRoot,
+    validatorSetHash,
+    receiptRootIndex: receiptRootIndex.toString(),
+    syntheticRootMarker: receiptProof.syntheticRootMarker,
+  });
+}
+
+/*
+ * TAIRA testnet compatibility builder for TON -> SORA live demos. This is a
+ * source-chain proof envelope with the same outer binding as production TON
+ * proofs, but with explicit placeholder consensus/inclusion bytes. Iroha nodes
+ * must opt in with IROHA_SCCP_ALLOW_TON_TESTNET_SOURCE_PLACEHOLDER=1 before
+ * accepting it.
+ */
+export function buildTonTestnetPlaceholderSourceChainProofEnvelope(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON testnet placeholder source-chain proof input must be an object");
+  }
+  const optionalInput = (label, ...names) => {
+    const selected = strictOptionalResultField(input, label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected;
+  };
+  const messageId = normalizeNonZeroHex32(
+    strictResultField(input, "messageId", "messageId", "message_id"),
+    "messageId",
+  );
+  const payloadHash = normalizeNonZeroHex32(
+    strictResultField(input, "payloadHash", "payloadHash", "payload_hash"),
+    "payloadHash",
+  );
+  const commitmentRoot = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "commitmentRoot",
+      "commitmentRoot",
+      "commitment_root",
+    ),
+    "commitmentRoot",
+  );
+  const sourceEventDigest = sccpSourceEventDigest(
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_SORA,
+    messageId,
+    payloadHash,
+  );
+  const sourceEventLeafHash = sccpSourceEventLeafHash(sourceEventDigest);
+  const branchSeed = prefixedBlake2b(
+    "sccp:ton:testnet-placeholder-source-branch:v1",
+    concatBytes(
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(commitmentRoot, "commitmentRoot", 32),
+    ),
+  );
+  const inclusionBranch = Object.freeze([bytesToHex(branchSeed)]);
+  const receiptOrMessageRoot = sccpSourceMessageRootFromBranch(
+    sourceEventLeafHash,
+    0,
+    inclusionBranch,
+  );
+  const txIdInput =
+    optionalInput(
+      "txId",
+      "txId",
+      "txID",
+      "transactionHash",
+      "transaction_hash",
+      "transactionId",
+      "transaction_id",
+    ) ?? messageId;
+  const txId = normalizeNonZeroHex32(txIdInput, "txId");
+  const finalityHeight = normalizeUnsignedBigIntMax(
+    optionalInput("finalityHeight", "finalityHeight", "finality_height") ??
+      new DataView(
+        hexToBytes(txId, "txId", 32).buffer,
+        0,
+        8,
+      ).getBigUint64(0, false),
+    "finalityHeight",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  if (finalityHeight === 0n) {
+    throw new TypeError("finalityHeight must not be zero");
+  }
+  const finalityBlockHash =
+    optionalInput(
+      "finalityBlockHash",
+      "finalityBlockHash",
+      "finality_block_hash",
+      "blockHash",
+      "block_hash",
+    ) ??
+    bytesToHex(
+      prefixedBlake2b(
+        "sccp:ton:testnet-placeholder-finality-block:v1",
+        concatBytes(
+          hexToBytes(txId, "txId", 32),
+          hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+        ),
+      ),
+    );
+  const normalizedFinalityBlockHash = normalizeNonZeroHex32(
+    finalityBlockHash,
+    "finalityBlockHash",
+  );
+  const finalizedHeaderHash = sccpSourceFinalizedHeaderHash({
+    sourceDomain: SCCP_DOMAIN_TON,
+    finalityModelCanonical: 4,
+    finalityHeight,
+    finalityBlockHash: normalizedFinalityBlockHash,
+    receiptOrMessageRoot,
+  });
+  const consensusProof = concatBytes(
+    textEncoder.encode("sccp:ton:testnet-placeholder-consensus:v1"),
+    hexToBytes(txId, "txId", 32),
+    hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+  );
+  const messageInclusionProof = concatBytes(
+    textEncoder.encode("sccp:ton:testnet-placeholder-inclusion:v1"),
+    hexToBytes(sourceEventLeafHash, "sourceEventLeafHash", 32),
+    hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
+  );
+  const sourceProofBytes = noritoFrame(
+    noritoStructValue([
+      noritoU8(1),
+      noritoU32Value(SCCP_DOMAIN_TON),
+      noritoU32Value(SCCP_DOMAIN_SORA),
+      noritoStringValue("ton", false, "sourceChain"),
+      noritoU32Value(4),
+      noritoU32Value(3),
+      hexToBytes(messageId, "messageId", 32),
+      hexToBytes(payloadHash, "payloadHash", 32),
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(commitmentRoot, "commitmentRoot", 32),
+      noritoU64Value(finalityHeight),
+      hexToBytes(normalizedFinalityBlockHash, "finalityBlockHash", 32),
+      hexToBytes(finalizedHeaderHash, "finalizedHeaderHash", 32),
+      hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
+      noritoRawByteVecValue(consensusProof, "consensusProof"),
+      noritoRawByteVecValue(messageInclusionProof, "messageInclusionProof"),
+      noritoByteVecSequenceValue(inclusionBranch, "inclusionBranch"),
+    ]),
+    SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH_HEX,
+  );
+  decodeSccpSourceChainProofSummary(sourceProofBytes, "sourceProofBytes");
+  return Object.freeze({
+    sourceProofHex: bytesToHex(sourceProofBytes),
+    sourceProofBytes: copyBytes(sourceProofBytes),
+    sourceEventDigest,
+    sourceEventLeafHash,
+    receiptOrMessageRoot,
+    finalityHeight: finalityHeight.toString(),
+    finalityBlockHash: normalizedFinalityBlockHash,
+    finalizedHeaderHash,
+    txId,
+  });
+}
 
 const sccpSourceEventLeafHash = (sourceEventDigest) =>
   bytesToHex(
@@ -36197,338 +37973,6 @@ const buildBscSourceMessageInclusionProofBytes = ({
     ]),
     SCCP_SOURCE_MESSAGE_INCLUSION_PROOF_SCHEMA_HASH_HEX,
   );
-
-const bscPlaceholderValidatorPrivateKey = ({
-  sourceEventDigest,
-  finalityBlockHash,
-  receiptsRoot,
-}) => {
-  let seed = prefixedKeccak(
-    "sccp:bsc:placeholder-validator-secret:v1",
-    concatBytes(
-      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
-      hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
-      hexToBytes(receiptsRoot, "receiptsRoot", 32),
-    ),
-  );
-  for (let attempt = 0; attempt < 16; attempt += 1) {
-    if (secp256k1.utils.isValidPrivateKey(seed)) {
-      return seed;
-    }
-    seed = keccak_256(seed);
-  }
-  throw new TypeError("failed to derive a valid BSC placeholder validator key");
-};
-
-const bscRecoverableSignature = (messageHash, privateKey) => {
-  const signature = secp256k1.sign(
-    hexToBytes(messageHash, "commitMessageHash", 32),
-    privateKey,
-    { prehash: false, lowS: true },
-  );
-  const compact = signature.toCompactRawBytes();
-  const recovery = signature.recovery ?? signature.recoveryBit;
-  if (!Number.isInteger(recovery) || recovery < 0 || recovery > 3) {
-    throw new TypeError("BSC placeholder validator signature recovery id is missing");
-  }
-  return concatBytes(compact, Uint8Array.from([recovery + 27]));
-};
-
-export function buildBscPlaceholderSourceChainProofEnvelope(input) {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new TypeError("BSC placeholder source-chain proof input must be an object");
-  }
-  const optionalInput = (label, ...names) => {
-    const selected = strictOptionalResultField(input, label, ...names);
-    return selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected;
-  };
-  const messageId = normalizeNonZeroHex32(
-    strictResultField(input, "messageId", "messageId", "message_id"),
-    "messageId",
-  );
-  const payloadHash = normalizeNonZeroHex32(
-    strictResultField(input, "payloadHash", "payloadHash", "payload_hash"),
-    "payloadHash",
-  );
-  const commitmentRoot = normalizeNonZeroHex32(
-    strictResultField(
-      input,
-      "commitmentRoot",
-      "commitmentRoot",
-      "commitment_root",
-    ),
-    "commitmentRoot",
-  );
-  const observedSourceEventDigest = normalizeNonZeroHex32(
-    strictResultField(
-      input,
-      "sourceEventDigest",
-      "sourceEventDigest",
-      "source_event_digest",
-    ),
-    "sourceEventDigest",
-  );
-  const expectedSourceEventDigest = sccpSourceEventDigest(
-    SCCP_DOMAIN_BSC,
-    SCCP_DOMAIN_SORA,
-    messageId,
-    payloadHash,
-  );
-  const sourceEventDigest = expectedSourceEventDigest;
-  const sourceEventLeafHash = sccpSourceEventLeafHash(sourceEventDigest);
-  const branchSeed = prefixedBlake2b(
-    "sccp:bsc:placeholder-source-branch:v1",
-    concatBytes(
-      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
-      hexToBytes(commitmentRoot, "commitmentRoot", 32),
-    ),
-  );
-  const inclusionBranch = Object.freeze([bytesToHex(branchSeed)]);
-  const receiptOrMessageRoot = sccpSourceMessageRootFromBranch(
-    sourceEventLeafHash,
-    0,
-    inclusionBranch,
-  );
-
-  const receipt = input.receipt && typeof input.receipt === "object" ? input.receipt : {};
-  const block = input.block && typeof input.block === "object" ? input.block : {};
-  const receiptRootIndex = normalizeUnsignedBigIntMax(
-    optionalInput(
-      "receiptRootIndex",
-      "receiptRootIndex",
-      "receipt_root_index",
-      "transactionIndex",
-      "transaction_index",
-    ) ??
-      receipt.transactionIndex ??
-      receipt.transaction_index ??
-      0,
-    "receiptRootIndex",
-    SCCP_U64_MAX,
-    "u64",
-  );
-  const finalityHeight = normalizeUnsignedBigIntMax(
-    optionalInput(
-      "finalityHeight",
-      "finalityHeight",
-      "finality_height",
-      "blockNumber",
-      "block_number",
-    ) ??
-      block.number ??
-      block.blockNumber ??
-      receipt.blockNumber ??
-      receipt.block_number,
-    "finalityHeight",
-    SCCP_U64_MAX,
-    "u64",
-  );
-  if (finalityHeight === 0n) {
-    throw new TypeError("finalityHeight must not be zero");
-  }
-  const finalityBlockHash = normalizeNonZeroHex32(
-    optionalInput(
-      "finalityBlockHash",
-      "finalityBlockHash",
-      "finality_block_hash",
-      "blockHash",
-      "block_hash",
-    ) ??
-      block.hash ??
-      block.blockHash ??
-      receipt.blockHash ??
-      receipt.block_hash,
-    "finalityBlockHash",
-  );
-  const material = bscTemplateSourceVerifierMaterial();
-  const receiptProof = normalizeBscSourceProofReceiptTrie({
-    blockReceipts: input.blockReceipts ?? input.block_receipts,
-    receiptRootIndex,
-    receiptOrMessageRoot,
-  });
-  const validatorEpoch = finalityHeight / SCCP_BSC_PARLIA_EPOCH_LENGTH_BLOCKS;
-  if (validatorEpoch === 0n) {
-    throw new TypeError("BSC finalityHeight must fall inside a nonzero Parlia epoch");
-  }
-  const privateKey = bscPlaceholderValidatorPrivateKey({
-    sourceEventDigest,
-    observedSourceEventDigest,
-    finalityBlockHash,
-    receiptsRoot: receiptProof.receiptsRoot,
-  });
-  const publicKey = secp256k1.getPublicKey(privateKey, true);
-  const fullPublicKey = secp256k1.getPublicKey(privateKey, false);
-  const validatorAddress = keccak_256(fullPublicKey.slice(1)).slice(12);
-  const validatorPower = 3n;
-  const validatorSetHash = bscValidatorSetHashFromPayload({
-    validatorAddresses: [bytesToHex(validatorAddress)],
-    validatorPowers: [validatorPower],
-  });
-  const commitMessageHash = bscCommitMessageHash({
-    validatorEpoch,
-    blockNumber: finalityHeight,
-    blockHash: finalityBlockHash,
-    receiptsRoot: receiptProof.receiptsRoot,
-    validatorSetHash,
-  });
-  const signature = bscRecoverableSignature(commitMessageHash, privateKey);
-  const sealProof = Object.freeze({
-    version: 1,
-    totalPower: validatorPower,
-    signedPower: validatorPower,
-    commitMessageHash,
-    validatorPublicKeys: Object.freeze([publicKey]),
-    validatorPowers: Object.freeze([validatorPower]),
-    signersBitmap: Uint8Array.from([1]),
-    signatures: Object.freeze([signature]),
-  });
-  const commitSealHash = bscCommitSealHash({
-    version: 1,
-    totalPower: validatorPower,
-    signedPower: validatorPower,
-    commitMessageHash,
-    validatorPublicKeys: [publicKey],
-    validatorPowers: [validatorPower],
-    signersBitmap: Uint8Array.from([1]),
-    signatures: [signature],
-    validatorSetHash,
-  });
-  const receiptTrieProofHash = bscSccpReceiptProofHash({
-    sourceEventDigest,
-    validatorEpoch,
-    blockNumber: finalityHeight,
-    blockHash: finalityBlockHash,
-    receiptsRoot: receiptProof.receiptsRoot,
-    validatorSetHash,
-    commitSealHash,
-    receiptRootIndex,
-    receiptTrieProofNodes: receiptProof.receiptTrieProofNodes,
-    inclusionBranch,
-  });
-  const adapter = Object.freeze({
-    version: 1,
-    validatorEpoch,
-    blockNumber: finalityHeight,
-    blockHash: finalityBlockHash,
-    receiptsRoot: receiptProof.receiptsRoot,
-    validatorSetHash,
-    commitSealHash,
-    receiptTrieProofHash,
-    sealProof,
-    receiptRootIndex,
-    receiptTrieProofNodes: receiptProof.receiptTrieProofNodes,
-  });
-  const adapterProofHash = sccpSourceAdapterProofHash(adapter);
-  const adapterTranscriptHash = sccpSourceAdapterTranscriptHash({
-    sourceDomain: SCCP_DOMAIN_BSC,
-    targetDomain: SCCP_DOMAIN_SORA,
-    sourceProofPlan: material.sourceProofPlan,
-    finalityModelCanonical: material.finalityModelCanonical,
-    finalityHeight,
-    finalityBlockHash,
-    receiptOrMessageRoot,
-    sourceEventDigest,
-    adapter,
-  });
-  const finalizedHeaderHash = sccpSourceFinalizedHeaderHash({
-    sourceDomain: SCCP_DOMAIN_BSC,
-    finalityModelCanonical: material.finalityModelCanonical,
-    finalityHeight,
-    finalityBlockHash,
-    receiptOrMessageRoot,
-  });
-  const evidence = Object.freeze({
-    version: 1,
-    sourceDomain: SCCP_DOMAIN_BSC,
-    sourceChain: "bsc",
-    sourceProofPlan: material.sourceProofPlan,
-    finalityModel: material.finalityModel,
-    adapterProofHash,
-    adapterTranscriptHash,
-    adapterCircuitId: material.adapterCircuitId,
-    sourceTrustAnchorId: material.sourceTrustAnchorId,
-    sourceTrustAnchorHash: material.sourceTrustAnchorHash,
-    consensusVerifierId: material.consensusVerifierId,
-    consensusVerifierHash: material.consensusVerifierHash,
-    messageInclusionVerifierId: material.messageInclusionVerifierId,
-    messageInclusionVerifierHash: material.messageInclusionVerifierHash,
-    finalityPolicyId: material.finalityPolicyId,
-    finalityPolicyHash: material.finalityPolicyHash,
-    sourceStateVerifierId: material.sourceStateVerifierId,
-    sourceStateVerifierHash: material.sourceStateVerifierHash,
-    sourceBridgeEmitterId: material.sourceBridgeEmitterId,
-    sourceBridgeEmitterAddress: material.sourceBridgeEmitterAddress,
-    sourceBridgeEmitterCodeHash: material.sourceBridgeEmitterCodeHash,
-    sourceBridgeNetworkId: material.sourceBridgeNetworkId,
-    sourceBridgeOwnerAddress: material.sourceBridgeOwnerAddress,
-    sourceBridgeConfigHash: material.sourceBridgeConfigHash,
-    sourceAdapterDeploymentHash: material.sourceAdapterDeploymentHash,
-    sourceAdapterDeploymentReceiptHash: material.sourceAdapterDeploymentReceiptHash,
-  });
-  const adapterVerificationProof = Object.freeze({
-    version: 1,
-    proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
-    circuitId: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
-    proofBytes: prefixedBlake2b(
-      "sccp:bsc:placeholder-source-adapter-opening:v1",
-      hexToBytes(adapterTranscriptHash, "adapterTranscriptHash", 32),
-    ),
-  });
-  const consensusProof = buildBscSourceConsensusProofBytes({
-    material,
-    adapter,
-    adapterTranscriptHash,
-    evidence,
-    adapterVerificationProof,
-    finalityHeight,
-    finalityBlockHash,
-    receiptOrMessageRoot,
-    finalizedHeaderHash,
-  });
-  const messageInclusionProof = buildBscSourceMessageInclusionProofBytes({
-    messageId,
-    payloadHash,
-    sourceEventDigest,
-    sourceEventLeafHash,
-    receiptOrMessageRoot,
-  });
-  const sourceProofBytes = noritoFrame(
-    noritoStructValue([
-      noritoU8(1),
-      noritoU32Value(SCCP_DOMAIN_BSC),
-      noritoU32Value(SCCP_DOMAIN_SORA),
-      noritoStringValue("bsc", false, "sourceChain"),
-      noritoU32Value(material.sourceProofPlan),
-      noritoU32Value(material.finalityModel),
-      hexToBytes(messageId, "messageId", 32),
-      hexToBytes(payloadHash, "payloadHash", 32),
-      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
-      hexToBytes(commitmentRoot, "commitmentRoot", 32),
-      noritoU64Value(finalityHeight),
-      hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
-      hexToBytes(finalizedHeaderHash, "finalizedHeaderHash", 32),
-      hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
-      noritoRawByteVecValue(consensusProof, "consensusProof"),
-      noritoRawByteVecValue(messageInclusionProof, "messageInclusionProof"),
-      noritoByteVecSequenceValue(inclusionBranch, "inclusionBranch"),
-    ]),
-    SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH_HEX,
-  );
-  decodeSccpSourceChainProofSummary(sourceProofBytes, "sourceProofBytes");
-  return Object.freeze({
-    sourceProofHex: bytesToHex(sourceProofBytes),
-    sourceProofBytes: copyBytes(sourceProofBytes),
-    sourceEventDigest,
-    observedSourceEventDigest,
-    sourceEventLeafHash,
-    receiptOrMessageRoot,
-    finalityHeight: finalityHeight.toString(),
-    finalityBlockHash,
-    receiptsRoot: receiptProof.receiptsRoot,
-    receiptRootIndex: receiptRootIndex.toString(),
-    syntheticRootMarker: receiptProof.syntheticRootMarker,
-  });
-}
 
 export function canonicalTronReceiptRootMptValue(receiptRoot) {
   const root = nonZeroHex32Bytes(receiptRoot, "receiptRoot");
@@ -41516,6 +42960,16 @@ export function tairaXorBscRouteIdHash(
   return hash;
 }
 
+export function tairaXorTonRouteIdHash(
+  routeId = SCCP_TAIRA_TON_XOR_ROUTE_ID_V1,
+) {
+  const hash = textHash32(routeId, "routeId");
+  if (routeId !== SCCP_TAIRA_TON_XOR_ROUTE_ID_V1) {
+    throw new TypeError("routeId must be taira_ton_xor");
+  }
+  return hash;
+}
+
 export function tairaXorAssetKeyHash(assetKey = SCCP_TAIRA_XOR_ASSET_KEY_V1) {
   const hash = textHash32(assetKey, "assetKey");
   if (assetKey !== SCCP_TAIRA_XOR_ASSET_KEY_V1) {
@@ -41886,6 +43340,44 @@ const normalizeTairaXorBscToTairaSettlementFragment = (value, label) => {
   );
   if (route && route !== SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1) {
     throw new TypeError(`${label}.route must be taira_bsc_xor`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(settlement, "payload") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payload_json") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payloadJson") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payload_bytes") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payloadBytes")
+  ) {
+    throw new TypeError(`${label} payload must be generated by Torii`);
+  }
+  return settlement;
+};
+
+const normalizeTairaXorTonToTairaSettlementFragment = (value, label) => {
+  if (
+    value === SCCP_OPTIONAL_FIELD_MISSING ||
+    value === undefined ||
+    value === null
+  ) {
+    return {};
+  }
+  const settlement = requirePlainObject(value, label);
+  const entrypoint = optionalStringAlias(
+    settlement,
+    `${label}.entrypoint`,
+    "entrypoint",
+  );
+  if (entrypoint && entrypoint !== "finalize_inbound") {
+    throw new TypeError(`${label}.entrypoint must be finalize_inbound`);
+  }
+  const route = optionalStringAlias(
+    settlement,
+    `${label}.route`,
+    "route",
+    "route_id",
+  );
+  if (route && route !== SCCP_TAIRA_TON_XOR_ROUTE_ID_V1) {
+    throw new TypeError(`${label}.route must be taira_ton_xor`);
   }
   if (
     Object.prototype.hasOwnProperty.call(settlement, "payload") ||
@@ -42365,17 +43857,58 @@ const requireTransferDomain = (transfer, key, expected, label) => {
 };
 
 const readTairaXorTextValue = (value, label) => {
+  const normalizeTextCandidate = (candidate, candidateLabel) => {
+    if (typeof candidate === "string") {
+      const text = normalizeNonEmptyString(candidate, candidateLabel);
+      if (/^0x(?:[0-9a-fA-F]{2})+$/u.test(text)) {
+        try {
+          return normalizeNonEmptyString(
+            decodeCanonicalUtf8Bytes(toBytes(text, candidateLabel), candidateLabel),
+            candidateLabel,
+          );
+        } catch (_error) {
+          return text;
+        }
+      }
+      return text;
+    }
+    return normalizeNonEmptyString(
+      decodeCanonicalUtf8Bytes(toBytes(candidate, candidateLabel), candidateLabel),
+      candidateLabel,
+    );
+  };
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const kind = strictResultField(value, `${label}.kind`, "kind");
     if (kind !== "TextUtf8") {
       throw new TypeError(`${label} must be a TextUtf8 SCCP codec value`);
     }
-    return normalizeNonEmptyString(
-      strictResultField(value, `${label}.value`, "value"),
-      `${label}.value`,
+    const payload = strictOptionalResultField(
+      value,
+      `${label}.payload`,
+      "payload",
     );
+    const canonicalValue = strictOptionalResultField(
+      value,
+      `${label}.value`,
+      "value",
+    );
+    let normalized = null;
+    if (payload !== SCCP_OPTIONAL_FIELD_MISSING) {
+      normalized = normalizeTextCandidate(payload, `${label}.payload`);
+    }
+    if (canonicalValue !== SCCP_OPTIONAL_FIELD_MISSING) {
+      const valueText = normalizeTextCandidate(canonicalValue, `${label}.value`);
+      if (normalized !== null && normalized !== valueText) {
+        throw new TypeError(`${label}.payload must match ${label}.value`);
+      }
+      normalized = valueText;
+    }
+    if (normalized === null) {
+      throw new TypeError(`${label}.value is required`);
+    }
+    return normalized;
   }
-  return normalizeNonEmptyString(value, label);
+  return normalizeTextCandidate(value, label);
 };
 
 const readTairaXorTronAddressPayload = (value, label) => {
@@ -42407,6 +43940,20 @@ const readTairaXorTronAddressPayload = (value, label) => {
 };
 
 const readTairaXorEvmAddressPayload = (value, label) => {
+  const normalizeCandidate = (candidate, candidateLabel) => {
+    try {
+      return normalizeEvmTransactionAddress(candidate, candidateLabel);
+    } catch (primaryError) {
+      try {
+        return normalizeEvmTransactionAddress(
+          decodeCanonicalUtf8Bytes(toBytes(candidate, candidateLabel), candidateLabel),
+          candidateLabel,
+        );
+      } catch (_utf8Error) {
+        throw primaryError;
+      }
+    }
+  };
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const kind = strictResultField(value, `${label}.kind`, "kind");
     if (kind !== "EvmHex") {
@@ -42417,13 +43964,101 @@ const readTairaXorEvmAddressPayload = (value, label) => {
       `${label}.payload`,
       "payload",
     );
-    const selected =
-      payload === SCCP_OPTIONAL_FIELD_MISSING
-        ? strictResultField(value, `${label}.value`, "value")
-        : payload;
-    return normalizeEvmTransactionAddress(selected, `${label}.value`);
+    const canonicalValue = strictOptionalResultField(
+      value,
+      `${label}.value`,
+      "value",
+    );
+    let normalized = null;
+    for (const [field, candidate] of [
+      ["payload", payload],
+      ["value", canonicalValue],
+    ]) {
+      if (candidate === SCCP_OPTIONAL_FIELD_MISSING) {
+        continue;
+      }
+      const candidateNormalized = normalizeCandidate(
+        candidate,
+        `${label}.${field}`,
+      );
+      if (normalized === null) {
+        normalized = candidateNormalized;
+        continue;
+      }
+      if (normalized !== candidateNormalized) {
+        throw new TypeError(`${label}.payload must match ${label}.value`);
+      }
+    }
+    if (normalized === null) {
+      throw new TypeError(`${label}.value is required`);
+    }
+    return normalized;
   }
-  return normalizeEvmTransactionAddress(value, label);
+  return normalizeCandidate(value, label);
+};
+
+const readTairaXorTonAddressPayload = (value, label) => {
+  const normalizeCandidate = (candidate, candidateLabel) => {
+    if (typeof candidate === "string") {
+      const text = normalizeNonEmptyString(candidate, candidateLabel);
+      if (/^0x(?:[0-9a-fA-F]{2})+$/u.test(text)) {
+        try {
+          return normalizeTonRawAddress(
+            decodeCanonicalUtf8Bytes(toBytes(text, candidateLabel), candidateLabel),
+            candidateLabel,
+          );
+        } catch (_error) {
+          return normalizeTonRawAddress(text, candidateLabel);
+        }
+      }
+      return normalizeTonRawAddress(text, candidateLabel);
+    }
+    return normalizeTonRawAddress(
+      decodeCanonicalUtf8Bytes(toBytes(candidate, candidateLabel), candidateLabel),
+      candidateLabel,
+    );
+  };
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const kind = strictResultField(value, `${label}.kind`, "kind");
+    if (kind !== "TonRaw") {
+      throw new TypeError(`${label} must be a TonRaw SCCP codec value`);
+    }
+    const payload = strictOptionalResultField(
+      value,
+      `${label}.payload`,
+      "payload",
+    );
+    const canonicalValue = strictOptionalResultField(
+      value,
+      `${label}.value`,
+      "value",
+    );
+    let normalized = null;
+    for (const [field, candidate] of [
+      ["payload", payload],
+      ["value", canonicalValue],
+    ]) {
+      if (candidate === SCCP_OPTIONAL_FIELD_MISSING) {
+        continue;
+      }
+      const candidateNormalized = normalizeCandidate(
+        candidate,
+        `${label}.${field}`,
+      );
+      if (normalized === null) {
+        normalized = candidateNormalized;
+        continue;
+      }
+      if (normalized !== candidateNormalized) {
+        throw new TypeError(`${label}.payload must match ${label}.value`);
+      }
+    }
+    if (normalized === null) {
+      throw new TypeError(`${label}.value is required`);
+    }
+    return normalized;
+  }
+  return normalizeCandidate(value, label);
 };
 
 export function bindTairaXorTronToTairaSourceProofPackage(input) {
@@ -43081,6 +44716,341 @@ export function bindTairaXorBscToTairaSourceProofPackage(input) {
       ...settlement,
       entrypoint: "finalize_inbound",
       route: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+    }),
+    sourceEventDigest,
+    txId: expectedTxId,
+    messageId: commitmentMessageId,
+    commitmentRoot: bundleCommitmentRoot,
+    amount: amount.toString(),
+  });
+}
+
+const normalizeTairaXorTonTxId = (value, label) =>
+  normalizeNonZeroHex32(value, label);
+
+export function bindTairaXorTonToTairaSourceProofPackage(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(
+      "TAIRA XOR TON-source proof package input must be an object",
+    );
+  }
+  const proofPackage = requirePlainObject(
+    strictResultField(input, "proofPackage", "proofPackage", "proof_package"),
+    "proofPackage",
+  );
+  const messageBundle = requirePlainObject(
+    strictResultField(
+      proofPackage,
+      "proofPackage.messageBundle",
+      "messageBundle",
+      "message_bundle",
+    ),
+    "proofPackage.messageBundle",
+  );
+  const settlementInput = strictOptionalResultField(
+    proofPackage,
+    "proofPackage.settlement",
+    "settlement",
+  );
+  const settlementDefaultsInput = strictOptionalResultField(
+    input,
+    "settlementDefaults",
+    "settlementDefaults",
+    "settlement_defaults",
+  );
+  const settlementDefaults = normalizeTairaXorTonToTairaSettlementFragment(
+    settlementDefaultsInput,
+    "settlementDefaults",
+  );
+  const settlement = normalizeTairaXorTonToTairaSettlementFragment(
+    settlementInput,
+    "proofPackage.settlement",
+  );
+
+  const expectedTxId = normalizeTairaXorTonTxId(
+    strictResultField(
+      input,
+      "txId",
+      "txId",
+      "txID",
+      "transactionHash",
+      "transaction_hash",
+      "transactionId",
+      "transaction_id",
+    ),
+    "txId",
+  );
+  const packageTxId = normalizeTairaXorTonTxId(
+    strictResultField(
+      proofPackage,
+      "proofPackage.txId",
+      "txId",
+      "txID",
+      "transactionHash",
+      "transaction_hash",
+      "transactionId",
+      "transaction_id",
+    ),
+    "proofPackage.txId",
+  );
+  if (packageTxId !== expectedTxId) {
+    throw new TypeError("proofPackage.txId must match txId");
+  }
+
+  const normalizedCommitment = normalizeMessageBundleCommitment(
+    messageBundle.commitment,
+  );
+  const commitmentMessageId = normalizeHex32(
+    normalizedCommitment.message_id,
+    "messageBundle.commitment.message_id",
+  );
+  const commitmentPayloadHash = normalizeHex32(
+    normalizedCommitment.payload_hash,
+    "messageBundle.commitment.payload_hash",
+  );
+  const commitmentTargetDomain = normalizeSccpDomainId(
+    normalizedCommitment.target_domain,
+    "messageBundle.commitment.target_domain",
+  );
+  if (commitmentTargetDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("messageBundle must target TAIRA/SORA");
+  }
+
+  const payloadEnvelope = normalizeSccpPayloadEnvelope(messageBundle.payload);
+  if (payloadEnvelope.kind !== "Transfer") {
+    throw new TypeError("messageBundle payload must be a Transfer");
+  }
+  const transfer = payloadEnvelope.value;
+  requireV1Version(
+    strictResultField(transfer, "payload.version", "version"),
+    "payload.version",
+  );
+  requireTransferDomain(
+    transfer,
+    "source_domain",
+    SCCP_DOMAIN_TON,
+    "payload.source_domain",
+  );
+  requireTransferDomain(
+    transfer,
+    "dest_domain",
+    SCCP_DOMAIN_SORA,
+    "payload.dest_domain",
+  );
+  requireTransferDomain(
+    transfer,
+    "asset_home_domain",
+    SCCP_DOMAIN_SORA,
+    "payload.asset_home_domain",
+  );
+  requireTransferCodec(
+    transfer,
+    "asset_id_codec",
+    SCCP_CODEC_TEXT_UTF8,
+    "payload.asset_id_codec",
+  );
+  requireTransferCodec(
+    transfer,
+    "sender_codec",
+    SCCP_CODEC_TON_RAW,
+    "payload.sender_codec",
+  );
+  requireTransferCodec(
+    transfer,
+    "recipient_codec",
+    SCCP_CODEC_TEXT_UTF8,
+    "payload.recipient_codec",
+  );
+  requireTransferCodec(
+    transfer,
+    "route_id_codec",
+    SCCP_CODEC_TEXT_UTF8,
+    "payload.route_id_codec",
+  );
+
+  const amount = normalizeUnsignedBigIntMax(
+    strictResultField(input, "amount", "amount"),
+    "amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (amount === 0n) {
+    throw new RangeError("amount must be greater than zero");
+  }
+  const transferAmount = normalizeUnsignedBigIntMax(
+    strictResultField(transfer, "payload.amount", "amount"),
+    "payload.amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (transferAmount !== amount) {
+    throw new TypeError("payload.amount must match amount");
+  }
+
+  const tonSender = normalizeTonRawAddress(
+    strictResultField(
+      input,
+      "tonSender",
+      "tonSender",
+      "ton_sender",
+      "sender",
+    ),
+    "tonSender",
+  );
+  if (
+    readTairaXorTonAddressPayload(transfer.sender, "payload.sender") !==
+    tonSender
+  ) {
+    throw new TypeError("payload.sender must match tonSender");
+  }
+  const tairaRecipient = normalizeCanonicalTairaAccountId(
+    strictResultField(
+      input,
+      "tairaRecipient",
+      "tairaRecipient",
+      "taira_recipient",
+      "recipient",
+      "tairaAccountId",
+      "taira_account_id",
+    ),
+    "tairaRecipient",
+  );
+  if (
+    readTairaXorTextValue(transfer.recipient, "payload.recipient") !==
+    tairaRecipient
+  ) {
+    throw new TypeError("payload.recipient must match tairaRecipient");
+  }
+  if (
+    readTairaXorTextValue(transfer.asset_id, "payload.asset_id") !==
+    SCCP_TAIRA_XOR_ASSET_KEY_V1
+  ) {
+    throw new TypeError("payload.asset_id must be xor");
+  }
+  if (
+    readTairaXorTextValue(transfer.route_id, "payload.route_id") !==
+    SCCP_TAIRA_TON_XOR_ROUTE_ID_V1
+  ) {
+    throw new TypeError("payload.route_id must be taira_ton_xor");
+  }
+
+  const transferNonce = strictResultField(transfer, "payload.nonce", "nonce");
+  const expectedPayload = buildTairaXorTonToTairaTransferPayload({
+    tonSender,
+    tairaRecipient,
+    amount,
+    nonce: transferNonce,
+  });
+  const expectedPayloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({
+      kind: "Transfer",
+      value: expectedPayload,
+    }),
+  );
+  if (commitmentPayloadHash !== expectedPayloadHash) {
+    throw new TypeError(
+      "messageBundle commitment payload hash must match the TAIRA XOR TON payload",
+    );
+  }
+  const expectedMessageId = sccpTransferMessageId(expectedPayload);
+  if (commitmentMessageId !== expectedMessageId) {
+    throw new TypeError(
+      "messageBundle commitment message id must match the TAIRA XOR TON payload",
+    );
+  }
+
+  const bundleCommitmentRoot = normalizeHex32(
+    strictResultField(
+      messageBundle,
+      "messageBundle.commitmentRoot",
+      "commitmentRoot",
+      "commitment_root",
+    ),
+    "messageBundle.commitmentRoot",
+  );
+  const normalizedMerkleProof = normalizeMessageBundleMerkleProof(
+    messageBundle.merkle_proof ?? messageBundle.merkleProof,
+  );
+  const expectedCommitmentRoot = sccpMerkleRootFromCommitment(
+    normalizedCommitment,
+    normalizedMerkleProof,
+  );
+  if (bundleCommitmentRoot !== expectedCommitmentRoot) {
+    throw new TypeError(
+      "messageBundle.commitmentRoot must match the commitment Merkle proof",
+    );
+  }
+  const normalizedMessageBundle = Object.freeze({
+    version: normalizeV1Version(messageBundle.version, "messageBundle.version"),
+    commitmentRoot: bundleCommitmentRoot,
+    commitment: normalizedCommitment,
+    merkleProof: normalizedMerkleProof,
+    payload: Object.freeze({
+      kind: "Transfer",
+      value: expectedPayload,
+    }),
+    finalityProof:
+      messageBundle.finality_proof ??
+      messageBundle.finalityProof ??
+      new Uint8Array(),
+  });
+  const packageMessageId = strictOptionalResultField(
+    proofPackage,
+    "proofPackage.messageId",
+    "messageId",
+    "message_id",
+  );
+  if (
+    packageMessageId !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeHex32(packageMessageId, "proofPackage.messageId") !==
+      commitmentMessageId
+  ) {
+    throw new TypeError("proofPackage.messageId must match the message bundle");
+  }
+  const packageCommitmentRoot = strictOptionalResultField(
+    proofPackage,
+    "proofPackage.commitmentRoot",
+    "commitmentRoot",
+    "commitment_root",
+  );
+  if (
+    packageCommitmentRoot !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeHex32(packageCommitmentRoot, "proofPackage.commitmentRoot") !==
+      bundleCommitmentRoot
+  ) {
+    throw new TypeError(
+      "proofPackage.commitmentRoot must match the message bundle",
+    );
+  }
+  const sourceEventDigest = normalizeNonZeroHex32(
+    strictResultField(
+      proofPackage,
+      "proofPackage.sourceEventDigest",
+      "sourceEventDigest",
+      "source_event_digest",
+    ),
+    "proofPackage.sourceEventDigest",
+  );
+  const expectedSourceEventDigest = sccpSourceEventDigest(
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_SORA,
+    commitmentMessageId,
+    commitmentPayloadHash,
+  );
+  if (sourceEventDigest !== expectedSourceEventDigest) {
+    throw new TypeError(
+      "proofPackage.sourceEventDigest must match the TON SCCP source event digest",
+    );
+  }
+
+  canonicalSccpMessageProofBundleBytes(normalizedMessageBundle);
+  return Object.freeze({
+    messageBundle: normalizedMessageBundle,
+    settlement: Object.freeze({
+      ...settlementDefaults,
+      ...settlement,
+      entrypoint: "finalize_inbound",
+      route: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1,
     }),
     sourceEventDigest,
     txId: expectedTxId,
@@ -44380,6 +46350,43 @@ function requireTonFullLightClientAuditRoleSeparation(deployment, auditHashes) {
   });
 }
 
+function requireGovernedSourceAdapterDeploymentAuditForBinding(deployment) {
+  if (deployment.sourceDomain === SCCP_DOMAIN_SOL) {
+    const auditHashes = [
+      deployment.solanaTowerReplayVerifierHash,
+      deployment.solanaFullAccountsdbLatticeVerifierHash,
+      deployment.solanaBankForkChoiceVerifierHash,
+    ];
+    if (
+      !auditHashes.every(
+        (hash, index) =>
+          hash === SCCP_GOVERNED_SOLANA_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1[index],
+      )
+    ) {
+      throw new TypeError(
+        "sourceAdapterDeployment requires governed Solana full-light-client audit verifier hashes",
+      );
+    }
+  }
+  if (deployment.sourceDomain === SCCP_DOMAIN_TON) {
+    const auditHashes = [
+      deployment.tonMasterchainConfigVerifierHash,
+      deployment.tonValidatorSetTransitionVerifierHash,
+      deployment.tonShardAccountsDictionaryVerifierHash,
+    ];
+    if (
+      !auditHashes.every(
+        (hash, index) =>
+          hash === SCCP_GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1[index],
+      )
+    ) {
+      throw new TypeError(
+        "sourceAdapterDeployment requires governed TON full-light-client audit verifier hashes",
+      );
+    }
+  }
+}
+
 function appendSccpSourceAdapterDeploymentTonAuditBytes(out, deployment) {
   const auditHashes = [
     deployment.tonMasterchainConfigVerifierHash,
@@ -44795,6 +46802,7 @@ export function sccpSourceAdapterDeploymentBindingHash(input) {
 
 export function sccpSourceAdapterDeploymentBindingFromDeployment(input) {
   const deployment = normalizeSccpSourceAdapterEngineDeployment(input);
+  requireGovernedSourceAdapterDeploymentAuditForBinding(deployment);
   return normalizeSccpSourceAdapterDeploymentBinding({
     sourceDomain: deployment.sourceDomain,
     targetDomain: deployment.targetDomain,

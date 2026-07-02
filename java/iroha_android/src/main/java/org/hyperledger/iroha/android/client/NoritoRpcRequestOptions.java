@@ -109,7 +109,7 @@ public final class NoritoRpcRequestOptions {
     }
 
     public Builder method(final String method) {
-      if (method == null || method.isBlank()) {
+      if (method == null || method.trim().isEmpty()) {
         this.method = DEFAULT_METHOD;
       } else {
         this.method = method.toUpperCase();

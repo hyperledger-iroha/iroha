@@ -13,7 +13,7 @@ use std::{
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
-use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
+use iroha_core::sumeragi::network_topology::{commit_quorum_from_len, redundant_send_r_from_len};
 use iroha_core::zk::{self, confidential_v2};
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
@@ -376,6 +376,26 @@ const LOCALNET_TX_GOSSIP_PERIOD_FAST_MS: u64 = 100;
 const LOCALNET_TX_GOSSIP_RESEND_TICKS_FAST: u32 = 1;
 /// Tx gossip frame cap for Nexus-enabled localnets so large public transactions still fit.
 const LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS: usize = 1_048_576;
+/// Base P2P frame cap for generated localnets.
+///
+/// Global defaults allow 16 MiB frames for production block-sync headroom. Local
+/// development networks use a tighter cap so a saturated laptop run cannot hold
+/// dozens of full-size frame buffers per peer.
+const LOCALNET_MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+/// Consensus message frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_CONSENSUS: usize = LOCALNET_MAX_FRAME_BYTES;
+/// Block-sync frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_BLOCK_SYNC: usize = LOCALNET_MAX_FRAME_BYTES;
+/// Control message frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_CONTROL: usize = 131_072;
+/// Default tx-gossip frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP: usize = 262_144;
+/// Peer-gossip frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_PEER_GOSSIP: usize = 65_536;
+/// Health-check frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_HEALTH: usize = 32_768;
+/// Miscellaneous frame cap for generated localnets.
+const LOCALNET_MAX_FRAME_BYTES_OTHER: usize = 131_072;
 /// Default listener host for generated P2P and Torii services.
 pub const DEFAULT_BIND_HOST: &str = "0.0.0.0";
 /// Default advertised host for generated peers and client config.
@@ -388,17 +408,20 @@ const LOCALNET_PACING_GOVERNOR_MIN_FACTOR_BPS: u32 = 10_000;
 const LOCALNET_PACING_GOVERNOR_MAX_FACTOR_BPS: u32 = 10_000;
 /// Baseline NPoS timeouts for localnet (keep in sync with config defaults).
 /// Default DA commit-quorum timeout multiplier for localnet configs.
+const LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 =
+    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER;
+/// DA commit-quorum timeout multiplier for explicit localnet perf profiles.
 ///
-/// Localnets run a fast one-second pipeline while also serving as the primary
-/// development path for large IVM/Kotodama contract validation. Give local DA
-/// enough liveness slack so a valid, CPU-heavy proposal is not replaced by a
-/// recovery heartbeat before validation can vote.
-const LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 32;
+/// Perf runs can carry CPU-heavy IVM/Kotodama payloads and keep the larger
+/// liveness slack. Normal localhost localnets should use Iroha defaults so
+/// simple one-transaction blocks do not wait on avoidable repair windows.
+const LOCALNET_PERF_DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 32;
 /// Default DA availability timeout multiplier for localnet configs.
 /// Extra slack keeps advisory availability warnings from firing on fast pipelines.
 const LOCALNET_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 1;
 /// Default DA availability timeout floor (ms) for localnet configs.
-const LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 2_000;
+const LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 =
+    iroha_config::parameters::defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_FLOOR_MS;
 /// Default RBC chunk size for localnet payloads.
 const LOCALNET_RBC_CHUNK_MAX_BYTES: usize = 256 * 1024;
 /// Maximum RBC payload chunks broadcast per tick for localnet.
@@ -408,8 +431,19 @@ const LOCALNET_RBC_PAYLOAD_CHUNKS_PER_TICK: usize = 128;
 /// This value intentionally trades peak stress throughput for bounded memory
 /// usage when consensus stalls or clients oversubmit.
 const LOCALNET_QUEUE_CAPACITY: usize = 20_000;
-/// Queue capacity used for perf-profile localnets (keeps stress bursts in-memory).
-const LOCALNET_PERF_QUEUE_CAPACITY: usize = 262_144;
+/// Queue capacity used for perf-profile localnets.
+///
+/// The queue also enforces a retained-byte budget, which is the binding limit for
+/// high-throughput localnet bursts. Keep the count cap only high enough to avoid
+/// count-based rejection before the byte guard engages; larger values preallocate
+/// fixed queue slots that sit mostly empty under the byte budget.
+const LOCALNET_PERF_QUEUE_CAPACITY: usize = 4_096;
+/// Runtime proposal cap used by perf-profile localnets.
+///
+/// The on-chain block parameter remains 10k for throughput targets, but local
+/// development nodes should not assemble thousand-transaction DA/RBC proposals
+/// while the queue is saturated.
+const LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS: usize = 256;
 /// Default transaction TTL in the queue for localnet (ms).
 const LOCALNET_QUEUE_TTL_MS: u64 = 600_000;
 /// Default lane TEU capacity for localnet scheduling (raises per-block budget).
@@ -1001,6 +1035,9 @@ fn generate_localnet_with_line<T: Write>(
     };
     let logger_filter = perf_spec.map(|_| LOCALNET_PERF_LOGGER_FILTER);
     let signature_batch_max_ed25519 = perf_spec.map(|_| LOCALNET_SIGNATURE_BATCH_MAX_ED25519);
+    let runtime_block_max_transactions =
+        perf_spec.map(|_| LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS);
+    let da_quorum_timeout_multiplier = localnet_da_quorum_timeout_multiplier(perf_spec);
     // Nexus stays enabled for Sora profiles and whenever NPoS bootstrap is requested.
     let nexus_enabled = localnet_should_enable_nexus(opts.sora_profile, npos_bootstrap);
     let dataspace_fault_tolerance =
@@ -1022,7 +1059,12 @@ fn generate_localnet_with_line<T: Write>(
         da_rbc_enabled,
         opts.peers,
     );
-    let collectors_k = perf_spec.map(|spec| spec.collectors_k);
+    let collectors_k = resolve_localnet_collectors_k(
+        perf_spec.map(|spec| spec.collectors_k),
+        da_rbc_enabled,
+        npos_bootstrap,
+        opts.peers,
+    );
     let block_max_transactions = perf_spec.map_or(LOCALNET_BLOCK_MAX_TRANSACTIONS, |spec| {
         spec.block_max_transactions
     });
@@ -1133,10 +1175,12 @@ fn generate_localnet_with_line<T: Write>(
         gas_account_id.as_deref(),
         redundant_send_r,
         collectors_k,
+        da_quorum_timeout_multiplier,
         commit_inflight_timeout_ms,
         tx_gossip_overrides,
         logger_filter,
         signature_batch_max_ed25519,
+        runtime_block_max_transactions,
         queue_capacity,
     );
     // Iroha2 localnets intentionally keep DA disabled, so the rendered config does not satisfy
@@ -1212,10 +1256,12 @@ fn generate_localnet_with_line<T: Write>(
             gas_account_id.as_deref(),
             redundant_send_r,
             collectors_k,
+            da_quorum_timeout_multiplier,
             commit_inflight_timeout_ms,
             tx_gossip_overrides,
             logger_filter,
             signature_batch_max_ed25519,
+            runtime_block_max_transactions,
             queue_capacity,
         );
         let path = out_dir.join(format!("peer{idx}.toml"));
@@ -1359,6 +1405,31 @@ fn resolve_localnet_redundant_send_r(
         return Some(redundant_send_r_from_len(peers));
     }
     redundant_send_r
+}
+
+fn resolve_localnet_collectors_k(
+    collectors_k: Option<u16>,
+    da_rbc_enabled: bool,
+    npos_bootstrap: bool,
+    peer_count: NonZeroU16,
+) -> Option<u16> {
+    if collectors_k.is_some() {
+        return collectors_k;
+    }
+    if da_rbc_enabled && npos_bootstrap {
+        let peers = usize::from(peer_count.get());
+        let quorum = commit_quorum_from_len(peers);
+        return Some(u16::try_from(quorum).unwrap_or(u16::MAX));
+    }
+    None
+}
+
+fn localnet_da_quorum_timeout_multiplier(perf_spec: Option<LocalnetPerfProfileSpec>) -> u32 {
+    if perf_spec.is_some() {
+        LOCALNET_PERF_DA_QUORUM_TIMEOUT_MULTIPLIER
+    } else {
+        LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER
+    }
 }
 
 fn build_peers(count: u16, seed: Option<&[u8]>, base_api: u16, base_p2p: u16) -> Result<Vec<Peer>> {
@@ -1712,10 +1783,12 @@ fn render_peer_config(
     gas_account_id: Option<&str>,
     redundant_send_r: Option<u8>,
     collectors_k: Option<u16>,
+    da_quorum_timeout_multiplier: u32,
     commit_inflight_timeout_ms: u64,
     tx_gossip_overrides: Option<LocalnetTxGossipOverrides>,
     logger_filter: Option<&str>,
     signature_batch_max_ed25519: Option<usize>,
+    runtime_block_max_transactions: Option<usize>,
     queue_capacity: usize,
 ) -> String {
     use toml::{Table, Value};
@@ -1842,7 +1915,7 @@ fn render_peer_config(
     let mut da_advanced = Table::new();
     da_advanced.insert(
         "quorum_timeout_multiplier".into(),
-        Value::Integer(i64::from(LOCALNET_DA_QUORUM_TIMEOUT_MULTIPLIER)),
+        Value::Integer(i64::from(da_quorum_timeout_multiplier)),
     );
     da_advanced.insert(
         "availability_timeout_multiplier".into(),
@@ -1984,6 +2057,14 @@ fn render_peer_config(
     }
 
     let mut block = Table::new();
+    if let Some(max_transactions) = runtime_block_max_transactions {
+        block.insert(
+            "max_transactions".into(),
+            Value::Integer(
+                i64::try_from(max_transactions).expect("runtime block max transactions fits i64"),
+            ),
+        );
+    }
     block.insert(
         "proposal_queue_scan_multiplier".into(),
         Value::Integer(
@@ -2169,6 +2250,60 @@ fn render_peer_config(
         ),
     );
     network.insert(
+        "max_frame_bytes".into(),
+        Value::Integer(i64::try_from(LOCALNET_MAX_FRAME_BYTES).expect("frame cap fits i64")),
+    );
+    network.insert(
+        "max_frame_bytes_consensus".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_MAX_FRAME_BYTES_CONSENSUS)
+                .expect("consensus frame cap fits i64"),
+        ),
+    );
+    network.insert(
+        "max_frame_bytes_control".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_MAX_FRAME_BYTES_CONTROL).expect("control frame cap fits i64"),
+        ),
+    );
+    network.insert(
+        "max_frame_bytes_block_sync".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_MAX_FRAME_BYTES_BLOCK_SYNC)
+                .expect("block sync frame cap fits i64"),
+        ),
+    );
+    network.insert(
+        "max_frame_bytes_tx_gossip".into(),
+        Value::Integer(
+            i64::try_from(if nexus_enabled {
+                LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS
+            } else {
+                LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP
+            })
+            .expect("tx gossip frame cap fits i64"),
+        ),
+    );
+    network.insert(
+        "max_frame_bytes_peer_gossip".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_MAX_FRAME_BYTES_PEER_GOSSIP)
+                .expect("peer gossip frame cap fits i64"),
+        ),
+    );
+    network.insert(
+        "max_frame_bytes_health".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_MAX_FRAME_BYTES_HEALTH).expect("health frame cap fits i64"),
+        ),
+    );
+    network.insert(
+        "max_frame_bytes_other".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_MAX_FRAME_BYTES_OTHER).expect("other frame cap fits i64"),
+        ),
+    );
+    network.insert(
         "connect_startup_delay_ms".into(),
         Value::Integer(
             i64::try_from(LOCALNET_CONNECT_STARTUP_DELAY_MS)
@@ -2207,15 +2342,6 @@ fn render_peer_config(
         "consensus_ingress_critical_bytes_burst".into(),
         Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST)),
     );
-    if nexus_enabled {
-        network.insert(
-            "max_frame_bytes_tx_gossip".into(),
-            Value::Integer(
-                i64::try_from(LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS)
-                    .expect("LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS fits i64"),
-            ),
-        );
-    }
     if let Some(overrides) = tx_gossip_overrides {
         network.insert(
             "transaction_gossip_period_ms".into(),
@@ -4600,7 +4726,7 @@ mod tests {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
-            peers: NonZeroU16::new(2).expect("non-zero"),
+            peers: NonZeroU16::new(4).expect("non-zero"),
             seed: Some("kagami-channel-caps".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
@@ -4622,6 +4748,8 @@ mod tests {
         let source =
             TomlSource::from_file(temp.path().join("peer0.toml")).expect("read generated config");
         let parsed = actual::Root::from_toml_source(source).expect("generated config must parse");
+        let expected_redundant_send_r = default_redundant_send_r(opts.peers);
+        let expected_collectors_k = commit_quorum_from_len(usize::from(opts.peers.get()));
 
         assert_eq!(
             parsed.network.connect_startup_delay,
@@ -4653,6 +4781,11 @@ mod tests {
             "localnet should set DA commit-quorum timeout multiplier"
         );
         assert_eq!(
+            parsed.sumeragi.da.quorum_timeout_multiplier,
+            iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
+            "normal localnet should use Iroha's default DA commit-quorum timeout"
+        );
+        assert_eq!(
             parsed.sumeragi.da.availability_timeout_multiplier,
             LOCALNET_DA_AVAILABILITY_TIMEOUT_MULTIPLIER,
             "localnet should tune DA availability timeout multiplier"
@@ -4661,6 +4794,21 @@ mod tests {
             parsed.sumeragi.da.availability_timeout_floor,
             Duration::from_millis(LOCALNET_DA_AVAILABILITY_TIMEOUT_FLOOR_MS),
             "localnet should set DA availability timeout floor"
+        );
+        assert_eq!(
+            parsed.sumeragi.da.availability_timeout_floor,
+            Duration::from_millis(
+                iroha_config::parameters::defaults::sumeragi::DA_AVAILABILITY_TIMEOUT_FLOOR_MS
+            ),
+            "normal localnet should use Iroha's default DA availability floor"
+        );
+        assert_eq!(
+            parsed.sumeragi.collectors.k, expected_collectors_k,
+            "DA-enabled NPoS localnet should use commit quorum sized collectors"
+        );
+        assert_eq!(
+            parsed.sumeragi.collectors.redundant_send_r, expected_redundant_send_r,
+            "DA-enabled localnet should fan redundant sends to quorum"
         );
         assert_eq!(
             parsed.sumeragi.rbc.chunk_max_bytes, LOCALNET_RBC_CHUNK_MAX_BYTES,
@@ -4673,6 +4821,16 @@ mod tests {
         assert_eq!(
             parsed.sumeragi.pacing_governor.min_factor_bps, LOCALNET_PACING_GOVERNOR_MIN_FACTOR_BPS,
             "localnet should clamp pacing governor min factor"
+        );
+        let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
+        let params = genesis_parameters(&manifest);
+        assert_eq!(
+            params.sumeragi().collectors_k(),
+            u16::try_from(expected_collectors_k).expect("localnet quorum fits u16")
+        );
+        assert_eq!(
+            params.sumeragi().collectors_redundant_send_r(),
+            expected_redundant_send_r
         );
         assert_eq!(
             parsed.sumeragi.pacing_governor.max_factor_bps, LOCALNET_PACING_GOVERNOR_MAX_FACTOR_BPS,
@@ -4737,6 +4895,38 @@ mod tests {
             parsed.network.p2p_subscriber_queue_cap.get(),
             LOCALNET_P2P_SUBSCRIBER_QUEUE_CAP,
             "localnet should raise P2P subscriber queue cap for fast pipelines"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes, LOCALNET_MAX_FRAME_BYTES,
+            "localnet should bound the base P2P frame cap"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_consensus, LOCALNET_MAX_FRAME_BYTES_CONSENSUS,
+            "localnet should bound consensus frame buffers"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_control, LOCALNET_MAX_FRAME_BYTES_CONTROL,
+            "localnet should keep control frames small"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_block_sync, LOCALNET_MAX_FRAME_BYTES_BLOCK_SYNC,
+            "localnet should bound block-sync frame buffers"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_tx_gossip, LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS,
+            "Nexus localnet should keep tx gossip frame buffers bounded while allowing public writes"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_peer_gossip, LOCALNET_MAX_FRAME_BYTES_PEER_GOSSIP,
+            "localnet should keep peer gossip frames small"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_health, LOCALNET_MAX_FRAME_BYTES_HEALTH,
+            "localnet should keep health-check frames small"
+        );
+        assert_eq!(
+            parsed.network.max_frame_bytes_other, LOCALNET_MAX_FRAME_BYTES_OTHER,
+            "localnet should keep miscellaneous frames small"
         );
         assert_eq!(
             parsed
@@ -4918,6 +5108,30 @@ mod tests {
             parsed.sumeragi.collectors.redundant_send_r,
             expected_redundant_send_r
         );
+        assert_eq!(
+            parsed.queue.capacity.get(),
+            LOCALNET_PERF_QUEUE_CAPACITY,
+            "perf localnet should keep the fixed queue allocation bounded"
+        );
+        assert_eq!(
+            parsed.queue.capacity_per_user.get(),
+            LOCALNET_PERF_QUEUE_CAPACITY,
+            "perf localnet per-user capacity should match the bounded queue capacity"
+        );
+        assert_eq!(
+            parsed.torii.api_high_load_tx_threshold,
+            Some(LOCALNET_PERF_QUEUE_CAPACITY),
+            "perf localnet should expose backpressure at the bounded queue capacity"
+        );
+        assert_eq!(
+            parsed
+                .sumeragi
+                .block
+                .max_transactions
+                .map(std::num::NonZeroUsize::get),
+            Some(LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS),
+            "perf localnet should cap runtime proposal assembly below the semantic block max"
+        );
         let expected_filter: Directives = LOCALNET_PERF_LOGGER_FILTER
             .parse()
             .expect("perf logger filter should parse");
@@ -4975,10 +5189,24 @@ mod tests {
         let expected_filter: Directives = LOCALNET_PERF_LOGGER_FILTER
             .parse()
             .expect("perf logger filter should parse");
+        assert_eq!(
+            parsed.sumeragi.da.quorum_timeout_multiplier,
+            LOCALNET_PERF_DA_QUORUM_TIMEOUT_MULTIPLIER,
+            "perf localnet should keep the extended DA liveness window"
+        );
         assert_eq!(parsed.logger.filter, Some(expected_filter));
         assert_eq!(
             parsed.pipeline.signature_batch_max_ed25519,
             LOCALNET_SIGNATURE_BATCH_MAX_ED25519
+        );
+        assert_eq!(
+            parsed
+                .sumeragi
+                .block
+                .max_transactions
+                .map(std::num::NonZeroUsize::get),
+            Some(LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS),
+            "NPoS perf localnet should use the same bounded runtime proposal cap"
         );
 
         let genesis_path = temp.path().join("genesis.json");
@@ -6764,14 +6992,32 @@ mod tests {
                 .and_then(|collectors| collectors.get("redundant_send_r"))
                 .and_then(toml::Value::as_integer)
                 .and_then(|value| u8::try_from(value).ok());
+            let collectors_k = sumeragi
+                .get("collectors")
+                .and_then(toml::Value::as_table)
+                .and_then(|collectors| collectors.get("k"))
+                .and_then(toml::Value::as_integer)
+                .and_then(|value| u16::try_from(value).ok());
             let expected_redundant = if expected {
                 Some(default_redundant_send_r(opts.peers))
+            } else {
+                None
+            };
+            let expected_collectors_k = if expected {
+                Some(
+                    u16::try_from(commit_quorum_from_len(usize::from(opts.peers.get())))
+                        .expect("localnet quorum fits u16"),
+                )
             } else {
                 None
             };
             assert_eq!(
                 redundant, expected_redundant,
                 "localnet redundant send should track DA policy"
+            );
+            assert_eq!(
+                collectors_k, expected_collectors_k,
+                "DA-enabled NPoS localnet collectors should track commit quorum"
             );
 
             let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
@@ -6791,6 +7037,13 @@ mod tests {
                 expected_redundant,
                 "genesis redundant send should track DA policy"
             );
+            if let Some(expected_collectors_k) = expected_collectors_k {
+                assert_eq!(
+                    params.sumeragi().collectors_k(),
+                    expected_collectors_k,
+                    "genesis collectors_k should track DA collector policy"
+                );
+            }
         }
 
         assert_for_line(BuildLine::Iroha2, false);

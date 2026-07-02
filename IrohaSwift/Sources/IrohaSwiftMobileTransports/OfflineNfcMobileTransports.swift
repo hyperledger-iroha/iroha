@@ -1246,7 +1246,7 @@ public struct IrohaOfflineNfcConfiguration: Equatable, Sendable {
 }
 
 private enum IrohaOfflineDeviceTransferTextPayload {
-    private static let legacyTextNfcPayloadMaxBytes = 12 * 1024
+    private static let inlineTextNfcPayloadMaxBytes = 12 * 1024
 
     static func normalize(
         _ payload: String,
@@ -1275,7 +1275,7 @@ private enum IrohaOfflineDeviceTransferTextPayload {
         guard textBytes.count <= OfflineNoteNfcApduProtocol.maxIncomingPayloadBytes else {
             throw IrohaOfflineNfcExchangeError.invalidPayload
         }
-        guard textBytes.count > legacyTextNfcPayloadMaxBytes else {
+        guard textBytes.count > inlineTextNfcPayloadMaxBytes else {
             return textBytes
         }
         if expectedKind == .paymentToken,
@@ -2147,7 +2147,7 @@ public final class IrohaOfflineNfcReaderService: NSObject, @unchecked Sendable, 
             log("start_configured_tag_reader \(IrohaOfflineNfcDiagnosticsPolicy.aidLogLabel(configuration.applicationIdentifierHex))")
         } else {
             session = NFCTagReaderSession(pollingOption: [.iso14443], delegate: self, queue: nil)
-            log("start_legacy_tag_reader \(IrohaOfflineNfcDiagnosticsPolicy.aidLogLabel(configuration.applicationIdentifierHex))")
+            log("start_basic_tag_reader \(IrohaOfflineNfcDiagnosticsPolicy.aidLogLabel(configuration.applicationIdentifierHex))")
         }
         guard let session else { return false }
         session.alertMessage = alert

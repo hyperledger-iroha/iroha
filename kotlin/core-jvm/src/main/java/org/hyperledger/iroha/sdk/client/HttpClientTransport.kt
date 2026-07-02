@@ -859,6 +859,7 @@ class HttpClientTransport(
                 request.validationFeePolicyVersion,
                 request.validationFeePolicyHash,
                 request.validationFeeInstructionIndex,
+                request.validationFeeTransferEntryIndex,
             )
             payload["instructions"] = request.instructions.mapIndexed { index, instruction ->
                 require(instruction.isNotEmpty()) { "instructions[$index] must not be empty" }
@@ -872,15 +873,23 @@ class HttpClientTransport(
             validationFeePolicyVersion: Long?,
             validationFeePolicyHash: String?,
             validationFeeInstructionIndex: Long?,
+            validationFeeTransferEntryIndex: Long?,
         ) {
             val hasPolicyVersion = validationFeePolicyVersion != null
             val hasPolicyHash = validationFeePolicyHash != null
             val hasInstructionIndex = validationFeeInstructionIndex != null
+            val hasTransferEntryIndex = validationFeeTransferEntryIndex != null
             require(hasPolicyVersion == hasPolicyHash) {
                 "validationFeePolicyVersion and validationFeePolicyHash must be provided together"
             }
             require(hasPolicyVersion || !hasInstructionIndex) {
                 "validationFeeInstructionIndex requires validation fee policy metadata"
+            }
+            require(hasPolicyVersion || !hasTransferEntryIndex) {
+                "validationFeeTransferEntryIndex requires validation fee policy metadata"
+            }
+            require(!hasTransferEntryIndex || hasInstructionIndex) {
+                "validationFeeTransferEntryIndex requires validationFeeInstructionIndex"
             }
             val policyVersion = validationFeePolicyVersion ?: return
             val policyHash = requireNotNull(validationFeePolicyHash) {
@@ -891,10 +900,17 @@ class HttpClientTransport(
             if (instructionIndex != null) {
                 require(instructionIndex >= 0L) { "validationFeeInstructionIndex must be non-negative" }
             }
+            val transferEntryIndex = validationFeeTransferEntryIndex
+            if (transferEntryIndex != null) {
+                require(transferEntryIndex >= 0L) { "validationFeeTransferEntryIndex must be non-negative" }
+            }
             payload["validation_fee_policy_version"] = policyVersion.toString()
             payload["validation_fee_policy_hash"] = normalizeHex32(policyHash, "validationFeePolicyHash")
             if (instructionIndex != null) {
                 payload["validation_fee_instruction_index"] = instructionIndex.toString()
+            }
+            if (transferEntryIndex != null) {
+                payload["validation_fee_transfer_entry_index"] = transferEntryIndex.toString()
             }
         }
 

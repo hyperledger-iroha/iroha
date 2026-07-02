@@ -722,7 +722,17 @@ fn verify_proof_signature(proof: &PorProofV1) -> Result<(), GatewayResponseError
                 Some(Value::Object(details)),
             )
         })?;
-    let signature = Signature::from_bytes(&proof.signature.signature);
+    let signature = Signature::try_from_bytes(&proof.signature.signature).map_err(|err| {
+        let mut details = json::Map::new();
+        details.insert(
+            "signature_len".into(),
+            Value::from(proof.signature.signature.len() as u64),
+        );
+        refusal(
+            format!("proof signature material is invalid: {err}"),
+            Some(Value::Object(details)),
+        )
+    })?;
     let digest = proof.proof_digest();
     signature.verify(&public_key, digest.as_ref()).map_err(|_| {
         let mut details = json::Map::new();
@@ -2303,10 +2313,11 @@ mod tests {
         let plan = CarBuildPlan::single_file_with_profile(&payload, profile).expect("build plan");
 
         let temp_dir = TempDir::new().expect("temp storage");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
         let signing_key = write_signing_key_hex();
         let config = StorageConfig::builder()
             .enabled(true)
-            .data_dir(temp_dir.path().join("storage"))
+            .data_dir(root.join("storage"))
             .stream_token_signing_key_path(Some(signing_key.path().to_path_buf()))
             .build();
         let node = NodeHandle::new(config);
@@ -2457,6 +2468,34 @@ mod tests {
     }
 
     #[test]
+    fn por_proof_signature_rejects_all_zero_signature_material() {
+        let (payload, por_tree) = sample_por_tree_payload();
+        let manifest_digest = [0xA5; 32];
+        let provider_id = [0xCD; 32];
+        let signing_key =
+            PrivateKey::from_bytes(Algorithm::Ed25519, &[0x22; 32]).expect("private key");
+
+        let mut proof = build_por_proof(
+            &por_tree,
+            &payload,
+            manifest_digest,
+            provider_id,
+            &signing_key,
+        )
+        .expect("build proof");
+        proof.signature.signature.fill(0);
+
+        let err = verify_proof_signature(&proof).expect_err("all-zero proof signature should fail");
+        assert_eq!(err.error_code(), "proof_mismatch");
+        match err {
+            GatewayResponseError::CapabilityRefusal { reason, .. } => {
+                assert!(reason.contains("all zero"));
+            }
+            other => panic!("expected proof mismatch refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn por_proof_non_ed25519_fixture_key_uses_checked_generation() {
         let secp_keypair = checked_test_keypair(Algorithm::Secp256k1);
 
@@ -2525,10 +2564,11 @@ mod tests {
         let plan = CarBuildPlan::single_file_with_profile(&payload, profile).expect("build plan");
 
         let temp_dir = TempDir::new().expect("temp storage");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
         let signing_key = write_signing_key_hex();
         let config = StorageConfig::builder()
             .enabled(true)
-            .data_dir(temp_dir.path().join("storage"))
+            .data_dir(root.join("storage"))
             .stream_token_signing_key_path(Some(signing_key.path().to_path_buf()))
             .build();
         let node = NodeHandle::new(config);

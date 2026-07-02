@@ -39,6 +39,7 @@ use iroha_data_model::soracloud::{
 use iroha_data_model::{
     DataSpaceId, ValidationFail,
     account::rekey::AccountAlias,
+    asset::{AssetBalancePolicy, AssetBalanceScope},
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
     escrow::EscrowId,
     events::time::Schedule,
@@ -264,6 +265,55 @@ fn current_axt_slot_for_state(state: &(impl StateReadOnly + ?Sized)) -> u64 {
         return state.height() as u64;
     }
     0
+}
+
+fn dataspace_id_for_alias_segment(
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    dataspace_alias: &str,
+) -> Option<DataSpaceId> {
+    if dataspace_alias.eq_ignore_ascii_case("universal") {
+        return Some(DataSpaceId::UNIVERSAL);
+    }
+    catalog.by_alias(dataspace_alias).map(|entry| entry.id)
+}
+
+fn legacy_transfer_v1_source_scope_for_world<W: WorldReadOnly>(
+    world: &W,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    definition_id: &AssetDefinitionId,
+) -> Result<AssetBalanceScope, ivm::VMError> {
+    let definition = world
+        .asset_definition(definition_id)
+        .map_err(|_| ivm::VMError::DecodeError)?;
+    if definition.balance_scope_policy() == AssetBalancePolicy::Global {
+        return Ok(AssetBalanceScope::Global);
+    }
+
+    let dataspace_alias = world
+        .asset_definition_alias_bindings()
+        .get(definition.id())
+        .map(|binding| binding.alias.dataspace_segment().to_owned())
+        .or_else(|| {
+            definition
+                .alias()
+                .as_ref()
+                .map(|alias| alias.dataspace_segment().to_owned())
+        })
+        .or_else(|| {
+            definition
+                .id()
+                .try_domain()
+                .map(|domain| domain.dataspace().as_ref().to_owned())
+        });
+
+    let Some(dataspace_alias) = dataspace_alias else {
+        return Err(ivm::VMError::PermissionDenied);
+    };
+    let Some(dataspace) = dataspace_id_for_alias_segment(dataspace_catalog, &dataspace_alias)
+    else {
+        return Err(ivm::VMError::PermissionDenied);
+    };
+    Ok(AssetBalanceScope::Dataspace(dataspace))
 }
 
 #[cfg(feature = "sm-ffi-openssl")]
@@ -787,6 +837,25 @@ pub trait QueryStateRefOps {
     ///
     /// Returns an [`ivm::VMError`] if the NFT is missing.
     fn nft_by_id(&self, nft_id: &NftId) -> Result<Nft, ivm::VMError>;
+    /// Load an asset definition's balance-scope policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the asset definition is missing.
+    fn asset_balance_policy(
+        &self,
+        definition_id: &AssetDefinitionId,
+    ) -> Result<AssetBalancePolicy, ivm::VMError>;
+    /// Resolve the source balance scope for a legacy transfer-v1 syscall.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ivm::VMError`] if the asset definition is missing or a
+    /// dataspace-restricted definition cannot be mapped to its home dataspace.
+    fn legacy_transfer_v1_source_scope(
+        &self,
+        definition_id: &AssetDefinitionId,
+    ) -> Result<AssetBalanceScope, ivm::VMError>;
     /// Load a named parameter from the current parameter set.
     ///
     /// # Errors
@@ -919,6 +988,62 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             QueryStateRef::QueryView(view) => CoreHostImpl::<NoQueryState>::nft_by_id(view, nft_id),
             QueryStateRef::Block(block) => CoreHostImpl::<NoQueryState>::nft_by_id(block, nft_id),
             QueryStateRef::Transaction(tx) => CoreHostImpl::<NoQueryState>::nft_by_id(tx, nft_id),
+        }
+    }
+
+    fn asset_balance_policy(
+        &self,
+        definition_id: &AssetDefinitionId,
+    ) -> Result<AssetBalancePolicy, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => view
+                .world()
+                .asset_definition(definition_id)
+                .map(|definition| definition.balance_scope_policy())
+                .map_err(|_| ivm::VMError::DecodeError),
+            QueryStateRef::QueryView(view) => view
+                .world()
+                .asset_definition(definition_id)
+                .map(|definition| definition.balance_scope_policy())
+                .map_err(|_| ivm::VMError::DecodeError),
+            QueryStateRef::Block(block) => block
+                .world()
+                .asset_definition(definition_id)
+                .map(|definition| definition.balance_scope_policy())
+                .map_err(|_| ivm::VMError::DecodeError),
+            QueryStateRef::Transaction(tx) => tx
+                .world()
+                .asset_definition(definition_id)
+                .map(|definition| definition.balance_scope_policy())
+                .map_err(|_| ivm::VMError::DecodeError),
+        }
+    }
+
+    fn legacy_transfer_v1_source_scope(
+        &self,
+        definition_id: &AssetDefinitionId,
+    ) -> Result<AssetBalanceScope, ivm::VMError> {
+        match *self {
+            QueryStateRef::View(view) => legacy_transfer_v1_source_scope_for_world(
+                view.world(),
+                &view.nexus.dataspace_catalog,
+                definition_id,
+            ),
+            QueryStateRef::QueryView(view) => legacy_transfer_v1_source_scope_for_world(
+                view.world(),
+                &view.nexus.dataspace_catalog,
+                definition_id,
+            ),
+            QueryStateRef::Block(block) => legacy_transfer_v1_source_scope_for_world(
+                block.world(),
+                &block.nexus.dataspace_catalog,
+                definition_id,
+            ),
+            QueryStateRef::Transaction(tx) => legacy_transfer_v1_source_scope_for_world(
+                tx.world(),
+                &tx.nexus.dataspace_catalog,
+                definition_id,
+            ),
         }
     }
 
@@ -2020,8 +2145,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
         let mut lane_for_dataspace = BTreeMap::new();
         let nexus = state.nexus();
+        let state_height = u64::try_from(state.height()).unwrap_or(u64::MAX);
         for lane in nexus.lane_catalog.lanes() {
-            let Some(dataspace_id) = crate::state::nexus_active_lane_dataspace(lane.id, nexus)
+            let Some(dataspace_id) =
+                crate::state::nexus_active_lane_dataspace_at_height(lane.id, nexus, state_height)
             else {
                 continue;
             };
@@ -2137,23 +2264,40 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     AxtPolicyCacheEvent::CacheMiss,
                 )
             } else {
+                let nexus = state.nexus();
+                let state_height = u64::try_from(state.height()).unwrap_or(u64::MAX);
                 let mut entries: Vec<_> = policies
                     .iter()
-                    .map(|(dsid, policy)| {
+                    .filter_map(|(dsid, policy)| {
+                        let active_dataspace = crate::state::nexus_active_lane_dataspace_at_height(
+                            policy.target_lane,
+                            nexus,
+                            state_height,
+                        )?;
+                        if active_dataspace != *dsid {
+                            return None;
+                        }
                         let mut policy = *policy;
                         policy.current_slot = current_slot;
-                        AxtPolicyBinding {
+                        Some(AxtPolicyBinding {
                             dsid: *dsid,
                             policy,
-                        }
+                        })
                     })
                     .collect();
                 entries.sort_by_key(|entry| entry.dsid);
-                let version = AxtPolicySnapshot::compute_version(&entries);
-                (
-                    Some(AxtPolicySnapshot { version, entries }),
-                    AxtPolicyCacheEvent::CacheHit,
-                )
+                if entries.is_empty() {
+                    (
+                        Self::derive_axt_policy_snapshot_from_directory(state),
+                        AxtPolicyCacheEvent::CacheMiss,
+                    )
+                } else {
+                    let version = AxtPolicySnapshot::compute_version(&entries);
+                    (
+                        Some(AxtPolicySnapshot { version, entries }),
+                        AxtPolicyCacheEvent::CacheHit,
+                    )
+                }
             }
         };
 
@@ -5856,10 +6000,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(ivm::gas::G_FASTPQ_BATCH)
     }
 
-    fn push_fastpq_batch_entry(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
-        let Some(entries) = self.fastpq_batch_entries.as_mut() else {
-            return Err(ivm::VMError::PermissionDenied);
-        };
+    fn decode_transfer_v1_args(
+        vm: &IVM,
+    ) -> Result<(AccountId, AccountId, AssetDefinitionId, Numeric), ivm::VMError> {
         let from_ptr = vm.register(10);
         let to_ptr = vm.register(11);
         let asset_def_ptr = vm.register(12);
@@ -5869,11 +6012,33 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let asset_def: AssetDefinitionId =
             Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
         let amount: Numeric = Self::decode_tlv_typed(vm, amount_ptr, PointerType::NoritoBytes)?;
+        Ok((from, to, asset_def, amount))
+    }
+
+    fn push_fastpq_batch_entry(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        let Some(entries) = self.fastpq_batch_entries.as_mut() else {
+            return Err(ivm::VMError::PermissionDenied);
+        };
+        let (from, to, asset_def, amount) = Self::decode_transfer_v1_args(vm)?;
         let asset_id = AssetId::of(asset_def.clone(), from.clone());
         let isi = Transfer::asset_numeric(asset_id, amount.clone(), to.clone());
         let gas = crate::gas::meter_instruction(&InstructionBox::from(TransferBox::from(isi)));
         entries.push(TransferAssetBatchEntry::new(from, to, asset_def, amount));
         Ok(gas)
+    }
+
+    fn queue_legacy_transfer_v1(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        let (from, to, asset_def, amount) = Self::decode_transfer_v1_args(vm)?;
+        let source_scope = {
+            let state_ref = self
+                .query_state
+                .get()
+                .ok_or(ivm::VMError::PermissionDenied)?;
+            state_ref.legacy_transfer_v1_source_scope(&asset_def)?
+        };
+        let asset_id = AssetId::with_scope(asset_def, from, source_scope);
+        let isi = Transfer::asset_numeric(asset_id, amount, to);
+        Ok(self.queue_instruction(InstructionBox::from(TransferBox::from(isi))))
     }
 
     fn finish_fastpq_batch(&mut self) -> Result<u64, ivm::VMError> {
@@ -7010,21 +7175,42 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let instr = InstructionBox::from(BurnBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
-            ivm::syscalls::SYSCALL_TRANSFER_ASSET => {
+            ivm::syscalls::SYSCALL_TRANSFER_V1 => {
                 if self.fastpq_batch_entries.is_some() {
                     return self.push_fastpq_batch_entry(vm);
+                }
+                self.queue_legacy_transfer_v1(vm)
+            }
+            ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
+                if self.fastpq_batch_entries.is_some() {
+                    return Err(ivm::VMError::PermissionDenied);
                 }
                 let from_ptr = vm.register(10);
                 let to_ptr = vm.register(11);
                 let asset_def_ptr = vm.register(12);
                 let amount_ptr = vm.register(13);
+                let dataspace_ptr = vm.register(14);
                 let from: AccountId = Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?;
                 let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
                 let asset_def: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
                 let amount: Numeric =
                     Self::decode_tlv_typed(vm, amount_ptr, PointerType::NoritoBytes)?;
-                let asset_id = AssetId::of(asset_def, from);
+                let dataspace: DataSpaceId =
+                    Self::decode_tlv_typed(vm, dataspace_ptr, PointerType::DataSpaceId)?;
+                let scope = {
+                    let state_ref = self
+                        .query_state
+                        .get()
+                        .ok_or(ivm::VMError::PermissionDenied)?;
+                    match state_ref.asset_balance_policy(&asset_def)? {
+                        AssetBalancePolicy::Global => AssetBalanceScope::Global,
+                        AssetBalancePolicy::DataspaceRestricted => {
+                            AssetBalanceScope::Dataspace(dataspace)
+                        }
+                    }
+                };
+                let asset_id = AssetId::with_scope(asset_def, from, scope);
                 let isi = Transfer::asset_numeric(asset_id, amount, to);
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 Ok(self.queue_instruction(instr))
@@ -11861,7 +12047,7 @@ seiyaku AliasPayout {{
 
   kotoage fn pay(amount: int) -> int permission(AssetOps) {{
     let merchant = {recipient_expr};
-    transfer_asset(authority(), merchant, SettlementAsset, amount);
+    transfer_asset(authority(), merchant, SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }}
 }}
@@ -13780,7 +13966,7 @@ seiyaku RecordFromPayload {
         vm.set_register(13, ivm::Memory::INPUT_START + amount_offset);
 
         let gas = host
-            .syscall(ivm_sys::SYSCALL_TRANSFER_ASSET, &mut vm)
+            .syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
             .expect("batch entry");
         let asset_id = AssetId::of(asset_def, from.clone());
         let isi = Transfer::asset_numeric(asset_id, amount, to);
@@ -13788,6 +13974,210 @@ seiyaku RecordFromPayload {
         assert_eq!(gas, expected);
         assert!(host.queued.is_empty());
         assert_eq!(host.fastpq_batch_entries.as_ref().map(Vec::len), Some(1));
+    }
+
+    fn scoped_transfer_state(
+        authority: &AccountId,
+        destination: &AccountId,
+        asset_def: AssetDefinitionId,
+        balance_policy: AssetBalancePolicy,
+    ) -> State {
+        let domain_id = asset_def
+            .try_domain()
+            .cloned()
+            .unwrap_or_else(fixture_domain_id);
+        let domain = Domain::new(domain_id).build(authority);
+        let source_account = build_fixture_account(authority, authority);
+        let destination_account = build_fixture_account(destination, authority);
+        let asset_def = AssetDefinition::numeric(asset_def)
+            .with_balance_scope_policy(balance_policy)
+            .build(authority);
+        let world = World::with([domain], [source_account, destination_account], [asset_def]);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        State::new_for_testing(world, kura, query)
+    }
+
+    fn prepare_scoped_transfer_syscall(
+        vm: &mut IVM,
+        from: &AccountId,
+        to: &AccountId,
+        asset_def: &AssetDefinitionId,
+        amount: &Numeric,
+        dataspace: DataSpaceId,
+    ) {
+        let from_ptr = store_tlv(vm, PointerType::AccountId, &norito_blob(from));
+        let to_ptr = store_tlv(vm, PointerType::AccountId, &norito_blob(to));
+        let asset_ptr = store_tlv(vm, PointerType::AssetDefinitionId, &norito_blob(asset_def));
+        let amount_ptr = store_tlv(
+            vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(amount).expect("encode amount"),
+        );
+        let dataspace_ptr = store_tlv(
+            vm,
+            PointerType::DataSpaceId,
+            &norito::to_bytes(&dataspace).expect("encode dataspace"),
+        );
+        vm.set_register(10, from_ptr);
+        vm.set_register(11, to_ptr);
+        vm.set_register(12, asset_ptr);
+        vm.set_register(13, amount_ptr);
+        vm.set_register(14, dataspace_ptr);
+    }
+
+    #[test]
+    fn transfer_asset_scoped_syscall_queues_global_source_for_global_definition() {
+        let authority: AccountId = fixture_account("alice");
+        let destination: AccountId = fixture_account("bob");
+        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "xor".parse().unwrap());
+        let state = scoped_transfer_state(
+            &authority,
+            &destination,
+            asset_def.clone(),
+            AssetBalancePolicy::Global,
+        );
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000);
+        let amount = Numeric::new(5_u32, 0);
+
+        prepare_scoped_transfer_syscall(
+            &mut vm,
+            &authority,
+            &destination,
+            &asset_def,
+            &amount,
+            DataSpaceId::new(7),
+        );
+        host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
+            .expect("global transfer should enqueue");
+
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+            AssetId::of(asset_def, authority),
+            amount,
+            destination,
+        )));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn legacy_transfer_v1_syscall_queues_global_source_for_global_definition() {
+        let authority: AccountId = fixture_account("alice");
+        let destination: AccountId = fixture_account("bob");
+        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "xor".parse().unwrap());
+        let state = scoped_transfer_state(
+            &authority,
+            &destination,
+            asset_def.clone(),
+            AssetBalancePolicy::Global,
+        );
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000);
+        let amount = Numeric::new(5_u32, 0);
+
+        prepare_scoped_transfer_syscall(
+            &mut vm,
+            &authority,
+            &destination,
+            &asset_def,
+            &amount,
+            DataSpaceId::new(7),
+        );
+        host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
+            .expect("legacy global transfer should enqueue");
+
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+            AssetId::of(asset_def, authority),
+            amount,
+            destination,
+        )));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn legacy_transfer_v1_syscall_uses_definition_home_dataspace_for_restricted_definition() {
+        let authority: AccountId = fixture_account("alice");
+        let destination: AccountId = fixture_account("bob");
+        let (paynet, catalog) = retail_dataspace_catalog();
+        let asset_def = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "paynet").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let state = scoped_transfer_state(
+            &authority,
+            &destination,
+            asset_def.clone(),
+            AssetBalancePolicy::DataspaceRestricted,
+        );
+        state.nexus.write().dataspace_catalog = catalog;
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000);
+        let amount = Numeric::new(5_u32, 0);
+
+        prepare_scoped_transfer_syscall(
+            &mut vm,
+            &authority,
+            &destination,
+            &asset_def,
+            &amount,
+            DataSpaceId::new(7),
+        );
+        host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
+            .expect("legacy restricted transfer should infer definition home dataspace");
+
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+            AssetId::with_scope(asset_def, authority, AssetBalanceScope::Dataspace(paynet)),
+            amount,
+            destination,
+        )));
+        assert_eq!(host.queued, vec![expected]);
+    }
+
+    #[test]
+    fn transfer_asset_scoped_syscall_queues_dataspace_source_for_restricted_definition() {
+        let authority: AccountId = fixture_account("alice");
+        let destination: AccountId = fixture_account("bob");
+        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "rose".parse().unwrap());
+        let dataspace = DataSpaceId::new(7);
+        let state = scoped_transfer_state(
+            &authority,
+            &destination,
+            asset_def.clone(),
+            AssetBalancePolicy::DataspaceRestricted,
+        );
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000);
+        let amount = Numeric::new(5_u32, 0);
+
+        prepare_scoped_transfer_syscall(
+            &mut vm,
+            &authority,
+            &destination,
+            &asset_def,
+            &amount,
+            dataspace,
+        );
+        host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
+            .expect("restricted transfer should enqueue");
+
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+            AssetId::with_scope(
+                asset_def,
+                authority,
+                AssetBalanceScope::Dataspace(dataspace),
+            ),
+            amount,
+            destination,
+        )));
+        assert_eq!(host.queued, vec![expected]);
     }
 
     #[test]
@@ -14982,7 +15372,7 @@ seiyaku Callee {
   kotoage fn pull_into_vault(target: AccountId,
                              asset: AssetDefinitionId,
                              amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), target, asset, amount);
+    transfer_asset(authority(), target, asset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -15023,11 +15413,17 @@ seiyaku Callee {
             PointerType::NoritoBytes,
             &norito::to_bytes(&amount).expect("encode amount"),
         );
+        let dataspace_ptr = store_tlv(
+            &mut vm,
+            PointerType::DataSpaceId,
+            &norito::to_bytes(&DataSpaceId::UNIVERSAL).expect("encode dataspace"),
+        );
         vm.set_register(10, from_ptr);
         vm.set_register(11, to_ptr);
         vm.set_register(12, asset_ptr);
         vm.set_register(13, amount_ptr);
-        host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET, &mut vm)
+        vm.set_register(14, dataspace_ptr);
+        host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
             .expect("root transfer should enqueue");
 
         let nested_target = callee_contract.to_string();
@@ -15119,7 +15515,7 @@ seiyaku Caller {
   }
 
   kotoage fn open(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), CallerAccount, SettlementAsset, amount);
+    transfer_asset(authority(), CallerAccount, SettlementAsset, amount, dataspace_id("0"));
     let payload = json_object();
     let payload = json_set_int(payload, name("amount"), amount);
     return decode_int(call_contract(VaultContract, "deposit", payload));
@@ -15143,7 +15539,7 @@ seiyaku Vault {
   }
 
   kotoage fn deposit(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), VaultAccount, SettlementAsset, amount);
+    transfer_asset(authority(), VaultAccount, SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -15293,7 +15689,7 @@ seiyaku AliasPayout {
   }
 
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), account_id("merchant@paynet"), SettlementAsset, amount);
+    transfer_asset(authority(), account_id("merchant@paynet"), SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -15469,7 +15865,7 @@ seiyaku AliasPayout {
 
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
     let merchant = resolve_account_alias("merchant@paynet");
-    transfer_asset(authority(), merchant, SettlementAsset, amount);
+    transfer_asset(authority(), merchant, SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -15840,7 +16236,7 @@ seiyaku AliasPayout {
 
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
     let merchant = resolve_account_alias("merchant@paynet");
-    transfer_asset(authority(), merchant, SettlementAsset, amount);
+    transfer_asset(authority(), merchant, SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -17406,7 +17802,7 @@ seiyaku AliasPayout {
   }
 
   kotoage fn pay(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), account_id("merchant@bank.paynet"), SettlementAsset, amount);
+    transfer_asset(authority(), account_id("merchant@bank.paynet"), SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -17544,7 +17940,7 @@ seiyaku Caller {
   }
 
   kotoage fn open(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), CallerAccount, SettlementAsset, amount);
+    transfer_asset(authority(), CallerAccount, SettlementAsset, amount, dataspace_id("0"));
     let payload = json_object();
     let payload = json_set_int(payload, name("amount"), amount);
     return decode_int(call_contract(ForwarderContract, "forward", payload));
@@ -17571,7 +17967,7 @@ seiyaku Forwarder {
   }
 
   kotoage fn forward(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), ForwarderAccount, SettlementAsset, amount);
+    transfer_asset(authority(), ForwarderAccount, SettlementAsset, amount, dataspace_id("0"));
     let payload = json_object();
     let payload = json_set_int(payload, name("amount"), amount);
     return decode_int(call_contract(VaultContract, "deposit", payload));
@@ -17595,7 +17991,7 @@ seiyaku Vault {
   }
 
   kotoage fn deposit(amount: int) -> int permission(AssetOps) {
-    transfer_asset(authority(), VaultAccount, SettlementAsset, amount);
+    transfer_asset(authority(), VaultAccount, SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }
 }
@@ -20601,12 +20997,13 @@ seiyaku Vault {
         let ptr_asset = ivm::Memory::INPUT_START + off_asset;
         let ptr_amount = ivm::Memory::INPUT_START + off_amount;
 
-        // Assemble: SCALL TRANSFER_ASSET; HALT (set arg registers from host side)
+        // Assemble: SCALL TRANSFER_ASSET_SCOPED; HALT (set arg registers from host side)
         let mut code = Vec::new();
         code.extend_from_slice(
             &encoding::wide::encode_sys(
                 instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET).expect("syscall id fits in u8"),
+                u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED)
+                    .expect("syscall id fits in u8"),
             )
             .to_le_bytes(),
         );

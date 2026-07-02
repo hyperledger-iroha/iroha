@@ -63,7 +63,7 @@ use sorafs_manifest::{
 };
 use zstd::stream::read::Decoder as ZstdDecoder;
 
-use super::persistence::{RECEIPT_SIGNATURE_PLACEHOLDER, ReceiptInsertOutcome};
+use super::persistence::{ReceiptInsertOutcome, receipt_signature_placeholder};
 use super::rs16::build_chunk_commitments;
 use super::{
     DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpoolBatchReport, persistence,
@@ -133,10 +133,10 @@ pub async fn handler_post_da_ingest(
         ResponseError::from(build_error_response(status, message, format))
     })?;
 
-    let proof_scheme =
-        lane_proof_scheme(&nexus, request.lane_id).map_err(|(status, message)| {
-            ResponseError::from(build_error_response(status, &message, format))
-        })?;
+    let committed_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    let proof_scheme = lane_proof_scheme(&nexus, request.lane_id, committed_height).map_err(
+        |(status, message)| ResponseError::from(build_error_response(status, &message, format)),
+    )?;
 
     let mut metadata = encrypt_governance_metadata(
         &request.metadata,
@@ -1245,8 +1245,9 @@ fn validate_request(
 fn lane_proof_scheme(
     nexus: &ConfigNexus,
     lane_id: LaneId,
+    block_height: u64,
 ) -> Result<DaProofScheme, (StatusCode, String)> {
-    iroha_core::da::active_lane_proof_policy(nexus, lane_id)
+    iroha_core::da::active_lane_proof_policy_at_height(nexus, lane_id, block_height)
         .map(|policy| policy.proof_scheme)
         .map_err(|_| {
             (
@@ -1296,7 +1297,7 @@ fn build_receipt(
         stripe_layout,
         queued_at_unix: queued_at,
         rent_quote,
-        operator_signature: Signature::from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER),
+        operator_signature: receipt_signature_placeholder(),
     };
     let unsigned_bytes =
         persistence::unsigned_receipt_bytes(&receipt, request.sequence).map_err(|err| {

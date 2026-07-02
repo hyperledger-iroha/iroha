@@ -30,8 +30,10 @@ from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
 from sorafs_evidence_validation import (  # noqa: E402
+    archive_artifact_path_label,
     build_evidence_artifact,
     count_evidence_artifacts,
+    recognized_evidence_artifacts,
     count_evidence_files,
     evidence_gate_status,
     evidence_artifact_is_valid,
@@ -62,6 +64,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
 )
 from sorafs_required_kinds import (  # noqa: E402
     parse_required_kinds as parse_required_evidence_kinds,
@@ -186,6 +189,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "gateway_signature_verified",
         "provider_signature_policy_enforced",
         "provider_pq_keys_governed",
+        "pq_key_roster_digest_hex",
         "ml_dsa_provider_signature_verified",
         "receipts_validated",
         "receipt_summary_digest_hex",
@@ -212,6 +216,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "latency_percentiles_updated",
         "degradation_alert_linked",
         "reputation_weight_governed",
+        "reputation_weight_policy_digest_hex",
         "missed_deadline_penalty_bound",
         "receipt_summary_digest_hex",
         "stats_digest_hex",
@@ -235,7 +240,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "iroha_config_bound",
         "potr_policy_bound",
         "pq_key_roster_bound",
+        "pq_key_roster_digest_hex",
         "reputation_weight_bound",
+        "reputation_weight_policy_digest_hex",
         "governance_dag_bound",
         "receipt_summary_digest_hex",
         "config_source",
@@ -263,7 +270,11 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "generated_at_unix",
     "deployment_id",
     "environment",
+    "deployment_context_reviewed",
     "receipt_summary_digest_hex",
+    "pq_key_roster_digest_hex",
+    "reputation_weight_policy_digest_hex",
+    "policy_digest_hex",
 )
 
 
@@ -325,6 +336,7 @@ def validate_receipt_validation(payload: dict[str, Any], errors: list[str]) -> N
     require_bool_true(payload, "gateway_signature_verified", errors)
     require_bool_true(payload, "provider_signature_policy_enforced", errors)
     require_bool_true(payload, "provider_pq_keys_governed", errors)
+    require_hex(payload, "pq_key_roster_digest_hex", HEX64_LEN, errors)
     require_bool_true(payload, "ml_dsa_provider_signature_verified", errors)
     require_positive_int(payload, "receipts_validated", errors)
     require_hex(payload, "receipt_summary_digest_hex", HEX64_LEN, errors)
@@ -339,6 +351,14 @@ def validate_proof_stream(
 ) -> None:
     require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_string_coverage(payload, "routes", "name", REQUIRED_ROUTES, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     require_bool_true(payload, "manifest_filter_verified", errors)
     require_bool_true(payload, "provider_filter_verified", errors)
     require_bool_true(payload, "tier_filter_verified", errors)
@@ -355,6 +375,7 @@ def validate_reputation_integration(payload: dict[str, Any], errors: list[str]) 
     require_bool_true(payload, "latency_percentiles_updated", errors)
     require_bool_true(payload, "degradation_alert_linked", errors)
     require_bool_true(payload, "reputation_weight_governed", errors)
+    require_hex(payload, "reputation_weight_policy_digest_hex", HEX64_LEN, errors)
     require_bool_true(payload, "missed_deadline_penalty_bound", errors)
     require_hex(payload, "receipt_summary_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "stats_digest_hex", HEX64_LEN, errors)
@@ -376,7 +397,9 @@ def validate_governance_approval(payload: dict[str, Any], errors: list[str]) -> 
     require_config_backed_governance_approval(payload, errors)
     require_bool_true(payload, "potr_policy_bound", errors)
     require_bool_true(payload, "pq_key_roster_bound", errors)
+    require_hex(payload, "pq_key_roster_digest_hex", HEX64_LEN, errors)
     require_bool_true(payload, "reputation_weight_bound", errors)
+    require_hex(payload, "reputation_weight_policy_digest_hex", HEX64_LEN, errors)
     require_bool_true(payload, "governance_dag_bound", errors)
     require_hex(payload, "receipt_summary_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
@@ -441,7 +464,12 @@ def build_summary(
 
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
     valid_receipt_summary_digests: set[str] = set()
+    valid_pq_key_roster_digests: set[str] = set()
+    valid_reputation_weight_policy_digests: set[str] = set()
+    valid_policy_digests: set[str] = set()
     valid_receipt_summary_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    pq_key_roster_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    reputation_weight_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -464,18 +492,37 @@ def build_summary(
             )
             continue
         artifact = build_evidence_artifact(
-            path,
+            archive_artifact_path_label(path, evidence_dirs),
             digest,
             payload,
             validation_errors,
             FINGERPRINT_FIELDS,
         )
         if evidence_artifact_is_valid(artifact):
-            digest = evidence_artifact_fingerprint(artifact).get("receipt_summary_digest_hex")
+            fingerprint = evidence_artifact_fingerprint(artifact)
+            digest = fingerprint.get("receipt_summary_digest_hex")
             if kind_name == "multi_provider_probe" and isinstance(digest, str):
                 valid_receipt_summary_digests.add(digest.lower())
             elif kind_name in RECEIPT_SUMMARY_BOUND_KINDS:
                 valid_receipt_summary_bound_artifacts.append((kind_name, artifact))
+            if kind_name == "governance_approval":
+                pq_digest = fingerprint.get("pq_key_roster_digest_hex")
+                if isinstance(pq_digest, str):
+                    valid_pq_key_roster_digests.add(pq_digest.lower())
+                reputation_digest = fingerprint.get(
+                    "reputation_weight_policy_digest_hex"
+                )
+                if isinstance(reputation_digest, str):
+                    valid_reputation_weight_policy_digests.add(
+                        reputation_digest.lower()
+                    )
+                policy_digest = fingerprint.get("policy_digest_hex")
+                if isinstance(policy_digest, str):
+                    valid_policy_digests.add(policy_digest.lower())
+            elif kind_name == "receipt_validation":
+                pq_key_roster_bound_artifacts.append((kind_name, artifact))
+            elif kind_name == "reputation_integration":
+                reputation_weight_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
@@ -494,6 +541,41 @@ def build_summary(
         missing_anchor_error_template=(
             "{kind_name} receipt_summary_digest_hex requires a valid "
             "multi_provider_probe receipt_summary_digest_hex"
+        ),
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("governance_approval", "receipt_validation"),
+        bound_artifacts=pq_key_roster_bound_artifacts,
+        valid_anchor_digests=valid_pq_key_roster_digests,
+        digest_field="pq_key_roster_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} pq_key_roster_digest_hex must reference a valid "
+            "governance_approval pq_key_roster_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} pq_key_roster_digest_hex requires a valid "
+            "governance_approval pq_key_roster_digest_hex"
+        ),
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=(
+            "governance_approval",
+            "reputation_integration",
+        ),
+        bound_artifacts=reputation_weight_bound_artifacts,
+        valid_anchor_digests=valid_reputation_weight_policy_digests,
+        digest_field="reputation_weight_policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} reputation_weight_policy_digest_hex must reference a "
+            "valid governance_approval reputation_weight_policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} reputation_weight_policy_digest_hex requires a valid "
+            "governance_approval reputation_weight_policy_digest_hex"
         ),
     )
 
@@ -519,7 +601,13 @@ def build_summary(
         },
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
+        "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_receipt_summary_digests": sorted(valid_receipt_summary_digests),
+        "valid_pq_key_roster_digests": sorted(valid_pq_key_roster_digests),
+        "valid_reputation_weight_policy_digests": sorted(
+            valid_reputation_weight_policy_digests
+        ),
+        "valid_policy_digests": sorted(valid_policy_digests),
         "required": required,
         "errors": errors,
     }

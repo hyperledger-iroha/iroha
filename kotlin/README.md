@@ -82,10 +82,11 @@ Do not render NFC controls when `supportedModalities()` omits NFC; non-NFC
 devices and app builds without HCE should use QR or Nearby only.
 
 JVM core includes an in-memory store and `ToriiOfflineNoteIssuerClient` for
-Torii key-refill. Legacy note issue and
+Torii key-refill. Retired note issue and
 `IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund submissions are
-retained for source compatibility but fail closed; production offline payments
-use Kagemusha flows. Apps provide canonical auth and a device-binding provider;
+fail-closed historical APIs; `NativeOfflineNoteProver` and chain-VK proof
+providers also fail closed for retired proof generation. Production offline
+payments use Kagemusha flows. Apps provide canonical auth and a device-binding provider;
 Android secure storage remains in the platform wallet layer. The
 Android `AndroidOfflineNoteSecureStore` rotates a non-exportable Android
 Keystore key on every committed wallet-state revision and rejects app-data
@@ -123,9 +124,9 @@ multi-hop compact-token proof paths when the native bundle includes packaged
 compact proving-key archives and matching verifier-slice material. Production
 defaults still stay on ABI 6 Reserved-lineage recursive spend until that
 artifact set is shipped and signed for release. Empty, malformed, missing, or
-oversized local archives fail as `IllegalArgumentException`; the legacy
-`isRecursiveCompactUnavailable(error)` helper remains for older bridge
-diagnostics.
+oversized local archives fail as `IllegalArgumentException`;
+`isRecursiveCompactUnavailable(error)` classifies the current bridge diagnostics
+for unavailable reserved ABI-7 compact surfaces.
 The ABI-7 launch boundary remains explicit: the one-hop LEN=4 compact-token
 proof path uses a packaged compact one-hop proving-key, while release evidence
 continues to track the proof-composition reservation, generic compact-token
@@ -184,7 +185,9 @@ wallets reject unknown previous recursive proof circuits and include
 previousHopCount)` identifies whether the selected append output circuit
 requires the request to carry the previous recursive proof opening archive.
 `outputCircuitId` is the Norito append request's `output_proof_circuit_id`;
-missing or empty request values preserve semantic compatibility append.
+wallets must pass either the semantic aggregation circuit id or the
+append-specific Reserved-lineage circuit id explicitly; missing, empty, and
+family-id selectors are rejected before native dispatch.
 `KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive)`
 and `buildPreviousProofOpenEnvelopesArchive(previousBundleArchive)` ask the
 native bridge to generate the opaque Pallas opening archives for the current-hop
@@ -214,8 +217,8 @@ native bridge returns a `KagemushaRecursiveSpendVerifyResultV1`:
 Reserved-lineage bundles require a matching active `lineage_verifier_record`,
 semantic bundles must omit it, and unsupported proof attachments are rejected
 as malformed requests rather than soft invalid proof results.
-Decoded verify results expose both `lineageWitnessRequiredForRedeem` and the
-earlier `lineageWitnessRequired` alias for the same redeem decision.
+Decoded verify results expose only `lineageWitnessRequiredForRedeem` for the
+redeem decision.
 Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
@@ -223,13 +226,13 @@ rejected before runtime key generation.
 Reserved-lineage append output is valid only when the previous bundle is
 already Reserved-lineage; semantic previous bundles keep using semantic append
 plus a record-backed lineage witness.
-Kotlin typed redeem builders accept the legacy single `lineageVerifierRecord`
+Kotlin typed redeem builders accept the single-record `lineageVerifierRecord`
 path plus `lineageVerifierRecords` / raw `lineage_verifier_records` for
 additional Reserved-lineage verifier records. Use the plural field for
 multi-profile record-backed lineage witnesses, or place every Reserved-lineage
 verifier record there for vector-only callers.
 `normalizeAppendOutputCircuitId` and `isSupportedAppendOutputCircuitId` expose
-that defaulting rule for wallet-side preflight.
+that explicit-selector rule for wallet-side preflight.
 `RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1` and
 `RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES` expose the
 exactly-one-envelope cardinality rule and native 8 MiB pre-decode cap for that
@@ -266,8 +269,10 @@ sanitized status metadata, not proof success.
 
 Wallet `load` persists newly issued local notes as `ISSUE_PENDING` until sync
 observes the matching `IssueOfflineNote` transaction commit; rejected issue
-outcomes cancel the pending note. Legacy `SPEND_PENDING` records are migrated
-to `SPENT`, and legacy `CHANGE_PENDING` records are migrated to `SPENDABLE`.
+outcomes cancel the pending note. Core wallet-note models use the current
+first-release state names. Retired `spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING`
+wallet-note state names are rejected; first-release records must use current
+state names.
 `OfflineNoteTransferHandoff` exposes one integration surface for local token
 handoff modalities: `qrStreamingFrameBytes(token)` for animated/binary QR,
 `nfcFrameBytes(token)` for APDU-sized NFC frame exchange, and
@@ -295,7 +300,7 @@ mismatches, and conflicting repeated headers or chunks.
 The NFC APDU parser fails closed on nonzero Le bytes for no-data commands,
 non-canonical zero-length reads, and direct read helpers with invalid requested
 lengths; no-offset APDUs also reject smuggled nonzero P1/P2 bytes. Nearby
-decoding rejects fractional versions, unknown fields inside legacy
+decoding rejects fractional versions, unknown fields inside retired
 pairing-challenge objects, and challenge/receipt ACK content-type downgrades
 instead of ignoring smuggled JSON.
 

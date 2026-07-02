@@ -7,9 +7,7 @@
 use core::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signature as DalekSignature, Verifier, VerifyingKey,
-};
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use norito::{
     core::{DecodeFromSlice, decode_field_canonical},
     derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize},
@@ -1159,17 +1157,18 @@ impl ProviderAdvertV1 {
 
         let mut public_key = [0u8; PUBLIC_KEY_LENGTH];
         public_key.copy_from_slice(&self.signature.public_key);
-        let verifying_key = VerifyingKey::from_bytes(&public_key)
-            .map_err(|err| AdvertSignatureError::InvalidPublicKey(err.to_string()))?;
+        let verifying_key = crate::checked_ed25519_verifying_key_from_bytes(&public_key)
+            .map_err(AdvertSignatureError::InvalidPublicKey)?;
 
         let mut signature = [0u8; SIGNATURE_LENGTH];
         signature.copy_from_slice(&self.signature.signature);
-        let signature = DalekSignature::from_bytes(&signature);
+        let signature = crate::checked_ed25519_signature_from_bytes(&signature)
+            .map_err(AdvertSignatureError::Verification)?;
 
         let body_bytes = norito::to_bytes(&self.body)
             .map_err(|err| AdvertSignatureError::BodyEncoding(err.to_string()))?;
         verifying_key
-            .verify(&body_bytes, &signature)
+            .verify_strict(&body_bytes, &signature)
             .map_err(|err| AdvertSignatureError::Verification(err.to_string()))
     }
 }
@@ -1346,6 +1345,63 @@ mod tests {
         advert.body.qos.max_retrieval_latency_ms += 1;
         let err = advert.verify_signature().unwrap_err();
         assert!(matches!(err, AdvertSignatureError::Verification(_)));
+    }
+
+    #[test]
+    fn verify_signature_rejects_all_zero_signature_material() {
+        let mut advert = signed_sample_advert(1_700_000_000);
+        advert.signature.signature.fill(0);
+
+        let err = advert
+            .verify_signature()
+            .expect_err("all-zero provider advert signature must be rejected");
+        assert!(matches!(
+            err,
+            AdvertSignatureError::Verification(reason) if reason.contains("all zero")
+        ));
+    }
+
+    #[test]
+    fn verify_signature_rejects_malformed_signature_r() {
+        const SMALL_ORDER_R: [u8; PUBLIC_KEY_LENGTH] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; PUBLIC_KEY_LENGTH] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        for (label, replacement_r, expected) in [
+            ("small-order", SMALL_ORDER_R, "small-order"),
+            ("noncanonical", NONCANONICAL_R, "not a canonical"),
+        ] {
+            let mut advert = signed_sample_advert(1_700_000_000);
+            advert.signature.signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
+
+            let err = advert
+                .verify_signature()
+                .expect_err("malformed provider advert signature R must be rejected");
+            assert!(
+                matches!(&err, AdvertSignatureError::Verification(reason) if reason.contains(expected)),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_signature_rejects_all_zero_public_key_material() {
+        let mut advert = signed_sample_advert(1_700_000_000);
+        advert.signature.public_key = vec![0; PUBLIC_KEY_LENGTH];
+
+        let err = advert
+            .verify_signature()
+            .expect_err("all-zero provider advert public key must be rejected");
+        assert!(matches!(
+            err,
+            AdvertSignatureError::InvalidPublicKey(reason) if reason.contains("all zero")
+        ));
     }
 
     #[test]

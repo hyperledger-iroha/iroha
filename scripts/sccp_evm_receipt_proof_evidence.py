@@ -44,6 +44,10 @@ def _hex(raw: bytes) -> str:
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        )
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     if not value.startswith("0x"):
@@ -57,12 +61,15 @@ def _strip_lower_0x_hex(value: str, *, label: str) -> str:
 def parse_hex_bytes(value: str, *, label: str, byte_length: int, nonzero: bool = True) -> bytes:
     """Parse fixed-width canonical hex bytes."""
 
+    if type(nonzero) is not bool:
+        raise ValueError("parse_hex_bytes nonzero must be a boolean")
+
     text = _strip_lower_0x_hex(value, label=label)
     if len(text) != byte_length * 2:
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -84,6 +91,8 @@ def parse_evm_address(value: str, *, label: str) -> bytes:
 def parse_domain(value: str) -> int:
     """Parse an EVM-family source domain."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
     if value != value.strip():
         raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
     text = value.lower()
@@ -104,6 +113,10 @@ def parse_domain(value: str) -> int:
 def parse_rpc_chain_id(value: str) -> int:
     """Parse an expected chain id flag."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            "--expected-rpc-chain-id must be a canonical decimal integer"
+        )
     if value != value.strip():
         raise argparse.ArgumentTypeError(
             "--expected-rpc-chain-id must be a canonical decimal integer"
@@ -177,7 +190,8 @@ def _json_rpc(
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
     if decoded.get("jsonrpc") != "2.0":
         raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
-    if decoded.get("id") != 1:
+    response_id = decoded.get("id")
+    if type(response_id) is not int or response_id != 1:
         raise RuntimeError(f"JSON-RPC {method} returned a mismatched response id")
     error = decoded.get("error")
     if error is not None:
@@ -210,7 +224,7 @@ def _rpc_hex_data(result: Any, *, method: str) -> bytes:
         raise RuntimeError(f"{method} returned non-canonical lowercase 0x hex data")
     try:
         return bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise RuntimeError(
             f"{method} returned non-canonical lowercase 0x hex data"
         ) from None
@@ -223,6 +237,9 @@ def _rpc_fixed_hex_data(
     byte_length: int,
     nonzero: bool = True,
 ) -> bytes:
+    if type(nonzero) is not bool:
+        raise ValueError("RPC fixed hex nonzero must be a boolean")
+
     raw = _rpc_hex_data(result, method=method)
     if len(raw) != byte_length:
         raise RuntimeError(f"{method} returned {len(raw)} bytes; expected {byte_length}")
@@ -297,8 +314,7 @@ def _receipt_logs(receipt: dict[str, Any]) -> list[Any]:
     for log_index, log in enumerate(logs):
         if not isinstance(log, dict):
             raise RuntimeError(f"receipt.logs[{log_index}] must be an object")
-        if log.get("removed") is True:
-            raise RuntimeError(f"receipt.logs[{log_index}] must not be removed")
+        _require_log_not_removed(log, label=f"receipt.logs[{log_index}]")
         address = _rpc_fixed_hex_data(
             log.get("address"),
             method=f"receipt.logs[{log_index}].address",
@@ -353,7 +369,20 @@ def canonical_receipt_rlp(receipt: dict[str, Any]) -> bytes:
     return payload if receipt_type is None else bytes([receipt_type]) + payload
 
 
+def _require_log_not_removed(log: dict[str, Any], *, label: str) -> None:
+    if "removed" not in log:
+        return
+    removed = log["removed"]
+    if removed is False:
+        return
+    if removed is True:
+        raise RuntimeError(f"{label} must not be removed")
+    raise RuntimeError(f"{label}.removed must be a boolean")
+
+
 def _encode_compact_path(nibbles: Sequence[int], *, leaf: bool) -> bytes:
+    if type(leaf) is not bool:
+        raise ValueError("compact trie path leaf must be a boolean")
     for nibble in nibbles:
         if nibble < 0 or nibble > 15:
             raise ValueError("trie path nibble out of range")
@@ -567,6 +596,10 @@ def _require_mainnet_chain(
     opener: Urlopen,
     timeout: float,
 ) -> int:
+    if type(domain) is not int or domain not in EXPECTED_RPC_CHAIN_IDS:
+        raise ValueError("domain must be an EVM-family source lane")
+    if expected_rpc_chain_id is not None and type(expected_rpc_chain_id) is not int:
+        raise ValueError("expected RPC chain id must be an exact integer")
     chain_id = _rpc_quantity(
         _json_rpc(rpc_url, "eth_chainId", [], opener=opener, timeout=timeout),
         method="eth_chainId",
@@ -604,8 +637,7 @@ def _source_event_digest_from_receipt(
     for index, log in enumerate(logs):
         if not isinstance(log, dict):
             raise RuntimeError(f"receipt.logs[{index}] must be an object")
-        if log.get("removed") is True:
-            raise RuntimeError(f"receipt.logs[{index}] must not be removed")
+        _require_log_not_removed(log, label=f"receipt.logs[{index}]")
         address = _rpc_fixed_hex_data(
             log.get("address"),
             method=f"receipt.logs[{index}].address",
@@ -668,6 +700,8 @@ def collect_receipt_proof_evidence(
 ) -> dict[str, Any]:
     """Collect a receipt trie proof from a mainnet JSON-RPC endpoint."""
 
+    if type(allow_receipt_only_evidence) is not bool:
+        raise ValueError("allow_receipt_only_evidence must be a boolean")
     chain_id = _require_mainnet_chain(
         rpc_url,
         domain=domain,
@@ -901,13 +935,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded

@@ -68,7 +68,7 @@ use crate::{
         extract_authority_domains as extract_directory_authority_domains,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
-    queue::evaluate_policy_plan_with_nexus_and_world_at,
+    queue::evaluate_policy_plan_with_nexus_and_world_at_block_height,
     smartcontracts::{Execute, code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
@@ -3693,11 +3693,12 @@ impl StateBlock<'_> {
             Some(decision) => decision,
             None => {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(tx));
-                evaluate_policy_plan_with_nexus_and_world_at(
+                evaluate_policy_plan_with_nexus_and_world_at_block_height(
                     &state_transaction.nexus,
                     &accepted,
                     &state_transaction.world,
                     state_transaction.block_unix_timestamp_ms(),
+                    state_transaction.block_height(),
                 )
                 .map(|plan| plan.coordinator_route())
                 .map_err(|err| {
@@ -4634,7 +4635,12 @@ fn collect_manifest_approvals(
                 format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
             )
         })?;
-        approvals.insert(canonical);
+        if !approvals.insert(canonical) {
+            return Err(reject_lane_policy(
+                alias,
+                "`gov_manifest_approvers` metadata must not duplicate approvers",
+            ));
+        }
     }
     Ok(approvals)
 }
@@ -4651,7 +4657,12 @@ fn canonical_manifest_validators(
                 format!("failed to encode validator `{validator}` as i105: {err}"),
             )
         })?;
-        validators.insert(i105);
+        if !validators.insert(i105) {
+            return Err(reject_lane_policy(
+                alias,
+                "lane manifest validator set contains duplicate validators",
+            ));
+        }
     }
     Ok(validators)
 }
@@ -5096,19 +5107,31 @@ fn enforce_lane_policies(
     let mut runtime_upgrade_present = false;
     if let Some(status) = manifest_status.as_ref() {
         if let Some(rules) = status.rules() {
-            let governance_sensitive = tx_requires_manifest_validator_gating(rules, tx);
+            let governance_manifest = status.governance.is_some();
+            let governance_sensitive =
+                governance_manifest && tx_requires_manifest_validator_gating(rules, tx);
             if governance_sensitive {
-                if !rules.validators.is_empty()
+                let manifest_validators = if rules.validators.is_empty() {
+                    None
+                } else {
+                    Some(canonical_manifest_validators(&lane_alias, rules)?)
+                };
+                if let Some(validators) = manifest_validators.as_ref()
                     && !allows_multisig_envelope_authority
-                    && !rules
-                        .validators
-                        .iter()
-                        .any(|validator| validator == tx.authority())
                 {
-                    return Err(reject_lane_policy(
-                        &lane_alias,
-                        "authority not part of lane validator set".to_string(),
-                    ));
+                    let authority = tx.authority();
+                    let authority_i105 = authority.canonical_i105().map_err(|err| {
+                        reject_lane_policy(
+                            &lane_alias,
+                            format!("failed to encode authority `{authority}` as i105: {err}"),
+                        )
+                    })?;
+                    if !validators.contains(&authority_i105) {
+                        return Err(reject_lane_policy(
+                            &lane_alias,
+                            "authority not part of lane validator set".to_string(),
+                        ));
+                    }
                 }
 
                 let quorum_required = !allows_multisig_envelope_authority
@@ -5119,14 +5142,16 @@ fn enforce_lane_policies(
                 }
             }
 
-            enforce_manifest_protected_namespaces(
-                &lane_alias,
-                rules,
-                tx,
-                &state_transaction.world,
-            )?;
+            if governance_manifest {
+                enforce_manifest_protected_namespaces(
+                    &lane_alias,
+                    rules,
+                    tx,
+                    &state_transaction.world,
+                )?;
 
-            runtime_upgrade_present = enforce_runtime_upgrade_hook(&lane_alias, rules, tx)?;
+                runtime_upgrade_present = enforce_runtime_upgrade_hook(&lane_alias, rules, tx)?;
+            }
         }
     }
 
@@ -5869,7 +5894,17 @@ pub(crate) fn enforce_fraud_policy(
                 ValidationFail::NotPermitted("fraud assessment signature must be 64 bytes".into()),
             ));
         }
-        let signature = iroha_crypto::Signature::from_bytes(signature_bytes);
+        let signature =
+            iroha_crypto::Signature::try_from_bytes(signature_bytes).map_err(|err| {
+                #[cfg(feature = "telemetry")]
+                if let Some(ctx) = fraud_ctx.as_ref() {
+                    ctx.record_invalid("attestation_signature");
+                    ctx.record_attestation(attester_label, "signature_parse");
+                }
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                    "fraud assessment signature is malformed: {err}"
+                )))
+            })?;
         let typed = iroha_crypto::SignatureOf::<FraudAssessment>::from_signature(signature);
         typed.verify(&attester.public_key, &unsigned).map_err(|_| {
             #[cfg(feature = "telemetry")]
@@ -8589,6 +8624,49 @@ pub mod tests {
     }
 
     #[test]
+    fn fraud_policy_rejects_all_zero_attestation_signature_before_backend() {
+        let attester =
+            checked_fixture_keypair(b"fraud-attester-ed25519".to_vec(), Algorithm::Ed25519);
+        let assessment = FraudAssessment::new(
+            Vec::new(),
+            iroha_data_model::fraud::types::FraudAssessmentParts {
+                query_id: [0xFA; 32],
+                engine_id: "risk-engine-eu".to_owned(),
+                risk_score_bps: 650,
+                confidence_bps: 9_000,
+                decision: iroha_data_model::fraud::types::AssessmentDecision::Allow,
+                generated_at_ms: 1,
+                signature: Some(vec![0_u8; ED25519_SIGNATURE_LENGTH]),
+            },
+        );
+        let metadata = fraud_metadata_with_assessment(&assessment);
+        let cfg = iroha_config::parameters::actual::FraudMonitoring {
+            enabled: true,
+            required_minimum_band: Some(iroha_config::parameters::actual::FraudRiskBand::Medium),
+            attesters: vec![iroha_config::parameters::actual::FraudAttester {
+                engine_id: "risk-engine-eu".to_owned(),
+                public_key: attester.public_key().clone(),
+            }],
+            ..Default::default()
+        };
+        let catalog = DataSpaceCatalog::default();
+        let assignment = single_lane_assignment(&catalog);
+
+        let err = super::enforce_fraud_policy(&cfg, &metadata, None, &assignment)
+            .expect_err("all-zero Ed25519 attestation signature must be rejected");
+
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
+                assert!(
+                    reason.contains("signature payload must not be all zero"),
+                    "unexpected rejection reason: {reason}"
+                );
+            }
+            other => panic!("expected Validation::NotPermitted, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn tx_rejected_when_gas_asset_required_but_missing() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
@@ -11226,6 +11304,60 @@ pub mod tests {
     }
 
     #[test]
+    fn state_manifest_quorum_rejects_duplicate_validators() {
+        let primary_keypair = checked_fixture_keypair(vec![0x11; 32], Algorithm::Ed25519);
+        let primary_id = AccountId::new(primary_keypair.public_key().clone());
+        let rules = GovernanceRules {
+            validators: vec![primary_id.clone(), primary_id],
+            ..GovernanceRules::default()
+        };
+
+        match super::canonical_manifest_validators("gov", &rules) {
+            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
+                assert!(
+                    msg.contains("duplicate validators"),
+                    "expected duplicate validator rejection, got {msg}"
+                );
+            }
+            other => panic!("expected duplicate validator rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn state_manifest_quorum_rejects_duplicate_approvers() {
+        let chain: ChainId = "lane-manifest-duplicate-approvers".parse().unwrap();
+        let primary_keypair = checked_fixture_keypair(vec![0x11; 32], Algorithm::Ed25519);
+        let secondary_keypair = checked_fixture_keypair(vec![0x22; 32], Algorithm::Ed25519);
+        let primary_id = AccountId::new(primary_keypair.public_key().clone());
+        let secondary_id = AccountId::new(secondary_keypair.public_key().clone());
+        let rules = GovernanceRules {
+            validators: vec![primary_id.clone(), secondary_id.clone()],
+            quorum: Some(2),
+            ..GovernanceRules::default()
+        };
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::GOV_APPROVERS_METADATA_KEY).clone(),
+            Json::new(vec![secondary_id.to_string(), secondary_id.to_string()]),
+        );
+        let tx = TransactionBuilder::new(chain, primary_id)
+            .with_instructions([Log::new(Level::INFO, "noop".into())])
+            .with_metadata(metadata)
+            .sign(primary_keypair.private_key());
+
+        match enforce_manifest_quorum("gov", &rules, &tx) {
+            Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
+                assert!(
+                    msg.contains("duplicate approvers"),
+                    "expected duplicate approver rejection, got {msg}"
+                );
+            }
+            other => panic!("expected duplicate approver rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn manifest_protected_namespaces_require_metadata() {
         let chain: ChainId = "lane-protected-ns".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
@@ -11367,6 +11499,73 @@ pub mod tests {
     }
 
     #[test]
+    fn non_governed_manifest_validators_do_not_gate_state_policy_for_ivm_contract_metadata() {
+        use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
+
+        let chain: ChainId = "non-governed-manifest-ivm-contract".parse().unwrap();
+        let (world, authority, keypair) = world_with_authority("wonderland");
+        let (validator, _) = gen_account_in("wonderland");
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let mut rules = GovernanceRules {
+            validators: vec![validator],
+            quorum: Some(1),
+            ..GovernanceRules::default()
+        };
+        rules
+            .protected_namespaces
+            .insert(Name::from_str("is").expect("namespace"));
+
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            TestLaneId::SINGLE,
+            LaneManifestStatus {
+                lane: TestLaneId::SINGLE,
+                alias: "is".to_string(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: None,
+                manifest_path: Some(PathBuf::from("/tmp/is.manifest.json")),
+                governance_rules: Some(rules),
+                privacy_commitments: Vec::new(),
+            },
+        );
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        state.install_lane_manifests(&manifests);
+
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            TestDataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+        let tx = TransactionBuilder::new(chain, authority.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0xCA])))
+            .sign(keypair.private_key());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let stx = block.transaction();
+        let assignment = single_lane_assignment(&stx.nexus.dataspace_catalog);
+
+        let result = super::enforce_lane_policies(&tx, &stx, &assignment);
+        assert!(
+            result.is_ok(),
+            "non-governed manifest validators must not reject contract metadata: {result:?}"
+        );
+    }
+
+    #[test]
     fn validate_transaction_without_context_uses_live_autoscale_route() {
         use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
 
@@ -11389,7 +11588,7 @@ pub mod tests {
                 .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
             elastic_lane
                 .metadata
-                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
 
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
@@ -11461,13 +11660,15 @@ pub mod tests {
                     ledger_time_ms,
                 )
                 .expect("catalog-only route resolves");
-                let live_plan = crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
-                    &view.nexus,
-                    &accepted,
-                    view.world(),
-                    ledger_time_ms,
-                )
-                .expect("live autoscale route resolves");
+                let live_plan =
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                        &view.nexus,
+                        &accepted,
+                        view.world(),
+                        ledger_time_ms,
+                        1,
+                    )
+                    .expect("live autoscale route resolves");
                 (catalog_only, live_plan)
             };
             if catalog_only.lane_id == TestLaneId::SINGLE
@@ -11510,7 +11711,7 @@ pub mod tests {
                 .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
             elastic_lane
                 .metadata
-                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "2".to_string());
+                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
 
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
@@ -11576,11 +11777,12 @@ pub mod tests {
                 drop(nexus);
                 let enabled_plan = {
                     let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &view.nexus,
                         &accepted,
                         view.world(),
                         0,
+                        1,
                     )
                     .expect("enabled Nexus autoscale route resolves")
                 };
@@ -11589,11 +11791,12 @@ pub mod tests {
                 drop(nexus);
                 let disabled_plan = {
                     let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &view.nexus,
                         &accepted,
                         view.world(),
                         0,
+                        1,
                     )
                     .expect("disabled Nexus default route resolves")
                 };

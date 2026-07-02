@@ -11,7 +11,10 @@ import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
-/** QR/Norito handoff codec for Offline Note payment tokens. */
+/**
+ * Archived classic Offline Note payment-token codec kept as fixture-only
+ * inputs; production offline payments use Kagemusha.
+ */
 public final class OfflineNotePaymentTokenCodec {
   public static final String TYPE = "offline_payment_token";
   public static final String TEXT_PREFIX = "wallet-offline-bearer-cash-payment:";
@@ -47,13 +50,13 @@ public final class OfflineNotePaymentTokenCodec {
   }
 
   public static OfflineNotePaymentToken decodeText(final String text) {
-    final String trimmed = Objects.requireNonNull(text, "text").trim();
-    if (!trimmed.startsWith(TEXT_PREFIX)) {
+    final String value = Objects.requireNonNull(text, "text");
+    if (!value.startsWith(TEXT_PREFIX)) {
       throw new IllegalArgumentException("Offline Note payment token prefix missing");
     }
     return decodeNorito(
         OfflineBase64Url.decodeUnpadded(
-            trimmed.substring(TEXT_PREFIX.length()), "Offline Note payment token payload"));
+            value.substring(TEXT_PREFIX.length()), "Offline Note payment token payload"));
   }
 
   public static List<byte[]> encodeQrFrameBytes(final OfflineNotePaymentToken token) {

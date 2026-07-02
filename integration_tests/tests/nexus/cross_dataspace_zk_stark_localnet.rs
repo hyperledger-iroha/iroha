@@ -66,12 +66,14 @@ use tokio::{
 };
 use toml::{Table, Value as TomlValue};
 
-const NEXUS_ALIAS: &str = "nexus";
+const NEXUS_ALIAS: &str = "universal";
 const DS1_ALIAS: &str = "ds1";
 const DS2_ALIAS: &str = "ds2";
 const NEXUS_ID_U64: u64 = 0;
 const DS1_ID_U64: u64 = 1;
 const DS2_ID_U64: u64 = 2;
+const DS1_MANIFEST_HASH: &str = "0100000000000000000000000000000000000000000000000000000000000000";
+const DS2_MANIFEST_HASH: &str = "0200000000000000000000000000000000000000000000000000000000000000";
 const NEXUS_LANE_INDEX: u32 = 0;
 const DS1_LANE_INDEX: u32 = 1;
 const DS2_LANE_INDEX: u32 = 2;
@@ -308,6 +310,10 @@ fn localnet_builder() -> NetworkBuilder {
             ds1.insert("alias".into(), TomlValue::String(DS1_ALIAS.to_owned()));
             ds1.insert("id".into(), TomlValue::Integer(DS1_ID_U64 as i64));
             ds1.insert(
+                "manifest_hash".into(),
+                TomlValue::String(DS1_MANIFEST_HASH.to_owned()),
+            );
+            ds1.insert(
                 "description".into(),
                 TomlValue::String("private dataspace one".to_owned()),
             );
@@ -316,6 +322,10 @@ fn localnet_builder() -> NetworkBuilder {
             let mut ds2 = Table::new();
             ds2.insert("alias".into(), TomlValue::String(DS2_ALIAS.to_owned()));
             ds2.insert("id".into(), TomlValue::Integer(DS2_ID_U64 as i64));
+            ds2.insert(
+                "manifest_hash".into(),
+                TomlValue::String(DS2_MANIFEST_HASH.to_owned()),
+            );
             ds2.insert(
                 "description".into(),
                 TomlValue::String("private dataspace two".to_owned()),
@@ -516,6 +526,12 @@ fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     let catalog = LaneCatalog::new(lane_count, lanes).expect("lane catalog");
     let lane_config = ActualLaneConfig::from_catalog(&catalog);
     proof_policy_bundle(&lane_config)
+}
+
+#[test]
+fn cross_dataspace_zk_stark_localnet_genesis_preexecution_smoke() {
+    let _guard = sandbox::serial_guard();
+    let _network = localnet_builder().build();
 }
 
 fn expected_lane_validators(
@@ -1788,15 +1804,42 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
 #[cfg(test)]
 mod tests {
     use super::{
+        DS1_ID_U64, DS1_MANIFEST_HASH, DS2_ID_U64, DS2_MANIFEST_HASH, NEXUS_ALIAS, NEXUS_ID_U64,
         ProofId, STARK_BACKEND, decode_proof_record_payload, parse_proof_status_from_json,
     };
-    use iroha::data_model::proof::{ProofRecord, ProofStatus};
+    use iroha::data_model::{
+        nexus::DataSpaceId,
+        proof::{ProofRecord, ProofStatus},
+    };
 
     fn sample_proof_id() -> ProofId {
         ProofId {
             backend: STARK_BACKEND.into(),
             proof_hash: [0xAB; 32],
         }
+    }
+
+    fn decode_manifest_hash_fixture(raw: &str) -> [u8; 32] {
+        assert_eq!(raw.len(), 64);
+        let mut hash = [0_u8; 32];
+        for (idx, chunk) in raw.as_bytes().chunks_exact(2).enumerate() {
+            let pair = std::str::from_utf8(chunk).expect("hex pair");
+            hash[idx] = u8::from_str_radix(pair, 16).expect("manifest hash hex");
+        }
+        hash
+    }
+
+    #[test]
+    fn dataspace_fixture_manifest_hashes_derive_config_ids() {
+        let ds1_hash = decode_manifest_hash_fixture(DS1_MANIFEST_HASH);
+        let ds2_hash = decode_manifest_hash_fixture(DS2_MANIFEST_HASH);
+
+        assert_eq!(NEXUS_ALIAS, "universal");
+        assert_eq!(NEXUS_ID_U64, DataSpaceId::UNIVERSAL.as_u64());
+        assert_eq!(DataSpaceId::from_hash(&ds1_hash).as_u64(), DS1_ID_U64);
+        assert_eq!(DataSpaceId::from_hash(&ds2_hash).as_u64(), DS2_ID_U64);
+        assert_ne!(DataSpaceId::from_hash(&ds1_hash), DataSpaceId::UNIVERSAL);
+        assert_ne!(DataSpaceId::from_hash(&ds2_hash), DataSpaceId::UNIVERSAL);
     }
 
     #[test]

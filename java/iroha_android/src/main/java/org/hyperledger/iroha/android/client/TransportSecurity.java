@@ -2,15 +2,20 @@ package org.hyperledger.iroha.android.client;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Shared transport-safety checks for SDK requests that carry credentials or raw private keys.
  */
 public final class TransportSecurity {
-  private static final java.util.Set<String> CREDENTIAL_HEADERS =
-      java.util.Set.of(
+  private static final Set<String> CREDENTIAL_HEADERS =
+      immutableSet(
           "authorization",
           "x-api-token",
           "x-iroha-account",
@@ -18,14 +23,15 @@ public final class TransportSecurity {
           "x-iroha-timestamp-ms",
           "x-iroha-nonce");
 
-  private static final java.util.List<String> SENSITIVE_BODY_FIELDS =
-      java.util.List.of(
-          "\"private_key\"",
-          "\"seed_hex\"",
-          "\"seed_b64\"",
-          "\"seed_base64\"",
-          "\"key_seed_hex\"",
-          "\"key_seed_b64\"");
+  private static final List<String> SENSITIVE_BODY_FIELDS =
+      Collections.unmodifiableList(
+          Arrays.asList(
+              "\"private_key\"",
+              "\"seed_hex\"",
+              "\"seed_b64\"",
+              "\"seed_base64\"",
+              "\"key_seed_hex\"",
+              "\"key_seed_b64\""));
 
   private TransportSecurity() {}
 
@@ -116,6 +122,10 @@ public final class TransportSecurity {
 
   private static boolean isSensitive(final Map<String, String> headers, final byte[] body) {
     return headersContainCredentials(headers) || bodyContainsSensitiveMaterial(body);
+  }
+
+  private static Set<String> immutableSet(final String... values) {
+    return Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList(values)));
   }
 
   private static boolean bodyContainsSensitiveMaterial(final byte[] body) {

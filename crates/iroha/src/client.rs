@@ -16581,6 +16581,23 @@ impl Client {
         Ok(())
     }
 
+    /// Convenience: GET `/v1/zk/vk` as JSON Value.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
+    pub fn get_zk_vk_list_json(&self) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/zk/vk");
+        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to list VKs with HTTP status: {}. {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
     /// Convenience: GET `/v1/zk/vk/{backend}/{name}` as JSON Value.
     ///
     /// # Errors
@@ -19573,7 +19590,13 @@ mod tests {
             pending_rbc: SumeragiPendingRbcStatus::default(),
             tx_queue_depth: 7,
             tx_queue_capacity: 20,
+            tx_queue_retained_bytes: 3_072,
+            tx_queue_max_retained_bytes: 4_096,
             tx_queue_saturated: true,
+            tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_bytes: true,
+            tx_queue_saturated_by_age: true,
+            tx_queue_oldest_queued_age_ms: 1_250,
             epoch_length_blocks: 100,
             epoch_commit_deadline_offset: 60,
             epoch_reveal_deadline_offset: 80,
@@ -23138,7 +23161,13 @@ mod tests {
             pending_rbc: SumeragiPendingRbcStatus::default(),
             tx_queue_depth: 0,
             tx_queue_capacity: 0,
+            tx_queue_retained_bytes: 0,
+            tx_queue_max_retained_bytes: 0,
             tx_queue_saturated: false,
+            tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_bytes: false,
+            tx_queue_saturated_by_age: false,
+            tx_queue_oldest_queued_age_ms: 0,
             epoch_length_blocks: 0,
             epoch_commit_deadline_offset: 0,
             epoch_reveal_deadline_offset: 0,
@@ -23573,7 +23602,13 @@ mod tests {
             pending_rbc: SumeragiPendingRbcStatus::default(),
             tx_queue_depth: 7,
             tx_queue_capacity: 20,
+            tx_queue_retained_bytes: 3_072,
+            tx_queue_max_retained_bytes: 4_096,
             tx_queue_saturated: true,
+            tx_queue_saturated_by_count: false,
+            tx_queue_saturated_by_bytes: true,
+            tx_queue_saturated_by_age: true,
+            tx_queue_oldest_queued_age_ms: 1_250,
             epoch_length_blocks: 100,
             epoch_commit_deadline_offset: 60,
             epoch_reveal_deadline_offset: 80,

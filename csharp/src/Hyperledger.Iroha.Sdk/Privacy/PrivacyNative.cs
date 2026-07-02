@@ -1168,12 +1168,12 @@ public static class PrivacyNative
     {
         if (!allowEmpty && value.IsEmpty)
         {
-            throw new ArgumentException("Privacy request component must not be empty.", parameterName);
+            throw new ArgumentException($"{parameterName} must not be empty.", parameterName);
         }
         if (value.Length > maxBytes)
         {
             throw new ArgumentException(
-                $"Privacy request component must not exceed {maxBytes} bytes.",
+                $"{parameterName} must not exceed {maxBytes} bytes.",
                 parameterName);
         }
         return value.ToArray();

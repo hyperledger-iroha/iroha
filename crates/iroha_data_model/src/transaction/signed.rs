@@ -985,12 +985,22 @@ impl iroha_version::Version for SignedTransaction {
     }
 }
 
+fn encode_default_layout_versioned<T>(version: u8, value: &T) -> Vec<u8>
+where
+    T: norito::NoritoSerialize,
+{
+    let mut bytes = Vec::with_capacity(1 + value.encoded_len_hint().unwrap_or(0));
+    bytes.push(version);
+    let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    value
+        .serialize(&mut bytes)
+        .expect("versioned transaction encoding should not fail");
+    bytes
+}
+
 impl iroha_version::codec::EncodeVersioned for SignedTransaction {
     fn encode_versioned(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(1);
-        bytes.push(self.version());
-        bytes.extend(norito::codec::encode_adaptive(self));
-        bytes
+        encode_default_layout_versioned(self.version(), self)
     }
 }
 
@@ -1012,10 +1022,7 @@ impl iroha_version::Version for TransactionEntrypoint {
 
 impl iroha_version::codec::EncodeVersioned for TransactionEntrypoint {
     fn encode_versioned(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(1);
-        bytes.push(self.version());
-        bytes.extend(norito::codec::encode_adaptive(self));
-        bytes
+        encode_default_layout_versioned(self.version(), self)
     }
 }
 
@@ -1518,6 +1525,40 @@ mod tests {
         TransactionBuilder::new(chain, authority)
             .with_instructions([Log::new(Level::INFO, "exact slice".into())])
             .sign(&private_key)
+    }
+
+    #[test]
+    fn verify_proof_instruction_signed_tx_versioned_roundtrip() {
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let public_key: iroha_crypto::PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .unwrap();
+        let authority = AccountId::new(public_key);
+        let private_key: iroha_crypto::PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .unwrap();
+        let proof_bytes = b"open-verify-envelope".to_vec();
+        let mut attachment = crate::proof::ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            crate::proof::ProofBox::new("halo2/ipa".into(), proof_bytes.clone()),
+            crate::proof::VerifyingKeyId::new("halo2/ipa", "component_verify_v1"),
+        );
+        attachment.envelope_hash = Some(iroha_crypto::Hash::new(&proof_bytes).into());
+        let instruction: InstructionBox = crate::isi::zk::VerifyProof::new(attachment).into();
+
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions([instruction])
+            .sign(&private_key);
+        let bytes = tx.encode_versioned();
+        let decoded = SignedTransaction::decode_all_versioned(&bytes)
+            .expect("versioned VerifyProof transaction must decode");
+
+        assert_eq!(decoded.hash(), tx.hash());
+        decoded
+            .verify_signature()
+            .expect("decoded VerifyProof transaction signature must verify");
     }
 
     fn checked_transaction_payload_signature(

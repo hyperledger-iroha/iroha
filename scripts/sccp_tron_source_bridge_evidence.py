@@ -32,6 +32,7 @@ SCRIPT_DIR = REPO_ROOT / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from path_safety import first_symlinked_existing_path_component  # noqa: E402
 from sccp_client_loader import load_sccp_module  # noqa: E402
 
 
@@ -157,6 +158,9 @@ def parse_hex_bytes(
 ) -> bytes:
     """Parse a canonical fixed-width hex value."""
 
+    if type(nonzero) is not bool:
+        raise ValueError("TRON source bridge fixed hex nonzero must be a boolean")
+
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -166,7 +170,7 @@ def parse_hex_bytes(
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if nonzero and not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be zero")
@@ -179,6 +183,11 @@ def _parse_runtime_bytecode_text(
     label: str,
     allow_whitespace: bool,
 ) -> bytes:
+    if type(allow_whitespace) is not bool:
+        raise ValueError(
+            "TRON source bridge runtime bytecode allow_whitespace must be a boolean"
+        )
+
     if allow_whitespace:
         text = "".join(value.strip().split())
     else:
@@ -196,7 +205,7 @@ def _parse_runtime_bytecode_text(
         raise argparse.ArgumentTypeError(f"{label} must have an even hex length")
     try:
         raw = bytes.fromhex(text)
-    except (SystemExit, RuntimeError, TypeError, ValueError):
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         raise argparse.ArgumentTypeError(f"{label} must be hex") from None
     if not any(raw):
         raise argparse.ArgumentTypeError(f"{label} must not be all zero")
@@ -213,14 +222,29 @@ def parse_runtime_bytecode_hex(value: str, *, label: str) -> bytes:
     )
 
 
+def _reject_runtime_bytecode_file_symlink_path(path: Path) -> None:
+    if first_symlinked_existing_path_component(path) is not None:
+        raise argparse.ArgumentTypeError("runtime bytecode file must not be a symlink")
+
+
+def _read_runtime_bytecode_file_text(path: Path, *, label: str) -> str:
+    try:
+        _reject_runtime_bytecode_file_symlink_path(path)
+    except (OSError, argparse.ArgumentTypeError):
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    if not path.is_file():
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+
+
 def parse_runtime_bytecode_file(value: str, *, label: str) -> bytes:
     """Parse runtime bytecode from a file containing hex text."""
 
     path = Path(value).expanduser()
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
+    text = _read_runtime_bytecode_file_text(path, label=label)
     return _parse_runtime_bytecode_text(
         text,
         label=label,
@@ -271,6 +295,9 @@ def _require_exact_u32(value: object, label: str) -> int:
 
 
 def _require_exact_u64(value: object, label: str, *, positive: bool = False) -> int:
+    if type(positive) is not bool:
+        raise ValueError("TRON source bridge exact u64 positive must be a boolean")
+
     if type(value) is not int or value < 0 or value > 0xFFFFFFFFFFFFFFFF:
         raise ValueError(f"{label} must be an exact u64")
     if positive and value == 0:
@@ -342,7 +369,7 @@ def parse_tron_address(value: str, *, label: str) -> bytes:
             raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
         try:
             raw = bytes.fromhex(hex_text)
-        except (SystemExit, RuntimeError, TypeError, ValueError):
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
             raise argparse.ArgumentTypeError(f"{label} must be hex") from None
         if len(raw) == 21:
             if raw[0] != 0x41:
@@ -419,6 +446,9 @@ def _require_fixed_bytes(
     byte_length: int,
     nonzero: bool = True,
 ) -> bytes:
+    if type(nonzero) is not bool:
+        raise ValueError("TRON source bridge fixed bytes nonzero must be a boolean")
+
     if not isinstance(value, (bytes, bytearray)):
         raise ValueError(f"{label} must be {byte_length} bytes")
     raw = bytes(value)
@@ -1069,17 +1099,46 @@ def _tron_template_component_hash(component_id: str, component_kind: str) -> byt
     )
 
 
+def _template_component_hashes() -> dict[str, bytes]:
+    return {
+        field: _tron_template_component_hash(component_id, component_kind)
+        for field, (component_id, component_kind) in TRON_TEMPLATE_COMPONENTS.items()
+    }
+
+
 def _require_live_source_component_hashes(args: argparse.Namespace) -> None:
-    for field, (component_id, component_kind) in TRON_TEMPLATE_COMPONENTS.items():
+    template_hashes = _template_component_hashes()
+    for field, template_hash in template_hashes.items():
         supplied = getattr(args, field, None)
         if supplied is None:
             continue
-        if supplied == _tron_template_component_hash(component_id, component_kind):
+        if supplied == template_hash:
             label = field.replace("_", " ")
             raise ValueError(
                 f"TRON production source evidence requires live {label}; "
                 f"template-derived {label} is not deployable"
             )
+    for field in (
+        "source_trust_anchor_hash",
+        "consensus_verifier_hash",
+        "message_inclusion_verifier_hash",
+        "finality_policy_hash",
+        "source_bridge_emitter_code_hash",
+        "network_id",
+        "adapter_verifier_vk_hash",
+        "deployment_receipt_hash",
+    ):
+        supplied_hash = getattr(args, field, None)
+        if supplied_hash is None:
+            continue
+        for template_field, template_hash in template_hashes.items():
+            if supplied_hash == template_hash:
+                label = field.replace("_", " ")
+                template_label = template_field.replace("_", " ")
+                raise ValueError(
+                    f"TRON production source evidence requires live {label}; "
+                    f"template-derived {template_label} is not deployable"
+                )
 
 
 def _require_source_role_hash_separation(
@@ -2048,7 +2107,8 @@ def _require_tron_sora_production_lane(args: argparse.Namespace, output: str) ->
     if source_domain != SCCP_DOMAIN_TRON or target_domain != SCCP_DOMAIN_SORA:
         raise ValueError(
             f"--{output} requires the production TRON -> SORA source lane "
-            f"(--source-domain {SCCP_DOMAIN_TRON} --target-domain {SCCP_DOMAIN_SORA})"
+            f"(source_domain = SCCP_DOMAIN_TRON ({SCCP_DOMAIN_TRON}), "
+            f"target_domain = SCCP_DOMAIN_SORA ({SCCP_DOMAIN_SORA}))"
         )
 
 
@@ -2900,13 +2960,8 @@ SENSITIVE_CLI_ERROR_MARKERS = (
 
 def _decoded_public_blocker_text(value: str) -> str:
     decoded = value
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        for _percent_pass in range(3):
-            next_percent_decoded = unquote(next_decoded)
-            if next_percent_decoded == next_decoded:
-                break
-            next_decoded = next_percent_decoded
+    for _decode_pass in range(max(1, len(value))):
+        next_decoded = unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded

@@ -6,9 +6,9 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -37,8 +37,8 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
         PlatformHttpTransportExecutor.createDefault(),
         URI.create("http://localhost:8080"),
         Duration.ofSeconds(15),
-        Map.of(),
-        List.of(),
+        Collections.emptyMap(),
+        Collections.emptyList(),
         100);
   }
 
@@ -52,8 +52,11 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
     this.executor = Objects.requireNonNull(executor, "executor");
     this.baseUri = Objects.requireNonNull(baseUri, "baseUri");
     this.timeout = timeout;
-    this.defaultHeaders = new LinkedHashMap<>(defaultHeaders == null ? Map.of() : defaultHeaders);
-    this.observers = List.copyOf(observers == null ? List.of() : observers);
+    this.defaultHeaders =
+        new LinkedHashMap<>(defaultHeaders == null ? Collections.emptyMap() : defaultHeaders);
+    this.observers =
+        Collections.unmodifiableList(
+            new ArrayList<>(observers == null ? Collections.emptyList() : observers));
     this.perPage = perPage;
   }
 
@@ -204,7 +207,7 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
               requiredString(item, "kind"),
               requiredString(item, "transaction_status"),
               item.get("transaction_hash") instanceof String ? (String) item.get("transaction_hash") : null,
-              hexBytes(encoded, "encoded")));
+              exactLowerHexBytes(encoded, "encoded")));
     }
     return outcomes;
   }
@@ -212,7 +215,7 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
   private String requireNestedEncoded(final Map<String, Object> box) {
     final Map<String, Object> json = requireObject(box.get("json"), "instruction box json");
     final Object encoded = json.get("encoded");
-    if (!(encoded instanceof String value) || value.isBlank()) {
+    if (!(encoded instanceof String value) || value.trim().isEmpty()) {
       throw new IllegalArgumentException("instruction box encoded payload missing");
     }
     return value;
@@ -228,30 +231,32 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
 
   private String requiredString(final Map<String, Object> value, final String field) {
     final Object raw = value.get(field);
-    if (!(raw instanceof String text) || text.isBlank()) {
+    if (!(raw instanceof String text) || text.trim().isEmpty()) {
       throw new IllegalArgumentException(field + " must be a non-empty string");
     }
     return text;
   }
 
-  private byte[] hexBytes(final String value, final String field) {
-    final String trimmed = value.trim();
-    final String withoutPrefix =
-        trimmed.regionMatches(true, 0, "0x", 0, 2) ? trimmed.substring(2) : trimmed;
-    final String normalized = withoutPrefix.toLowerCase(Locale.ROOT);
-    if ((normalized.length() & 1) != 0) {
-      throw new IllegalArgumentException(field + " must have an even hex length");
+  private byte[] exactLowerHexBytes(final String value, final String field) {
+    if (value.isEmpty() || (value.length() & 1) != 0) {
+      throw new IllegalArgumentException(field + " must be non-empty even lowercase hex");
     }
-    final byte[] out = new byte[normalized.length() / 2];
+    final byte[] out = new byte[value.length() / 2];
     for (int index = 0; index < out.length; index++) {
-      final int hi = Character.digit(normalized.charAt(index * 2), 16);
-      final int lo = Character.digit(normalized.charAt(index * 2 + 1), 16);
-      if (hi < 0 || lo < 0) {
-        throw new IllegalArgumentException(field + " must be hex");
+      final char high = value.charAt(index * 2);
+      final char low = value.charAt(index * 2 + 1);
+      if (!isLowerHexCharacter(high) || !isLowerHexCharacter(low)) {
+        throw new IllegalArgumentException(field + " must be lowercase hex");
       }
+      final int hi = Character.digit(high, 16);
+      final int lo = Character.digit(low, 16);
       out[index] = (byte) ((hi << 4) | lo);
     }
     return out;
+  }
+
+  private boolean isLowerHexCharacter(final char value) {
+    return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
   }
 
   private String rejectCode(final Map<String, List<String>> headers) {
@@ -260,7 +265,7 @@ public final class ToriiOfflineNoteOutcomeProvider implements OfflineNoteOutcome
         continue;
       }
       for (final String value : entry.getValue()) {
-        if (value != null && !value.isBlank()) {
+        if (value != null && !value.trim().isEmpty()) {
           return value.trim();
         }
       }

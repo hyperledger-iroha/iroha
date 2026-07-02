@@ -10241,7 +10241,8 @@ fn verify_manifest_signature(
         .map_err(|err| format!("invalid manifest public key hex: {err}"))?;
     let sig_bytes = hex::decode(&signature.signature_hex)
         .map_err(|err| format!("invalid manifest signature hex: {err}"))?;
-    let sig = Signature::from_bytes(&sig_bytes);
+    let sig = Signature::try_from_bytes(&sig_bytes)
+        .map_err(|err| format!("invalid manifest signature material: {err}"))?;
     sig.verify(&public_key, payload)
         .map_err(|err| format!("manifest signature verification failed: {err}").into())
 }

@@ -34,10 +34,27 @@ from sorafs_runner_preflight import (  # noqa: E402
     run_command_plan,
     require_existing_files,
     require_runner_non_negative_int,
+    require_runner_passthrough_args,
     require_runner_positive_int,
+    require_runner_url_args,
+    validate_runner_fixed_evidence_plan,
+    validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
 )
+
+
+PLAN_SCHEMA = "sorafs.reputation.rollout_evidence_collection_plan.v1"
+PLAN_FIELDS = frozenset(
+    {
+        "schema",
+        "verifier_summary_schema",
+        "external_evidence",
+        "evidence_contract",
+        "steps",
+    }
+)
+EXTERNAL_EVIDENCE_FIELDS = frozenset({"metrics", "transport", "consumption"})
 
 
 @dataclass(frozen=True)
@@ -49,19 +66,19 @@ class CommandPlan:
     command: list[str]
 
 
-
-
 def split_provider_proof_spec(spec: str) -> tuple[str, Path]:
     provider_id, separator, path = spec.partition("=")
     provider_id = provider_id.strip()
     path = path.strip()
     if not separator or not provider_id or not path:
-        raise ValueError(f"--provider-proof must use PROVIDER_ID=PATH form, got `{spec}`")
+        raise ValueError("--provider-proof must use PROVIDER_ID=PATH form")
     return provider_id, Path(path)
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
     errors = validate_runner_preflight(args, summary_filename="rollout-summary.json")
+    require_runner_passthrough_args(args, ("sorafs_cli_bin",), (), errors)
+    require_runner_url_args(args, ("torii_url",), errors)
     seen_input_files: dict[Path, tuple[str, Path]] = {}
     if not args.provider_id:
         errors.append("at least one --provider-id is required")
@@ -71,7 +88,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors.append("--provider-id must be non-empty")
             continue
         if provider_id in seen_provider_ids:
-            errors.append(f"duplicate --provider-id `{provider_id}`")
+            errors.append("duplicate --provider-id")
         seen_provider_ids.add(provider_id)
 
     proof_specs: dict[str, Path] = {}
@@ -82,16 +99,16 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors.append(error_diagnostic_label(error))
             continue
         if provider_id in proof_specs:
-            errors.append(f"duplicate --provider-proof for `{provider_id}`")
+            errors.append("duplicate --provider-proof")
         proof_specs[provider_id] = path
 
     for provider_id in args.provider_id:
         if provider_id not in proof_specs:
-            errors.append(f"missing --provider-proof for `{provider_id}`")
+            errors.append("missing --provider-proof for requested provider")
 
     extra_proofs = sorted(set(proof_specs) - set(args.provider_id))
-    for provider_id in extra_proofs:
-        errors.append(f"--provider-proof supplied for unrequested provider `{provider_id}`")
+    if extra_proofs:
+        errors.append("--provider-proof supplied for unrequested provider")
 
     errors.extend(require_existing_files([args.snapshot], "--snapshot", seen=seen_input_files))
     errors.extend(
@@ -224,22 +241,34 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     return plan
 
 
+def external_evidence(args: argparse.Namespace) -> dict[str, str]:
+    """Return reviewed external evidence paths rendered in dry-run plans."""
+
+    return {
+        "metrics": str(args.metrics_evidence),
+        "transport": str(args.transport_evidence),
+        "consumption": str(args.consumption_evidence),
+    }
+
+
+def evidence_contract() -> dict[str, dict[str, object]]:
+    """Return the checker-backed evidence contract rendered in dry-run plans."""
+
+    return {
+        kind: {
+            "schema": KIND_BY_NAME[kind].schema,
+            "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
+        }
+        for kind in DEFAULT_REQUIRED_KINDS
+    }
+
+
 def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
     return {
-        "schema": "sorafs.reputation.rollout_evidence_collection_plan.v1",
+        "schema": PLAN_SCHEMA,
         "verifier_summary_schema": SUMMARY_SCHEMA,
-        "external_evidence": {
-            "metrics": str(args.metrics_evidence),
-            "transport": str(args.transport_evidence),
-            "consumption": str(args.consumption_evidence),
-        },
-        "evidence_contract": {
-            kind: {
-                "schema": KIND_BY_NAME[kind].schema,
-                "required_payload_fields": list(EVIDENCE_REQUIRED_FIELDS[kind]),
-            }
-            for kind in DEFAULT_REQUIRED_KINDS
-        },
+        "external_evidence": external_evidence(args),
+        "evidence_contract": evidence_contract(),
         "steps": [
             {
                 "label": step.label,
@@ -249,6 +278,28 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
             for step in plan
         ],
     }
+
+
+def validate_plan_json(
+    rendered: object,
+    plan: Sequence[CommandPlan],
+    args: argparse.Namespace,
+) -> list[str]:
+    """Validate the reputation collection-plan envelope before use."""
+
+    return validate_runner_fixed_evidence_plan(
+        rendered,
+        plan,
+        diagnostic_prefix="reputation rollout runner plan",
+        plan_schema=PLAN_SCHEMA,
+        plan_fields=PLAN_FIELDS,
+        summary_schema=SUMMARY_SCHEMA,
+        external_evidence=external_evidence(args),
+        external_evidence_fields=EXTERNAL_EVIDENCE_FIELDS,
+        known_kinds=KIND_BY_NAME,
+        evidence_contract=evidence_contract(),
+        evidence_required_fields=EVIDENCE_REQUIRED_FIELDS,
+    )
 
 
 def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:
@@ -349,8 +400,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     plan = build_command_plan(args)
+    rendered_plan = plan_json(plan, args)
+    plan_errors = validate_plan_json(rendered_plan, plan, args)
+    if plan_errors:
+        emit_runner_error_lines(plan_errors)
+        return 2
     if args.dry_run:
-        plan_errors = write_runner_plan(plan_json(plan, args))
+        plan_errors = write_runner_plan(rendered_plan)
         if plan_errors:
             emit_runner_error_lines(plan_errors)
             return 2

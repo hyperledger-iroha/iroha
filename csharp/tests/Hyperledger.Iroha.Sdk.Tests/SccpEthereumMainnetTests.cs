@@ -2060,6 +2060,21 @@ public sealed class SccpEthereumMainnetTests
         };
         Assert.Throws<ArgumentException>(
             () => EthereumMainnetSccp.CanonicalEvmReceiptRlp(removedLogReceipt));
+        foreach (var removed in new object?[] { null, 1, "secret-token-removed" })
+        {
+            var malformedRemovedLog = new Dictionary<string, object?>(validReceiptLog)
+            {
+                ["removed"] = removed,
+            };
+            var malformedRemovedReceipt = new Dictionary<string, object?>(typedReceipt)
+            {
+                ["logs"] = new object?[] { malformedRemovedLog },
+            };
+            var malformedRemovedError = Assert.Throws<ArgumentException>(
+                () => EthereumMainnetSccp.CanonicalEvmReceiptRlp(malformedRemovedReceipt));
+            Assert.Contains("receipt.logs[0].removed must be a boolean", malformedRemovedError.Message);
+            Assert.DoesNotContain("secret-token", malformedRemovedError.Message);
+        }
         var tooManyTopicsLog = new Dictionary<string, object?>(validReceiptLog)
         {
             ["topics"] = Enumerable.Repeat<object?>("0x" + new string('2', 64), 5).ToArray(),
@@ -3318,6 +3333,29 @@ public sealed class SccpEthereumMainnetTests
                     SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
                 }, cancellationToken: TestContext.Current.CancellationToken).AsTask());
         Assert.Contains("removed logs", removedSourceEventLog.Message);
+
+        foreach (var removed in new object?[] { null, 1, "secret-token-removed" })
+        {
+            var malformedRemovedLog = new Dictionary<string, object?>(sourceEventLog)
+            {
+                ["removed"] = removed,
+            };
+            var malformedRemovedReceipt = new Dictionary<string, object?>(receipt)
+            {
+                ["logs"] = new object?[] { malformedRemovedLog },
+            };
+            var malformedRemovedError = await Assert.ThrowsAsync<ArgumentException>(
+                () => EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                    new EthereumMainnetInboundEvidence
+                    {
+                        Receipt = malformedRemovedReceipt,
+                        Block = block,
+                        BeaconFinality = beaconFinality,
+                        SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                    }, cancellationToken: TestContext.Current.CancellationToken).AsTask());
+            Assert.Contains("receipt.logs[0].removed must be a boolean", malformedRemovedError.Message);
+            Assert.DoesNotContain("secret-token", malformedRemovedError.Message);
+        }
 
         var nonObjectLogReceipt = new Dictionary<string, object?>(receipt)
         {

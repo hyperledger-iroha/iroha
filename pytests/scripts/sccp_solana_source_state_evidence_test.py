@@ -219,7 +219,13 @@ def test_solana_source_hex_parser_redacts_parser_causes():
 def test_solana_source_hex_parser_redacts_helper_exit_parser_causes(monkeypatch):
     module = load_evidence_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         detail = (
             "secret-token Solana source hex TypeError detail"
             if exception_type is TypeError
@@ -245,6 +251,10 @@ def test_solana_source_hex_parser_redacts_helper_exit_parser_causes(monkeypatch)
                 assert rendered == "source state verifier hash must be hex"
                 assert "secret-token" not in rendered
                 assert exception_type.__name__ not in rendered
+                if exception_type is module.argparse.ArgumentTypeError:
+                    assert (
+                        "ArgumentTypeError" not in rendered
+                    ), "Solana source hex ArgumentTypeError detail leaked"
                 assert exc.__cause__ is None
                 assert exc.__suppress_context__ is True
             else:
@@ -252,6 +262,27 @@ def test_solana_source_hex_parser_redacts_helper_exit_parser_causes(monkeypatch)
                     "Solana source-state parser "
                     f"{exception_type.__name__} was accepted"
                 )
+
+
+def test_solana_source_hex_nonzero_controls_reject_non_booleans():
+    module = load_evidence_module()
+
+    for nonzero in (1, "true", None):
+        try:
+            module.parse_hex_bytes(
+                "0x" + "00" * 32,
+                label="source state verifier hash",
+                byte_length=32,
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == (
+                "Solana source-state fixed hex nonzero must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "malformed Solana source-state fixed-hex nonzero control accepted"
+            )
 
 
 def test_solana_source_domain_parser_requires_canonical_ascii_decimal():
@@ -332,6 +363,47 @@ def test_solana_source_state_evidence_rejects_boolean_target_domain():
         assert "target_domain must be an exact u32" in str(exc)
     else:
         raise AssertionError("boolean Solana target domain was accepted")
+
+
+def test_solana_source_state_hash_helpers_reject_boolean_domains():
+    module = load_evidence_module()
+
+    helper_cases = (
+        (
+            lambda: module.solana_source_adapter_verifier_vk_hash(source_domain=True),
+            "source_domain must be an exact u32",
+        ),
+        (
+            lambda: module.solana_source_adapter_verifier_vk_hash(target_domain=False),
+            "target_domain must be an exact u32",
+        ),
+        (
+            lambda: module.solana_source_verifier_material_record_hash(
+                SimpleNamespace(**{**solana_args(module).__dict__, "source_domain": True})
+            ),
+            "source_domain must be an exact u32",
+        ),
+        (
+            lambda: module.solana_source_adapter_engine_deployment_record_hash(
+                SimpleNamespace(**{**solana_args(module).__dict__, "target_domain": False})
+            ),
+            "target_domain must be an exact u32",
+        ),
+        (
+            lambda: module.solana_full_light_client_gate_hash(
+                SimpleNamespace(**{**solana_args(module).__dict__, "target_domain": False})
+            ),
+            "target_domain must be an exact u32",
+        ),
+    )
+
+    for helper, expected_error in helper_cases:
+        try:
+            helper()
+        except ValueError as exc:
+            assert str(exc) == expected_error
+        else:
+            raise AssertionError(f"{expected_error!r} helper case was accepted")
 
 
 def test_solana_toml_rendering_rejects_reused_role_hashes():
@@ -436,6 +508,31 @@ def test_direct_record_hashes_reject_template_component_hashes():
             )
 
 
+def test_direct_record_hashes_reject_cross_role_template_component_hashes():
+    module = load_evidence_module()
+    template_hash = module._template_component_hashes()["consensus_verifier_hash"]
+
+    for record_hash, field in (
+        (module.solana_source_verifier_material_record_hash, "source_trust_anchor_hash"),
+        (
+            module.solana_source_adapter_engine_deployment_record_hash,
+            "source_state_verifier_hash",
+        ),
+    ):
+        args = solana_args(module)
+        setattr(args, field, template_hash)
+
+        try:
+            record_hash(args)
+        except SystemExit as exc:
+            assert field in str(exc)
+            assert "consensus_verifier_hash template hash" in str(exc)
+        else:
+            raise AssertionError(
+                f"Solana record hash accepted cross-role template hash for {field}"
+            )
+
+
 def test_direct_record_hashes_reject_zero_component_hashes():
     module = load_evidence_module()
     material_fields = tuple(
@@ -525,6 +622,28 @@ def test_solana_source_evidence_rejects_adapter_verifier_vk_hash_mismatch():
         assert "canonical Solana source-adapter verifier profile" in str(exc)
     else:
         raise AssertionError("mismatched Solana adapter verifier vk hash was accepted")
+
+
+def test_solana_source_evidence_rejects_wrong_lane_domains_with_named_constants():
+    module = load_evidence_module()
+
+    source_args = solana_args(module)
+    source_args.source_domain = module.SCCP_DOMAIN_SORA
+    try:
+        module.render_toml(source_args)
+    except SystemExit as exc:
+        assert "source_domain = SCCP_DOMAIN_SOL (3)" in str(exc)
+    else:
+        raise AssertionError("Solana source evidence accepted non-Solana source domain")
+
+    target_args = solana_args(module)
+    target_args.target_domain = module.SCCP_DOMAIN_SOL
+    try:
+        module.render_toml(target_args)
+    except SystemExit as exc:
+        assert "target_domain = SCCP_DOMAIN_SORA (0)" in str(exc)
+    else:
+        raise AssertionError("Solana source evidence accepted non-SORA target domain")
 
 
 def test_solana_cli_json_summary_and_toml_output(capsys):

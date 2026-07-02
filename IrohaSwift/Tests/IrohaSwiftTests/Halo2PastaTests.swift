@@ -1340,6 +1340,21 @@ final class Halo2PastaTests: XCTestCase {
         XCTAssertEqual(redeemValues.outputAmounts, [5, 0])
     }
 
+    func testOpenVerifyEnvelopeRejectsNonExactPublicInputHashBeforeParsingEnvelope() throws {
+        let canonicalHash = String(repeating: "ab", count: 32)
+        let malformedEnvelope = Data()
+        for rejectedHash in Self.nonExactPublicInputHashes(canonicalHash) {
+            XCTAssertFalse(try Halo2OfflineNoteProver.verifyOpenVerifyEnvelope(
+                malformedEnvelope,
+                publicInputsHashHex: rejectedHash
+            ))
+        }
+        XCTAssertThrowsError(try Halo2OfflineNoteProver.verifyOpenVerifyEnvelope(
+            malformedEnvelope,
+            publicInputsHashHex: canonicalHash
+        ))
+    }
+
     func testOfflineNoteNativeHalo2ProofEnvelopeFitsQrBudget() throws {
         let fixture = try Self.loadFixture()
         try Halo2OfflineNoteProver.prewarm()
@@ -1389,6 +1404,12 @@ final class Halo2PastaTests: XCTestCase {
             proof.proof.bytes,
             publicInputsHashHex: fixture.chainVectors.audit.publicInputsHash
         ))
+        for rejectedHash in Self.nonExactPublicInputHashes(fixture.chainVectors.audit.publicInputsHash) {
+            XCTAssertFalse(try Halo2OfflineNoteProver.verifyOpenVerifyEnvelope(
+                proof.proof.bytes,
+                publicInputsHashHex: rejectedHash
+            ))
+        }
         XCTAssertFalse(try Halo2OfflineNoteProver.verifyOpenVerifyEnvelope(
             proof.proof.bytes,
             publicInputsHashHex: String(repeating: "0", count: 64)
@@ -2084,6 +2105,18 @@ final class Halo2PastaTests: XCTestCase {
             limbs[idx] = value
         }
         return limbs
+    }
+
+    private static func nonExactPublicInputHashes(_ canonicalHash: String) -> [String] {
+        [
+            " \(canonicalHash)",
+            "\(canonicalHash)\n",
+            canonicalHash.uppercased(),
+            "0x\(canonicalHash)",
+            String(canonicalHash.dropLast()),
+            String(canonicalHash.dropLast(2)) + "zz",
+            ""
+        ]
     }
 
     private static func loadFixture() throws -> Halo2OfflineInteropFixture {

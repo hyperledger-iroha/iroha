@@ -2989,6 +2989,30 @@ public static class EthereumMainnetSccp
         return null;
     }
 
+    private static void RequireEvmReceiptLogNotRemoved(
+        IReadOnlyDictionary<string, object?> log,
+        string label,
+        string removedMessage,
+        string parameterName)
+    {
+        if (!log.TryGetValue("removed", out var removed))
+        {
+            return;
+        }
+
+        if (removed is false)
+        {
+            return;
+        }
+
+        if (removed is true)
+        {
+            throw new ArgumentException(removedMessage, parameterName);
+        }
+
+        throw new ArgumentException($"{label}.removed must be a boolean.", parameterName);
+    }
+
     private static object? StrictFirstPresent(
         IReadOnlyDictionary<string, object?> input,
         string parameterName,
@@ -3086,10 +3110,11 @@ public static class EthereumMainnetSccp
                 throw new ArgumentException($"receipt.logs[{index}] must be an object.", nameof(receipt));
             }
 
-            if (FirstPresent(log, "removed") is true)
-            {
-                throw new ArgumentException($"receipt.logs[{index}] must not be removed.", nameof(receipt));
-            }
+            RequireEvmReceiptLogNotRemoved(
+                log,
+                $"receipt.logs[{index}]",
+                $"receipt.logs[{index}] must not be removed.",
+                nameof(receipt));
 
             var topics = RequireList(FirstPresent(log, "topics"), $"receipt.logs[{index}].topics");
             if (topics.Count > 4)
@@ -3637,10 +3662,11 @@ public static class EthereumMainnetSccp
                 throw new ArgumentException($"receipt.logs[{index}] must be an object.", nameof(receipt));
             }
 
-            if (FirstPresent(log, "removed") is true)
-            {
-                throw new ArgumentException("receipt.logs must not contain removed logs.", nameof(receipt));
-            }
+            RequireEvmReceiptLogNotRemoved(
+                log,
+                $"receipt.logs[{index}]",
+                "receipt.logs must not contain removed logs.",
+                nameof(receipt));
 
             var logAddress = NormalizeRpcHex(
                 FirstPresent(log, "address"),

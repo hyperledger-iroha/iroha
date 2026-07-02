@@ -37,8 +37,9 @@ use iroha_config::parameters::actual::{
 use iroha_crypto::{Hash, HashOf};
 #[allow(unused_imports)]
 use iroha_data_model::nexus::{
-    DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId, LaneLifecyclePlan, LanePrivacyProof,
-    LaneStorageProfile, LaneVisibility, UniversalAccountId,
+    AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
+    LaneCatalog, LaneId, LaneLifecyclePlan, LanePrivacyProof, LaneStorageProfile, LaneVisibility,
+    UniversalAccountId,
 };
 use iroha_data_model::{
     account::AccountId,
@@ -63,14 +64,15 @@ use journal::{QueuePlanJournal, QueuePlanJournalFlush, QueuePlanJournalRecordV1}
 #[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
+pub(crate) use router::routable_lane_ids_for_nexus_at_height;
 pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
     RoutingPlan, RoutingResolveError, SingleLaneRouter, evaluate_policy,
     evaluate_policy_plan_with_catalog, evaluate_policy_plan_with_catalog_and_world,
     evaluate_policy_plan_with_catalog_and_world_at, evaluate_policy_plan_with_nexus_and_world_at,
-    evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world,
-    evaluate_policy_with_catalog_and_world_at, resolve_query_routing_decision,
-    resolve_routing_decision,
+    evaluate_policy_plan_with_nexus_and_world_at_block_height, evaluate_policy_with_catalog,
+    evaluate_policy_with_catalog_and_world, evaluate_policy_with_catalog_and_world_at,
+    resolve_query_routing_decision, resolve_routing_decision,
 };
 use thiserror::Error;
 use tokio::{
@@ -144,7 +146,8 @@ pub(crate) fn execution_context_for_routing_plan(
     )
 }
 
-fn resolve_routing_plan_against_catalogs(
+/// Resolve every coordinator and participant leg in a full routing plan against active catalogs.
+pub(crate) fn resolve_routing_plan_against_catalogs(
     plan: RoutingPlan,
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
@@ -168,6 +171,82 @@ fn resolve_routing_plan_against_catalogs(
             Ok(RoutingPlan::native_amx(coordinator, participants))
         }
     }
+}
+
+fn ensure_routing_plan_active_at_height(
+    plan: &RoutingPlan,
+    nexus: &Nexus,
+    block_height: u64,
+) -> Result<(), RoutingResolveError> {
+    for leg in plan.legs() {
+        let route = leg.route;
+        if crate::state::nexus_active_lane_dataspace_at_height(route.lane_id, nexus, block_height)
+            != Some(route.dataspace_id)
+            && !route_uses_legacy_default_public_lane(route, nexus)
+        {
+            return Err(RoutingResolveError::InactiveLane {
+                lane_id: route.lane_id,
+                dataspace_id: route.dataspace_id,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn route_uses_legacy_default_public_lane(route: RoutingDecision, nexus: &Nexus) -> bool {
+    if route.lane_id != LaneId::SINGLE || route.dataspace_id == DataSpaceId::UNIVERSAL {
+        return false;
+    }
+    if nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .any(|lane| lane.dataspace_id == route.dataspace_id)
+    {
+        return false;
+    }
+    nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .find(|lane| lane.id == LaneId::SINGLE)
+        .is_some_and(|lane| {
+            lane.dataspace_id == DataSpaceId::UNIVERSAL
+                && !lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
+                && !lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
+        })
+}
+
+fn resolve_routing_plan_against_nexus_at_height(
+    plan: RoutingPlan,
+    nexus: &Nexus,
+    block_height: u64,
+) -> Result<RoutingPlan, RoutingResolveError> {
+    let plan =
+        resolve_routing_plan_against_catalogs(plan, &nexus.lane_catalog, &nexus.dataspace_catalog)?;
+    ensure_routing_plan_active_at_height(&plan, nexus, block_height)?;
+    Ok(plan)
+}
+
+fn state_height_for_routing(state: &State) -> u64 {
+    u64::try_from(state.committed_height()).unwrap_or(u64::MAX)
+}
+
+fn state_view_height_for_routing(state_view: &StateView<'_>) -> u64 {
+    u64::try_from(state_view.height()).unwrap_or(u64::MAX)
+}
+
+fn nexus_with_route_catalogs(
+    nexus: &Nexus,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+) -> Nexus {
+    let mut nexus = nexus.clone();
+    nexus.lane_catalog = lane_catalog.clone();
+    nexus.dataspace_catalog = dataspace_catalog.clone();
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    nexus
 }
 
 /// Nexus-derived limits that influence queue telemetry and scheduling defaults.
@@ -426,7 +505,7 @@ pub struct QueuePressureSnapshot {
 }
 
 impl QueuePressureSnapshot {
-    /// Whether either saturation signal is active.
+    /// Whether any saturation signal is active.
     #[must_use]
     pub const fn is_saturated(self) -> bool {
         self.saturated_by_count || self.saturated_by_bytes || self.saturated_by_age
@@ -561,6 +640,11 @@ struct PreparedQueueAdmission {
     enqueued_at_ms: u64,
     #[cfg(feature = "telemetry")]
     pending_teu: u64,
+}
+
+struct ExpiredQueueTransaction {
+    tx: AcceptedTransaction<'static>,
+    routing: RoutingDecision,
 }
 
 fn first_batch_duplicate_index(prepared: &[PreparedQueueAdmission]) -> Option<usize> {
@@ -1681,7 +1765,12 @@ impl Queue {
                     format!("invalid account id `{trimmed}` in `gov_manifest_approvers`: {err}"),
                 )
             })?;
-            approvals.insert(canonical);
+            if !approvals.insert(canonical) {
+                return Err(Self::enforcement_error(
+                    alias,
+                    "`gov_manifest_approvers` metadata must not duplicate approvers",
+                ));
+            }
         }
         Ok(approvals)
     }
@@ -1698,7 +1787,12 @@ impl Queue {
                     format!("failed to encode validator `{validator}` as i105: {err}"),
                 )
             })?;
-            validators.insert(i105);
+            if !validators.insert(i105) {
+                return Err(Self::enforcement_error(
+                    alias,
+                    "lane manifest validator set contains duplicate validators",
+                ));
+            }
         }
         Ok(validators)
     }
@@ -2373,7 +2467,11 @@ impl Queue {
         state_view: &StateView<'_>,
     ) -> Result<RoutingPlan, RoutingResolveError> {
         let nexus = state_view.nexus();
-        resolve_routing_plan_against_catalogs(plan, &nexus.lane_catalog, &nexus.dataspace_catalog)
+        resolve_routing_plan_against_nexus_at_height(
+            plan,
+            nexus,
+            state_view_height_for_routing(state_view),
+        )
     }
 
     fn resolve_precomputed_routing_plan_with_state(
@@ -2383,21 +2481,14 @@ impl Queue {
         nexus: &Nexus,
         plan: RoutingPlan,
     ) -> Result<RoutingPlan, RoutingResolveError> {
-        let plan = resolve_routing_plan_against_catalogs(
-            plan,
-            &nexus.lane_catalog,
-            &nexus.dataspace_catalog,
-        )?;
+        let block_height = state_height_for_routing(state);
+        let plan = resolve_routing_plan_against_nexus_at_height(plan, nexus, block_height)?;
         let current_plan = self
             .router
             .read()
             .try_route_plan_with_state(tx, state)
             .and_then(|plan| {
-                resolve_routing_plan_against_catalogs(
-                    plan,
-                    &nexus.lane_catalog,
-                    &nexus.dataspace_catalog,
-                )
+                resolve_routing_plan_against_nexus_at_height(plan, nexus, block_height)
             })?;
         if current_plan == plan {
             Ok(plan)
@@ -2437,7 +2528,7 @@ impl Queue {
     ) -> Result<RoutingPlan, RoutingResolveError> {
         let nexus = self.sync_nexus_routing_with_state(state);
         let plan = self.router.read().try_route_plan_with_state(tx, state)?;
-        resolve_routing_plan_against_catalogs(plan, &nexus.lane_catalog, &nexus.dataspace_catalog)
+        resolve_routing_plan_against_nexus_at_height(plan, &nexus, state_height_for_routing(state))
     }
 
     fn record_refreshed_routing_plan(&self, hash: SignedTxHash, plan: RoutingPlan) {
@@ -2478,13 +2569,37 @@ impl Queue {
             .router
             .read()
             .try_route_plan_with_state(tx.as_accepted(), state)?;
-        let plan = resolve_routing_plan_against_catalogs(
+        let plan = resolve_routing_plan_against_nexus_at_height(
             plan,
-            &nexus.lane_catalog,
-            &nexus.dataspace_catalog,
+            &nexus,
+            state_height_for_routing(state),
         )?;
         self.record_refreshed_routing_plan(hash, plan.clone());
         Ok(plan)
+    }
+
+    fn remove_routing_metadata_plan_first(
+        &self,
+        hash: SignedTxHash,
+    ) -> (RoutingDecision, Option<RoutingPlan>) {
+        if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+            self.routing_decisions.remove(&hash);
+            let _ = routing_ledger::take_route(&hash);
+            return (plan.coordinator_route(), Some(plan));
+        }
+
+        if let Some(plan) = routing_ledger::take_plan(&hash) {
+            self.routing_decisions.remove(&hash);
+            let _ = routing_ledger::take(&hash);
+            return (plan.coordinator_route(), Some(plan));
+        }
+
+        if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+            routing_ledger::discard_if_matches(&hash, decision);
+            return (decision, None);
+        }
+
+        (routing_ledger::take_route(&hash).unwrap_or_default(), None)
     }
 
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
@@ -2494,22 +2609,9 @@ impl Queue {
         reason: String,
         telemetry: Option<&StateTelemetry>,
     ) {
-        let routing = if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-            routing_ledger::discard_if_matches(&hash, decision);
-            decision
-        } else {
-            routing_ledger::take(&hash).unwrap_or_default()
-        };
-        let removed_plan = self
-            .routing_plans
-            .remove(&hash)
-            .map(|(_, plan)| plan)
-            .or_else(|| routing_ledger::take_plan(&hash));
+        let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
         if let Some(plan) = removed_plan.as_ref() {
             self.record_plan_journal_remove(hash, plan);
-            routing_ledger::discard_plan_if_matches(&hash, plan);
-        } else {
-            let _ = routing_ledger::take_plan(&hash);
         }
 
         let removed_tx = self.txs.remove(&hash).map(|(_, tx)| tx);
@@ -2569,7 +2671,7 @@ impl Queue {
     ) -> Result<RoutingPlan, RoutingResolveError> {
         let nexus = self.sync_nexus_routing_with_state(state);
         let plan = self.router.read().try_route_plan_with_state(tx, state)?;
-        resolve_routing_plan_against_catalogs(plan, &nexus.lane_catalog, &nexus.dataspace_catalog)
+        resolve_routing_plan_against_nexus_at_height(plan, &nexus, state_height_for_routing(state))
     }
 
     /// Returns whether the queue currently tracks the transaction hash.
@@ -2721,10 +2823,10 @@ impl Queue {
                 .read()
                 .try_route_plan_with_state(&tx, state)
                 .and_then(|plan| {
-                    resolve_routing_plan_against_catalogs(
+                    resolve_routing_plan_against_nexus_at_height(
                         plan,
-                        &nexus.lane_catalog,
-                        &nexus.dataspace_catalog,
+                        &nexus,
+                        state_height_for_routing(state),
                     )
                 }),
         };
@@ -2893,7 +2995,22 @@ impl Queue {
                 let governance_sensitive =
                     Self::tx_requires_manifest_validator_gating(rules, &checked);
                 if governance_sensitive {
-                    if !rules.validators.is_empty() && checked.as_ref().authority_opt().is_none() {
+                    let manifest_validators = if rules.validators.is_empty() {
+                        None
+                    } else {
+                        match Self::canonical_manifest_validators(&alias, rules) {
+                            Ok(validators) => Some(validators),
+                            Err(err) => {
+                                #[cfg(feature = "telemetry")]
+                                telemetry_handle.record_manifest_admission("malformed_validators");
+                                return Err(Failure {
+                                    tx: Box::new(checked.as_accepted().clone()),
+                                    err,
+                                });
+                            }
+                        }
+                    };
+                    if manifest_validators.is_some() && checked.as_ref().authority_opt().is_none() {
                         #[cfg(feature = "telemetry")]
                         telemetry_handle.record_manifest_admission("missing_authority");
                         return Err(Failure {
@@ -2906,27 +3023,39 @@ impl Queue {
                         });
                     }
                     if let Some(authority) = checked.as_ref().authority_opt()
-                        && !rules.validators.is_empty()
+                        && let Some(validators) = manifest_validators.as_ref()
                         && !allows_multisig_envelope_authority
-                        && !rules
-                            .validators
-                            .iter()
-                            .any(|validator| validator == authority)
                     {
-                        iroha_logger::warn!(
-                            lane = %alias,
-                            authority = %authority,
-                            "rejecting transaction not signed by governance validator"
-                        );
-                        #[cfg(feature = "telemetry")]
-                        telemetry_handle.record_manifest_admission("non_validator_authority");
-                        return Err(Failure {
-                            tx: Box::new(checked.as_accepted().clone()),
-                            err: Error::GovernanceNotPermitted {
-                                alias: alias.clone(),
-                                reason: "authority not part of lane validator set".to_string(),
-                            },
-                        });
+                        let authority_i105 = match authority.canonical_i105() {
+                            Ok(value) => value,
+                            Err(err) => {
+                                return Err(Failure {
+                                    tx: Box::new(checked.as_accepted().clone()),
+                                    err: Self::enforcement_error(
+                                        &alias,
+                                        format!(
+                                            "failed to encode authority `{authority}` as i105: {err}"
+                                        ),
+                                    ),
+                                });
+                            }
+                        };
+                        if !validators.contains(&authority_i105) {
+                            iroha_logger::warn!(
+                                lane = %alias,
+                                authority = %authority,
+                                "rejecting transaction not signed by governance validator"
+                            );
+                            #[cfg(feature = "telemetry")]
+                            telemetry_handle.record_manifest_admission("non_validator_authority");
+                            return Err(Failure {
+                                tx: Box::new(checked.as_accepted().clone()),
+                                err: Error::GovernanceNotPermitted {
+                                    alias: alias.clone(),
+                                    reason: "authority not part of lane validator set".to_string(),
+                                },
+                            });
+                        }
                     }
                     let quorum_required = !allows_multisig_envelope_authority
                         && rules.quorum.unwrap_or(0).saturating_sub(1) > 0
@@ -3944,7 +4073,7 @@ impl Queue {
     fn pop_from_queue(
         self: &Arc<Self>,
         state_view: &StateView,
-        expired_transactions: &mut Vec<AcceptedTransaction<'static>>,
+        expired_transactions: &mut Vec<ExpiredQueueTransaction>,
     ) -> Option<TransactionGuard> {
         #[cfg(feature = "telemetry")]
         let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
@@ -3994,15 +4123,9 @@ impl Queue {
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
-                    if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                        routing_ledger::discard_plan_if_matches(&hash, &plan);
-                        self.routing_decisions.remove(&hash);
-                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                        routing_ledger::discard_if_matches(&hash, decision);
-                    } else {
-                        // Ensure we do not leak entries when the queue-side cache missed the remove.
-                        let _ = routing_ledger::take(&hash);
-                        let _ = routing_ledger::take_plan(&hash);
+                    let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
+                    if let Some(plan) = removed_plan.as_ref() {
+                        self.record_plan_journal_remove(hash, plan);
                     }
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(state_view.telemetry));
@@ -4011,7 +4134,10 @@ impl Queue {
                     if let Error::Expired = e
                         && let Ok(tx) = Arc::try_unwrap(removed_tx)
                     {
-                        expired_transactions.push(tx.into_accepted());
+                        expired_transactions.push(ExpiredQueueTransaction {
+                            tx: tx.into_accepted(),
+                            routing,
+                        });
                     }
                 }
                 self.remove_tx_encoded_len(&hash);
@@ -4063,18 +4189,10 @@ impl Queue {
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
-                    let routing = if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                        let routing = plan.coordinator_route();
-                        routing_ledger::discard_plan_if_matches(&hash, &plan);
-                        self.routing_decisions.remove(&hash);
-                        routing
-                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                        routing_ledger::discard_if_matches(&hash, decision);
-                        decision
-                    } else {
-                        let _ = routing_ledger::take_plan(&hash);
-                        routing_ledger::take(&hash).unwrap_or_default()
-                    };
+                    let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
+                    if let Some(plan) = removed_plan.as_ref() {
+                        self.record_plan_journal_remove(hash, plan);
+                    }
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(state_view.telemetry));
                     self.tx_enqueued_at_ms.remove(&hash);
@@ -4136,7 +4254,7 @@ impl Queue {
     fn pop_from_queue_with_state(
         self: &Arc<Self>,
         state: &State,
-        expired_transactions: &mut Vec<AcceptedTransaction<'static>>,
+        expired_transactions: &mut Vec<ExpiredQueueTransaction>,
     ) -> Option<TransactionGuard> {
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state.metrics();
@@ -4186,15 +4304,9 @@ impl Queue {
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
-                    if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                        routing_ledger::discard_plan_if_matches(&hash, &plan);
-                        self.routing_decisions.remove(&hash);
-                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                        routing_ledger::discard_if_matches(&hash, decision);
-                    } else {
-                        // Ensure we do not leak entries when the queue-side cache missed the remove.
-                        let _ = routing_ledger::take(&hash);
-                        let _ = routing_ledger::take_plan(&hash);
+                    let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
+                    if let Some(plan) = removed_plan.as_ref() {
+                        self.record_plan_journal_remove(hash, plan);
                     }
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(telemetry_handle));
@@ -4203,7 +4315,10 @@ impl Queue {
                     if let Error::Expired = e
                         && let Ok(tx) = Arc::try_unwrap(removed_tx)
                     {
-                        expired_transactions.push(tx.into_accepted());
+                        expired_transactions.push(ExpiredQueueTransaction {
+                            tx: tx.into_accepted(),
+                            routing,
+                        });
                     }
                 }
                 self.remove_tx_encoded_len(&hash);
@@ -4253,18 +4368,10 @@ impl Queue {
                     if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
                         self.decrease_per_user_tx_count(authority);
                     }
-                    let routing = if let Some((_, plan)) = self.routing_plans.remove(&hash) {
-                        let routing = plan.coordinator_route();
-                        routing_ledger::discard_plan_if_matches(&hash, &plan);
-                        self.routing_decisions.remove(&hash);
-                        routing
-                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
-                        routing_ledger::discard_if_matches(&hash, decision);
-                        decision
-                    } else {
-                        let _ = routing_ledger::take_plan(&hash);
-                        routing_ledger::take(&hash).unwrap_or_default()
-                    };
+                    let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
+                    if let Some(plan) = removed_plan.as_ref() {
+                        self.record_plan_journal_remove(hash, plan);
+                    }
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(telemetry_handle));
                     self.tx_enqueued_at_ms.remove(&hash);
@@ -4414,6 +4521,13 @@ impl Queue {
         self.max_retained_bytes
     }
 
+    /// Override retained-byte accounting in tests and return the resulting pressure snapshot.
+    #[cfg(test)]
+    pub fn set_retained_bytes_for_tests(&self, retained_bytes: u64) -> QueuePressureSnapshot {
+        self.retained_bytes.store(retained_bytes, Ordering::Relaxed);
+        self.pressure_snapshot()
+    }
+
     fn track_active_transaction(&self) {
         self.active_count.fetch_add(1, Ordering::Relaxed);
     }
@@ -4554,7 +4668,7 @@ impl Queue {
         transactions: &mut Vec<TransactionGuard>,
         mut pop_next: F,
     ) where
-        F: FnMut(&mut Vec<AcceptedTransaction<'static>>) -> Option<TransactionGuard>,
+        F: FnMut(&mut Vec<ExpiredQueueTransaction>) -> Option<TransactionGuard>,
     {
         if transactions.len() >= max_txs_in_block.get() {
             return;
@@ -4576,25 +4690,9 @@ impl Queue {
 
         expired_transactions
             .into_iter()
-            .map(|tx| {
-                let hash = tx.as_ref().hash();
-                let routing = self
-                    .routing_decisions
-                    .remove(&hash)
-                    .map(|(_, decision)| decision)
-                    .or_else(|| routing_ledger::take(&hash))
-                    .unwrap_or_default();
-                let removed_plan = self
-                    .routing_plans
-                    .remove(&hash)
-                    .map(|(_, plan)| plan)
-                    .or_else(|| routing_ledger::take_plan(&hash));
-                if let Some(plan) = removed_plan.as_ref() {
-                    self.record_plan_journal_remove(hash, plan);
-                    routing_ledger::discard_plan_if_matches(&hash, plan);
-                } else {
-                    let _ = routing_ledger::take_plan(&hash);
-                }
+            .map(|expired| {
+                let hash = expired.tx.as_ref().hash();
+                let routing = expired.routing;
                 TransactionEvent {
                     hash,
                     block_height: None,
@@ -4880,6 +4978,8 @@ impl Queue {
                 snapshot.max_retained_bytes.get(),
                 snapshot.saturated_by_count,
                 snapshot.saturated_by_bytes,
+                snapshot.saturated_by_age,
+                snapshot.oldest_queued_tx_age_ms,
             );
         }
         #[cfg(not(feature = "telemetry"))]
@@ -4941,14 +5041,10 @@ impl Queue {
         for hash in to_remove {
             if let Some((_, tx_arc)) = self.txs.remove(&hash) {
                 self.untrack_active_transaction();
-                let routing = self
-                    .routing_decisions
-                    .remove(&hash)
-                    .map(|(_, decision)| decision)
-                    .or_else(|| routing_ledger::take(&hash))
-                    .unwrap_or_default();
-                self.routing_plans.remove(&hash);
-                let _ = routing_ledger::take_plan(&hash);
+                let (routing, removed_plan) = self.remove_routing_metadata_plan_first(hash);
+                if let Some(plan) = removed_plan.as_ref() {
+                    self.record_plan_journal_remove(hash, plan);
+                }
                 self.removed_hashes.insert(hash, ());
                 self.untrack_expiry_hash(&hash);
                 if let Some(authority) = tx_arc.as_ref().as_ref().authority_opt() {
@@ -5481,8 +5577,9 @@ impl Queue {
         lane_catalog: &LaneCatalog,
         dataspace_catalog: &DataSpaceCatalog,
     ) {
-        #[cfg(not(feature = "telemetry"))]
-        let _ = (lane_catalog, dataspace_catalog);
+        let routing_nexus =
+            nexus_with_route_catalogs(state_view.nexus(), lane_catalog, dataspace_catalog);
+        let block_height = state_view_height_for_routing(state_view);
         #[cfg(feature = "telemetry")]
         {
             self.tx_teu.clear();
@@ -5510,7 +5607,7 @@ impl Queue {
             let routing_plan = match router
                 .try_route_plan_with_view(tx.as_accepted(), state_view)
                 .and_then(|plan| {
-                    resolve_routing_plan_against_catalogs(plan, lane_catalog, dataspace_catalog)
+                    resolve_routing_plan_against_nexus_at_height(plan, &routing_nexus, block_height)
                 }) {
                 Ok(plan) => plan,
                 Err(err) => {
@@ -5579,8 +5676,9 @@ impl Queue {
         lane_catalog: &LaneCatalog,
         dataspace_catalog: &DataSpaceCatalog,
     ) {
-        #[cfg(not(feature = "telemetry"))]
-        let _ = (lane_catalog, dataspace_catalog);
+        let routing_nexus =
+            nexus_with_route_catalogs(&state.nexus_snapshot(), lane_catalog, dataspace_catalog);
+        let block_height = state_height_for_routing(state);
         #[cfg(feature = "telemetry")]
         {
             self.tx_teu.clear();
@@ -5611,10 +5709,10 @@ impl Queue {
             }
             let routing_plan = match router.try_route_plan_without_state(tx.as_accepted()) {
                 Ok(Some(plan)) => {
-                    match resolve_routing_plan_against_catalogs(
+                    match resolve_routing_plan_against_nexus_at_height(
                         plan,
-                        lane_catalog,
-                        dataspace_catalog,
+                        &routing_nexus,
+                        block_height,
                     ) {
                         Ok(plan) => plan,
                         Err(err) => {
@@ -5634,10 +5732,10 @@ impl Queue {
                     match router
                         .try_route_plan_with_view(tx.as_accepted(), state_view)
                         .and_then(|plan| {
-                            resolve_routing_plan_against_catalogs(
+                            resolve_routing_plan_against_nexus_at_height(
                                 plan,
-                                lane_catalog,
-                                dataspace_catalog,
+                                &routing_nexus,
+                                block_height,
                             )
                         }) {
                         Ok(plan) => plan,
@@ -5969,10 +6067,11 @@ pub mod tests {
         name::Name,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
-            AuditControls, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, JurisdictionSet,
-            LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
-            LaneConfig, LaneId, LaneLifecyclePlan, LanePrivacyMerkleWitness, LanePrivacyProof,
-            LanePrivacyWitness, ManifestVersion, ParticipantSelector,
+            AuditControls, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, FeeSponsorPolicy,
+            FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect, JurisdictionSet, LaneCatalog,
+            LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule, LaneConfig, LaneId,
+            LaneLifecyclePlan, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
+            ManifestVersion, ParticipantSelector,
         },
         parameter::TransactionParameters,
         prelude::*,
@@ -6013,6 +6112,114 @@ pub mod tests {
     };
 
     static NEXT_TEST_DOMAIN_SUFFIX: AtomicU64 = AtomicU64::new(1);
+
+    fn seed_committed_height_for_queue_test(state: &State, height: u64) {
+        let mut block_hashes = state.block_hashes.block();
+        while u64::try_from(block_hashes.len()).unwrap_or(u64::MAX) < height {
+            let next = u8::try_from(block_hashes.len() % usize::from(u8::MAX))
+                .expect("modulo u8::MAX fits u8")
+                .saturating_add(1);
+            block_hashes.push_for_tests(
+                HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                    Hash::prehashed([next; Hash::LENGTH]),
+                ),
+            );
+        }
+        block_hashes.commit_for_tests();
+    }
+
+    fn state_with_future_created_autoscale_lane(
+        created_height: u64,
+        committed_height: u64,
+    ) -> State {
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut future_elastic = LaneConfig {
+            id: LaneId::new(1),
+            alias: "elastic-lane-1".to_owned(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        future_elastic
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        future_elastic.metadata.insert(
+            AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            created_height.to_string(),
+        );
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.lane_catalog =
+                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
+                    .expect("future-created autoscale lane catalog");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+        assert_eq!(
+            crate::state::nexus_active_lane_dataspace_at_height(
+                LaneId::new(1),
+                &state.nexus_snapshot(),
+                created_height,
+            ),
+            Some(DataSpaceId::UNIVERSAL),
+            "future-created autoscale fixture must be valid once its creation height is reached"
+        );
+        if committed_height < created_height {
+            assert_eq!(
+                crate::state::nexus_active_lane_dataspace_at_height(
+                    LaneId::new(1),
+                    &state.nexus_snapshot(),
+                    committed_height,
+                ),
+                None,
+                "future-created autoscale fixture must be inactive before its creation height"
+            );
+        }
+        seed_committed_height_for_queue_test(&state, committed_height);
+        state
+    }
+
+    struct FutureCreatedNoStateRouter;
+
+    impl LaneRouter for FutureCreatedNoStateRouter {
+        fn route(&self, _tx: &AcceptedTransaction<'_>) -> RoutingDecision {
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL)
+        }
+
+        fn route_without_state(&self, _tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
+            Some(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL))
+        }
+    }
+
+    fn queue_with_state_free_future_created_router(
+        state: &State,
+        time_source: &TimeSource,
+    ) -> Queue {
+        let queue = Queue::test_with_router(
+            config_factory(),
+            time_source,
+            Arc::new(FutureCreatedNoStateRouter),
+        );
+        let nexus = state.nexus_snapshot();
+        *queue.routing_uses_config_router.write() = Queue::nexus_uses_config_router(&nexus);
+        *queue.routing_policy.write() = nexus.routing_policy.clone();
+        *queue.lane_catalog.write() = Arc::new(nexus.lane_catalog.clone());
+        *queue.dataspace_catalog.write() = Arc::new(nexus.dataspace_catalog.clone());
+        *queue.nexus_limits.write() = QueueLimits::from_nexus(&nexus);
+        queue
+    }
 
     fn unique_test_domain_name(prefix: &str) -> String {
         let suffix = NEXT_TEST_DOMAIN_SUFFIX.fetch_add(1, Ordering::Relaxed);
@@ -6548,6 +6755,7 @@ pub mod tests {
             nexus.autoscale.enabled = true;
             nexus.autoscale.last_transition_height = 2;
         }
+        seed_committed_height_for_queue_test(&state, 2);
         let committed_nexus = state.nexus_snapshot();
 
         assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
@@ -6574,6 +6782,114 @@ pub mod tests {
             "autoscale scale-out must refresh the local routing ledger plan"
         );
         assert_eq!(queue.lane_catalog.read().lanes().len(), 2);
+    }
+
+    #[test]
+    fn proposal_queue_keeps_pending_default_route_off_future_created_autoscale_lane() {
+        let NexusFeeFixture {
+            mut state,
+            authority_id,
+            authority_keypair,
+            ..
+        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.fees.base_fee = Numeric::zero();
+        state
+            .set_nexus(nexus.clone())
+            .expect("apply initial single-lane Nexus config");
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_secs(60),
+                capacity: nonzero!(16_usize),
+                capacity_per_user: nonzero!(16_usize),
+                ..Config::default()
+            },
+            &time_source,
+        );
+
+        let tx = (0_u32..128)
+            .map(|idx| {
+                accepted_tx_with(
+                    authority_id.clone(),
+                    &authority_keypair,
+                    &time_source,
+                    vec![InstructionBox::from(Log::new(
+                        Level::INFO,
+                        format!("future autoscale shard candidate {idx}").into(),
+                    ))],
+                    Metadata::default(),
+                )
+            })
+            .find(|tx| {
+                let hash = tx.as_ref().hash();
+                let mut bytes = [0_u8; core::mem::size_of::<u64>()];
+                bytes.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
+                u64::from_le_bytes(bytes) % 2 == 1
+            })
+            .expect("fixture should find a transaction hashing to the future elastic shard");
+        let tx_hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push pending tx");
+        assert_eq!(
+            *queue
+                .routing_decisions
+                .get(&tx_hash)
+                .expect("initial routing"),
+            RoutingDecision::default()
+        );
+
+        let mut future_elastic = LaneConfig {
+            id: LaneId::new(1),
+            alias: "elastic-lane-1".to_string(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        future_elastic
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+        future_elastic
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "7".to_string());
+        let lane_catalog =
+            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
+                .expect("future autoscale lane catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.lane_catalog = lane_catalog;
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.last_transition_height = 7;
+        }
+        seed_committed_height_for_queue_test(&state, 6);
+        let committed_nexus = state.nexus_snapshot();
+
+        assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
+        assert_eq!(
+            *queue
+                .routing_decisions
+                .get(&tx_hash)
+                .expect("rerouted decision"),
+            RoutingDecision::default(),
+            "future-created autoscale lanes must not receive pending default-route traffic before activation"
+        );
+        assert_eq!(
+            queue
+                .routing_plans
+                .get(&tx_hash)
+                .expect("rerouted plan")
+                .coordinator_route(),
+            RoutingDecision::default(),
+            "reroute must refresh the full plan to the active default route"
+        );
+        assert_eq!(
+            routing_ledger::get_plan(&tx_hash).map(|plan| plan.coordinator_route()),
+            Some(RoutingDecision::default()),
+            "local routing ledger must not advertise the future-created elastic lane"
+        );
     }
 
     #[test]
@@ -6627,6 +6943,7 @@ pub mod tests {
             nexus.autoscale.max_lanes = nonzero!(8_u32);
             nexus.autoscale.last_transition_height = 3;
         }
+        seed_committed_height_for_queue_test(&state, 3);
         let initial_nexus = state.nexus_snapshot();
 
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -7281,6 +7598,40 @@ pub mod tests {
             1
         );
 
+        // Duplicate metadata approvals are malformed even when the unique approver set
+        // would satisfy quorum.
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+        metadata.insert(
+            (*super::GOV_APPROVERS_METADATA_KEY).clone(),
+            Json::new(vec![
+                validator_secondary.to_string(),
+                validator_secondary.to_string(),
+            ]),
+        );
+        let tx = accepted_tx_with(
+            validator_primary.clone(),
+            &primary_keypair,
+            &time_source,
+            vec![activate.clone()],
+            metadata,
+        );
+        let err = queue
+            .push(tx, state.view())
+            .expect_err("duplicate manifest approvers should reject");
+        match err.err {
+            Error::GovernanceNotPermitted { reason, .. } => {
+                assert!(
+                    reason.contains("duplicate approvers"),
+                    "expected duplicate approver rejection, got {reason}"
+                );
+            }
+            other => panic!("expected governance rejection, got {other:?}"),
+        }
+
         // Attach metadata listing the secondary validator so the quorum threshold is satisfied.
         let mut metadata = Metadata::default();
         metadata.insert(
@@ -7398,6 +7749,97 @@ pub mod tests {
             metrics
                 .governance_manifest_admission_total
                 .with_label_values(&["non_validator_authority"])
+                .get(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn governance_manifest_rejects_duplicate_validator_set_for_protected_contract_ops() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        #[cfg(feature = "telemetry")]
+        let metrics = Arc::new(Metrics::default());
+        #[cfg(feature = "telemetry")]
+        let state = Arc::new(State::with_telemetry(
+            world_with_test_domains(),
+            kura.clone(),
+            query_handle.clone(),
+            StateTelemetry::new(metrics.clone(), true),
+        ));
+        #[cfg(not(feature = "telemetry"))]
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+
+        let (validator_id, validator_keypair) = gen_account_in("wonderland");
+        let mut protected = BTreeSet::new();
+        protected.insert(Name::from_str("apps").expect("static namespace"));
+
+        let mut statuses = BTreeMap::new();
+        let rules = GovernanceRules {
+            validators: vec![validator_id.clone(), validator_id.clone()],
+            protected_namespaces: protected,
+            ..GovernanceRules::default()
+        };
+        let status = LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "gov".to_string(),
+            dataspace: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("parliament".to_string()),
+            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        };
+        statuses.insert(LaneId::SINGLE, status);
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        queue.install_lane_manifests(&manifests);
+
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator_id,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let code_hash = iroha_crypto::Hash::new(b"demo");
+        let activate = InstructionBox::from(ActivateContractInstance {
+            contract_address: contract_address.clone(),
+            code_hash,
+        });
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+
+        let tx = accepted_tx_with(
+            validator_id,
+            &validator_keypair,
+            &time_source,
+            vec![activate],
+            metadata,
+        );
+        let err = queue
+            .push(tx, state.view())
+            .expect_err("duplicate manifest validators must fail closed");
+        match err.err {
+            Error::GovernanceNotPermitted { reason, .. } => {
+                assert!(
+                    reason.contains("duplicate validators"),
+                    "expected duplicate validator rejection, got {reason}"
+                );
+            }
+            other => panic!("expected governance rejection, got {other:?}"),
+        }
+        #[cfg(feature = "telemetry")]
+        assert_eq!(
+            metrics
+                .governance_manifest_admission_total
+                .with_label_values(&["malformed_validators"])
                 .get(),
             1
         );
@@ -8371,6 +8813,192 @@ pub mod tests {
     }
 
     #[test]
+    fn queue_plan_journal_tombstones_stale_dataspace_rebind_after_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_journal.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let lane = LaneId::new(3);
+        let old_dataspace = DataSpaceId::new(7);
+        let current_dataspace = DataSpaceId::new(8);
+        let stale_lane_catalog = LaneCatalog::new(
+            nonzero!(4_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: lane,
+                    dataspace_id: old_dataspace,
+                    alias: "shared-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("stale lane catalog");
+        let current_lane_catalog = LaneCatalog::new(
+            nonzero!(4_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: lane,
+                    dataspace_id: current_dataspace,
+                    alias: "shared-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("current lane catalog");
+        let stale_dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: old_dataspace,
+                alias: "old-dataspace".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("stale dataspace catalog");
+        let current_dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: current_dataspace,
+                alias: "current-dataspace".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("current dataspace catalog");
+        let matcher = LaneRoutingMatcher {
+            account: None,
+            instruction: Some("unregister::account".to_owned()),
+            description: None,
+        };
+
+        let mut current_nexus = state.nexus_snapshot();
+        current_nexus.enabled = true;
+        current_nexus.lane_catalog = current_lane_catalog.clone();
+        current_nexus.dataspace_catalog = current_dataspace_catalog.clone();
+        current_nexus.fees.base_fee = Numeric::zero();
+        current_nexus.routing_policy.rules = vec![LaneRoutingRule {
+            lane,
+            dataspace: Some(current_dataspace),
+            matcher: matcher.clone(),
+        }];
+        state
+            .set_nexus(current_nexus.clone())
+            .expect("apply current Nexus dataspace rebind state");
+
+        let mut stale_nexus = current_nexus;
+        stale_nexus.lane_catalog = stale_lane_catalog.clone();
+        stale_nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&stale_lane_catalog);
+        stale_nexus.dataspace_catalog = stale_dataspace_catalog.clone();
+        stale_nexus.routing_policy.rules = vec![LaneRoutingRule {
+            lane,
+            dataspace: Some(old_dataspace),
+            matcher,
+        }];
+
+        let queue = Queue::test(config_factory(), &time_source);
+        queue.reconfigure_nexus_with_state(&stale_nexus, &state, None);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let tx = accepted_tx_with(
+            authority_id.clone(),
+            &authority_keypair,
+            &time_source,
+            vec![InstructionBox::from(Unregister::account(authority_id))],
+            Metadata::default(),
+        );
+        let hash = tx.hash();
+        let stale_plan = queue
+            .router
+            .read()
+            .try_route_plan_with_state(&tx, &state)
+            .and_then(|plan| {
+                resolve_routing_plan_against_catalogs(
+                    plan,
+                    &stale_nexus.lane_catalog,
+                    &stale_nexus.dataspace_catalog,
+                )
+            })
+            .expect("stale plan resolves against stale Nexus catalogs");
+        assert_eq!(
+            stale_plan.coordinator_route(),
+            RoutingDecision::new(lane, old_dataspace)
+        );
+        let flush = queue.record_plan_journal_put_deferred(
+            &tx,
+            hash,
+            &stale_plan,
+            Queue::duration_to_millis(time_source.get_unix_time()),
+        );
+        queue.flush_plan_journal_deferred(flush);
+        drop(queue);
+
+        let replay_queue = Queue::test(config_factory(), &time_source);
+        replay_queue.reconfigure_nexus_with_state(&stale_nexus, &state, None);
+        assert_eq!(
+            replay_queue
+                .dataspace_catalog
+                .read()
+                .by_id(old_dataspace)
+                .map(|entry| entry.alias.as_str()),
+            Some("old-dataspace"),
+            "restart fixture should begin with stale queue-local dataspace catalog"
+        );
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install replay journal"),
+            1
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay journal");
+
+        assert_eq!(summary.records, 1);
+        assert_eq!(summary.replayed, 0);
+        assert_eq!(summary.tombstoned_stale, 1);
+        assert!(!replay_queue.txs.contains_key(&hash));
+        assert!(
+            replay_queue
+                .dataspace_catalog
+                .read()
+                .by_id(old_dataspace)
+                .is_none(),
+            "journal replay must synchronize away from the stale dataspace catalog"
+        );
+        assert_eq!(
+            replay_queue
+                .lane_catalog
+                .read()
+                .lanes()
+                .iter()
+                .find(|entry| entry.id == lane)
+                .map(|entry| entry.dataspace_id),
+            Some(current_dataspace),
+            "journal replay must synchronize the lane's committed dataspace binding"
+        );
+        drop(replay_queue);
+
+        let final_queue = Queue::test(config_factory(), &time_source);
+        assert_eq!(
+            final_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install tombstoned journal"),
+            0
+        );
+    }
+
+    #[test]
     fn queue_plan_journal_tombstones_elastic_plan_when_range_corrupt_after_restart() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
@@ -8409,6 +9037,7 @@ pub mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         }
+        seed_committed_height_for_queue_test(&state, 2);
 
         let queue = Queue::test(config_factory(), &time_source);
         queue
@@ -8481,6 +9110,107 @@ pub mod tests {
         assert_eq!(summary.replayed, 0);
         assert_eq!(summary.tombstoned_stale, 1);
         assert!(!replay_queue.txs.contains_key(&hash));
+        drop(replay_queue);
+
+        let final_queue = Queue::test(config_factory(), &time_source);
+        assert_eq!(
+            final_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install tombstoned journal"),
+            0
+        );
+    }
+
+    #[test]
+    fn queue_plan_journal_tombstones_future_created_autoscale_plan_after_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_journal.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let mut future_elastic = LaneConfig {
+            id: LaneId::new(1),
+            alias: "elastic-lane-1".to_owned(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        future_elastic
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        future_elastic
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.lane_catalog =
+                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
+                    .expect("future-created lane catalog");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+        seed_committed_height_for_queue_test(&state, 6);
+
+        let queue = Queue::test(config_factory(), &time_source);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let forged_plan =
+            RoutingPlan::single(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL));
+        let flush = queue.record_plan_journal_put_deferred(
+            &tx,
+            hash,
+            &forged_plan,
+            Queue::duration_to_millis(time_source.get_unix_time()),
+        );
+        queue.flush_plan_journal_deferred(flush);
+        drop(queue);
+
+        let replay_queue = Queue::test(config_factory(), &time_source);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install replay journal"),
+            1
+        );
+        assert_eq!(
+            replay_queue
+                .route_plan_with_state(&tx, &state)
+                .expect("live route should resolve")
+                .coordinator_route(),
+            RoutingDecision::default(),
+            "live routing must not select the future-created elastic lane"
+        );
+
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay journal");
+
+        assert_eq!(summary.records, 1);
+        assert_eq!(summary.replayed, 0);
+        assert_eq!(summary.tombstoned_stale, 1);
+        assert!(!replay_queue.txs.contains_key(&hash));
+        assert!(replay_queue.routing_decisions.get(&hash).is_none());
+        assert!(replay_queue.routing_plans.get(&hash).is_none());
+        assert_eq!(
+            routing_ledger::get_plan(&hash),
+            None,
+            "tombstoned future-created plan must not enter the local routing ledger"
+        );
         drop(replay_queue);
 
         let final_queue = Queue::test(config_factory(), &time_source);
@@ -8576,6 +9306,8 @@ pub mod tests {
             nexus.enabled = true;
             nexus.routing_policy = policy.clone();
             nexus.lane_catalog = current_lane_catalog.clone();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog.clone();
         }
 
@@ -9318,6 +10050,7 @@ pub mod tests {
         Grant::account_permission(
             CanUseFeeSponsor {
                 sponsor: fixture.sponsor_id.clone(),
+                policy: "default".parse().expect("default fee sponsor policy"),
             },
             fixture.authority_id.clone(),
         )
@@ -9352,6 +10085,15 @@ pub mod tests {
             .get_mut()
             .dataspace_fee_sponsors
             .insert(DataSpaceId::UNIVERSAL, fixture.sponsor_id.to_string());
+        fixture
+            .state
+            .nexus
+            .get_mut()
+            .dataspace_fee_sponsor_policies
+            .insert(
+                DataSpaceId::UNIVERSAL,
+                "default".parse().expect("default fee sponsor policy"),
+            );
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_dpn_contract_call_tx(
@@ -9378,6 +10120,15 @@ pub mod tests {
             .get_mut()
             .dataspace_fee_sponsors
             .insert(DataSpaceId::UNIVERSAL, fixture.sponsor_id.to_string());
+        fixture
+            .state
+            .nexus
+            .get_mut()
+            .dataspace_fee_sponsor_policies
+            .insert(
+                DataSpaceId::UNIVERSAL,
+                "default".parse().expect("default fee sponsor policy"),
+            );
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_dpn_contract_call_tx(
@@ -9409,6 +10160,7 @@ pub mod tests {
         Grant::account_permission(
             CanUseFeeSponsor {
                 sponsor: fixture.sponsor_id.clone(),
+                policy: "default".parse().expect("default fee sponsor policy"),
             },
             fixture.authority_id.clone(),
         )
@@ -9442,6 +10194,7 @@ pub mod tests {
         Grant::account_permission(
             CanUseFeeSponsor {
                 sponsor: fixture.sponsor_id.clone(),
+                policy: "default".parse().expect("default fee sponsor policy"),
             },
             fixture.authority_id.clone(),
         )
@@ -10347,6 +11100,18 @@ pub mod tests {
         fee_asset_definition_id: AssetDefinitionId,
     }
 
+    fn default_fee_sponsor_policy(sponsor: &AccountId) -> FeeSponsorPolicy {
+        FeeSponsorPolicy {
+            id: FeeSponsorPolicyId::new(
+                sponsor.clone(),
+                "default".parse().expect("default fee sponsor policy"),
+            ),
+            enabled: true,
+            max_fee: None,
+            rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
+        }
+    }
+
     fn nexus_fee_fixture(
         authority_balance: Option<Numeric>,
         sponsor_balance: Option<Numeric>,
@@ -10388,6 +11153,11 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
+        let policy = default_fee_sponsor_policy(&sponsor_id);
+        state
+            .world
+            .fee_sponsor_policies
+            .insert(policy.id.clone(), policy);
         let dpn_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
             &authority_id,
@@ -10645,6 +11415,101 @@ pub mod tests {
 
         assert_eq!(routing.lane_id, expected_lane);
         assert_eq!(routing.dataspace_id, expected_dataspace);
+    }
+
+    #[test]
+    fn state_backed_queue_routes_reject_state_free_future_created_autoscale_hint() {
+        let state = state_with_future_created_autoscale_lane(7, 6);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = queue_with_state_free_future_created_router(&state, &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+
+        let route_err = queue
+            .route_plan_with_state(&tx, &state)
+            .expect_err("state-backed route must reject future-created state-free hint");
+        assert_eq!(route_err.as_label(), "inactive_lane");
+        assert!(matches!(
+            route_err,
+            RoutingResolveError::InactiveLane {
+                lane_id,
+                dataspace_id,
+            } if lane_id == LaneId::new(1) && dataspace_id == DataSpaceId::UNIVERSAL
+        ));
+
+        let gossip_err = queue
+            .route_plan_for_gossip_with_state(&tx, &state)
+            .expect_err("state-backed gossip route must reject future-created state-free hint");
+        assert_eq!(gossip_err.as_label(), "inactive_lane");
+        assert!(matches!(
+            gossip_err,
+            RoutingResolveError::InactiveLane {
+                lane_id,
+                dataspace_id,
+            } if lane_id == LaneId::new(1) && dataspace_id == DataSpaceId::UNIVERSAL
+        ));
+
+        let push_err = queue
+            .push_with_gossip_payload_with_state(tx, &state, None)
+            .expect_err("admission must reject future-created state-free hint");
+        assert!(
+            matches!(
+                &push_err,
+                Failure {
+                    err: Error::UnresolvedRoute { .. },
+                    ..
+                }
+            ),
+            "unexpected admission error: {push_err:?}"
+        );
+        if let Error::UnresolvedRoute { reason } = &push_err.err {
+            assert!(
+                reason.contains("not active"),
+                "inactive-lane admission rejection should explain the active-height boundary: {reason}"
+            );
+        }
+        assert!(!queue.txs.contains_key(&hash));
+        assert!(queue.routing_decisions.get(&hash).is_none());
+        assert!(queue.routing_plans.get(&hash).is_none());
+        assert_eq!(
+            routing_ledger::get_plan(&hash),
+            None,
+            "rejected inactive state-free route must not enter the local routing ledger"
+        );
+    }
+
+    #[test]
+    fn state_backed_queue_routes_allow_legacy_default_public_lane_dynamic_dataspace() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let dynamic_dataspace = DataSpaceId::new(4_242);
+        let queue = Queue::test_with_router(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: dynamic_dataspace,
+            }),
+        );
+        let tx = accepted_tx_by_someone(&time_source);
+        let expected = RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, dynamic_dataspace));
+
+        assert_eq!(
+            queue
+                .route_plan_with_state(&tx, &state)
+                .expect("legacy default public lane route should resolve with state"),
+            expected
+        );
+        assert_eq!(
+            queue
+                .route_plan_for_gossip_with_state(&tx, &state)
+                .expect("legacy default public lane gossip route should resolve with state"),
+            expected
+        );
     }
 
     #[test]
@@ -11105,6 +11970,52 @@ pub mod tests {
     }
 
     #[test]
+    fn reroute_pending_transactions_with_state_removes_state_free_future_created_autoscale_hint() {
+        let state = state_with_future_created_autoscale_lane(7, 6);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+
+        queue
+            .push(tx, state.view())
+            .expect("initial live route should enqueue on active default lane");
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(
+            queue
+                .routing_plans
+                .get(&hash)
+                .expect("initial plan")
+                .coordinator_route(),
+            RoutingDecision::default()
+        );
+
+        let router: Arc<dyn LaneRouter> = Arc::new(FutureCreatedNoStateRouter);
+        let nexus = state.nexus_snapshot();
+        queue.reroute_pending_transactions_with_state(
+            &router,
+            &state,
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+        );
+
+        assert_eq!(
+            queue.active_len(),
+            0,
+            "inactive state-free reroute must remove the queued transaction"
+        );
+        assert_eq!(queue.queued_len(), 0);
+        assert!(queue.txs.get(&hash).is_none());
+        assert!(queue.routing_decisions.get(&hash).is_none());
+        assert!(queue.routing_plans.get(&hash).is_none());
+        assert_eq!(
+            routing_ledger::get_plan(&hash),
+            None,
+            "inactive state-free reroute must clear the local routing ledger"
+        );
+    }
+
+    #[test]
     fn push_with_gossip_payload_with_state_and_routing_validates_precomputed_plan() {
         struct CountingRouter {
             calls: Arc<AtomicUsize>,
@@ -11247,6 +12158,8 @@ pub mod tests {
             nexus.enabled = true;
             nexus.routing_policy = policy.clone();
             nexus.lane_catalog = current_lane_catalog.clone();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog.clone();
         }
 
@@ -11512,8 +12425,9 @@ pub mod tests {
         );
         if let Error::UnresolvedRoute { reason } = &err.err {
             assert!(
-                reason.contains("does not match the current Nexus routing policy"),
-                "stale-plan rejection should explain current-policy mismatch: {reason}"
+                reason.contains("does not match the current Nexus routing policy")
+                    || reason.contains("not active"),
+                "stale-plan rejection should explain current-policy or active-height mismatch: {reason}"
             );
         }
         assert_eq!(
@@ -11527,6 +12441,105 @@ pub mod tests {
         assert!(queue.routing_plans.get(&hash).is_none());
         assert_eq!(queue.active_len(), 0);
         assert_eq!(queue.queued_len(), 0);
+        assert!(
+            queue.tx_gossip.pop().is_none(),
+            "rejected direct admission must not publish gossip notifications"
+        );
+    }
+
+    #[test]
+    fn push_with_gossip_payload_with_state_and_routing_rejects_future_created_autoscale_plan() {
+        let NexusFeeFixture {
+            mut state,
+            authority_id,
+            authority_keypair,
+            ..
+        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let mut future_elastic = LaneConfig {
+            id: LaneId::new(1),
+            alias: "elastic-lane-1".to_owned(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        future_elastic
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        future_elastic
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(8_u32);
+            nexus.lane_catalog =
+                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), future_elastic])
+                    .expect("future-created lane catalog");
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+        seed_committed_height_for_queue_test(&state, 6);
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_with(
+            authority_id,
+            &authority_keypair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "forged future autoscale plan".into(),
+            ))],
+            Metadata::default(),
+        );
+        let hash = tx.hash();
+        let forged_plan =
+            RoutingPlan::single(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL));
+
+        assert_eq!(
+            queue
+                .route_plan_with_state(&tx, &state)
+                .expect("live route should resolve")
+                .coordinator_route(),
+            RoutingDecision::default(),
+            "live routing must not select the future-created elastic lane"
+        );
+        let err = queue
+            .push_with_gossip_payload_with_state_and_routing_plan(tx, &state, forged_plan, None)
+            .expect_err("forged future-created autoscale plan must reject");
+
+        assert!(
+            matches!(
+                &err,
+                Failure {
+                    err: Error::UnresolvedRoute { .. },
+                    ..
+                }
+            ),
+            "unexpected future-created plan rejection: {err:?}"
+        );
+        if let Error::UnresolvedRoute { reason } = &err.err {
+            assert!(
+                reason.contains("not active"),
+                "future-created plan rejection should explain active-height mismatch: {reason}"
+            );
+        }
+        assert!(!queue.txs.contains_key(&hash));
+        assert!(queue.routing_decisions.get(&hash).is_none());
+        assert!(queue.routing_plans.get(&hash).is_none());
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.queued_len(), 0);
+        assert_eq!(
+            routing_ledger::get_plan(&hash),
+            None,
+            "rejected future-created plan must not enter the local routing ledger"
+        );
         assert!(
             queue.tx_gossip.pop().is_none(),
             "rejected direct admission must not publish gossip notifications"
@@ -11564,8 +12577,9 @@ pub mod tests {
         );
         if let Error::UnresolvedRoute { reason } = &err.err {
             assert!(
-                reason.contains("does not match the current Nexus routing policy"),
-                "stale-plan rejection should explain current-policy mismatch: {reason}"
+                reason.contains("does not match the current Nexus routing policy")
+                    || reason.contains("not active"),
+                "stale-plan rejection should explain current-policy or active-height mismatch: {reason}"
             );
         }
         assert_eq!(
@@ -12896,6 +13910,155 @@ pub mod tests {
         );
     }
 
+    #[test]
+    fn expired_event_prefers_full_plan_over_divergent_legacy_route() {
+        let expected = RoutingDecision::new(LaneId::new(5), DataSpaceId::new(13));
+        let stale = RoutingDecision::default();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(expected.lane_id, expected.dataspace_id)]);
+        let state = Arc::new(state);
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut queue = Queue::test_with_router_for_routes(
+            Config {
+                transaction_time_to_live: Duration::from_millis(10),
+                ..config_factory()
+            },
+            &time_source,
+            Arc::new(MutableRouter::new(expected)),
+            &[(expected.lane_id, expected.dataspace_id)],
+        );
+        let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
+        queue.events_sender = event_sender;
+        let queue = Arc::new(queue);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push tx");
+        while event_receiver.try_recv().is_ok() {}
+
+        queue.routing_decisions.insert(hash, stale);
+        crate::queue::routing_ledger::record(hash, stale);
+        queue
+            .routing_plans
+            .insert(hash, RoutingPlan::single(expected));
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            RoutingPlan::single(expected),
+            queue.capacity.get(),
+        );
+        crate::queue::routing_ledger::record(hash, stale);
+
+        time_handle.advance(Duration::from_millis(11));
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
+
+        assert!(guards.is_empty());
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(crate::queue::routing_ledger::get_plan(&hash), None);
+        assert_eq!(crate::queue::routing_ledger::get(&hash), None);
+
+        let mut saw_expired = false;
+        while let Ok(event) = event_receiver.try_recv() {
+            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
+                continue;
+            };
+            if event.hash != hash {
+                continue;
+            }
+            if !matches!(event.status, TransactionStatus::Expired) {
+                continue;
+            }
+            assert_eq!(event.lane_id, expected.lane_id);
+            assert_eq!(event.dataspace_id, expected.dataspace_id);
+            saw_expired = true;
+            break;
+        }
+        assert!(
+            saw_expired,
+            "expected expired event to carry full-plan route"
+        );
+    }
+
+    #[test]
+    fn unresolved_route_event_prefers_full_plan_over_divergent_legacy_route() {
+        let expected = RoutingDecision::new(LaneId::new(5), DataSpaceId::new(13));
+        let stale = RoutingDecision::default();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(expected.lane_id, expected.dataspace_id)]);
+        let state = Arc::new(state);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router = Arc::new(MutableRouter::new(expected));
+        let mut queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router.clone(),
+            &[(expected.lane_id, expected.dataspace_id)],
+        );
+        let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
+        queue.events_sender = event_sender;
+        let queue = Arc::new(queue);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        queue.push(tx, state.view()).expect("push tx");
+        while event_receiver.try_recv().is_ok() {}
+
+        queue.routing_decisions.insert(hash, stale);
+        crate::queue::routing_ledger::record(hash, stale);
+        queue
+            .routing_plans
+            .insert(hash, RoutingPlan::single(expected));
+        crate::queue::routing_ledger::record_plan_bounded(
+            hash,
+            RoutingPlan::single(expected),
+            queue.capacity.get(),
+        );
+        crate::queue::routing_ledger::record(hash, stale);
+        router.set_error(RoutingResolveError::UnknownLane {
+            lane_id: LaneId::new(99),
+        });
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
+
+        assert!(guards.is_empty());
+        assert_eq!(queue.active_len(), 0);
+        assert_eq!(crate::queue::routing_ledger::get_plan(&hash), None);
+        assert_eq!(crate::queue::routing_ledger::get(&hash), None);
+
+        let mut saw_rejected = false;
+        while let Ok(event) = event_receiver.try_recv() {
+            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
+                continue;
+            };
+            if event.hash != hash {
+                continue;
+            }
+            let TransactionStatus::Rejected(reason) = &event.status else {
+                continue;
+            };
+            assert_eq!(event.lane_id, expected.lane_id);
+            assert_eq!(event.dataspace_id, expected.dataspace_id);
+            assert!(matches!(
+                reason.as_ref(),
+                TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::InternalError(message)
+                ) if message.contains("transaction routing could not be resolved")
+                    && message.contains("lane 99")
+            ));
+            saw_rejected = true;
+            break;
+        }
+        assert!(
+            saw_rejected,
+            "expected rejected event to carry full-plan route"
+        );
+    }
+
     #[tokio::test]
     async fn dropping_transaction_guard_clears_removed_hashes() {
         let kura = Kura::blank_kura_for_testing();
@@ -13573,8 +14736,9 @@ pub mod tests {
         );
         if let Error::UnresolvedRoute { reason } = &err.err {
             assert!(
-                reason.contains("does not match the current Nexus routing policy"),
-                "stale-plan rejection should explain current-policy mismatch: {reason}"
+                reason.contains("does not match the current Nexus routing policy")
+                    || reason.contains("not active"),
+                "stale-plan rejection should explain current-policy or active-height mismatch: {reason}"
             );
         }
         assert_eq!(

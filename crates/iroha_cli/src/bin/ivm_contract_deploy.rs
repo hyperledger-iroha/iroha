@@ -81,10 +81,14 @@ struct Args {
     contract_alias: String,
     #[arg(long)]
     previous_contract_address: Option<String>,
+    #[arg(long)]
+    dataspace_id: Option<u64>,
     #[arg(long, default_value_t = DEFAULT_CHAIN_DISCRIMINANT_TAIRA)]
     chain_discriminant: u16,
     #[arg(long)]
     gas_asset_id: Option<String>,
+    #[arg(long = "gov-manifest-approver", value_name = "ACCOUNT")]
+    gov_manifest_approvers: Vec<String>,
     #[arg(long, default_value_t = DEFAULT_IVM_GAS_LIMIT)]
     gas_limit: u64,
     #[arg(long, default_value_t = 300_000)]
@@ -178,6 +182,24 @@ fn insert_gas_asset_id(metadata: &mut Metadata, gas_asset_id: Option<&str>) -> R
     Ok(())
 }
 
+fn insert_gov_manifest_approvers(metadata: &mut Metadata, approvers: &[String]) -> Result<()> {
+    let mut accounts = Vec::new();
+    for (index, raw) in approvers.iter().enumerate() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(eyre!("--gov-manifest-approver[{index}] must not be blank"));
+        }
+        accounts.push(trimmed.to_owned());
+    }
+    if !accounts.is_empty() {
+        metadata.insert(
+            Name::from_str("gov_manifest_approvers")?,
+            Json::new(accounts),
+        );
+    }
+    Ok(())
+}
+
 fn ivm_transaction_metadata(gas_asset_id: Option<&str>, gas_limit: u64) -> Result<Metadata> {
     let mut metadata = Metadata::default();
     insert_gas_asset_id(&mut metadata, gas_asset_id)?;
@@ -188,6 +210,7 @@ fn ivm_transaction_metadata(gas_asset_id: Option<&str>, gas_limit: u64) -> Resul
 fn instruction_transaction_metadata(
     gas_asset_id: Option<&str>,
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
+    gov_manifest_approvers: &[String],
 ) -> Result<Metadata> {
     let mut metadata = Metadata::default();
     insert_gas_asset_id(&mut metadata, gas_asset_id)?;
@@ -201,6 +224,7 @@ fn instruction_transaction_metadata(
         "contract_address",
         contract_address.to_string(),
     )?;
+    insert_gov_manifest_approvers(&mut metadata, gov_manifest_approvers)?;
     Ok(metadata)
 }
 
@@ -222,13 +246,19 @@ fn current_deploy_nonce(client: &Client, authority: &AccountId) -> Result<u64> {
         .map(|value| value.unwrap_or(0))
 }
 
-fn resolve_alias_dataspace(alias: &ContractAlias) -> Result<DataSpaceId> {
+fn resolve_alias_dataspace(
+    alias: &ContractAlias,
+    dataspace_id: Option<u64>,
+) -> Result<DataSpaceId> {
+    if let Some(dataspace_id) = dataspace_id {
+        return Ok(DataSpaceId::new(dataspace_id));
+    }
     match alias.dataspace_segment() {
         "universal" => Ok(DataSpaceId::UNIVERSAL),
         "governance" => Ok(DataSpaceId::new(1)),
         "zk" => Ok(DataSpaceId::new(2)),
         other => Err(eyre!(
-            "unsupported dataspace alias `{other}`; only universal/governance/zk are supported by this helper"
+            "unsupported dataspace alias `{other}`; pass --dataspace-id for non-standard dataspaces"
         )),
     }
 }
@@ -812,7 +842,7 @@ fn main() -> Result<()> {
         .contract_alias
         .parse()
         .wrap_err("failed to parse --contract-alias")?;
-    let dataspace_id = resolve_alias_dataspace(&contract_alias)?;
+    let dataspace_id = resolve_alias_dataspace(&contract_alias, args.dataspace_id)?;
     let deploy_nonce = current_deploy_nonce(&client, &authority)?;
     let next_nonce = deploy_nonce
         .checked_add(1)
@@ -962,7 +992,11 @@ fn main() -> Result<()> {
         &authority,
         &private_key,
         transaction_ttl,
-        instruction_transaction_metadata(args.gas_asset_id.as_deref(), &contract_address)?,
+        instruction_transaction_metadata(
+            args.gas_asset_id.as_deref(),
+            &contract_address,
+            &args.gov_manifest_approvers,
+        )?,
         activate_instructions,
     )?;
 
@@ -1000,6 +1034,31 @@ fn main() -> Result<()> {
         }
     }
 
+    let code_hash_hex = hex::encode(<[u8; 32]>::from(code_hash));
+    let payload_digest_hex = hex::encode(blake3::hash(&code).as_bytes());
+    let operation_status = if args.emit_only {
+        "prepared"
+    } else {
+        "committed"
+    };
+    let operation_receipt = norito::json!({
+        "operation_kind": ("contract_deploy"),
+        "status": (operation_status),
+        "transport": ("ivm-contract-deploy-helper"),
+        "dataspace": (dataspace_id.to_string()),
+        "contract_alias": (contract_alias.to_string()),
+        "contract_address": (contract_address.to_string()),
+        "code_hash_hex": (code_hash_hex.clone()),
+        "abi_hash_hex": (Option::<String>::None),
+        "tx_hash_hex": (activate_tx_hash.to_string()),
+        "entrypoint": (Option::<String>::None),
+        "entrypoint_hash_hex": (Option::<String>::None),
+        "gas_limit": (args.gas_limit),
+        "gas_used": (Option::<u64>::None),
+        "gas_asset_id": (args.gas_asset_id.clone()),
+        "fee_sponsor": (Option::<String>::None),
+        "payload_digest_hex": (payload_digest_hex),
+    });
     let result = norito::json!({
         "ok": true,
         "submitted": (!args.emit_only),
@@ -1011,13 +1070,26 @@ fn main() -> Result<()> {
         "contract_subject_account": (contract_address.subject_id()),
         "deploy_nonce": (deploy_nonce),
         "next_deploy_nonce": (next_nonce),
-        "code_hash_hex": (hex::encode(<[u8; 32]>::from(code_hash))),
+        "code_hash_hex": (code_hash_hex.clone()),
         "register_bytes_tx_strategy": (register_bytes_tx_strategy),
         "direct_register_bytes_tx_size": (direct_register_bytes_tx_size as u64),
         "register_bytes_via_ivm_tx_hash": (register_bytes_tx_hash),
         "register_bytes_stage_tx_hashes": (register_stage_tx_hashes),
         "register_manifest_via_ivm_tx_hash": (register_manifest_tx_hash),
         "activate_tx_hash": (activate_tx_hash),
+        "operation_receipt": (operation_receipt),
+        "terminal_kind": (if args.emit_only { "Prepared" } else { "Committed" }),
+        "final": (if args.emit_only {
+            norito::json!({
+                "kind": ("Prepared"),
+                "hash": (activate_tx_hash),
+            })
+        } else {
+            norito::json!({
+                "kind": ("Committed"),
+                "hash": (activate_tx_hash),
+            })
+        }),
     });
     let mut result = result
         .as_object()

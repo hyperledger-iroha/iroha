@@ -33,6 +33,7 @@ use thiserror::Error;
 
 use crate::{
     capability::{self, ConstantRateMode, GreaseEntry},
+    checked_ed25519_verifying_key_from_bytes,
     constant_rate::{CONSTANT_RATE_CELL_BYTES, ConstantRateProfileName},
     incentive_log::IncentiveLogConfig,
     token_tool::read_revocation_file,
@@ -2460,7 +2461,7 @@ impl CertificateConfig {
                     path: self.bundle_path.clone(),
                     message: "issuer_ed25519_hex must decode to 32 bytes".to_string(),
                 })?;
-        VerifyingKey::from_bytes(&array).map_err(|err| ConfigError::Certificate {
+        checked_ed25519_verifying_key_from_bytes(&array).map_err(|err| ConfigError::Certificate {
             path: self.bundle_path.clone(),
             message: format!("failed to parse issuer Ed25519 key: {err}"),
         })
@@ -4147,6 +4148,46 @@ mod tests {
         assert_eq!(policy.revocations.len(), 3);
         let expected_fp = compute_issuer_fingerprint(keypair.public_key());
         assert_eq!(policy.verifier.issuer_fingerprint(), &expected_fp);
+    }
+
+    #[test]
+    fn certificate_config_rejects_all_zero_issuer_ed25519_key_material() {
+        let config = CertificateConfig {
+            bundle_path: PathBuf::from("relay.cbor"),
+            issuer_ed25519_hex: hex::encode([0u8; 32]),
+            issuer_mldsa_hex: None,
+            validation_phase: CertificateValidationPhaseSetting::Phase1AllowSingle,
+        };
+
+        match config.parse_issuer_ed25519() {
+            Err(ConfigError::Certificate { message, .. }) => assert!(
+                message.contains("all zero"),
+                "unexpected certificate config error: {message}"
+            ),
+            other => panic!("expected certificate config error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn certificate_config_rejects_small_order_issuer_ed25519_key_material() {
+        const SMALL_ORDER_ED25519_POINT: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        let config = CertificateConfig {
+            bundle_path: PathBuf::from("relay.cbor"),
+            issuer_ed25519_hex: hex::encode(SMALL_ORDER_ED25519_POINT),
+            issuer_mldsa_hex: None,
+            validation_phase: CertificateValidationPhaseSetting::Phase1AllowSingle,
+        };
+
+        match config.parse_issuer_ed25519() {
+            Err(ConfigError::Certificate { message, .. }) => assert!(
+                message.contains("small-order"),
+                "unexpected certificate config error: {message}"
+            ),
+            other => panic!("expected certificate config error, got {other:?}"),
+        }
     }
 
     #[test]

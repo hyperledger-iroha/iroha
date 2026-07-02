@@ -142,6 +142,26 @@ fn load_user_config_from_fixtures(
         .change_context(FixtureConfigLoadError)
 }
 
+#[test]
+fn quic_datagram_buffers_default_to_one_mib() {
+    assert_eq!(
+        defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get(),
+        1024 * 1024
+    );
+    assert_eq!(
+        defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
+        1024 * 1024
+    );
+    assert!(
+        defaults::network::QUIC_DATAGRAM_RECEIVE_BUFFER_BYTES.get()
+            >= defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get()
+    );
+    assert!(
+        defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get()
+            >= defaults::network::QUIC_DATAGRAM_MAX_PAYLOAD_BYTES.get()
+    );
+}
+
 /// This test not only asserts that the minimal set of fields is enough;
 /// it also gives an insight into every single default value
 #[test]
@@ -420,8 +440,8 @@ fn minimal_config_snapshot() {
                 quic_enabled: false,
                 quic_datagrams_enabled: true,
                 quic_datagram_max_payload_bytes: 1200,
-                quic_datagram_receive_buffer_bytes: 67108864,
-                quic_datagram_send_buffer_bytes: 67108864,
+                quic_datagram_receive_buffer_bytes: 1048576,
+                quic_datagram_send_buffer_bytes: 1048576,
                 scion: ScionConfig {
                     enabled: false,
                     fallback_to_legacy: true,
@@ -436,6 +456,10 @@ fn minimal_config_snapshot() {
                 p2p_queue_cap_high: 8192,
                 p2p_queue_cap_low: 32768,
                 p2p_post_queue_cap: 2048,
+                p2p_outbound_frame_queue_max_high_bytes: 134217728,
+                p2p_outbound_frame_queue_max_low_bytes: 67108864,
+                p2p_outbound_frame_queue_max_high_frames: 8192,
+                p2p_outbound_frame_queue_max_low_frames: 4096,
                 p2p_subscriber_queue_cap: 8192,
                 consensus_ingress_rate_per_sec: Some(
                     300,
@@ -1606,40 +1630,9 @@ fn minimal_config_snapshot() {
                     canonical_sponsor_account_id: None,
                     fee_receipts_activation_height: 18446744073709551615,
                     external_settlement_enabled: false,
-                    burn_from_unix_timestamp_ms: 18446744073709551615,
+                    burn_from_unix_timestamp_ms: 0,
                     settlement_mode: Direct,
                     successful_claim_fee_exempt_authorities: [],
-                    sponsored_contract_operation_allowlist: [
-                        SponsoredContractOperationAllowlistEntry {
-                            contract_alias: Some(
-                                ContractAlias(
-                                    "dpn_suite::dpn",
-                                ),
-                            ),
-                            contract_address: None,
-                            entrypoints: {
-                                "approve_factored_invoice_counterparty",
-                                "approve_factoring",
-                                "approve_reverse_factored_invoice_counterparty",
-                                "configure",
-                                "confirm_factoring_funds_received",
-                                "finalize_factored_invoice_dpn",
-                                "finalize_factoring",
-                                "finalize_reverse_factored_invoice_dpn",
-                                "freeze_dpn",
-                                "mark_factoring_funds_sent",
-                                "mark_pending_settlement",
-                                "record_issued_dpn",
-                                "register_ed25519_key",
-                                "request_factored_invoice_issue",
-                                "request_factoring",
-                                "request_reverse_factored_invoice_issue",
-                                "sync_nft_metadata",
-                                "transfer_dpn",
-                                "unfreeze_dpn",
-                            },
-                        },
-                    ],
                 },
                 relay_worker: NexusRelayWorker {
                     enabled: false,
@@ -2523,6 +2516,7 @@ fn minimal_config_snapshot() {
                 rayon_global_threads: 0,
                 scheduler_stack_bytes: 33554432,
                 prover_stack_bytes: 33554432,
+                sumeragi_stack_bytes: 67108864,
                 guest_stack_bytes: 4194304,
                 gas_to_stack_multiplier: 4,
             },
@@ -3414,6 +3408,7 @@ fn routing_policy_dataspace_resolution() {
             description: None,
             fault_tolerance: None,
             fee_sponsor_account_id: None,
+            fee_sponsor_policy: None,
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(1),
@@ -3467,6 +3462,7 @@ fn routing_policy_lane_dataspace_mismatch_rejected() {
             description: None,
             fault_tolerance: None,
             fee_sponsor_account_id: None,
+            fee_sponsor_policy: None,
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(0),
@@ -3516,6 +3512,7 @@ fn dataspace_fault_tolerance_zero_rejected() {
             description: None,
             fault_tolerance: Some(0),
             fee_sponsor_account_id: None,
+            fee_sponsor_policy: None,
         }],
         ..Nexus::default()
     };
@@ -3541,6 +3538,7 @@ fn dataspace_manifest_hash_required_for_non_universal() {
             description: None,
             fault_tolerance: None,
             fee_sponsor_account_id: None,
+            fee_sponsor_policy: None,
         }],
         ..Nexus::default()
     };
@@ -3567,6 +3565,7 @@ fn dataspace_explicit_id_must_match_manifest_hash() {
             description: None,
             fault_tolerance: None,
             fee_sponsor_account_id: None,
+            fee_sponsor_policy: None,
         }],
         ..Nexus::default()
     };
@@ -3607,6 +3606,7 @@ fn dataspace_fee_sponsor_account_id_parses_when_sponsorship_enabled() {
             description: None,
             fault_tolerance: None,
             fee_sponsor_account_id: Some("sponsor@alpha".into()),
+            fee_sponsor_policy: Some("default".into()),
         }],
         fees: NexusFees {
             sponsorship_enabled: true,
@@ -3628,6 +3628,104 @@ fn dataspace_fee_sponsor_account_id_parses_when_sponsorship_enabled() {
         parsed.dataspace_fee_sponsors.get(&DataSpaceId::new(1)),
         Some(&"sponsor@alpha".to_owned())
     );
+}
+
+#[test]
+fn dataspace_fee_sponsor_account_id_requires_policy() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, NexusFees, RoutingPolicy,
+    };
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            dataspace: Some("alpha".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: Some(
+                "0100000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_account_id: Some("sponsor@alpha".into()),
+            fee_sponsor_policy: None,
+        }],
+        fees: NexusFees {
+            sponsorship_enabled: true,
+            ..NexusFees::default()
+        },
+        routing_policy: RoutingPolicy {
+            default_lane: Some(0),
+            default_dataspace: Some("alpha".into()),
+            ..RoutingPolicy::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "fee_sponsor_policy");
+}
+
+#[test]
+fn dataspace_fee_sponsor_policy_requires_account_id() {
+    use std::num::NonZeroU32;
+
+    use iroha_config::parameters::user::{
+        DataSpaceDescriptor, LaneDescriptor, Nexus, NexusFees, RoutingPolicy,
+    };
+    use iroha_config_base::util::Emitter;
+
+    let mut emitter = Emitter::<ParseError>::new();
+    let nexus = Nexus {
+        enabled: true,
+        lane_count: NonZeroU32::new(1).expect("nonzero"),
+        lane_catalog: vec![LaneDescriptor {
+            index: Some(0),
+            alias: Some("primary".into()),
+            dataspace: Some("alpha".into()),
+            description: None,
+            ..LaneDescriptor::default()
+        }],
+        dataspace_catalog: vec![DataSpaceDescriptor {
+            alias: Some("alpha".into()),
+            id: Some(1),
+            manifest_hash: Some(
+                "0100000000000000000000000000000000000000000000000000000000000000".into(),
+            ),
+            description: None,
+            fault_tolerance: None,
+            fee_sponsor_account_id: None,
+            fee_sponsor_policy: Some("default".into()),
+        }],
+        fees: NexusFees {
+            sponsorship_enabled: true,
+            ..NexusFees::default()
+        },
+        routing_policy: RoutingPolicy {
+            default_lane: Some(0),
+            default_dataspace: Some("alpha".into()),
+            ..RoutingPolicy::default()
+        },
+        ..Nexus::default()
+    };
+
+    assert!(nexus.parse(&mut emitter).is_none());
+    let err = emitter.into_result().expect_err("parse error expected");
+    let debug = strip_ansi_codes(&format!("{err:?}"));
+    assert_contains!(debug, "fee_sponsor_account_id");
 }
 
 #[test]
@@ -3659,6 +3757,7 @@ fn dataspace_fee_sponsor_account_id_requires_sponsorship_enabled() {
             description: None,
             fault_tolerance: None,
             fee_sponsor_account_id: Some("sponsor@alpha".into()),
+            fee_sponsor_policy: Some("default".into()),
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(0),
@@ -3690,6 +3789,7 @@ fn dataspace_fee_sponsor_account_id_requires_nexus_enabled() {
             description: None,
             fault_tolerance: None,
             fee_sponsor_account_id: Some("sponsor@universal".into()),
+            fee_sponsor_policy: Some("default".into()),
         }],
         fees: NexusFees {
             sponsorship_enabled: true,
@@ -4142,7 +4242,7 @@ fn taira_config_enables_untrusted_cid_hosting() {
         .and_then(|policy| policy.get("rules"))
         .and_then(TomlValue::as_array)
         .expect("nexus.routing_policy.rules should be configured");
-    assert!(
+    let has_is_instruction_route = |instruction: &str| {
         routing_rules.iter().any(|rule| {
             rule.get("lane").and_then(TomlValue::as_integer) == Some(3)
                 && rule.get("dataspace").and_then(TomlValue::as_str) == Some("is")
@@ -4151,10 +4251,22 @@ fn taira_config_enables_untrusted_cid_hosting() {
                     .and_then(TomlValue::as_table)
                     .and_then(|matcher| matcher.get("instruction"))
                     .and_then(TomlValue::as_str)
-                    == Some("smartcontract::deploy")
-        }),
-        "Taira profile should route contract deployments to the external `is` lane"
-    );
+                    == Some(instruction)
+        })
+    };
+    for instruction in [
+        "smartcontract::deploy",
+        "shield",
+        "zk::zk_transfer",
+        "unshield",
+        "register_asset_hidden_zk_pool",
+        "asset_hidden_zk_transfer",
+    ] {
+        assert!(
+            has_is_instruction_route(instruction),
+            "Taira profile should route {instruction} to the external `is` lane"
+        );
+    }
 
     let block = doc
         .get("sumeragi")

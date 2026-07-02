@@ -167,11 +167,14 @@ TypeInvariant ==
   /\ \A c \in Cases: ActualLabel(c) \in AllLabelValues
 
 VNextRechainErrorLabelCoreSafety ==
-  /\ \A c \in Cases: Matches(c)
+  /\ VNextRechainErrorLabelsMatch
   /\ PayloadLabelsStable
 
+VNextRechainErrorLabelsMatch ==
+  \A c \in Cases: Matches(c)
+
 VNextRechainErrorLabelExactness ==
-  /\ \A c \in Cases: Matches(c)
+  /\ VNextRechainErrorLabelsMatch
   /\ PayloadLabelsStable
 VNextRechainErrorLabelCorrectnessEnvelope ==
   /\ TypeInvariant

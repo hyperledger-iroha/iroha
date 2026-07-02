@@ -21,7 +21,8 @@ fn baseline_policy_allows_known_surface_numbers() {
         // WSV helpers
         SYSCALL_SET_ACCOUNT_DETAIL,
         SYSCALL_MINT_ASSET,
-        SYSCALL_TRANSFER_ASSET,
+        SYSCALL_TRANSFER_V1,
+        SYSCALL_TRANSFER_ASSET_SCOPED,
         SYSCALL_NFT_MINT_ASSET,
         SYSCALL_NFT_TRANSFER_ASSET,
     ];

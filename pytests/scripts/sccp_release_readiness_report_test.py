@@ -9,8 +9,11 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +45,11 @@ class HostilePublicKey:
 
     def __repr__(self):
         return "secret-token-hostile-key"
+
+
+def skip_unless_system_temp_is_symlink() -> None:
+    if not Path("/tmp").is_symlink():
+        pytest.skip("/tmp is not a symlink on this platform")
 
 
 JS_CALLBACK_HOOK_SYMBOLS = ("witnessProvider", "proveFn", "consensusProvider")
@@ -705,7 +713,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "flaggedArtifactBytes",
             "tinyProofArtifactBytes",
             "proofArtifactBytes must be at least 65536 bytes",
-            "proofArtifactBytes contains forbidden prover dependency marker",
+            "nativeProverSelfTestBytes contains forbidden prover dependency marker",
             "verified native EVM prover artifacts",
             "buildEthereumCalldata({ proofResult })",
             "runEthereumMainnetNativeProverSelfTest",
@@ -1391,8 +1399,12 @@ def phase_command_lines(fragments) -> list[str]:
                 ),
                 None,
             )
+            test_command += (
+                " --artifacts-path target/sccp-production-corridor/dotnet-artifacts"
+            )
             if filter_fragment is not None:
                 test_command += " --filter " + filter_fragment
+            test_command += " -p:ProduceReferenceAssembly=false"
             test_command += " --nologo"
             if "sccp-dotnet-sdk.trx" in fragments:
                 test_command += " --logger trx;LogFileName=sccp-dotnet-sdk.trx"
@@ -1785,6 +1797,33 @@ def load_verify_helpers():
     return module
 
 
+def deep_percent_encoded_text(value: str, *, layers: int = 5) -> str:
+    """Return ASCII text percent-encoded repeatedly."""
+
+    encoded = value
+    for _layer in range(layers):
+        encoded = "".join(f"%{ord(character):02X}" for character in encoded)
+    return encoded
+
+
+def nested_html_entity_text(value: str, *, layers: int = 5) -> str:
+    """Return text whose ampersands are HTML-escaped repeatedly."""
+
+    encoded = value
+    for _layer in range(layers):
+        encoded = encoded.replace("&", "&amp;")
+    return encoded
+
+
+def repeated_percent_token(hex_token: str, *, layers: int = 40) -> str:
+    """Return a compact repeatedly percent-encoded byte token."""
+
+    encoded = f"%{hex_token}"
+    for _layer in range(layers - 1):
+        encoded = encoded.replace("%", "%25")
+    return encoded
+
+
 def test_release_readiness_report_redacts_encoded_sensitive_native_evm_duplicate_key():
     """Readiness duplicate-key diagnostics must decode sensitive key labels."""
 
@@ -1819,6 +1858,122 @@ def test_release_readiness_report_redacts_encoded_sensitive_native_evm_duplicate
             "sensitive key name"
         )
         assert duplicate_key not in rendered
+
+
+def test_release_readiness_report_native_evm_public_helper_flags_reject_non_booleans():
+    """Native EVM public helper policy controls must not accept truthy aliases."""
+
+    report = load_report_module()
+    malformed_values = (1, "true", None)
+
+    for positive in malformed_values:
+        try:
+            report._is_canonical_decimal_text("1", positive=positive)
+        except ValueError as exc:
+            assert str(exc) == "readiness canonical decimal positive must be a boolean"
+        else:
+            raise AssertionError(
+                "non-boolean readiness canonical decimal positive control was accepted"
+            )
+
+    for require_hash_match in malformed_values:
+        try:
+            report._public_native_evm_artifact_errors(
+                {},
+                "native helper artifact",
+                require_hash_match=require_hash_match,
+            )
+        except ValueError as exc:
+            assert (
+                str(exc)
+                == "native EVM artifact require_hash_match must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "non-boolean native EVM artifact hash-match control was accepted"
+            )
+
+        try:
+            report._public_native_evm_sdk_artifact_errors(
+                [],
+                "native helper bundle",
+                require_hash_match=require_hash_match,
+                require_complete=True,
+            )
+        except ValueError as exc:
+            assert (
+                str(exc)
+                == "native EVM sdk_artifacts require_hash_match must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "non-boolean native EVM SDK hash-match control was accepted"
+            )
+
+    for require_complete in malformed_values:
+        try:
+            report._public_native_evm_audit_hash_errors(
+                {"audit_hashes": {}},
+                "native helper bundle",
+                require_complete=require_complete,
+            )
+        except ValueError as exc:
+            assert (
+                str(exc)
+                == "native EVM audit_hashes require_complete must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "non-boolean native EVM audit completeness control was accepted"
+            )
+
+        try:
+            report._public_native_evm_sdk_artifact_errors(
+                [],
+                "native helper bundle",
+                require_hash_match=True,
+                require_complete=require_complete,
+            )
+        except ValueError as exc:
+            assert (
+                str(exc)
+                == "native EVM sdk_artifacts require_complete must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "non-boolean native EVM SDK completeness control was accepted"
+            )
+
+    for redact_unsafe_path in malformed_values:
+        try:
+            report._redacted_native_evm_artifact_summary(
+                {"path": "operator|unsafe"},
+                redact_unsafe_path=redact_unsafe_path,
+            )
+        except ValueError as exc:
+            assert (
+                str(exc)
+                == "native EVM artifact redact_unsafe_path must be a boolean"
+            )
+        else:
+            raise AssertionError(
+                "non-boolean native EVM artifact redaction control was accepted"
+            )
+
+    for require_phase_evidence in malformed_values:
+        try:
+            report._build_report(
+                [],
+                [],
+                [],
+                require_phase_evidence=require_phase_evidence,
+            )
+        except ValueError as exc:
+            assert str(exc) == "readiness require_phase_evidence must be a boolean"
+        else:
+            raise AssertionError(
+                "non-boolean readiness phase-evidence control was accepted"
+            )
 
 
 def test_release_readiness_report_redacts_verifier_helper_failures(
@@ -1974,6 +2129,94 @@ def fixed_hex32(seed: int) -> str:
     """Return a non-zero 32-byte hex fixture."""
 
     return "0x" + f"{seed % 256:02x}" * 32
+
+
+def fixed_tron_address(seed: int) -> str:
+    """Return a non-zero canonical TRON 0x41-prefixed address fixture."""
+
+    return "0x41" + f"{seed % 256:02x}" * 20
+
+
+def test_release_readiness_report_boolean_domain_does_not_alias_eth_policy() -> None:
+    """Boolean lane domains must not borrow ETH readiness-report policy."""
+
+    report = load_report_module()
+    route_hash = fixed_hex32(0x41)
+    destination_hash = fixed_hex32(0x42)
+    record_labels = {
+        "source_verifier_material": "source verifier material",
+        "source_adapter_deployment": "source adapter deployment",
+        "destination_rollout": "destination rollout",
+        "route_allowlist": "route allowlist",
+    }
+    lane = {
+        "domain": True,
+        "chain": "eth",
+        "records": {field: True for field in record_labels},
+        "production_ready": True,
+        "source_record_hashes": {
+            "source_verifier_material_hash": fixed_hex32(0x43),
+            "source_adapter_engine_deployment_hash": fixed_hex32(0x44),
+        },
+        "source_adapter_gate": {
+            "required": False,
+            "ready": True,
+            "gate_hash": "",
+            "audit_hashes": {},
+            "blockers": [],
+        },
+        "evm_live_metadata": {
+            "required": False,
+            "ready": True,
+            "source_rpc_chain_id": "",
+            "source_block_tag": "",
+            "destination_rpc_chain_id": "",
+            "destination_block_tag": "",
+        },
+        "destination_binding": {
+            "destination_binding_hash": destination_hash,
+        },
+        "route_allowlist": {
+            "route_allowlist_hash": route_hash,
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": fixed_hex32(0x45),
+                "evidence_source": "common_route_canary_snapshot",
+                "route_allowlist_hash": route_hash,
+                "destination_binding_hash": destination_hash,
+                "evidence_bound": True,
+                "message_id": fixed_hex32(0x46),
+            },
+        },
+        "blockers": [],
+    }
+    evidence = {"lanes": [lane]}
+
+    assert report._active_launch_lane(evidence) is None
+    active_blockers = report._active_launch_required_record_metadata_blockers(
+        "active launch",
+        lane,
+        record_labels,
+    )
+    expected_domain_label = report._sccp_domain_constant_label(
+        report.ACTIVE_LAUNCH_DOMAIN
+    )
+    assert (
+        f"active launch: active {report.ACTIVE_LAUNCH_DISPLAY} launch lane "
+        f"domain must be {expected_domain_label}"
+    ) in active_blockers
+
+    crypto_row = report._cryptographic_evidence(evidence)[0]
+    assert crypto_row["domain"] is True
+    assert crypto_row["route_canary_message_id"] == ""
+    crypto_errors = "\n".join(
+        report._public_cryptographic_evidence_errors([crypto_row])
+    )
+    assert "readiness report cryptographic_evidence[0] domain must be an integer" in (
+        crypto_errors
+    )
+    assert "message-proof route canary evidence" not in crypto_errors
+    assert "EVM route canary evidence" not in crypto_errors
 
 
 def write_native_evm_prover_bundle(
@@ -2179,10 +2422,16 @@ def test_release_readiness_active_launch_policy_is_ethereum_mainnet() -> None:
 
     report = load_report_module()
 
-    assert report.ACTIVE_LAUNCH_DOMAIN == 1
+    assert report.ACTIVE_LAUNCH_DOMAIN == report.SCCP_DOMAIN_ETH
     assert report.ACTIVE_LAUNCH_CHAIN == "eth"
     assert report.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
     assert report.ACTIVE_LAUNCH_DISPLAY == "Ethereum mainnet"
+    assert (
+        report._sccp_domain_constant_label(report.SCCP_DOMAIN_ETH)
+        == "SCCP_DOMAIN_ETH (1)"
+    )
+    assert report._sccp_domain_constant_label(True) == "non-integer domain"
+    assert "SCCP_DOMAIN_ETH" not in report._sccp_domain_constant_label(True)
     assert (
         report.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE
         == "evm_message_proof_accepted_transaction"
@@ -3179,6 +3428,47 @@ def test_release_readiness_report_guards_tron_route_config_canonical_manifest_ga
 
             assert any(
                 "SCCP TRON route-config canonical-manifest source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+
+def test_release_readiness_report_guards_ton_route_manifest_cli_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin TON route-manifest CLI guards."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._ton_route_manifest_cli_gate_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.TON_ROUTE_MANIFEST_CLI_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ton-route-manifest-cli-gate-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = report._ton_route_manifest_cli_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP TON route-manifest CLI source inventory" in error
                 and str(sparse_source) in error
                 and f"missing marker: {removed_marker}" in error
                 for error in errors
@@ -5298,7 +5588,7 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
-            "except (SystemExit, RuntimeError, TypeError, ValueError, binascii.Error):",
+            "except (\n        argparse.ArgumentTypeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n        binascii.Error,\n    ):",
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
@@ -5307,6 +5597,22 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         (
             "scripts/sccp_all_lanes_evidence.py",
             "SENSITIVE_MINIMAL_TOML_KEY_MARKERS = (",
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            '"credential",',
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            '"credentials",',
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            '"auth-header",',
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            '"auth_header",',
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
@@ -5330,6 +5636,14 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
+            '"signing-key",',
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
+            '"signing_key",',
+        ),
+        (
+            "scripts/sccp_all_lanes_evidence.py",
             "def _minimal_toml_duplicate_key_detail(",
         ),
         (
@@ -5344,14 +5658,10 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
             "scripts/sccp_all_lanes_evidence.py",
             "def _toml_unsupported_section_detail(",
         ),
-        (
-            "scripts/sccp_all_lanes_evidence.py",
-            "except (SystemExit, TypeError, ValueError, RuntimeError):",
-        ),
-        (
-            "scripts/sccp_all_lanes_evidence.py",
-            "except (argparse.ArgumentTypeError, SystemExit, TypeError, ValueError, RuntimeError):",
-        ),
+            (
+                "scripts/sccp_all_lanes_evidence.py",
+                'except (argparse.ArgumentTypeError, SystemExit, TypeError, ValueError, RuntimeError):\n        errors.append("destination binding cannot be recomputed")',
+            ),
         (
             "scripts/sccp_all_lanes_evidence.py",
             "unsupported zk section with sensitive name",
@@ -5370,7 +5680,7 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
-            "for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):",
+            "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -5430,6 +5740,18 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "credential_duplicate_key",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "auth_header_duplicate_key",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "signing_key_duplicate_key",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "route|operator-duplicate-key",
         ),
         (
@@ -5443,6 +5765,14 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
             "seed_phrase_section",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "auth-header-section",
+        ),
+        (
+            "pytests/scripts/sccp_all_lanes_evidence_test.py",
+            "signing_key_section",
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
@@ -5478,10 +5808,6 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         ),
         (
             "scripts/sccp_all_lanes_evidence.py",
-            "except (SystemExit, RuntimeError, TypeError, ValueError):",
-        ),
-        (
-            "scripts/sccp_all_lanes_evidence.py",
             "def decode_comment_base64(field: str, label: str) -> bytes | None:",
         ),
         (
@@ -5506,7 +5832,7 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         ),
         (
             "pytests/scripts/sccp_all_lanes_evidence_test.py",
-            "for exception_type in (TypeError, ValueError):",
+            "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
         ),
         (
             "scripts/sccp_ton_live_evidence.py",
@@ -5522,7 +5848,7 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         ),
         (
             "scripts/sccp_ton_live_evidence.py",
-            "except (SystemExit, RuntimeError, TypeError, binascii.Error, ValueError):",
+            "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, binascii.Error, ValueError):",
         ),
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
@@ -5534,7 +5860,7 @@ def test_release_readiness_report_guards_sccp_source_material_role_validation_ga
         ),
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
-            "for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):",
+            "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
         ),
         (
             "pytests/scripts/sccp_ton_live_evidence_test.py",
@@ -6075,6 +6401,100 @@ def test_release_readiness_report_guards_unready_transparent_proof_config_gate_i
         "SCCP unready transparent-proof config-only source inventory" in error
         and str(forbidden_env_source) in error
         and "contains forbidden environment override" in error
+        for error in errors
+    )
+
+    forbidden_env_alias_source = tmp_path / "user-forbidden-env-alias.rs"
+    forbidden_env_alias_source.write_text(
+        "zk_sccp_allow_unready_transparent_proofs\n",
+        encoding="utf-8",
+    )
+    errors = report._sccp_unready_transparent_proof_config_gate_inventory_errors(
+        (),
+        (forbidden_env_alias_source,),
+    )
+
+    assert any(
+        "SCCP unready transparent-proof config-only source inventory" in error
+        and str(forbidden_env_alias_source) in error
+        and "contains forbidden environment override: "
+        "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS" in error
+        for error in errors
+    )
+
+    forbidden_env_split_source = tmp_path / "user-forbidden-env-split.rs"
+    forbidden_env_split_source.write_text(
+        'std::env::var(concat!("ZK_", "SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS"));\n',
+        encoding="utf-8",
+    )
+    errors = report._sccp_unready_transparent_proof_config_gate_inventory_errors(
+        (),
+        (forbidden_env_split_source,),
+    )
+
+    assert any(
+        "SCCP unready transparent-proof config-only source inventory" in error
+        and str(forbidden_env_split_source) in error
+        and "contains forbidden environment override: "
+        "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS" in error
+        for error in errors
+    )
+
+    forbidden_env_hex_escape_source = tmp_path / "user-forbidden-env-hex-escape.rs"
+    forbidden_env_hex_escape_source.write_text(
+        'std::env::var("\\x5a\\x4b_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS");\n',
+        encoding="utf-8",
+    )
+    errors = report._sccp_unready_transparent_proof_config_gate_inventory_errors(
+        (),
+        (forbidden_env_hex_escape_source,),
+    )
+
+    assert any(
+        "SCCP unready transparent-proof config-only source inventory" in error
+        and str(forbidden_env_hex_escape_source) in error
+        and "contains forbidden environment override: "
+        "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS" in error
+        for error in errors
+    )
+
+    forbidden_env_unicode_plain_escape_source = (
+        tmp_path / "user-forbidden-env-unicode-plain-escape.rs"
+    )
+    forbidden_env_unicode_plain_escape_source.write_text(
+        'std::env::var("\\u005a\\u004b_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS");\n',
+        encoding="utf-8",
+    )
+    errors = report._sccp_unready_transparent_proof_config_gate_inventory_errors(
+        (),
+        (forbidden_env_unicode_plain_escape_source,),
+    )
+
+    assert any(
+        "SCCP unready transparent-proof config-only source inventory" in error
+        and str(forbidden_env_unicode_plain_escape_source) in error
+        and "contains forbidden environment override: "
+        "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS" in error
+        for error in errors
+    )
+
+    forbidden_env_unicode_escape_source = (
+        tmp_path / "user-forbidden-env-unicode-escape.rs"
+    )
+    forbidden_env_unicode_escape_source.write_text(
+        'std::env::var("\\u{005a}\\u{004b}_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS");\n',
+        encoding="utf-8",
+    )
+    errors = report._sccp_unready_transparent_proof_config_gate_inventory_errors(
+        (),
+        (forbidden_env_unicode_escape_source,),
+    )
+
+    assert any(
+        "SCCP unready transparent-proof config-only source inventory" in error
+        and str(forbidden_env_unicode_escape_source) in error
+        and "contains forbidden environment override: "
+        "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS" in error
         for error in errors
     )
 
@@ -7084,8 +7504,13 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         "normalized_summary_line",
         'unicodedata.category(character) != "Cf"',
         "malformed_summary_lines",
+        "raw_match = SUMMARY_RE.fullmatch(normalized)",
+        "normalized_match = (",
+        "elif normalized_match is not None:",
         "canonical-plus-failed-summary",
         "canonical-plus-ansi-failed-summary",
+        "ansi-decorated-success-summary",
+        "control-decorated-success-summary",
         "DOTNET_TEST_PASSED_SUMMARY_LIKE_PATTERN",
         "DOTNET_TEST_PASSED_MALFORMED_SUMMARY_ERROR_FRAGMENT",
         ".NET malformed VSTest summary marker",
@@ -7131,6 +7556,35 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         "test_release_readiness_report_rejects_unexpected_phase_command",
         "test_release_bundle_verifier_rejects_unexpected_phase_command",
         "test_release_bundle_phase_command_matchers_allow_only_known_swift_setup",
+        "assembly-control-path",
+        "assembly-storage-control-path",
+        "assembly-padded-path",
+        "assembly-storage-padded-path",
+        "assembly-empty-component-path",
+        "assembly-storage-empty-component-path",
+        "lowercase-passed-outcome-result",
+        "missing-outcome-result",
+        "padded-passed-outcome-result",
+        "control-passed-outcome-result",
+        "has_empty_dotted_name_component",
+        "not has_empty_dotted_name_component(value)",
+        "unit-test-id-empty-component",
+        "unit-test-id-trailing-punctuation",
+        "execution-id-empty-component",
+        "execution-id-trailing-punctuation",
+        "result-test-id-empty-component",
+        "result-test-id-trailing-punctuation",
+        "result-execution-id-empty-component",
+        "result-execution-id-trailing-punctuation",
+        "unit-test-definition-name-empty-component",
+        "testmethod-name-empty-component",
+        "testmethod-classname-empty-component",
+        "result-test-name-empty-component",
+        "result-test-name-control-whitespace",
+        "uppercase-isexecuted-passed-result",
+        "numeric-isexecuted-passed-result",
+        "padded-isexecuted-passed-result",
+        "control-isexecuted-passed-result",
     ):
         assert required_marker in inventory_markers
 
@@ -7693,6 +8147,51 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
     )
 
 
+def test_release_readiness_phase_transcript_rejects_unreadable_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Standalone phase transcript checks must reject unreadable file shapes."""
+
+    report = load_report_module()
+    monkeypatch.chdir(tmp_path)
+    real_log = tmp_path / "real-js-sdk.log"
+    real_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: js-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    symlink_log = tmp_path / "js-sdk-symlink.log"
+    symlink_log.symlink_to(real_log)
+    directory_log = tmp_path / "js-sdk-directory.log"
+    directory_log.mkdir()
+
+    for artifact_path in (
+        "js-sdk-symlink.log",
+        "js-sdk-directory.log",
+        "js-sdk-missing.log",
+    ):
+        errors = report._phase_transcript_errors(
+            "js-sdk",
+            {"path": artifact_path},
+        )
+        rendered = "\n".join(errors)
+
+        assert errors == ["evidence artifact cannot be read"]
+        assert "real-js-sdk" not in rendered
+        assert "IsADirectory" not in rendered
+        assert "Traceback" not in rendered
+
+
 def test_release_readiness_report_guards_sccp_release_bundle_source_copy_gate_inventory(
     tmp_path: Path,
 ) -> None:
@@ -7908,6 +8407,44 @@ def test_release_readiness_report_guards_release_public_json_root_schema_gate_in
         assert checked_markers > 0
 
 
+def test_release_readiness_json_loader_rejects_unreadable_file_shapes(
+    tmp_path: Path,
+) -> None:
+    """Shared readiness JSON loading must reject non-regular file shapes."""
+
+    report = load_report_module()
+    outside_json = tmp_path / "secret-token-outside.json"
+    outside_json.write_text("{}\n", encoding="utf-8")
+    symlink_json = tmp_path / "payload.json"
+    symlink_json.symlink_to(outside_json)
+    directory_json = tmp_path / "payload-dir.json"
+    directory_json.mkdir()
+    real_parent = tmp_path / "secret-token-readiness-json-real-parent"
+    real_parent.mkdir()
+    (real_parent / "payload.json").write_text("{}\n", encoding="utf-8")
+    parent_link = tmp_path / "secret-token-readiness-json-parent-link"
+    parent_link.symlink_to(real_parent, target_is_directory=True)
+
+    for path in (
+        symlink_json,
+        directory_json,
+        parent_link / "payload.json",
+        tmp_path / "missing.json",
+    ):
+        try:
+            report._load_json_without_duplicate_keys(path)
+        except OSError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError("unreadable JSON path was accepted")
+
+        assert message == "JSON path cannot be read"
+        assert "secret-token" not in message
+        assert "IsADirectory" not in message
+        assert "FileNotFound" not in message
+        assert "Traceback" not in message
+
+
 def test_release_readiness_report_guards_release_public_markdown_text_schema_gate_inventory(
     tmp_path: Path,
 ) -> None:
@@ -8016,6 +8553,28 @@ def test_release_readiness_report_guards_release_public_crypto_evidence_binding_
                 for error in errors
             )
         assert checked_markers > 0
+
+
+def test_release_readiness_report_public_crypto_source_gate_maps_use_domain_constants() -> None:
+    """Public crypto source-gate policies must not rely on literal lane ids."""
+
+    report = load_report_module()
+    source_text = SCRIPT.read_text(encoding="utf-8")
+
+    assert report.ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN[
+        report.SCCP_DOMAIN_BSC
+    ] == frozenset(("evm_source_gate_hash",))
+    assert (
+        report.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[
+            report.SCCP_DOMAIN_BSC
+        ]
+        == "evm_source_gate_hash"
+    )
+    # Source-inventory marker: readiness public crypto BSC source-gate policy maps must use SCCP_DOMAIN_BSC instead of a literal integer.
+    assert 'SCCP_DOMAIN_BSC: frozenset(("evm_source_gate_hash",)),' in source_text
+    assert 'SCCP_DOMAIN_BSC: "evm_source_gate_hash",' in source_text
+    assert '    2: frozenset(("evm_source_gate_hash",)),' not in source_text
+    assert '    2: "evm_source_gate_hash",' not in source_text
 
 
 def test_release_readiness_report_guards_release_public_submission_surface_binding_gate_inventory(
@@ -9019,7 +9578,8 @@ def test_release_readiness_report_blocks_missing_launch_scope_source_gate(
     report = load_report_module()
     blocker = (
         "SCCP launch-scope constants source inventory "
-        "sccp_release_readiness_report.py missing marker: ACTIVE_LAUNCH_DOMAIN = 1"
+        "sccp_release_readiness_report.py missing marker: "
+        "ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_ETH"
     )
     monkeypatch.setattr(
         report,
@@ -9629,6 +10189,46 @@ def test_release_readiness_report_blocks_missing_tron_route_config_canonical_man
         "validation_blockers": [blocker],
     }
     assert readiness["source_inventory"]["bsc_route_config_canonical_manifest_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ton_route_manifest_cli_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when TON route-manifest CLI guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP TON route-manifest CLI source inventory "
+        "scripts/sccp_ton_taira_xor_deploy.test.mjs missing marker: "
+        "TON route manifest rejects duplicate CLI options before writing"
+    )
+    monkeypatch.setattr(
+        report,
+        "_ton_route_manifest_cli_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["ton_route_manifest_cli_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["tron_route_config_canonical_manifest_gate"] == {
         "validation_status": "passed",
         "validation_blockers": [],
     }
@@ -11921,10 +12521,11 @@ def test_release_readiness_report_requires_evm_evidence_script_transcript(
             "--phase-result",
             "evidence-scripts=passed",
             "--phase-evidence",
-            f"evidence-scripts={corridor_log}",
-            str(evidence),
+            f"evidence-scripts={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=tmp_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -12808,6 +13409,8 @@ def test_release_readiness_guards_evm_source_live_production_surface() -> None:
             "source bridge runtime bytecode hash must match bridge_code_hash",
             "deployment receipt block receiptsRoot metadata must be verified",
             "Ethereum source deployment receipt block finality metadata must be verified",
+            "type(value) is not str",
+            'f"{label} must be canonical lowercase 0x hex"',
             "source verifier material hash metadata must match canonical inputs",
             "source adapter engine deployment hash metadata must match canonical inputs",
             "expected source verifier material hash argument must match ",
@@ -12829,6 +13432,9 @@ def test_release_readiness_guards_evm_source_live_production_surface() -> None:
             "test_evm_source_live_rejects_receipt_block_code_hash_drift",
             "test_evm_source_live_toml_revalidates_imported_summary_metadata",
             "test_evm_source_live_toml_requires_independent_pins",
+            "test_evm_source_live_cli_parsers_reject_non_string_values_without_stringification",
+            "HostileSourceLiveParserValue",
+            "secret-token-evm-source-live-parser-value",
             "test_evm_source_json_rpc_redacts_transport_and_error_response_details",
             "duplicate JSON keys",
         ),
@@ -12883,6 +13489,7 @@ def test_release_readiness_guards_evm_live_destination_production_surface() -> N
             "verifier key hash metadata must match verifyingKeyHash",
             "destination binding hash metadata must match canonical live inputs",
             "destination binding key metadata must match canonical inputs",
+            "type(value) is not str",
             "route-canary MessageProofAccepted destinationBindingHash does not",
             "route-canary MessageProofAccepted verifierBackendHash does not",
             "route-canary MessageProofAccepted proofFamilyHash does not match",
@@ -12909,7 +13516,12 @@ def test_release_readiness_guards_evm_live_destination_production_surface() -> N
             "test_live_evm_evidence_rejects_bridge_code_hash_drift",
             "test_live_evm_evidence_rejects_bridge_destination_binding_drift",
             "test_live_evm_full_toml_revalidates_imported_summary_metadata",
+            "test_evm_live_cli_parsers_reject_non_string_values_without_stringification",
+            "HostileEvmLiveParserValue",
+            "secret-token-evm-live-parser-value",
             "test_live_evm_route_canary_rejects_unverified_transaction_metadata",
+            "test_live_evm_bsc_default_latest_route_canary_renders_full_toml",
+            "finality_policy",
             "route_canary_call_data_mutator",
             "proofBytes offset must be 256 bytes",
             "publicInputs[0] must match event messageId",
@@ -12982,7 +13594,8 @@ def test_release_readiness_guards_evm_route_canary_finalized_receipt_block() -> 
             "receipt_block_finalized=False",
             "transaction to does not match destination bridge",
             'block_tag="finalized" if finality_expected else "latest"',
-            "test_live_evm_bsc_default_latest_route_canary_stays_diagnostic",
+            "test_live_evm_bsc_default_latest_route_canary_renders_full_toml",
+            "finality_policy",
             "receipt block is newer than the finalized execution block",
             "receipt block hash does not match the finalized execution block",
         ),
@@ -13968,9 +14581,10 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
     assert "Source Gate | Source Gate Audits | Route Allowlist" in completed.stdout
     assert (
         "Canary Source | Canary Message Proof | Canary TRON Owner | "
-        "Canary TRON Signature | Canary Log Index | Canary Target Domain | "
-        "Canary Proof Version | Canary Proof Source | Canary Call Data | "
-        "Canary Payload | Canary Statement | Canary Commitment | "
+        "Canary TRON Signature | Canary TRON Tx ID | Canary TRON Tx Owner | "
+        "Canary TRON Signature Hash | Canary TRON Recovered | Canary Log Index | "
+        "Canary Target Domain | Canary Proof Version | Canary Proof Source | "
+        "Canary Call Data | Canary Payload | Canary Statement | Canary Commitment | "
         "Canary Finality Height | Canary Finality Block | Canary Tx"
     ) in completed.stdout
     assert "Canary Receipt Finalized | Canary Receipts Root" in completed.stdout
@@ -13992,6 +14606,29 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
     assert "`governed_deployment_evidence` | ready" in completed.stdout
     assert "`live_route_canary_evidence` | ready" in completed.stdout
     assert "## Blocking Items\n\n- None" in completed.stdout
+
+
+def test_release_readiness_report_accepts_phase_evidence_under_system_temp_symlink_prefix() -> None:
+    """System temp aliases such as macOS /tmp must not block phase artifacts."""
+
+    skip_unless_system_temp_is_symlink()
+    report = load_report_module()
+    with tempfile.TemporaryDirectory(
+        prefix="iroha-release-readiness-",
+        dir="/tmp",
+    ) as directory:
+        tmp_root = Path(directory)
+        corridor_log = tmp_root / "sccp-corridor.log"
+        corridor_payload = complete_corridor_log()
+        corridor_log.write_text(corridor_payload, encoding="utf-8")
+
+        artifact = report._artifact(corridor_log)
+
+        assert artifact["path"] == str(corridor_log)
+        assert artifact["bytes"] == len(corridor_payload.encode("utf-8"))
+        assert artifact["sha256"] == hashlib.sha256(
+            corridor_payload.encode("utf-8")
+        ).hexdigest()
 
 
 def test_release_readiness_report_passes_with_only_active_launch_lane(
@@ -14226,6 +14863,10 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
 
     markdown = report._render_markdown(readiness, max_blockers_per_lane=4)
 
+    assert "that strict `dotnet test` command carrying" in markdown
+    assert "`--artifacts-path <bridge-target>/dotnet-artifacts`" in markdown
+    assert "`-p:ProduceReferenceAssembly=false`" in markdown
+    assert "`--nologo`" in markdown
     assert (
         "VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` "
         "marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker "
@@ -14255,12 +14896,25 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
         in markdown
     )
     assert "`UnitTestResult` rows directly under `Results`" in markdown
+    assert "`Results` contains only direct `UnitTestResult` rows" in markdown
     assert "`UnitTest` definitions directly under `TestDefinitions`" in markdown
+    assert (
+        "`TestDefinitions` contains only direct `UnitTest` definitions"
+        in markdown
+    )
     assert (
         "keeps `TestMethod` and `Execution` definitions directly under "
         "`UnitTest`"
         in markdown
     )
+    assert "requires every `UnitTestResult` row to be a leaf element" in markdown
+    assert (
+        "requires every `UnitTest` definition to contain only direct "
+        "`Execution` and `TestMethod` children"
+        in markdown
+    )
+    assert "requires every `TestMethod` definition to be a leaf element" in markdown
+    assert "requires every `Execution` definition to be a leaf element" in markdown
     assert (
         "requires each `UnitTest` definition to contain exactly one direct "
         "`TestMethod`"
@@ -14273,6 +14927,35 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
     assert (
         "requires canonical TRX `TestMethod className` and "
         "`TestMethod name` values"
+        in markdown
+    )
+    assert (
+        "requires canonical TRX present `UnitTest` definition name values"
+        in markdown
+    )
+    assert (
+        "requires TRX `TestMethod className` values to use the "
+        "`Hyperledger.Iroha.Sdk.Tests` namespace"
+        in markdown
+    )
+    assert (
+        "requires present `UnitTest` definition names to match their "
+        "`TestMethod` exactly or by suffix"
+        in markdown
+    )
+    assert (
+        "canonical ordered numeric unit duration with non-repeated descending "
+        "units"
+        in markdown
+    )
+    assert (
+        "requires canonical TRX assembly `codeBase`/`storage` path values"
+        in markdown
+    )
+    assert (
+        "without empty-component, padded/control-bearing, URI-like, "
+        "drive-relative, percent-encoded, URI-delimiter, traversal, "
+        "XML-delimiter, or suffixed or nested `.dll` aliases"
         in markdown
     )
     assert (
@@ -14289,10 +14972,11 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
         "present `Execution` definition to carry an `id`"
         in markdown
     )
-    assert "uses canonical, unique TRX `UnitTest` and `Execution` ids" in markdown
+    assert "uses canonical, alphanumeric-ending, empty-component-free, unique TRX `UnitTest` and `Execution` ids" in markdown
     assert (
         "requires each present `UnitTestResult` `testId` value and each "
-        "present `UnitTestResult` `executionId` value to be canonical and unique"
+        "present `UnitTestResult` `executionId` value to be canonical, "
+        "alphanumeric-ending, empty-component-free, and unique"
         in markdown
     )
     assert (
@@ -14303,9 +14987,12 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
         "contains only `UnitTestResult` rows bound by `testId` or "
         "`executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test "
         "definitions whose actual `TestMethod className.name` pair contains "
-        "an exact `Sccp...` test token with at least one suffix character and "
-        "whose SCCP method token shares that expected assembly evidence on "
-        "the same `TestMethod` or its parent `UnitTest`"
+        "an exact `Sccp...` test token with at least one suffix character, "
+        "whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` "
+        "namespace, whose present `UnitTest` definition name matches that "
+        "`TestMethod` exactly or by suffix, and whose SCCP method token shares "
+        "that expected assembly evidence on the same `TestMethod` or its "
+        "parent `UnitTest`"
         in markdown
     )
     assert (
@@ -14314,8 +15001,8 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
         in markdown
     )
     assert (
-        "requires every `UnitTestResult` `testName` value to be present "
-        "and unique"
+        "requires every `UnitTestResult` `testName` value to be present, "
+        "canonical, and unique"
         in markdown
     )
     assert (
@@ -14326,8 +15013,11 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
     )
     assert (
         "SCCP TRX test definition/result names used for binding must be "
-        "unpadded, ASCII-only, whitespace-free, control-character-free, and "
-        "must not rely on a bare `Sccp` namespace/class segment"
+        "unpadded, ASCII-only, empty-component-free, whitespace-free, "
+        "control-character-free, and free of XML/path/URI delimiters, quotes, "
+        "backticks, pipes, slashes, colons, semicolons, hashes, percent signs, "
+        "question marks, and ampersands, and must not rely on a bare `Sccp` "
+        "namespace/class segment"
         in markdown
     )
     assert "contains at least one passed SCCP `UnitTestResult`" in markdown
@@ -14336,7 +15026,26 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
         "`UnitTestResult`"
     ) in markdown
     assert (
+        "TRX `UnitTestResult` outcome values must be present and literal `Passed`"
+        in markdown
+    )
+    assert (
+        "missing, lowercase, padded, control-bearing, or otherwise aliased "
+        "outcomes remain forged evidence"
+        in markdown
+    )
+    assert (
         "requires every present `UnitTestResult` `isExecuted` flag to be `true`"
+        in markdown
+    )
+    assert (
+        "Present TRX `UnitTestResult` `isExecuted` flags must be unpadded "
+        "literal lowercase `true`"
+        in markdown
+    )
+    assert (
+        "truthy numeric, padded, control-bearing, or case-variant aliases "
+        "remain forged evidence"
         in markdown
     )
     assert (
@@ -14349,6 +15058,11 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
     )
     assert "padding must use ordinary spaces only" in markdown
     assert "tab/control-whitespace separators remain forged evidence" in markdown
+    assert (
+        "Accepted VSTest success summaries must match raw canonical text before "
+        "ANSI/control/format stripping"
+        in markdown
+    )
     assert "must not contain empty path-list segments" in markdown
     assert (
         "Named or traversal subdirectories before or after `TestResults` "
@@ -14485,7 +15199,14 @@ def test_release_readiness_report_required_evidence_items_are_unique(
     assert "repeated public section headings" in required_evidence
     assert "noncanonical required-section order" in required_evidence
     assert "canonical Required Release Evidence bullet spelling" in required_evidence
+    assert (
+        "not-ready nested schema, hash/flag-coherence, and route-canary "
+        "proof-context/hash-role/common/truth-semantic blockers"
+    ) in required_evidence
     assert "must not contain empty path-list segments" in required_evidence
+    assert "`--artifacts-path <bridge-target>/dotnet-artifacts`" in required_evidence
+    assert "`-p:ProduceReferenceAssembly=false`" in required_evidence
+    assert "`--nologo`" in required_evidence
     assert (
         "contains exactly the VSTest passed-test count of `UnitTestResult` rows"
         in required_evidence
@@ -15360,31 +16081,46 @@ def test_release_readiness_public_sensitive_markers_reject_encoded_confusables()
     """Decoded homoglyph-sensitive public text must not be echoed."""
 
     report = load_report_module()
-    encoded_sensitive = "s%D0%B5cret-token"
-    blocker = f"operator {encoded_sensitive} blocker"
+    encoded_sensitive_cases = (
+        "s%D0%B5cret-token",
+        "secret%20key",
+        "private%20key",
+        "private&amp;#95;key",
+        "passphrase",
+        "access%20key",
+        "api%20key",
+        "client&amp;#32;secret",
+        "auth&amp;#32;header",
+        "signing&amp;#32;key",
+        "session%3dabc",
+        "seed%20phrase",
+    )
 
-    assert report._public_text_contains_sensitive_marker(encoded_sensitive)
-    assert report._public_blocker_text_issue(blocker) == "sensitive name"
-    assert (
-        report._native_evm_validation_blocker_issue(
-            blocker,
-            "readiness report native_evm_prover_bundle validation_blockers",
-            0,
+    for encoded_sensitive in encoded_sensitive_cases:
+        blocker = f"operator {encoded_sensitive} blocker"
+
+        assert report._public_text_contains_sensitive_marker(encoded_sensitive)
+        assert report._public_blocker_text_issue(blocker) == "sensitive name"
+        assert (
+            report._native_evm_validation_blocker_issue(
+                blocker,
+                "readiness report native_evm_prover_bundle validation_blockers",
+                0,
+            )
+            == "readiness report native_evm_prover_bundle validation_blockers[0] "
+            "contains sensitive name"
         )
-        == "readiness report native_evm_prover_bundle validation_blockers[0] "
-        "contains sensitive name"
-    )
-    assert (
-        report._native_evm_prover_duplicate_json_key_blocker(
-            "readiness report native_evm_prover_bundle",
-            encoded_sensitive,
+        assert (
+            report._native_evm_prover_duplicate_json_key_blocker(
+                "readiness report native_evm_prover_bundle",
+                encoded_sensitive,
+            )
+            == "readiness report native_evm_prover_bundle JSON contains duplicate "
+            "key with sensitive key name"
         )
-        == "readiness report native_evm_prover_bundle JSON contains duplicate "
-        "key with sensitive key name"
-    )
-    assert not report._native_evm_markdown_path_is_safe(
-        f"artifacts/{encoded_sensitive}.json"
-    )
+        assert not report._native_evm_markdown_path_is_safe(
+            f"artifacts/{encoded_sensitive}.json"
+        )
 
 
 def test_release_readiness_cli_error_detail_rejects_decoded_unsafe_messages() -> None:
@@ -15394,6 +16130,8 @@ def test_release_readiness_cli_error_detail_rejects_decoded_unsafe_messages() ->
     fallback = "SCCP release readiness report generation failed"
 
     for detail in (
+        deep_percent_encoded_text("safe|readiness detail"),
+        "safe" + nested_html_entity_text("&#124;") + "readiness detail",
         "safe%0Areadiness detail",
         "safe%E2%80%AEreadiness detail",
         "safe%7Creadiness detail",
@@ -15405,6 +16143,56 @@ def test_release_readiness_cli_error_detail_rejects_decoded_unsafe_messages() ->
         report._cli_error_detail(RuntimeError("safe readiness detail"), fallback=fallback)
         == "safe readiness detail"
     )
+    assert (
+        report._cli_error_detail(
+            RuntimeError("already set by --phase-evidence rust-sccp=<path>"),
+            fallback=fallback,
+        )
+        == "already set by --phase-evidence rust-sccp=<path>"
+    )
+    assert (
+        report._cli_error_detail(
+            RuntimeError("phase evidence path contains Markdown-unsafe character '|'"),
+            fallback=fallback,
+        )
+        == "phase evidence path contains Markdown-unsafe character '|'"
+    )
+    assert (
+        report._cli_error_detail(
+            RuntimeError("SORA -> eth route canary mismatch"),
+            fallback=fallback,
+        )
+        == "SORA -> eth route canary mismatch"
+    )
+    assert (
+        report._cli_error_detail(
+            RuntimeError(deep_percent_encoded_text("operator api key detail")),
+            fallback=fallback,
+        )
+        == fallback
+    )
+    assert (
+        report._cli_error_detail(
+            RuntimeError(
+                "operator " + nested_html_entity_text("private&#95;key") + " detail"
+            ),
+            fallback=fallback,
+        )
+        == fallback
+    )
+
+
+def test_release_readiness_cli_error_detail_treats_system_exit_as_opaque() -> None:
+    """Top-level readiness CLI SystemExit details must stay category-only."""
+
+    report = load_report_module()
+    fallback = "SCCP release readiness report generation failed"
+    safe_message = "safe readiness SystemExit detail"
+
+    detail = report._cli_error_detail(SystemExit(safe_message), fallback=fallback)
+
+    assert detail == fallback
+    assert safe_message not in detail
 
 
 def test_release_readiness_report_markdown_marks_duplicate_public_blocker_strings(
@@ -15700,6 +16488,70 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             "route canary receipt block number must be a positive integer",
         ),
     )
+    route_canary_log_index_exactness_cases = (
+        (
+            "log_index",
+            "0",
+            "route canary log_index must be a u32 integer",
+        ),
+        (
+            "log_index",
+            True,
+            "route canary log_index must be a u32 integer",
+        ),
+        (
+            "log_index",
+            -1,
+            "route canary log_index must be a u32 integer",
+        ),
+        (
+            "log_index",
+            0x1_0000_0000,
+            "route canary log_index must be a u32 integer",
+        ),
+        (
+            "log_index",
+            None,
+            "route canary log_index must be a u32 integer",
+        ),
+    )
+    route_canary_proof_context_exactness_cases = (
+        (
+            "target_domain",
+            report.SCCP_DOMAIN_BSC,
+            "route canary target_domain must be active launch domain",
+        ),
+        (
+            "target_domain",
+            "1",
+            "route canary target_domain must be an integer",
+        ),
+        (
+            "target_domain",
+            True,
+            "route canary target_domain must be an integer",
+        ),
+        (
+            "proof_version",
+            2,
+            "route canary proof_version must be 1",
+        ),
+        (
+            "proof_version",
+            "1",
+            "route canary proof_version must be an integer",
+        ),
+        (
+            "proof_source_domain",
+            report.ACTIVE_LAUNCH_DOMAIN,
+            "route canary proof_source_domain must be SORA domain",
+        ),
+        (
+            "proof_source_domain",
+            "0",
+            "route canary proof_source_domain must be an integer",
+        ),
+    )
     route_canary_evidence_bound_exactness_cases = (
         (
             "evidence_bound",
@@ -15847,6 +16699,48 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             "route canary evidence source must be a non-empty canonical string",
         ),
     )
+    route_canary_binding_hash_cases = (
+        (
+            "route_allowlist_hash",
+            None,
+            "route canary route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist_hash",
+            "0x" + "00" * 32,
+            "route canary route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist_hash",
+            fixed_hex32(0x39).upper(),
+            "route canary route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist_hash",
+            fixed_hex32(0xFE),
+            "route canary route allowlist hash must match route_allowlist_hash",
+        ),
+        (
+            "destination_binding_hash",
+            None,
+            "route canary destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding_hash",
+            "0x" + "00" * 32,
+            "route canary destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding_hash",
+            fixed_hex32(0x3A).upper(),
+            "route canary destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding_hash",
+            fixed_hex32(0xFD),
+            "route canary destination binding hash must match destination_binding_hash",
+        ),
+    )
     route_canary_hex32_exactness_cases = (
         (
             "evidence_hash",
@@ -15857,6 +16751,36 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             "evidence_hash",
             fixed_hex32(0x30).upper(),
             "route canary evidence hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "call_data_sha256",
+            None,
+            "route canary call data SHA-256 must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "payload_hash",
+            "0x" + "00" * 32,
+            "route canary payload hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "statement_hash",
+            fixed_hex32(0x33).upper(),
+            "route canary statement hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "commitment_root",
+            1,
+            "route canary commitment root must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "finality_height",
+            "0x" + "00" * 32,
+            "route canary finality height must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "finality_block_hash",
+            fixed_hex32(0x34).upper(),
+            "route canary finality block hash must be a canonical non-zero bytes32 hex string",
         ),
         (
             "transaction_hash",
@@ -15946,11 +16870,35 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
     )
     route_canary_hash_roles = (
         ("evidence_hash", "evidence hash"),
+        ("call_data_sha256", "call data SHA-256"),
+        ("payload_hash", "payload hash"),
+        ("statement_hash", "statement hash"),
+        ("commitment_root", "commitment root"),
+        ("finality_height", "finality height"),
+        ("finality_block_hash", "finality block hash"),
         ("transaction_hash", "transaction hash"),
         ("receipt_block_hash", "receipt block hash"),
         ("block_receipts_root", "block receipts root"),
         ("message_id", "message id"),
     )
+    all_lanes = report._load_all_lanes_module()
+    active_profile = all_lanes.LANE_PROFILES[report.ACTIVE_LAUNCH_DOMAIN]
+    active_template_hash = "0x" + next(
+        iter(all_lanes._source_material_template_hashes(active_profile).values())
+    ).hex()
+    route_canary_template_hash_cases = tuple(
+        (
+            f"template_hash.{field}",
+            active_template_hash,
+            f"route canary {label} must be live evidence, not built-in template material",
+        )
+        for field, label in route_canary_hash_roles
+    )
+    assert (
+        "template_hash.evidence_hash",
+        active_template_hash,
+        "route canary evidence hash must be live evidence, not built-in template material",
+    ) in route_canary_template_hash_cases
     route_canary_upstream_hash_reuse_cases = tuple(
         (
             f"upstream_hash_reuse.{target_field}.{source_field}",
@@ -15975,58 +16923,30 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
         None,
         "route canary message id must not reuse route allowlist hash",
     ) in route_canary_upstream_hash_reuse_cases
+    route_canary_sibling_hash_reuse_cases = tuple(
+        (
+            f"hash_reuse.{target_field}.{source_field}",
+            None,
+            f"route canary {target_label} must not reuse {source_label}",
+        )
+        for target_index, (target_field, target_label) in enumerate(
+            route_canary_hash_roles
+        )
+        for source_field, source_label in route_canary_hash_roles[:target_index]
+    )
+    assert (
+        "hash_reuse.finality_block_hash.finality_height",
+        None,
+        "route canary finality block hash must not reuse finality height",
+    ) in route_canary_sibling_hash_reuse_cases
+    assert (
+        "hash_reuse.message_id.block_receipts_root",
+        None,
+        "route canary message id must not reuse block receipts root",
+    ) in route_canary_sibling_hash_reuse_cases
     route_canary_hash_role_reuse_cases = (
         *route_canary_upstream_hash_reuse_cases,
-        (
-            "hash_reuse.transaction_hash.evidence_hash",
-            None,
-            "route canary transaction hash must not reuse evidence hash",
-        ),
-        (
-            "hash_reuse.receipt_block_hash.evidence_hash",
-            None,
-            "route canary receipt block hash must not reuse evidence hash",
-        ),
-        (
-            "hash_reuse.receipt_block_hash.transaction_hash",
-            None,
-            "route canary receipt block hash must not reuse transaction hash",
-        ),
-        (
-            "hash_reuse.block_receipts_root.evidence_hash",
-            None,
-            "route canary block receipts root must not reuse evidence hash",
-        ),
-        (
-            "hash_reuse.block_receipts_root.transaction_hash",
-            None,
-            "route canary block receipts root must not reuse transaction hash",
-        ),
-        (
-            "hash_reuse.block_receipts_root.receipt_block_hash",
-            None,
-            "route canary block receipts root must not reuse receipt block hash",
-        ),
-        (
-            "hash_reuse.message_id.evidence_hash",
-            None,
-            "route canary message id must not reuse evidence hash",
-        ),
-        (
-            "hash_reuse.message_id.transaction_hash",
-            None,
-            "route canary message id must not reuse transaction hash",
-        ),
-        (
-            "hash_reuse.message_id.receipt_block_hash",
-            None,
-            "route canary message id must not reuse receipt block hash",
-        ),
-        (
-            "hash_reuse.message_id.block_receipts_root",
-            None,
-            "route canary message id must not reuse block receipts root",
-        ),
+        *route_canary_sibling_hash_reuse_cases,
     )
     cases = (
         (
@@ -16065,11 +16985,15 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             "route canary receipt block number must be a positive integer",
         ),
         *receipt_block_number_exactness_cases,
+        *route_canary_log_index_exactness_cases,
+        *route_canary_proof_context_exactness_cases,
         *route_canary_evidence_bound_exactness_cases,
         *route_canary_status_exactness_cases,
         *route_canary_evidence_source_exactness_cases,
+        *route_canary_binding_hash_cases,
         *route_canary_hex32_exactness_cases,
         *route_canary_blocker_cases,
+        *route_canary_template_hash_cases,
         *route_canary_hash_role_reuse_cases,
         *route_canary_message_proof_used_exactness_cases,
         *route_canary_receipt_finalized_exactness_cases,
@@ -16104,6 +17028,9 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
         elif field.startswith("hash_reuse."):
             _, target_field, source_field = field.split(".", 2)
             canary[target_field] = canary[source_field]
+        elif field.startswith("template_hash."):
+            _, target_field = field.split(".", 1)
+            canary[target_field] = value
         elif field.startswith("blockers."):
             canary["blockers"] = value
         elif field.startswith("present_null."):
@@ -16164,6 +17091,63 @@ def test_release_readiness_report_treats_missing_active_route_canary_blockers_as
     assert route_canary_item["blockers"] == []
 
 
+def test_release_readiness_report_numbers_repeated_active_component_blocker_duplicates(
+) -> None:
+    """Active-launch component blocker duplicate groups must stay distinct."""
+
+    report = load_report_module()
+    lane_label = (
+        f"domain {report.ACTIVE_LAUNCH_DOMAIN} "
+        f"({report.ACTIVE_LAUNCH_CHAIN})"
+    )
+    copied_blockers = (
+        "safe duplicated active component blocker a",
+        "safe%20duplicated%20active%20component%20blocker%20a",
+        "safe duplicated active component blocker b",
+        "safe%20duplicated%20active%20component%20blocker%20b",
+    )
+    cases = (
+        (
+            f"{lane_label}: route canary blockers",
+            report._active_launch_route_canary_blocker_container_errors(
+                lane_label,
+                {"blockers": list(copied_blockers)},
+            ),
+        ),
+        (
+            f"{lane_label}: route allowlist blockers",
+            report._active_launch_route_allowlist_blocker_container_errors(
+                lane_label,
+                {"blockers": list(copied_blockers)},
+            ),
+        ),
+        (
+            f"{lane_label}: destination rollout blockers",
+            report._active_launch_destination_binding_blocker_container_errors(
+                lane_label,
+                {"blockers": list(copied_blockers)},
+            ),
+        ),
+        (
+            f"{lane_label}: source adapter gate blockers",
+            report._active_launch_source_adapter_gate_blocker_container_errors(
+                lane_label,
+                {"blockers": list(copied_blockers)},
+            ),
+        ),
+    )
+
+    for label, blockers in cases:
+        duplicate_error = f"{label} must not contain duplicate strings"
+        rendered = "\n".join(blockers)
+        assert f"{duplicate_error} #1" in rendered
+        assert f"{duplicate_error} #2" in rendered
+        assert rendered.count(f"{duplicate_error} #") == 2
+        assert f"{label} must be empty" in blockers
+        for copied_blocker in copied_blockers:
+            assert copied_blocker not in rendered
+
+
 def test_release_readiness_report_blocks_malformed_active_route_allowlist_binding(
     tmp_path: Path,
 ) -> None:
@@ -16172,6 +17156,11 @@ def test_release_readiness_report_blocks_malformed_active_route_allowlist_bindin
     report = load_report_module()
     evidence, _ = write_active_launch_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    all_lanes = report._load_all_lanes_module()
+    active_profile = all_lanes.LANE_PROFILES[report.ACTIVE_LAUNCH_DOMAIN]
+    active_template_hash = "0x" + next(
+        iter(all_lanes._source_material_template_hashes(active_profile).values())
+    ).hex()
     expected_match_flag_exactness_cases = (
         (
             "route_allowlist.expected_route_allowlist_hash_matches",
@@ -16255,6 +17244,16 @@ def test_release_readiness_report_blocks_malformed_active_route_allowlist_bindin
             "route allowlist hash must match the expected canonical source, deployment, and destination binding hash",
         ),
         (
+            "route_allowlist.template_route_hash",
+            active_template_hash,
+            "route allowlist hash must be route binding evidence, not built-in template material",
+        ),
+        (
+            "route_allowlist.template_expected_route_hash",
+            active_template_hash,
+            "expected route allowlist hash must be route binding evidence, not built-in template material",
+        ),
+        (
             "source_record_hashes.source_verifier_material_hash",
             "0x" + "00" * 32,
             "route allowlist source verifier material hash must be a canonical non-zero bytes32 hex string",
@@ -16301,6 +17300,13 @@ def test_release_readiness_report_blocks_malformed_active_route_allowlist_bindin
         assert active_lane is not None
         route_allowlist = active_lane["route_allowlist"]
         if path == "route_allowlist.hash_mismatch":
+            route_allowlist["expected_route_allowlist_hash"] = value
+            route_allowlist["expected_route_allowlist_hash_matches"] = True
+        elif path == "route_allowlist.template_route_hash":
+            route_allowlist["route_allowlist_hash"] = value
+            route_allowlist["expected_route_allowlist_hash"] = value
+            route_allowlist["expected_route_allowlist_hash_matches"] = True
+        elif path == "route_allowlist.template_expected_route_hash":
             route_allowlist["expected_route_allowlist_hash"] = value
             route_allowlist["expected_route_allowlist_hash_matches"] = True
         elif path.startswith("route_allowlist.blockers."):
@@ -16393,6 +17399,44 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
     report = load_report_module()
     evidence, _ = write_active_launch_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    active_source_gate_required_blocker = (
+        "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate summary must be required"
+    ).replace(
+        "{ACTIVE_LAUNCH_DISPLAY}",
+        report.ACTIVE_LAUNCH_DISPLAY,
+    )
+    active_source_gate_hash_blocker = (
+        "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be a canonical non-zero bytes32 hex string"
+    ).replace(
+        "{ACTIVE_LAUNCH_DISPLAY}",
+        report.ACTIVE_LAUNCH_DISPLAY,
+    )
+    active_source_gate_audit_hashes_blocker = (
+        "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes must contain only evm_source_gate_hash"
+    ).replace(
+        "{ACTIVE_LAUNCH_DISPLAY}",
+        report.ACTIVE_LAUNCH_DISPLAY,
+    )
+    active_source_gate_template_hash_blocker = (
+        "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be "
+        "deployed gate evidence, not built-in template material"
+    ).replace(
+        "{ACTIVE_LAUNCH_DISPLAY}",
+        report.ACTIVE_LAUNCH_DISPLAY,
+    )
+    active_source_gate_template_audit_hash_blocker = (
+        "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes "
+        "evm_source_gate_hash must be deployed audit evidence, not built-in "
+        "template material"
+    ).replace(
+        "{ACTIVE_LAUNCH_DISPLAY}",
+        report.ACTIVE_LAUNCH_DISPLAY,
+    )
+    all_lanes = report._load_all_lanes_module()
+    active_profile = all_lanes.LANE_PROFILES[report.ACTIVE_LAUNCH_DOMAIN]
+    active_template_hash = "0x" + next(
+        iter(all_lanes._source_material_template_hashes(active_profile).values())
+    ).hex()
     expected_destination_match_flag_exactness_cases = (
         (
             "destination_binding.expected_destination_binding_hash_matches",
@@ -16427,6 +17471,16 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             "governed deployment source verifier material hash must not reuse source adapter engine deployment hash",
         ),
         (
+            "source_record_hashes.template_source_material_hash",
+            active_template_hash,
+            "governed deployment source verifier material hash must be deployed evidence, not built-in template material",
+        ),
+        (
+            "source_record_hashes.template_source_deployment_hash",
+            active_template_hash,
+            "governed deployment source adapter engine deployment hash must be deployed evidence, not built-in template material",
+        ),
+        (
             "destination_binding.destination_binding_hash",
             "0x" + "00" * 32,
             "governed deployment destination binding hash must be a canonical non-zero bytes32 hex string",
@@ -16440,6 +17494,16 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             "destination_binding.hash_reuse_source_adapter",
             None,
             "governed deployment destination binding hash must not reuse source adapter engine deployment hash",
+        ),
+        (
+            "destination_binding.template_destination_binding_hash",
+            active_template_hash,
+            "governed deployment destination binding hash must be destination binding evidence, not built-in template material",
+        ),
+        (
+            "destination_binding.template_expected_destination_binding_hash",
+            active_template_hash,
+            "governed deployment expected destination binding hash must be destination binding evidence, not built-in template material",
         ),
         (
             "destination_binding.expected_destination_binding_hash",
@@ -16543,12 +17607,12 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
         (
             "source_adapter_gate.required",
             False,
-            "active EVM source adapter gate summary must be required",
+            active_source_gate_required_blocker,
         ),
         (
             "source_adapter_gate.gate_hash",
             "",
-            "active EVM source adapter gate hash must be a canonical non-zero bytes32 hex string",
+            active_source_gate_hash_blocker,
         ),
         (
             "source_adapter_gate.hash_reuse_source_verifier",
@@ -16566,9 +17630,19 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             "governed deployment source adapter gate hash must not reuse destination binding hash",
         ),
         (
+            "source_adapter_gate.template_gate_hash",
+            active_template_hash,
+            active_source_gate_template_hash_blocker,
+        ),
+        (
+            "source_adapter_gate.template_audit_hash",
+            active_template_hash,
+            active_source_gate_template_audit_hash_blocker,
+        ),
+        (
             "source_adapter_gate.audit_hashes",
             {"unexpected_gate_hash": fixed_hex32(0x54)},
-            "active EVM source adapter gate audit hashes must contain only evm_source_gate_hash",
+            active_source_gate_audit_hashes_blocker,
         ),
     )
 
@@ -16585,6 +17659,14 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             source_hashes["source_adapter_engine_deployment_hash"] = source_hashes[
                 "source_verifier_material_hash"
             ]
+        elif path == "source_record_hashes.template_source_material_hash":
+            active_lane["source_record_hashes"][
+                "source_verifier_material_hash"
+            ] = value
+        elif path == "source_record_hashes.template_source_deployment_hash":
+            active_lane["source_record_hashes"][
+                "source_adapter_engine_deployment_hash"
+            ] = value
         elif path == "destination_binding.hash_mismatch":
             active_lane["destination_binding"]["expected_destination_binding_hash"] = (
                 value
@@ -16616,6 +17698,21 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             active_lane["destination_binding"][
                 "expected_destination_binding_hash_matches"
             ] = True
+        elif path == "destination_binding.template_destination_binding_hash":
+            active_lane["destination_binding"]["destination_binding_hash"] = value
+            active_lane["destination_binding"][
+                "expected_destination_binding_hash"
+            ] = value
+            active_lane["destination_binding"][
+                "expected_destination_binding_hash_matches"
+            ] = True
+        elif path == "destination_binding.template_expected_destination_binding_hash":
+            active_lane["destination_binding"][
+                "expected_destination_binding_hash"
+            ] = value
+            active_lane["destination_binding"][
+                "expected_destination_binding_hash_matches"
+            ] = True
         elif path == "source_adapter_gate":
             active_lane.pop("source_adapter_gate", None)
         elif path.startswith("source_adapter_gate.blockers."):
@@ -16643,6 +17740,15 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             active_lane["source_adapter_gate"]["gate_hash"] = reused_hash
             active_lane["source_adapter_gate"]["audit_hashes"] = {
                 "evm_source_gate_hash": reused_hash
+            }
+        elif path == "source_adapter_gate.template_gate_hash":
+            active_lane["source_adapter_gate"]["gate_hash"] = value
+            active_lane["source_adapter_gate"]["audit_hashes"] = {
+                "evm_source_gate_hash": value
+            }
+        elif path == "source_adapter_gate.template_audit_hash":
+            active_lane["source_adapter_gate"]["audit_hashes"] = {
+                "evm_source_gate_hash": value
             }
         else:
             section, field = path.split(".", 1)
@@ -16675,12 +17781,18 @@ def test_release_readiness_report_recomputes_active_checklist_rejects_malformed_
     report = load_report_module()
     evidence, _ = write_active_launch_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    active_live_metadata_blocker = (
+        "active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed"
+    ).replace(
+        "{ACTIVE_LAUNCH_DISPLAY}",
+        report.ACTIVE_LAUNCH_DISPLAY,
+    )
     cases = (
         (
             "evm_live_metadata",
             "operator secret-token live metadata root",
             "governed_deployment_evidence",
-            "active EVM live metadata summary is malformed",
+            active_live_metadata_blocker,
         ),
         (
             "source_record_hashes",
@@ -17203,6 +18315,26 @@ def test_release_readiness_report_classifies_malformed_active_lane_blockers(
             "domain 1 (eth): route canary operator launch hold",
         ),
         (
+            ["Route Canary operator launch hold"],
+            ("live_route_canary_evidence",),
+            "domain 1 (eth): Route Canary operator launch hold",
+        ),
+        (
+            ["route%20canary operator launch hold"],
+            ("live_route_canary_evidence",),
+            "domain 1 (eth): route%20canary operator launch hold",
+        ),
+        (
+            ["Route%20Allowlist operator launch hold"],
+            ("route_allowlist_binding",),
+            "domain 1 (eth): Route%20Allowlist operator launch hold",
+        ),
+        (
+            ["Source%20Adapter operator launch hold"],
+            ("governed_deployment_evidence",),
+            "domain 1 (eth): Source%20Adapter operator launch hold",
+        ),
+        (
             [duplicate_lane_blocker, duplicate_lane_blocker],
             (*category_item_ids, "no_unresolved_blockers"),
             "domain 1 (eth): active launch lane blockers must not contain duplicate strings",
@@ -17242,6 +18374,157 @@ def test_release_readiness_report_classifies_malformed_active_lane_blockers(
                 for blocker in item["blockers"]
             )
             assert duplicate_lane_blocker not in all_blockers
+
+
+def test_release_readiness_report_numbers_repeated_active_lane_blocker_duplicates(
+) -> None:
+    """Distinct active-lane duplicate blocker groups must stay distinct."""
+
+    report = load_report_module()
+    lane_label = f"domain {report.ACTIVE_LAUNCH_DOMAIN} ({report.ACTIVE_LAUNCH_CHAIN})"
+    duplicate_error = (
+        f"{lane_label}: active launch lane blockers must not contain duplicate strings"
+    )
+    copied_blockers = (
+        "route canary safe duplicated active lane blocker a",
+        "route%20canary%20safe%20duplicated%20active%20lane%20blocker%20a",
+        "route canary safe duplicated active lane blocker b",
+        "route%20canary%20safe%20duplicated%20active%20lane%20blocker%20b",
+        "route canary operator launch hold",
+    )
+
+    valid_blockers, schema_blockers = report._active_launch_lane_blockers_for_checklist(
+        list(copied_blockers),
+        lane_label,
+    )
+    rendered = "\n".join(schema_blockers)
+
+    assert f"{duplicate_error} #1" in rendered
+    assert f"{duplicate_error} #2" in rendered
+    assert rendered.count(f"{duplicate_error} #") == 2
+    assert valid_blockers == ["route canary operator launch hold"]
+    for copied_blocker in copied_blockers[:-1]:
+        assert copied_blocker not in rendered
+
+
+def test_release_readiness_report_numbers_repeated_active_launch_blocker_issues(
+    tmp_path: Path,
+) -> None:
+    """Repeated malformed active-launch blockers must stay distinct."""
+
+    report = load_report_module()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    evidence_summary = report._load_evidence_summary([evidence])
+    active_lane = report._active_launch_lane(evidence_summary)
+    assert active_lane is not None
+    hostile_blockers = [
+        "operator\nactive-launch-blocker-a",
+        "operator\tactive-launch-blocker-b",
+        "operator|active-launch-blocker-a",
+        "operator|active-launch-blocker-b",
+        "operator active-launch bl\u043ecker-a",
+        "operator active-launch bl\u043ecker-b",
+        "operator secret-token-active-launch-blocker",
+        "operator private-key-active-launch-blocker",
+    ]
+    evidence_summary["blockers"] = list(hostile_blockers)
+    active_lane["blockers"] = list(hostile_blockers)
+
+    blockers = report._active_launch_blockers(evidence_summary)
+    rendered = "\n".join(blockers)
+    lane_prefix = (
+        f"domain {report.ACTIVE_LAUNCH_DOMAIN} "
+        f"({report.ACTIVE_LAUNCH_CHAIN}): active launch lane blocker"
+    )
+
+    for label in ("SCCP evidence blocker", lane_prefix):
+        for suffix in (
+            "contains control character",
+            "contains Markdown-unsafe character",
+            "contains non-ASCII character",
+            "contains sensitive name",
+        ):
+            assert f"{label} {suffix} #1" in rendered
+            assert f"{label} {suffix} #2" in rendered
+            assert rendered.count(f"{label} {suffix} #") == 2
+    for blocker in hostile_blockers:
+        assert blocker not in rendered
+
+
+def test_release_readiness_report_numbers_repeated_active_launch_duplicate_groups(
+) -> None:
+    """Distinct copied active-launch duplicate groups must stay distinct."""
+
+    report = load_report_module()
+    evidence_blockers = (
+        "safe duplicated active evidence blocker a",
+        "safe%20duplicated%20active%20evidence%20blocker%20a",
+        "safe duplicated active evidence blocker b",
+        "safe%20duplicated%20active%20evidence%20blocker%20b",
+    )
+    lane_blockers = (
+        "route canary safe duplicated active lane blocker a",
+        "route%20canary%20safe%20duplicated%20active%20lane%20blocker%20a",
+        "route canary safe duplicated active lane blocker b",
+        "route%20canary%20safe%20duplicated%20active%20lane%20blocker%20b",
+    )
+    evidence_summary = {
+        "blockers": list(evidence_blockers),
+        "lanes": [
+            {
+                "domain": report.ACTIVE_LAUNCH_DOMAIN,
+                "blockers": list(lane_blockers),
+            }
+        ],
+    }
+
+    blockers = report._active_launch_blockers(evidence_summary)
+    rendered = "\n".join(blockers)
+    evidence_error = "SCCP evidence blockers must not contain duplicate strings"
+    lane_error = (
+        f"domain {report.ACTIVE_LAUNCH_DOMAIN} "
+        f"({report.ACTIVE_LAUNCH_CHAIN}): active launch lane blockers must not "
+        "contain duplicate strings"
+    )
+
+    for error in (evidence_error, lane_error):
+        assert f"{error} #1" in rendered
+        assert f"{error} #2" in rendered
+        assert rendered.count(f"{error} #") == 2
+    for copied_blocker in (*evidence_blockers, *lane_blockers):
+        assert copied_blocker not in rendered
+
+
+def test_release_readiness_report_decodes_active_launch_blocker_domain_prefixes(
+) -> None:
+    """Encoded active-domain blockers must scope before active launch filtering."""
+
+    report = load_report_module()
+    prefix = f"domain {report.ACTIVE_LAUNCH_DOMAIN} ({report.ACTIVE_LAUNCH_CHAIN}): "
+    active_root = "domain%201%20(eth): route canary encoded active evidence hold"
+    active_lane = "Domain%201%20(ETH): route canary encoded active lane hold"
+    other_root = "domain%202%20(bsc): route canary encoded other evidence hold"
+    other_lane = "Domain%202%20(BSC): route canary encoded other lane hold"
+    unscoped_lane = "route canary unscoped active lane hold"
+    evidence_summary = {
+        "blockers": [active_root, other_root],
+        "lanes": [
+            {
+                "domain": report.ACTIVE_LAUNCH_DOMAIN,
+                "blockers": [active_lane, other_lane, unscoped_lane],
+            }
+        ],
+    }
+
+    blockers = report._active_launch_blockers(evidence_summary)
+    rendered = "\n".join(blockers)
+
+    assert active_root in blockers
+    assert active_lane in blockers
+    assert f"{prefix}{unscoped_lane}" in blockers
+    assert other_root not in rendered
+    assert other_lane not in rendered
+    assert f"{prefix}{other_lane}" not in rendered
 
 
 def test_release_readiness_report_blocks_malformed_native_prover_blockers(
@@ -17356,6 +18639,35 @@ def test_release_readiness_report_blocks_malformed_native_prover_blockers(
             assert "`<invalid validation_blockers>`" in markdown
         if forbidden_text is not None:
             assert forbidden_text not in markdown
+
+
+def test_release_readiness_report_numbers_repeated_native_prover_blocker_duplicates(
+) -> None:
+    """Distinct native-prover duplicate groups must stay distinct and redacted."""
+
+    report = load_report_module()
+    label = "native EVM prover validation_blockers"
+    duplicate_error = f"{label} must not contain duplicate strings"
+    duplicated_blockers = (
+        "safe duplicated native validation blocker a",
+        "safe%20duplicated%20native%20validation%20blocker%20a",
+        "safe duplicated native validation blocker b",
+        "safe%20duplicated%20native%20validation%20blocker%20b",
+        "operator launch hold",
+    )
+
+    blockers = report._native_evm_validation_blockers(
+        list(duplicated_blockers),
+        label,
+    )
+    rendered = "\n".join(blockers)
+
+    assert f"{duplicate_error} #1" in rendered
+    assert f"{duplicate_error} #2" in rendered
+    assert rendered.count(f"{duplicate_error} #") == 2
+    assert "operator launch hold" in blockers
+    for copied_blocker in duplicated_blockers[:-1]:
+        assert copied_blocker not in rendered
 
 
 def test_release_readiness_report_blocks_without_native_evm_prover_bundle(
@@ -17863,6 +19175,36 @@ def test_release_readiness_report_redacts_native_evm_payload_artifact_path_failu
     assert "artifact path detail" not in rendered_blockers
 
 
+def test_release_readiness_report_rejects_unscannable_native_evm_payload_paths(
+    tmp_path: Path,
+) -> None:
+    """Native prover payload scans must reject symlinks and directories."""
+
+    report = load_report_module()
+    real_payload = tmp_path / "real-proof.bin"
+    real_payload.write_bytes(b"x" * 2048)
+    symlink_payload = tmp_path / "proof.bin"
+    symlink_payload.symlink_to(real_payload)
+    directory_payload = tmp_path / "proof-directory.bin"
+    directory_payload.mkdir()
+    expected = (
+        "native EVM Groth16 prover bundle proof_artifact cannot be scanned "
+        "for forbidden prover dependency markers"
+    )
+
+    for payload_path in (symlink_payload, directory_payload):
+        blockers = report._native_evm_prover_forbidden_payload_blockers(
+            payload_path,
+            "proof_artifact",
+        )
+        rendered = "\n".join(blockers)
+
+        assert blockers == [expected]
+        assert "real-proof" not in rendered
+        assert "IsADirectory" not in rendered
+        assert "Traceback" not in rendered
+
+
 def test_release_readiness_report_blocks_malformed_native_evm_artifact_metadata(
     tmp_path: Path,
     monkeypatch,
@@ -18137,6 +19479,12 @@ def test_release_readiness_report_rejects_malformed_output_paths_before_build(
             "readiness/%2e%2e/report.md",
             "readiness report output path contains percent-encoded traversal segment",
         ),
+        (
+            "readiness/"
+            f"{repeated_percent_token('2e')}{repeated_percent_token('2e')}"
+            "/report.md",
+            "readiness report output path contains percent-encoded traversal segment",
+        ),
     )
 
     for path_text, expected_error in cases:
@@ -18153,6 +19501,89 @@ def test_release_readiness_report_rejects_malformed_output_paths_before_build(
         assert "Traceback" not in captured.err
         assert not Path(path_text).exists()
     assert not (tmp_path / "readiness").exists()
+
+
+def test_release_readiness_report_rejects_output_input_collisions_before_build(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness output must not overwrite copied source evidence inputs."""
+
+    report = load_report_module()
+    monkeypatch.chdir(tmp_path)
+    phase = report._corridor_phases()[0]
+    evidence = tmp_path / "evidence.toml"
+    phase_log = tmp_path / "phase.log"
+    phase_dir = tmp_path / "phase-artifacts"
+    phase_dir.mkdir()
+    phase_dir_log = phase_dir / f"{phase}.log"
+    native_bundle = tmp_path / "native-evm-prover-bundle.json"
+    sentinels = {
+        evidence: "sentinel:readiness-input-evidence\n",
+        phase_log: "sentinel:readiness-phase-evidence\n",
+        phase_dir_log: "sentinel:readiness-phase-dir-evidence\n",
+        native_bundle: "sentinel:readiness-native-prover-bundle\n",
+    }
+    for path, text in sentinels.items():
+        path.write_text(text, encoding="utf-8")
+
+    def fail_build(*_args, **_kwargs):
+        raise AssertionError("readiness output collision preflight did not run first")
+
+    monkeypatch.setattr(report, "_build_report", fail_build)
+    cases = (
+        (
+            ["--output", str(evidence), str(evidence)],
+            "readiness report output path must not be the same path as input evidence",
+        ),
+        (
+            [
+                "--output",
+                str(phase_log),
+                "--phase-evidence",
+                f"{phase}={phase_log}",
+                str(evidence),
+            ],
+            "readiness report output path must not be the same path as phase evidence",
+        ),
+        (
+            [
+                "--output",
+                str(phase_dir_log),
+                "--phase-evidence-dir",
+                str(phase_dir),
+                str(evidence),
+            ],
+            "readiness report output path must not be the same path as phase evidence",
+        ),
+        (
+            [
+                "--output",
+                str(native_bundle),
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ],
+            "readiness report output path must not be the same path as native EVM prover bundle",
+        ),
+    )
+
+    for argv, expected_error in cases:
+        try:
+            report.main(argv)
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError("readiness CLI accepted output/input path collision")
+
+        captured = capsys.readouterr()
+        assert expected_error in captured.err
+        assert "sentinel:" not in captured.err
+        assert "Traceback" not in captured.err
+
+    for path, text in sentinels.items():
+        assert path.read_text(encoding="utf-8") == text
 
 
 def test_release_readiness_report_cli_suppresses_malformed_report_roots(
@@ -18492,7 +19923,7 @@ def test_release_readiness_report_cli_rejects_malformed_native_bundle_without_le
     ) in blockers
     assert (
         "readiness report native_evm_prover_bundle artifact bytes must be a "
-        "non-negative integer"
+        "positive integer"
     ) in blockers
     assert (
         "readiness report native_evm_prover_bundle proof_artifact sha256 must "
@@ -18554,6 +19985,56 @@ def test_release_readiness_report_cli_rejects_malformed_native_bundle_without_le
     assert "safe native implementation note" not in captured.out
     assert "safe native int-key note" not in captured.out
     assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_rejects_zero_byte_native_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Copied native-prover artifact rows must carry positive byte counts."""
+
+    report = load_report_module()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_manifest = write_native_evm_prover_bundle(tmp_path, evidence)
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_manifest,
+    )
+    native_bundle = json.loads(json.dumps(readiness["native_evm_prover_bundle"]))
+    native_bundle["artifact"]["bytes"] = 0
+    native_bundle["sdk_artifacts"][0]["implementation_artifact"]["bytes"] = 0
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "native_evm_prover_bundle": native_bundle,
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "native_evm_prover_bundle" not in payload
+    assert (
+        "readiness report native_evm_prover_bundle artifact bytes must be a "
+        "positive integer"
+    ) in blockers
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[0] "
+        "implementation_artifact bytes must be a positive integer"
+    ) in blockers
+    assert "readiness report native_evm_prover_bundle is invalid" in blockers
     assert "Traceback" not in captured.err
 
 
@@ -18708,6 +20189,67 @@ def test_release_readiness_report_cli_rejects_malformed_corridor_without_leaking
     assert "safe corridor artifact note" not in captured.out
     assert "safe corridor int-key note" not in captured.out
     assert "safe corridor artifact int-key note" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_rejects_duplicate_corridor_evidence_artifacts_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Readiness CLI must suppress duplicate copied corridor artifact paths."""
+
+    report = load_report_module()
+    phases = report._corridor_phases()
+    first_phase, second_phase, third_phase = phases[:3]
+    artifact = {
+        "path": "evidence/00-complete.toml",
+        "bytes": 5,
+        "sha256": "1" * 64,
+    }
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "corridor": {
+                "production_ready": False,
+                "phases": {phase: "skipped" for phase in phases},
+                "evidence_artifacts": {
+                    first_phase: artifact,
+                    second_phase: dict(artifact),
+                    third_phase: {
+                        "path": "operator secret-token-corridor-artifact",
+                        "bytes": 5,
+                        "sha256": "1" * 64,
+                    },
+                },
+                "require_phase_evidence": True,
+                "blockers": [],
+            },
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "corridor" not in payload
+    assert (
+        "readiness report corridor evidence_artifacts contains duplicate path #1"
+        in blockers
+    )
+    assert (
+        f"readiness report corridor evidence_artifacts.{third_phase} path must "
+        "be a canonical public path"
+    ) in blockers
+    assert "readiness report corridor is invalid" in blockers
+    assert "evidence/00-complete.toml" not in captured.out
+    assert "operator secret-token-corridor-artifact" not in captured.out
     assert "secret-token" not in captured.out
     assert "Traceback" not in captured.err
 
@@ -19088,6 +20630,104 @@ def test_release_readiness_report_cli_rejects_duplicate_input_provenance_without
     assert "Traceback" not in captured.err
 
 
+def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_inputs_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Mixed malformed copied inputs must still report duplicate safe paths."""
+
+    report = load_report_module()
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "inputs": [
+                "evidence/00-complete.toml",
+                "operator secret-token-input",
+                {"path": "operator secret-token-input-object"},
+                "evidence/00-complete.toml",
+            ],
+            "input_artifacts": [
+                {
+                    "path": "evidence/00-complete.toml",
+                    "bytes": 5,
+                    "sha256": "1" * 64,
+                },
+            ],
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "inputs" not in payload
+    assert "readiness report inputs contains duplicate path" in blockers
+    assert (
+        "readiness report inputs must be a list of canonical strings"
+        in blockers
+    )
+    assert "operator secret-token-input" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_input_artifacts_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Mixed malformed input artifacts must still report safe duplicate paths."""
+
+    report = load_report_module()
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "inputs": ["evidence/00-complete.toml"],
+            "input_artifacts": [
+                {
+                    "path": "evidence/00-complete.toml",
+                    "bytes": 5,
+                    "sha256": "1" * 64,
+                },
+                "operator secret-token-input-artifact",
+                {
+                    "path": "evidence/00-complete.toml",
+                    "bytes": 5,
+                    "sha256": "1" * 64,
+                },
+            ],
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "input_artifacts" not in payload
+    assert (
+        "readiness report input_artifacts contains duplicate path #1"
+        in blockers
+    )
+    assert (
+        "readiness report input_artifacts must be a list of objects"
+        in blockers
+    )
+    assert "operator secret-token-input-artifact" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_release_readiness_report_cli_rejects_input_provenance_drift_without_leaking(
     monkeypatch,
     capsys,
@@ -19232,24 +20872,24 @@ def test_release_readiness_report_cli_rejects_malformed_source_inventory_without
         in blockers
     )
     assert (
-        "readiness report source_inventory[2] contains malformed unknown field name"
+        "readiness report source_inventory[1] contains malformed unknown field name"
         in blockers
     )
     assert (
-        "readiness report source_inventory[2] contains unknown field: "
+        "readiness report source_inventory[1] contains unknown field: "
         "operator_note"
     ) in blockers
     assert (
-        "readiness report source_inventory[2] validation_status must be passed "
+        "readiness report source_inventory[1] validation_status must be passed "
         "or blocked"
     ) in blockers
     assert (
-        "readiness report source_inventory[2] validation_blockers[0] contains "
+        "readiness report source_inventory[1] validation_blockers[0] contains "
         "sensitive name"
     ) in blockers
-    assert "readiness report source_inventory[3] must be an object" in blockers
+    assert "readiness report source_inventory[2] must be an object" in blockers
     assert (
-        "readiness report source_inventory[4] missing field: validation_blockers"
+        "readiness report source_inventory[3] missing field: validation_blockers"
         in blockers
     )
     assert "readiness report source_inventory is invalid" in blockers
@@ -19343,28 +20983,48 @@ def test_release_readiness_report_cli_rejects_duplicate_public_blocker_lists_wit
         item["ready"] = True
         item["blockers"] = []
     checklist["items"][0]["ready"] = False
-    root_blocker = "safe duplicated root blocker"
-    encoded_root_blocker = "safe%20duplicated%20root%20blocker"
-    checklist_blocker = "safe duplicated checklist blocker"
-    encoded_checklist_blocker = "safe%20duplicated%20checklist%20blocker"
-    corridor_blocker = "safe duplicated corridor blocker"
-    encoded_corridor_blocker = "safe%20duplicated%20corridor%20blocker"
-    source_blocker = "safe duplicated source blocker"
-    encoded_source_blocker = "safe%20duplicated%20source%20blocker"
-    native_blocker = "safe duplicated native blocker"
-    encoded_native_blocker = "safe%20duplicated%20native%20blocker"
-    user_prover_blocker = "safe duplicated user-prover blocker"
-    encoded_user_prover_blocker = "safe duplicated user&#45;prover blocker"
-    checklist["items"][0]["blockers"] = [
-        checklist_blocker,
-        encoded_checklist_blocker,
-    ]
+    duplicate_blockers = {
+        "root": (
+            "safe duplicated root blocker a",
+            "safe%20duplicated%20root%20blocker%20a",
+            "safe duplicated root blocker b",
+            "safe%20duplicated%20root%20blocker%20b",
+        ),
+        "checklist": (
+            "safe duplicated checklist blocker a",
+            "safe%20duplicated%20checklist%20blocker%20a",
+            "safe duplicated checklist blocker b",
+            "safe%20duplicated%20checklist%20blocker%20b",
+        ),
+        "corridor": (
+            "safe duplicated corridor blocker a",
+            "safe%20duplicated%20corridor%20blocker%20a",
+            "safe duplicated corridor blocker b",
+            "safe%20duplicated%20corridor%20blocker%20b",
+        ),
+        "source": (
+            "safe duplicated source blocker a",
+            "safe%20duplicated%20source%20blocker%20a",
+            "safe duplicated source blocker b",
+            "safe%20duplicated%20source%20blocker%20b",
+        ),
+        "native": (
+            "safe duplicated native blocker a",
+            "safe%20duplicated%20native%20blocker%20a",
+            "safe duplicated native blocker b",
+            "safe%20duplicated%20native%20blocker%20b",
+        ),
+        "user_prover": (
+            "safe duplicated user-prover blocker a",
+            "safe duplicated user&#45;prover blocker a",
+            "safe duplicated user-prover blocker b",
+            "safe duplicated user&#45;prover blocker b",
+        ),
+    }
+    checklist["items"][0]["blockers"] = list(duplicate_blockers["checklist"])
     corridor = json.loads(json.dumps(readiness["corridor"]))
     corridor["production_ready"] = False
-    corridor["blockers"] = [
-        corridor_blocker,
-        encoded_corridor_blocker,
-    ]
+    corridor["blockers"] = list(duplicate_blockers["corridor"])
     source_inventory = {
         gate: {
             "validation_status": "passed",
@@ -19376,33 +21036,23 @@ def test_release_readiness_report_cli_rejects_duplicate_public_blocker_lists_wit
     source_index = sorted(source_inventory).index(source_gate)
     source_inventory[source_gate] = {
         "validation_status": "blocked",
-        "validation_blockers": [
-            source_blocker,
-            encoded_source_blocker,
-        ],
+        "validation_blockers": list(duplicate_blockers["source"]),
     }
     native_bundle = json.loads(json.dumps(readiness["native_evm_prover_bundle"]))
     native_bundle["validation_status"] = "blocked"
-    native_bundle["validation_blockers"] = [
-        native_blocker,
-        encoded_native_blocker,
-    ]
+    native_bundle["validation_blockers"] = list(duplicate_blockers["native"])
     phase_status = {phase: "passed" for phase in report._corridor_phases()}
     user_surfaces = json.loads(json.dumps(report._submission_surfaces(phase_status)))
     user_surfaces[0]["validation_status"] = "blocked"
-    user_surfaces[0]["validation_blockers"] = [
-        user_prover_blocker,
-        encoded_user_prover_blocker,
-    ]
+    user_surfaces[0]["validation_blockers"] = list(
+        duplicate_blockers["user_prover"]
+    )
     monkeypatch.setattr(
         report,
         "_build_report",
         lambda *_args, **_kwargs: {
             "production_ready": False,
-            "blockers": [
-                root_blocker,
-                encoded_root_blocker,
-            ],
+            "blockers": list(duplicate_blockers["root"]),
             "release_checklist": checklist,
             "corridor": corridor,
             "source_inventory": source_inventory,
@@ -19426,40 +21076,24 @@ def test_release_readiness_report_cli_rejects_duplicate_public_blocker_lists_wit
         "user_prover_submission_surfaces",
     ):
         assert root not in payload
-    assert "readiness report blockers must not contain duplicate strings" in blockers
-    assert (
+    duplicate_errors = (
+        "readiness report blockers must not contain duplicate strings",
         "readiness report release_checklist items[0] blockers must not "
-        "contain duplicate strings"
-    ) in blockers
-    assert (
-        "readiness report corridor blockers must not contain duplicate strings"
-        in blockers
-    )
-    assert (
+        "contain duplicate strings",
+        "readiness report corridor blockers must not contain duplicate strings",
         f"readiness report source_inventory[{source_index}] validation_blockers "
-        "must not contain duplicate strings"
-    ) in blockers
-    assert (
+        "must not contain duplicate strings",
         "readiness report native_evm_prover_bundle validation_blockers must not "
-        "contain duplicate strings"
-    ) in blockers
-    assert (
+        "contain duplicate strings",
         "readiness report user_prover_submission_surfaces[0] validation_blockers "
-        "must not contain duplicate strings"
-    ) in blockers
-    for copied_blocker in (
-        root_blocker,
-        encoded_root_blocker,
-        checklist_blocker,
-        encoded_checklist_blocker,
-        corridor_blocker,
-        encoded_corridor_blocker,
-        source_blocker,
-        encoded_source_blocker,
-        native_blocker,
-        encoded_native_blocker,
-        user_prover_blocker,
-        encoded_user_prover_blocker,
+        "must not contain duplicate strings",
+    )
+    for duplicate_error in duplicate_errors:
+        assert f"{duplicate_error} #1" in blockers
+        assert f"{duplicate_error} #2" in blockers
+        assert blockers.count(f"{duplicate_error} #") == 2
+    for copied_blocker in tuple(
+        blocker for blockers in duplicate_blockers.values() for blocker in blockers
     ):
         assert copied_blocker not in captured.out
     assert "secret-token" not in captured.out
@@ -19578,6 +21212,50 @@ def test_release_readiness_report_cli_rejects_malformed_user_prover_surfaces_wit
     assert "Traceback" not in captured.err
 
 
+def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_user_prover_surfaces_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Mixed malformed user-prover rows must still report duplicate lanes."""
+
+    report = load_report_module()
+    phase_status = {phase: "passed" for phase in report._corridor_phases()}
+    valid_surfaces = report._submission_surfaces(phase_status)
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "user_prover_submission_surfaces": [
+                valid_surfaces[0],
+                "operator secret-token-user-surface",
+                dict(valid_surfaces[0]),
+            ],
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "user_prover_submission_surfaces" not in payload
+    assert (
+        "readiness report user_prover_submission_surfaces[2] lanes is duplicated"
+        in blockers
+    )
+    assert (
+        "readiness report user_prover_submission_surfaces must be a list of objects"
+        in blockers
+    )
+    assert "operator secret-token-user-surface" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_release_readiness_report_cli_rejects_empty_cryptographic_evidence_without_leaking(
     monkeypatch,
     capsys,
@@ -19613,6 +21291,52 @@ def test_release_readiness_report_cli_rejects_empty_cryptographic_evidence_witho
     assert "Traceback" not in captured.err
 
 
+def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_cryptographic_evidence_without_leaking(
+    monkeypatch,
+    capsys,
+) -> None:
+    """Mixed malformed crypto rows must still report duplicate domains."""
+
+    report = load_report_module()
+    crypto_row = {
+        "domain": report.ACTIVE_LAUNCH_DOMAIN,
+        "chain": report.ACTIVE_LAUNCH_CHAIN,
+    }
+    monkeypatch.setattr(
+        report,
+        "_build_report",
+        lambda *_args, **_kwargs: {
+            "production_ready": True,
+            "blockers": [],
+            "cryptographic_evidence": [
+                crypto_row,
+                "operator secret-token-crypto-row",
+                dict(crypto_row),
+            ],
+        },
+    )
+
+    exit_code = report.main(["--format", "json", "evidence.toml"])
+
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    blockers = "\n".join(payload["blockers"])
+    assert payload["production_ready"] is False
+    assert "cryptographic_evidence" not in payload
+    assert (
+        "readiness report cryptographic_evidence contains duplicate "
+        f"domain: {report.ACTIVE_LAUNCH_DOMAIN}"
+    ) in blockers
+    assert (
+        "readiness report cryptographic_evidence must be a list of objects"
+        in blockers
+    )
+    assert "operator secret-token-crypto-row" not in captured.out
+    assert "secret-token" not in captured.out
+    assert "Traceback" not in captured.err
+
+
 def test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_without_leaking(
     monkeypatch,
     capsys,
@@ -19639,6 +21363,10 @@ def test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_w
         "route_canary_message_proof_used": True,
         "route_canary_raw_data_owner_matches_transaction": None,
         "route_canary_signature_recovers_to_owner": None,
+        "route_canary_transaction_id": "",
+        "route_canary_transaction_owner_address": "",
+        "route_canary_signature_sha256": "",
+        "route_canary_signature_recovered_address": "",
         "route_canary_log_index": 0,
         "route_canary_target_domain": report.ACTIVE_LAUNCH_DOMAIN,
         "route_canary_proof_version": 1,
@@ -19675,6 +21403,12 @@ def test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_w
             "route_canary_message_proof_used": "true",
             "route_canary_raw_data_owner_matches_transaction": "true",
             "route_canary_signature_recovers_to_owner": "true",
+            "route_canary_transaction_id": "operator secret-token-transaction-id",
+            "route_canary_transaction_owner_address": "operator secret-token-owner",
+            "route_canary_signature_sha256": "operator secret-token-signature",
+            "route_canary_signature_recovered_address": (
+                "operator secret-token-recovered"
+            ),
             "route_canary_log_index": "0",
             "route_canary_target_domain": "1",
             "route_canary_proof_version": "1",
@@ -19704,6 +21438,10 @@ def test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_w
     del missing_row["route_canary_message_proof_used"]
     del missing_row["route_canary_raw_data_owner_matches_transaction"]
     del missing_row["route_canary_signature_recovers_to_owner"]
+    del missing_row["route_canary_transaction_id"]
+    del missing_row["route_canary_transaction_owner_address"]
+    del missing_row["route_canary_signature_sha256"]
+    del missing_row["route_canary_signature_recovered_address"]
     del missing_row["route_canary_log_index"]
     del missing_row["route_canary_target_domain"]
     del missing_row["route_canary_proof_version"]
@@ -19780,6 +21518,23 @@ def test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_w
         "readiness report cryptographic_evidence[0] "
         "route_canary_signature_recovers_to_owner must be boolean"
     ) in blockers
+    for field in (
+        "route_canary_transaction_id",
+        "route_canary_signature_sha256",
+    ):
+        assert (
+            "readiness report cryptographic_evidence[0] "
+            f"{field} must be a canonical non-zero bytes32 hex string"
+        ) in blockers
+    for field in (
+        "route_canary_transaction_owner_address",
+        "route_canary_signature_recovered_address",
+    ):
+        assert (
+            "readiness report cryptographic_evidence[0] "
+            f"{field} must be a non-zero canonical 0x41-prefixed 21-byte "
+            "hex string"
+        ) in blockers
     assert (
         "readiness report cryptographic_evidence[0] "
         "route_canary_log_index must be an integer"
@@ -19846,6 +21601,16 @@ def test_release_readiness_report_cli_rejects_malformed_cryptographic_evidence_w
         "route_canary_signature_recovers_to_owner"
     ) in blockers
     for field in (
+        "route_canary_transaction_id",
+        "route_canary_transaction_owner_address",
+        "route_canary_signature_sha256",
+        "route_canary_signature_recovered_address",
+    ):
+        assert (
+            "readiness report cryptographic_evidence[1] missing field: "
+            f"{field}"
+        ) in blockers
+    for field in (
         "route_canary_log_index",
         "route_canary_target_domain",
         "route_canary_proof_version",
@@ -19910,6 +21675,10 @@ def public_crypto_rows_for_all_domains(report) -> list[dict[str, object]]:
                 "route_canary_message_proof_used": None,
                 "route_canary_raw_data_owner_matches_transaction": None,
                 "route_canary_signature_recovers_to_owner": None,
+                "route_canary_transaction_id": "",
+                "route_canary_transaction_owner_address": "",
+                "route_canary_signature_sha256": "",
+                "route_canary_signature_recovered_address": "",
                 "route_canary_log_index": None,
                 "route_canary_target_domain": None,
                 "route_canary_proof_version": None,
@@ -19980,10 +21749,15 @@ def add_message_proof_route_canary_public_fields(
             }
         )
     if domain == report.SCCP_DOMAIN_TRON:
+        tron_owner = fixed_tron_address(seed_base + 11)
         row.update(
             {
                 "route_canary_raw_data_owner_matches_transaction": True,
                 "route_canary_signature_recovers_to_owner": True,
+                "route_canary_transaction_id": fixed_hex32(seed_base + 7),
+                "route_canary_transaction_owner_address": tron_owner,
+                "route_canary_signature_sha256": fixed_hex32(seed_base + 8),
+                "route_canary_signature_recovered_address": tron_owner,
                 "route_canary_block_number": 1000 + domain,
                 "route_canary_block_timestamp": 2000 + domain,
             }
@@ -20056,6 +21830,48 @@ def test_release_readiness_report_public_crypto_rejects_route_canary_metadata_dr
             f"{row_label} route_canary_receipt_block_finalized must be true "
             "for message-proof route canary evidence"
         ) in errors, domain
+
+
+def test_release_readiness_report_public_crypto_treats_malformed_route_canary_hash_as_absent() -> None:
+    """Malformed truthy canary hashes must not satisfy public evidence presence."""
+
+    report = load_report_module()
+
+    for domain in sorted(report.ALL_LANES_CHAIN_BY_DOMAIN):
+        rows = public_crypto_rows_for_all_domains(report)
+        target_index, target_row = next(
+            (index, row)
+            for index, row in enumerate(rows)
+            if row["domain"] == domain
+        )
+        target_row["route_canary_evidence_hash"] = "0x" + "gg" * 32
+        target_row["route_canary_evidence_source"] = (
+            report.ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN[domain]
+        )
+        target_row["route_canary_evidence_bound"] = True
+        if domain in report.MESSAGE_PROOF_ROUTE_CANARY_DOMAINS:
+            target_row["route_canary_message_proof_used"] = True
+
+        errors = report._public_cryptographic_evidence_errors(rows)
+        row_label = f"readiness report cryptographic_evidence[{target_index}]"
+
+        assert (
+            f"{row_label} route_canary_evidence_hash must be a canonical "
+            "non-zero bytes32 hex string"
+        ) in errors, domain
+        assert (
+            f"{row_label} route_canary_evidence_source must be empty when "
+            "route canary evidence is absent"
+        ) in errors, domain
+        assert (
+            f"{row_label} route_canary_evidence_bound must be false when "
+            "route canary evidence is absent"
+        ) in errors, domain
+        if domain in report.MESSAGE_PROOF_ROUTE_CANARY_DOMAINS:
+            assert (
+                f"{row_label} route_canary_message_proof_used must be null "
+                "when route canary evidence is absent"
+            ) in errors, domain
 
 
 def test_release_readiness_report_public_crypto_rejects_snapshot_route_canary_metadata_drift() -> None:
@@ -20363,14 +22179,19 @@ def test_release_readiness_report_public_crypto_rejects_route_canary_transcript_
         )
         route_message_id = fixed_hex32(0xF0 + domain)
         target_row["route_canary_evidence_hash"] = route_message_id
-        target_row["route_canary_message_id"] = route_message_id
+        transcript_field = (
+            "route_canary_signature_sha256"
+            if domain == report.SCCP_DOMAIN_TRON
+            else "route_canary_message_id"
+        )
+        target_row[transcript_field] = route_message_id
 
         errors = report._public_cryptographic_evidence_errors(rows)
 
         assert (
             f"readiness report cryptographic_evidence[{target_index}] "
             "route_canary hash role route_canary_evidence_hash must not reuse "
-            "route_canary_message_id"
+            f"{transcript_field}"
         ) in errors, domain
 
 
@@ -20380,7 +22201,9 @@ def test_release_readiness_report_public_crypto_rejects_tron_owner_signature_dri
     report = load_report_module()
     rows = public_crypto_rows_for_all_domains(report)
     tron_index, tron_row = next(
-        (index, row) for index, row in enumerate(rows) if row["domain"] == 5
+        (index, row)
+        for index, row in enumerate(rows)
+        if row["domain"] == report.SCCP_DOMAIN_TRON
     )
     tron_row.update(
         {
@@ -20389,14 +22212,18 @@ def test_release_readiness_report_public_crypto_rejects_tron_owner_signature_dri
             "route_canary_message_proof_used": True,
             "route_canary_raw_data_owner_matches_transaction": False,
             "route_canary_signature_recovers_to_owner": None,
+            "route_canary_transaction_id": fixed_hex32(0xF7),
+            "route_canary_transaction_owner_address": fixed_tron_address(0xF7),
+            "route_canary_signature_sha256": fixed_hex32(0xF8),
+            "route_canary_signature_recovered_address": fixed_tron_address(0xF7),
             "route_canary_log_index": 0,
-            "route_canary_target_domain": 5,
+            "route_canary_target_domain": report.SCCP_DOMAIN_TRON,
             "route_canary_proof_version": 1,
             "route_canary_proof_source_domain": report.SCCP_DOMAIN_SORA,
-            "route_canary_call_data_sha256": fixed_hex32(0xF7),
-            "route_canary_payload_hash": fixed_hex32(0xF8),
-            "route_canary_statement_hash": fixed_hex32(0xF9),
-            "route_canary_commitment_root": fixed_hex32(0xFA),
+            "route_canary_call_data_sha256": fixed_hex32(0xF9),
+            "route_canary_payload_hash": fixed_hex32(0xFA),
+            "route_canary_statement_hash": fixed_hex32(0xFD),
+            "route_canary_commitment_root": fixed_hex32(0xFE),
             "route_canary_finality_height": fixed_hex32(0xFB),
             "route_canary_finality_block_hash": fixed_hex32(0xFC),
             "route_canary_block_number": 123,
@@ -20419,7 +22246,7 @@ def test_release_readiness_report_public_crypto_rejects_tron_owner_signature_dri
 
     # Source-inventory marker: public crypto TRON owner/signature null policy covers every non-TRON launch domain
     for domain, chain in report.ALL_LANES_CHAIN_BY_DOMAIN.items():
-        if domain == 5:
+        if domain == report.SCCP_DOMAIN_TRON:
             continue
         rows = public_crypto_rows_for_all_domains(report)
         target_index, target_row = next(
@@ -20441,6 +22268,100 @@ def test_release_readiness_report_public_crypto_rejects_tron_owner_signature_dri
             f"{row_label} route_canary_signature_recovers_to_owner must be null "
             "for non-TRON route canary evidence"
         ) in errors, domain
+
+
+def test_release_readiness_report_public_crypto_rejects_tron_transcript_drift() -> None:
+    """Public TRON canary rows must expose canonical tx and signature transcript."""
+
+    report = load_report_module()
+    rows = public_crypto_rows_for_all_domains(report)
+    tron_index, tron_row = next(
+        (index, row)
+        for index, row in enumerate(rows)
+        if row["domain"] == report.SCCP_DOMAIN_TRON
+    )
+    add_message_proof_route_canary_public_fields(
+        report,
+        tron_row,
+        report.SCCP_DOMAIN_TRON,
+    )
+    tron_row["route_canary_transaction_id"] = ""
+    tron_row["route_canary_signature_sha256"] = "0x" + "00" * 32
+    tron_row["route_canary_transaction_owner_address"] = "0x41" + "00" * 20
+    tron_row["route_canary_signature_recovered_address"] = fixed_tron_address(0x88)
+
+    errors = report._public_cryptographic_evidence_errors(rows)
+    row_label = f"readiness report cryptographic_evidence[{tron_index}]"
+
+    for field in (
+        "route_canary_transaction_id",
+        "route_canary_signature_sha256",
+    ):
+        assert (
+            f"{row_label} {field} must be a canonical non-zero bytes32 hex string "
+            "for TRON route canary evidence"
+        ) in errors, field
+    assert (
+        f"{row_label} route_canary_transaction_owner_address must be a non-zero "
+        "canonical 0x41-prefixed 21-byte hex string for TRON route canary evidence"
+    ) in errors
+    assert (
+        f"{row_label} route_canary_signature_recovered_address must match "
+        "route_canary_transaction_owner_address"
+    ) not in errors
+
+    rows = public_crypto_rows_for_all_domains(report)
+    tron_index, tron_row = next(
+        (index, row)
+        for index, row in enumerate(rows)
+        if row["domain"] == report.SCCP_DOMAIN_TRON
+    )
+    add_message_proof_route_canary_public_fields(
+        report,
+        tron_row,
+        report.SCCP_DOMAIN_TRON,
+    )
+    tron_row["route_canary_signature_recovered_address"] = fixed_tron_address(0x89)
+
+    errors = report._public_cryptographic_evidence_errors(rows)
+    row_label = f"readiness report cryptographic_evidence[{tron_index}]"
+
+    assert (
+        f"{row_label} route_canary_signature_recovered_address must match "
+        "route_canary_transaction_owner_address"
+    ) in errors
+
+    # Source-inventory marker: public crypto TRON transcript empty policy covers every non-TRON launch domain
+    for domain, chain in report.ALL_LANES_CHAIN_BY_DOMAIN.items():
+        if domain == report.SCCP_DOMAIN_TRON:
+            continue
+        rows = public_crypto_rows_for_all_domains(report)
+        target_index, target_row = next(
+            (index, row)
+            for index, row in enumerate(rows)
+            if row["domain"] == domain and row["chain"] == chain
+        )
+        target_row["route_canary_transaction_id"] = fixed_hex32(0x91 + domain)
+        target_row["route_canary_transaction_owner_address"] = fixed_tron_address(
+            0x92 + domain
+        )
+        target_row["route_canary_signature_sha256"] = fixed_hex32(0x93 + domain)
+        target_row["route_canary_signature_recovered_address"] = fixed_tron_address(
+            0x92 + domain
+        )
+
+        errors = report._public_cryptographic_evidence_errors(rows)
+        row_label = f"readiness report cryptographic_evidence[{target_index}]"
+
+        for field in (
+            "route_canary_transaction_id",
+            "route_canary_transaction_owner_address",
+            "route_canary_signature_sha256",
+            "route_canary_signature_recovered_address",
+        ):
+            assert (
+                f"{row_label} {field} must be empty for non-TRON lanes"
+            ) in errors, (domain, field)
 
 
 def test_release_readiness_report_public_crypto_rejects_non_tron_route_canary_block_metadata() -> None:
@@ -20518,7 +22439,7 @@ def test_release_readiness_report_public_crypto_rejects_route_canary_transcript_
                 "route_canary_proof_source_domain": report.SCCP_DOMAIN_SORA,
             }
         )
-        if domain == 5:
+        if domain == report.SCCP_DOMAIN_TRON:
             target_row["route_canary_raw_data_owner_matches_transaction"] = True
             target_row["route_canary_signature_recovers_to_owner"] = True
         for field in transcript_fields:
@@ -20596,7 +22517,7 @@ def test_release_readiness_report_public_crypto_rejects_route_canary_scalar_drif
         )
         for offset, field in enumerate(transcript_fields):
             target_row[field] = fixed_hex32(0xE0 + domain * 10 + offset)
-        if domain == 5:
+        if domain == report.SCCP_DOMAIN_TRON:
             target_row["route_canary_raw_data_owner_matches_transaction"] = True
             target_row["route_canary_signature_recovers_to_owner"] = True
 
@@ -20770,12 +22691,15 @@ def test_release_readiness_report_public_crypto_rejects_route_canary_transcript_
 
     report = load_report_module()
     all_lanes = report._load_all_lanes_module()
-    transcript_field = "route_canary_message_id"
-
     # Source-inventory marker: public crypto route-canary transcript template replays cover every launch domain
     for domain, chain in report.ALL_LANES_CHAIN_BY_DOMAIN.items():
         profile = all_lanes.LANE_PROFILES[domain]
         template_hashes = all_lanes._source_material_template_hashes(profile)
+        transcript_field = (
+            "route_canary_signature_sha256"
+            if domain == report.SCCP_DOMAIN_TRON
+            else "route_canary_message_id"
+        )
         for template_field, template_hash in template_hashes.items():
             rows = public_crypto_rows_for_all_domains(report)
             target_index, target_row = next(
@@ -20956,23 +22880,27 @@ def test_release_readiness_report_public_crypto_template_loader_failure_is_bound
     )
     target_row["route_canary_message_id"] = fixed_hex32(0xF5)
 
-    def broken_template_hashes(_domain):
-        raise RuntimeError("secret-token-template-loader")
+    for exception_type in (RuntimeError, report.argparse.ArgumentTypeError):
 
-    monkeypatch.setattr(
-        report,
-        "_source_adapter_gate_template_hashes",
-        broken_template_hashes,
-    )
+        def broken_template_hashes(_domain, exception_type=exception_type):
+            raise exception_type("secret-token-template-loader")
 
-    errors = report._public_cryptographic_evidence_errors(rows)
-    joined_errors = "\n".join(errors)
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                report,
+                "_source_adapter_gate_template_hashes",
+                broken_template_hashes,
+            )
 
-    assert (
-        f"readiness report cryptographic_evidence[{target_index}] "
-        "template material validation failed"
-    ) in joined_errors
-    assert "secret-token-template-loader" not in joined_errors
+            errors = report._public_cryptographic_evidence_errors(rows)
+
+        joined_errors = "\n".join(errors)
+
+        assert (
+            f"readiness report cryptographic_evidence[{target_index}] "
+            "template material validation failed"
+        ) in joined_errors
+        assert "secret-token-template-loader" not in joined_errors
 
 
 def test_release_readiness_report_public_crypto_rejects_source_gate_template_replays_when_required_false_or_malformed() -> None:
@@ -22336,6 +24264,69 @@ def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_dr
     assert payload["release_checklist"]["ready"] is False
 
 
+def test_release_readiness_report_numbers_repeated_sensitive_native_evm_sdk_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Repeated sensitive SDK names must stay distinct without leaking names."""
+
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    secret_unknown_sdk = "secret-token-sdk"
+    private_unknown_sdk = "private-key-sdk"
+    missing_sdks = [
+        payload["native_sdk_artifacts"][0]["sdk"],
+        payload["native_sdk_artifacts"][1]["sdk"],
+    ]
+    payload["native_sdk_artifacts"][0]["sdk"] = secret_unknown_sdk
+    payload["native_sdk_artifacts"][1]["sdk"] = private_unknown_sdk
+    native_bundle.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    payload = json.loads(completed.stdout)
+    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+    assert (
+        "native_sdk_artifacts contains unknown sdk with sensitive name #1"
+        in blockers
+    )
+    assert (
+        "native_sdk_artifacts contains unknown sdk with sensitive name #2"
+        in blockers
+    )
+    assert (
+        "native_sdk_artifacts contains unknown sdk with sensitive name"
+        not in blockers
+    )
+    for sdk in missing_sdks:
+        assert f"native_sdk_artifacts missing sdk: {sdk}" in blockers
+    assert secret_unknown_sdk not in completed.stdout
+    assert secret_unknown_sdk not in completed.stderr
+    assert private_unknown_sdk not in completed.stdout
+    assert private_unknown_sdk not in completed.stderr
+    assert payload["release_checklist"]["ready"] is False
+
+
 def test_release_readiness_report_blocks_native_evm_prover_sdk_implementation_artifact_drift(
     tmp_path: Path,
 ) -> None:
@@ -23361,12 +25352,14 @@ def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results(
     payload = json.loads(native_bundle.read_text(encoding="utf-8"))
     rogue_sdk = "rogue-sdk"
     secret_sdk = "secret-token-sdk"
+    private_sdk = "private-key-sdk"
 
     parity_path = tmp_path / payload["cross_sdk_fixture_parity_artifact"]
     parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
     parity_result = next(iter(parity_payload["sdk_results"].values()))
     parity_payload["sdk_results"][rogue_sdk] = dict(parity_result)
     parity_payload["sdk_results"][secret_sdk] = dict(parity_result)
+    parity_payload["sdk_results"][private_sdk] = dict(parity_result)
     parity_bytes = (
         json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -23380,6 +25373,7 @@ def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results(
     self_test_result = next(iter(self_test_payload["sdk_results"].values()))
     self_test_payload["sdk_results"][rogue_sdk] = dict(self_test_result)
     self_test_payload["sdk_results"][secret_sdk] = dict(self_test_result)
+    self_test_payload["sdk_results"][private_sdk] = dict(self_test_result)
     self_test_bytes = (
         json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -23420,7 +25414,11 @@ def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results(
     ) in blockers
     assert (
         "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
-        "sdk_results contains unknown sdk with sensitive name"
+        "sdk_results contains unknown sdk with sensitive name #1"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        "sdk_results contains unknown sdk with sensitive name #2"
     ) in blockers
     assert (
         "native EVM Groth16 prover bundle native_prover_self_test_artifact "
@@ -23428,11 +25426,28 @@ def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results(
     ) in blockers
     assert (
         "native EVM Groth16 prover bundle native_prover_self_test_artifact "
-        "sdk_results contains unknown sdk with sensitive name"
+        "sdk_results contains unknown sdk with sensitive name #1"
     ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle native_prover_self_test_artifact "
+        "sdk_results contains unknown sdk with sensitive name #2"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        "sdk_results contains unknown sdk with sensitive name"
+        not in blockers
+    )
+    assert (
+        "native EVM Groth16 prover bundle native_prover_self_test_artifact "
+        "sdk_results contains unknown sdk with sensitive name"
+        not in blockers
+    )
     assert secret_sdk not in "\n".join(blockers)
     assert secret_sdk not in completed.stdout
     assert secret_sdk not in completed.stderr
+    assert private_sdk not in "\n".join(blockers)
+    assert private_sdk not in completed.stdout
+    assert private_sdk not in completed.stderr
     assert payload["release_checklist"]["ready"] is False
 
 
@@ -23939,41 +25954,49 @@ def test_release_readiness_report_blocks_native_evm_prover_percent_encoded_path(
     """Native prover artifact paths must not smuggle encoded traversal."""
 
     evidence, _ = write_active_launch_evidence(tmp_path)
-    native_bundle = write_native_evm_prover_bundle(
-        tmp_path,
-        evidence,
-        overrides={
-            "proof_artifact": "native-prover-artifacts/%252e%252e/secret-token.bin"
-        },
+    cases = (
+        "native-prover-artifacts/%252e%252e/secret-token.bin",
+        "native-prover-artifacts/"
+        f"{repeated_percent_token('2e')}{repeated_percent_token('2e')}"
+        "/proof.bin",
     )
 
-    completed = subprocess.run(
-        [
-            "python3",
-            str(SCRIPT),
-            "--format",
-            "json",
-            "--phase-result",
-            "all=passed",
-            "--native-evm-prover-bundle",
-            str(native_bundle),
-            str(evidence),
-        ],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    for index, proof_artifact in enumerate(cases):
+        native_bundle_root = tmp_path / f"native-bundle-{index}"
+        native_bundle_root.mkdir()
+        native_bundle = write_native_evm_prover_bundle(
+            native_bundle_root,
+            evidence,
+            overrides={"proof_artifact": proof_artifact},
+        )
 
-    assert completed.returncode == 1
-    payload = json.loads(completed.stdout)
-    blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
-    assert (
-        "native EVM Groth16 prover bundle proof_artifact path contains "
-        "percent-encoded traversal segment"
-    ) in blockers
-    assert "secret-token" not in "\n".join(blockers)
-    assert payload["release_checklist"]["ready"] is False
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--format",
+                "json",
+                "--phase-result",
+                "all=passed",
+                "--native-evm-prover-bundle",
+                str(native_bundle),
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 1
+        payload = json.loads(completed.stdout)
+        blockers = payload["native_evm_prover_bundle"]["validation_blockers"]
+        assert (
+            "native EVM Groth16 prover bundle proof_artifact path contains "
+            "percent-encoded traversal segment"
+        ) in blockers
+        assert "secret-token" not in "\n".join(blockers)
+        assert payload["release_checklist"]["ready"] is False
 
 
 def test_release_readiness_report_blocks_native_evm_prover_forbidden_path_marker(
@@ -24090,11 +26113,7 @@ def test_release_readiness_report_accepts_phase_evidence_dir(
     evidence, _ = write_complete_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
     phase_artifacts = write_downloaded_phase_artifacts(tmp_path)
-    js_log = (
-        phase_artifacts
-        / "sccp-production-corridor-js-sdk"
-        / "js-sdk.log"
-    )
+    js_log = phase_artifacts / "sccp-production-corridor-js-sdk" / "js-sdk.log"
 
     completed = subprocess.run(
         [
@@ -24239,6 +26258,7 @@ def test_release_readiness_path_helpers_reject_decoded_sensitive_marker_families
         "operator/secret%20key.log",
         "operator/private&#45;key.log",
         "operator/password.log",
+        "operator/passphrase.log",
         "operator/bearer.log",
         "operator/authorization.log",
         "operator/access%20key.log",
@@ -24250,6 +26270,7 @@ def test_release_readiness_path_helpers_reject_decoded_sensitive_marker_families
         "operator/recovery%2dphrase.log",
         "operator/seed%20phrase.log",
         "operator/signing_key.log",
+        "operator/session.log",
         "operator/token.log",
     )
     helpers = (
@@ -24276,6 +26297,7 @@ def test_release_readiness_path_helpers_reject_decoded_sensitive_marker_families
         "secret%20key",
         "private&#45;key",
         "password",
+        "passphrase",
         "bearer",
         "authorization",
         "access%20key",
@@ -24287,6 +26309,7 @@ def test_release_readiness_path_helpers_reject_decoded_sensitive_marker_families
         "recovery%2dphrase",
         "seed%20phrase",
         "signing_key",
+        "session",
         "token",
     )
     for name in sensitive_names:
@@ -24341,12 +26364,13 @@ def test_release_readiness_report_requires_contract_smoke_node_success_evidence(
                 "--phase-result",
                 "contract-smoke=passed",
                 "--phase-evidence",
-                f"contract-smoke={corridor_log}",
+                f"contract-smoke={corridor_log.name}",
                 "--native-evm-prover-bundle",
-                str(native_bundle),
-                str(evidence),
+                native_bundle.name,
+                evidence.name,
             ],
             check=False,
+            cwd=tmp_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -24381,12 +26405,13 @@ def test_release_readiness_report_rejects_duplicate_phase_evidence_assignment(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={first_log}",
+            f"rust-sccp={first_log.name}",
             "--phase-evidence",
-            f"rust-sccp={second_log}",
-            str(evidence),
+            f"rust-sccp={second_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=tmp_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -24511,12 +26536,13 @@ def test_release_readiness_report_suppresses_duplicate_phase_evidence_paths(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={first_log}",
+            f"rust-sccp={first_log.name}",
             "--phase-evidence",
-            f"rust-sccp={second_log}",
-            str(evidence),
+            f"rust-sccp={second_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=first_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -24785,10 +26811,11 @@ def test_release_readiness_report_rejects_padded_phase_evidence_name(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f" rust-sccp ={corridor_log}",
-            str(evidence),
+            f" rust-sccp ={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -24948,10 +26975,11 @@ def test_release_readiness_report_rejects_markdown_phase_evidence_name(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust|sccp={corridor_log}",
-            str(evidence),
+            f"rust|sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -24980,10 +27008,11 @@ def test_release_readiness_report_rejects_malformed_phase_evidence_name(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust_sccp={corridor_log}",
-            str(evidence),
+            f"rust_sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25012,10 +27041,11 @@ def test_release_readiness_report_suppresses_unknown_phase_evidence_name(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"secret-token={corridor_log}",
-            str(evidence),
+            f"secret-token={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25049,10 +27079,11 @@ def test_release_readiness_report_rejects_phase_evidence_dir_override(
             "--phase-evidence-dir",
             str(phase_artifacts),
             "--phase-evidence",
-            f"rust-sccp={override_log}",
-            str(evidence),
+            f"rust-sccp={override_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=override_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25083,10 +27114,11 @@ def test_release_readiness_report_rejects_forged_phase_log(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"all={corridor_log}",
-            str(evidence),
+            f"all={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=tmp_path,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25132,10 +27164,11 @@ def test_release_readiness_report_rejects_output_before_phase_marker(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25182,10 +27215,11 @@ def test_release_readiness_report_rejects_prefix_alias_phase_marker(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25234,10 +27268,11 @@ def test_release_readiness_report_rejects_duplicate_phase_marker(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25289,10 +27324,11 @@ def test_release_readiness_report_rejects_prefix_marker_hidden_failure(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25345,10 +27381,11 @@ def test_release_readiness_report_rejects_partial_multi_phase_hidden_failure(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25382,10 +27419,11 @@ def test_release_readiness_report_rejects_out_of_order_full_corridor_log(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25421,10 +27459,11 @@ def test_release_readiness_report_rejects_full_corridor_success_before_command(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25472,10 +27511,11 @@ def test_release_readiness_report_rejects_extra_rust_success_before_command(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25523,10 +27563,11 @@ def test_release_readiness_report_rejects_unexpected_phase_command(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25577,10 +27618,11 @@ def test_release_readiness_report_rejects_duplicate_rust_command(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25630,10 +27672,11 @@ def test_release_readiness_report_rejects_duplicate_rust_success_after_command(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25673,10 +27716,11 @@ def test_release_readiness_report_rejects_full_corridor_final_command_only_succe
                 "--phase-result",
                 f"{phase}=passed",
                 "--phase-evidence",
-                f"{phase}={corridor_log}",
-                str(evidence),
+                f"{phase}={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -25721,12 +27765,13 @@ def test_release_readiness_report_rejects_success_before_required_late_command(
                 "--phase-result",
                 f"{phase}=passed",
                 "--phase-evidence",
-                f"{phase}={corridor_log}",
+                f"{phase}={corridor_log.name}",
                 "--native-evm-prover-bundle",
-                str(native_bundle),
-                str(evidence),
+                native_bundle.name,
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -25770,12 +27815,13 @@ def test_release_readiness_report_rejects_success_only_after_final_required_comm
                 "--phase-result",
                 f"{phase}=passed",
                 "--phase-evidence",
-                f"{phase}={corridor_log}",
+                f"{phase}={corridor_log.name}",
                 "--native-evm-prover-bundle",
-                str(native_bundle),
-                str(evidence),
+                native_bundle.name,
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -25811,10 +27857,11 @@ def test_release_readiness_report_rejects_phase_log_without_expected_command(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25853,10 +27900,11 @@ def test_release_readiness_rejects_java_android_log_without_source_harness(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"java-android={corridor_log}",
-            str(evidence),
+            f"java-android={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25899,10 +27947,11 @@ def test_release_readiness_rejects_java_android_log_without_ton_harness(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"java-android={corridor_log}",
-            str(evidence),
+            f"java-android={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -25942,10 +27991,11 @@ def test_release_readiness_rejects_kotlin_log_without_ton_prover_test(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"kotlin-sdk={corridor_log}",
-            str(evidence),
+            f"kotlin-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26001,10 +28051,11 @@ def test_release_readiness_report_requires_release_verifier_tests_in_evidence_ph
                 "--phase-result",
                 "evidence-scripts=passed",
                 "--phase-evidence",
-                f"evidence-scripts={corridor_log}",
-                str(evidence),
+                f"evidence-scripts={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -26058,10 +28109,11 @@ def test_release_readiness_report_requires_retired_network_scan_evidence(
             "--phase-result",
             "evidence-scripts=passed",
             "--phase-evidence",
-            f"evidence-scripts={corridor_log}",
-            str(evidence),
+            f"evidence-scripts={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26116,10 +28168,11 @@ def test_release_readiness_report_rejects_output_only_retired_network_scan_evide
             "--phase-result",
             "evidence-scripts=passed",
             "--phase-evidence",
-            f"evidence-scripts={corridor_log}",
-            str(evidence),
+            f"evidence-scripts={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26171,10 +28224,11 @@ def test_release_readiness_report_rejects_echoed_retired_network_scan_command(
             "--phase-result",
             "evidence-scripts=passed",
             "--phase-evidence",
-            f"evidence-scripts={corridor_log}",
-            str(evidence),
+            f"evidence-scripts={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26220,10 +28274,11 @@ def test_release_readiness_report_rejects_phase_log_without_phase_completion(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26268,10 +28323,11 @@ def test_release_readiness_report_rejects_command_line_only_completion_marker(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26316,10 +28372,11 @@ def test_release_readiness_report_rejects_nonexact_completion_marker(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26364,10 +28421,11 @@ def test_release_readiness_report_rejects_completion_before_phase_evidence(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26412,10 +28470,11 @@ def test_release_readiness_report_rejects_success_marker_before_phase_command(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26461,10 +28520,11 @@ def test_release_readiness_report_rejects_command_after_completion(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26510,10 +28570,11 @@ def test_release_readiness_report_rejects_output_after_completion(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26556,10 +28617,11 @@ def test_release_readiness_report_rejects_command_line_only_full_completion_mark
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26604,10 +28666,11 @@ def test_release_readiness_report_rejects_marker_only_full_corridor_completion(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26653,10 +28716,11 @@ def test_release_readiness_report_rejects_command_line_only_success_marker(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26702,10 +28766,11 @@ def test_release_readiness_report_rejects_xtrace_success_marker(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26751,10 +28816,11 @@ def test_release_readiness_report_rejects_obfuscated_xtrace_success_marker(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26804,10 +28870,11 @@ def test_release_readiness_report_rejects_hidden_phase_success_marker(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26856,10 +28923,11 @@ def test_release_readiness_report_rejects_decorated_phase_success_marker(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26908,10 +28976,11 @@ def test_release_readiness_report_rejects_negated_success_marker(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -26957,10 +29026,11 @@ def test_release_readiness_report_rejects_diagnostic_success_marker(
             "--phase-result",
             "all=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -27010,10 +29080,11 @@ def test_release_readiness_report_rejects_phase_failure_output_marker(
             "--phase-result",
             "evidence-scripts=passed",
             "--phase-evidence",
-            f"evidence-scripts={corridor_log}",
-            str(evidence),
+            f"evidence-scripts={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -27063,10 +29134,11 @@ def test_release_readiness_report_rejects_ansi_obfuscated_failure_output(
             "--phase-result",
             "evidence-scripts=passed",
             "--phase-evidence",
-            f"evidence-scripts={corridor_log}",
-            str(evidence),
+            f"evidence-scripts={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -27116,10 +29188,11 @@ def test_release_readiness_report_rejects_unicode_format_obfuscated_failure_outp
             "--phase-result",
             "evidence-scripts=passed",
             "--phase-evidence",
-            f"evidence-scripts={corridor_log}",
-            str(evidence),
+            f"evidence-scripts={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -27193,10 +29266,11 @@ def test_release_readiness_report_rejects_cargo_diagnostic_output_transcript(
                 "--phase-result",
                 f"{phase}=passed",
                 "--phase-evidence",
-                f"{phase}={corridor_log}",
-                str(evidence),
+                f"{phase}={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -27263,10 +29337,11 @@ def test_release_readiness_report_rejects_js_node_diagnostic_output_transcript(
                 "--phase-result",
                 "js-sdk=passed",
                 "--phase-evidence",
-                f"js-sdk={corridor_log}",
-                str(evidence),
+                f"js-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -27335,10 +29410,11 @@ def test_release_readiness_report_rejects_python_diagnostic_output_transcript(
                 "--phase-result",
                 "python-sdk=passed",
                 "--phase-evidence",
-                f"python-sdk={corridor_log}",
-                str(evidence),
+                f"python-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -27406,10 +29482,11 @@ def test_release_readiness_report_rejects_swift_diagnostic_output_transcript(
                 "--phase-result",
                 "swift-sdk=passed",
                 "--phase-evidence",
-                f"swift-sdk={corridor_log}",
-                str(evidence),
+                f"swift-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -27474,10 +29551,11 @@ def test_release_readiness_report_rejects_gradle_diagnostic_output_transcript(
                 "--phase-result",
                 f"{phase}=passed",
                 "--phase-evidence",
-                f"{phase}={corridor_log}",
-                str(evidence),
+                f"{phase}={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -27544,10 +29622,11 @@ def test_release_readiness_report_rejects_evidence_script_diagnostic_output_tran
                 "--phase-result",
                 "evidence-scripts=passed",
                 "--phase-evidence",
-                f"evidence-scripts={corridor_log}",
-                str(evidence),
+                f"evidence-scripts={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -27613,10 +29692,11 @@ def test_release_readiness_report_rejects_contract_smoke_diagnostic_output_trans
                 "--phase-result",
                 "contract-smoke=passed",
                 "--phase-evidence",
-                f"contract-smoke={corridor_log}",
-                str(evidence),
+                f"contract-smoke={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -27662,10 +29742,11 @@ def test_release_readiness_report_rejects_output_only_phase_command_fragment(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -27717,10 +29798,11 @@ def test_release_readiness_report_rejects_bare_phase_command_fragment(
             "--phase-result",
             "evidence-scripts=passed",
             "--phase-evidence",
-            f"evidence-scripts={corridor_log}",
-            str(evidence),
+            f"evidence-scripts={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -27766,10 +29848,11 @@ def test_release_readiness_report_rejects_short_circuited_phase_command_fragment
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -27823,10 +29906,11 @@ def test_release_readiness_report_rejects_comment_only_phase_command_fragment(
             "--phase-result",
             "evidence-scripts=passed",
             "--phase-evidence",
-            f"evidence-scripts={corridor_log}",
-            str(evidence),
+            f"evidence-scripts={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -27880,10 +29964,11 @@ def test_release_readiness_report_rejects_inert_option_phase_command_fragment(
             "--phase-result",
             "kotlin-sdk=passed",
             "--phase-evidence",
-            f"kotlin-sdk={corridor_log}",
-            str(evidence),
+            f"kotlin-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -27937,10 +30022,11 @@ def test_release_readiness_report_rejects_prefix_android_harness_phase_command_f
             "--phase-result",
             "java-android=passed",
             "--phase-evidence",
-            f"java-android={corridor_log}",
-            str(evidence),
+            f"java-android={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -28006,10 +30092,11 @@ def test_release_readiness_report_rejects_nonexact_android_harness_phase_command
                 "--phase-result",
                 "java-android=passed",
                 "--phase-evidence",
-                f"java-android={corridor_log}",
-                str(evidence),
+                f"java-android={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -28062,10 +30149,11 @@ def test_release_readiness_report_rejects_narrow_kotlin_phase_command_fragment(
             "--phase-result",
             "kotlin-sdk=passed",
             "--phase-evidence",
-            f"kotlin-sdk={corridor_log}",
-            str(evidence),
+            f"kotlin-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -28126,10 +30214,11 @@ def test_release_readiness_report_rejects_nonexact_kotlin_selector_phase_command
                 "--phase-result",
                 "kotlin-sdk=passed",
                 "--phase-evidence",
-                f"kotlin-sdk={corridor_log}",
-                str(evidence),
+                f"kotlin-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -28181,10 +30270,11 @@ def test_release_readiness_report_rejects_gradle_dry_run_phase_command_fragment(
             "--phase-result",
             "kotlin-sdk=passed",
             "--phase-evidence",
-            f"kotlin-sdk={corridor_log}",
-            str(evidence),
+            f"kotlin-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -28231,10 +30321,11 @@ def test_release_readiness_report_rejects_pytest_suffix_phase_command_fragment(
             "--phase-result",
             "python-sdk=passed",
             "--phase-evidence",
-            f"python-sdk={corridor_log}",
-            str(evidence),
+            f"python-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -28281,10 +30372,11 @@ def test_release_readiness_report_rejects_pytest_extra_positional_phase_command_
             "--phase-result",
             "python-sdk=passed",
             "--phase-evidence",
-            f"python-sdk={corridor_log}",
-            str(evidence),
+            f"python-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -28335,10 +30427,11 @@ def test_release_readiness_report_rejects_node_extra_positional_phase_command_fr
             "--phase-result",
             "js-sdk=passed",
             "--phase-evidence",
-            f"js-sdk={corridor_log}",
-            str(evidence),
+            f"js-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -28394,10 +30487,11 @@ def test_release_readiness_report_rejects_dotnet_suffix_phase_command_fragment(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -28473,10 +30567,11 @@ def test_release_readiness_report_rejects_dotnet_success_before_test_command(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -28535,10 +30630,11 @@ def test_release_readiness_report_rejects_extra_dotnet_success_before_test_comma
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -28607,10 +30703,11 @@ def test_release_readiness_report_rejects_duplicate_dotnet_success_after_test_co
                 "--phase-result",
                 "dotnet-sdk=passed",
                 "--phase-evidence",
-                f"dotnet-sdk={corridor_log}",
-                str(evidence),
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -28667,10 +30764,11 @@ def test_release_readiness_report_rejects_extra_dotnet_setup_markers_before_comm
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -28754,10 +30852,11 @@ def test_release_readiness_report_rejects_dotnet_version_before_version_command(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -28833,10 +30932,11 @@ def test_release_readiness_report_rejects_dotnet_info_before_version_command(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -28912,10 +31012,11 @@ def test_release_readiness_report_rejects_dotnet_host_markers_before_info_comman
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29015,10 +31116,11 @@ def test_release_readiness_report_rejects_dotnet_bridge_markers_before_build_com
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29083,10 +31185,11 @@ def test_release_readiness_report_rejects_dotnet_bridge_sha_before_path(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29142,10 +31245,11 @@ def test_release_readiness_report_rejects_extra_dotnet_bridge_sha_before_path(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29205,10 +31309,11 @@ def test_release_readiness_report_rejects_extra_dotnet_bridge_path_after_sha(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29264,10 +31369,11 @@ def test_release_readiness_report_rejects_duplicate_dotnet_bridge_sha_after_sha(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29353,7 +31459,7 @@ def test_release_readiness_report_rejects_dotnet_malformed_bridge_transcript(
                 else line
                 for line in phase_lines
             ]
-        corridor_log = tmp_path / f"forged-dotnet-sdk-malformed-bridge-{index}.log"
+        corridor_log = case_dir / f"forged-dotnet-sdk-malformed-bridge-{index}.log"
         corridor_log.write_text(
             "\n".join(
                 (
@@ -29376,10 +31482,11 @@ def test_release_readiness_report_rejects_dotnet_malformed_bridge_transcript(
                 "--phase-result",
                 "dotnet-sdk=passed",
                 "--phase-evidence",
-                f"dotnet-sdk={corridor_log}",
-                str(evidence),
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -29420,7 +31527,7 @@ def test_release_readiness_report_rejects_dotnet_bridge_target_dir_drift(
             replacement if "cargo build -p connect_norito_bridge" in line else line
             for line in phase_successful_lines(report, "dotnet-sdk")
         ]
-        corridor_log = tmp_path / f"forged-dotnet-sdk-bridge-target-{index}.log"
+        corridor_log = case_dir / f"forged-dotnet-sdk-bridge-target-{index}.log"
         corridor_log.write_text(
             "\n".join(
                 (
@@ -29443,10 +31550,11 @@ def test_release_readiness_report_rejects_dotnet_bridge_target_dir_drift(
                 "--phase-result",
                 "dotnet-sdk=passed",
                 "--phase-evidence",
-                f"dotnet-sdk={corridor_log}",
-                str(evidence),
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -29497,10 +31605,11 @@ def test_release_readiness_report_rejects_dotnet_bridge_build_extra_env(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29578,10 +31687,11 @@ def test_release_readiness_report_rejects_dotnet_test_before_restore_command(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29635,10 +31745,11 @@ def test_release_readiness_report_rejects_duplicate_dotnet_restore_command(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29688,10 +31799,11 @@ def test_release_readiness_report_rejects_dotnet_non_windows_transcript(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29748,10 +31860,11 @@ def test_release_readiness_report_rejects_dotnet_malformed_version_transcript(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29804,10 +31917,11 @@ def test_release_readiness_report_rejects_dotnet_prerelease_version_transcript(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29860,10 +31974,11 @@ def test_release_readiness_report_rejects_dotnet_zero_padded_version_transcript(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29916,10 +32031,11 @@ def test_release_readiness_report_rejects_dotnet_non_8_0_version_transcript(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -29972,10 +32088,11 @@ def test_release_readiness_report_rejects_dotnet_malformed_os_transcript(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -30026,10 +32143,11 @@ def test_release_readiness_report_rejects_dotnet_bare_passed_transcript(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -30083,10 +32201,11 @@ def test_release_readiness_report_rejects_dotnet_failed_summary_transcript(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -30144,10 +32263,11 @@ def test_release_readiness_report_rejects_extra_dotnet_malformed_summary(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -30217,10 +32337,11 @@ def test_release_readiness_report_rejects_dotnet_error_output_transcript(
                 "--phase-result",
                 "dotnet-sdk=passed",
                 "--phase-evidence",
-                f"dotnet-sdk={corridor_log}",
-                str(evidence),
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -30275,10 +32396,11 @@ def test_release_readiness_report_rejects_dotnet_zero_passed_summary_transcript(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -30332,10 +32454,11 @@ def test_release_readiness_report_rejects_dotnet_skipped_summary_transcript(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -30389,10 +32512,11 @@ def test_release_readiness_report_rejects_dotnet_noncanonical_zero_skipped_summa
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -30456,10 +32580,11 @@ def test_release_readiness_report_rejects_dotnet_summary_non_space_whitespace(
                 "--phase-result",
                 "dotnet-sdk=passed",
                 "--phase-evidence",
-                f"dotnet-sdk={corridor_log}",
-                str(evidence),
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -30523,10 +32648,11 @@ def test_release_readiness_report_rejects_dotnet_summary_collapsed_spacing(
                 "--phase-result",
                 "dotnet-sdk=passed",
                 "--phase-evidence",
-                f"dotnet-sdk={corridor_log}",
-                str(evidence),
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -30543,59 +32669,66 @@ def test_release_readiness_report_rejects_dotnet_summary_collapsed_spacing(
 def test_release_readiness_report_rejects_dotnet_malformed_duration_summary(
     tmp_path: Path,
 ) -> None:
-    """.NET phase evidence must report a VSTest-style numeric duration."""
+    """.NET phase evidence must report a canonical VSTest-style duration."""
 
     evidence, _ = write_complete_evidence(tmp_path)
     report = load_report_module()
-    corridor_log = tmp_path / "forged-dotnet-sdk-malformed-duration-summary.log"
-    success_fragments = tuple(
-        "Passed! - Failed: 0, Passed: 42, Skipped: 0, Total: 42, "
-        "Duration: definitely-not-a-duration - "
-        "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
-        if fragment.startswith("Passed!")
-        else fragment
-        for fragment in phase_success_lines(report, "dotnet-sdk")
+    cases = (
+        ("free-form", "definitely-not-a-duration"),
+        ("duplicate-unit", "1 ms 2 ms"),
+        ("out-of-order-unit", "1 ms 2 s"),
     )
-    corridor_log.write_text(
-        "\n".join(
-            (
-                "==> SCCP production corridor: dotnet-sdk",
-                *phase_command_lines(
-                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
-                ),
-                *success_fragments,
-                "SCCP production corridor completed.",
-                "",
-            )
-        ),
-        encoding="utf-8",
-    )
+    for case_name, duration in cases:
+        corridor_log = tmp_path / f"forged-dotnet-sdk-duration-{case_name}.log"
+        success_fragments = tuple(
+            "Passed! - Failed: 0, Passed: 42, Skipped: 0, Total: 42, "
+            f"Duration: {duration} - "
+            "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+            if fragment.startswith("Passed!")
+            else fragment
+            for fragment in phase_success_lines(report, "dotnet-sdk")
+        )
+        corridor_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: dotnet-sdk",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["dotnet-sdk"]
+                    ),
+                    *success_fragments,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
 
-    completed = subprocess.run(
-        [
-            "python3",
-            str(SCRIPT),
-            "--require-phase-evidence",
-            "--phase-result",
-            "all=missing",
-            "--phase-result",
-            "dotnet-sdk=passed",
-            "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
-        ],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--require-phase-evidence",
+                "--phase-result",
+                "all=missing",
+                "--phase-result",
+                "dotnet-sdk=passed",
+                "--phase-evidence",
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
+            ],
+            check=False,
+            cwd=corridor_log.parent,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
 
-    assert completed.returncode == 1
-    assert "Status: NOT READY" in completed.stdout
-    assert (
-        "production corridor phase dotnet-sdk evidence artifact is missing "
-        "expected phase-block success marker: Passed!"
-    ) in completed.stdout
+        assert completed.returncode == 1, case_name
+        assert "Status: NOT READY" in completed.stdout, case_name
+        assert (
+            "production corridor phase dotnet-sdk evidence artifact is missing "
+            "expected phase-block success marker: Passed!"
+        ) in completed.stdout, case_name
 
 
 def test_release_readiness_report_rejects_dotnet_wrong_assembly_summary_transcript(
@@ -30638,10 +32771,11 @@ def test_release_readiness_report_rejects_dotnet_wrong_assembly_summary_transcri
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -30695,10 +32829,11 @@ def test_release_readiness_report_rejects_dotnet_inconsistent_total_transcript(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -30750,10 +32885,11 @@ def test_release_readiness_report_rejects_dotnet_missing_architecture_transcript
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -30811,10 +32947,11 @@ def test_release_readiness_report_rejects_dotnet_malformed_rid_transcript(
                 "--phase-result",
                 "dotnet-sdk=passed",
                 "--phase-evidence",
-                f"dotnet-sdk={corridor_log}",
-                str(evidence),
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -30874,10 +33011,11 @@ def test_release_readiness_report_rejects_dotnet_malformed_architecture_transcri
                 "--phase-result",
                 "dotnet-sdk=passed",
                 "--phase-evidence",
-                f"dotnet-sdk={corridor_log}",
-                str(evidence),
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -30927,10 +33065,11 @@ def test_release_readiness_report_rejects_dotnet_rid_architecture_mismatch(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -30982,10 +33121,11 @@ def test_release_readiness_report_rejects_dotnet_missing_trx_transcript(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -31039,10 +33179,11 @@ def test_release_readiness_report_rejects_dotnet_malformed_trx_bytes_transcript(
                 "--phase-result",
                 "dotnet-sdk=passed",
                 "--phase-evidence",
-                f"dotnet-sdk={corridor_log}",
-                str(evidence),
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -31097,10 +33238,11 @@ def test_release_readiness_report_rejects_dotnet_trx_bytes_before_trx_path(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -31150,10 +33292,11 @@ def test_release_readiness_report_rejects_dotnet_trx_path_before_passed_summary(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -31203,10 +33346,11 @@ def test_release_readiness_report_rejects_extra_dotnet_trx_path_before_passed_su
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -31256,10 +33400,11 @@ def test_release_readiness_report_rejects_extra_dotnet_passed_summary_after_trx_
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -31313,10 +33458,11 @@ def test_release_readiness_report_rejects_extra_dotnet_trx_bytes_before_trx_path
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -31370,10 +33516,11 @@ def test_release_readiness_report_rejects_extra_dotnet_trx_path_after_trx_bytes(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -31429,10 +33576,11 @@ def test_release_readiness_report_rejects_duplicate_dotnet_trx_bytes_after_trx_b
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -31485,10 +33633,11 @@ def test_release_readiness_report_rejects_dotnet_malformed_trx_transcript(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -31543,10 +33692,11 @@ def test_release_readiness_report_rejects_dotnet_trx_traversal_component(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -31606,10 +33756,11 @@ def test_release_readiness_report_rejects_dotnet_trx_named_subdirectory(
                 "--phase-result",
                 "dotnet-sdk=passed",
                 "--phase-evidence",
-                f"dotnet-sdk={corridor_log}",
-                str(evidence),
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -31667,10 +33818,11 @@ def test_release_readiness_report_rejects_dotnet_trx_backslash_or_drive_path(
                 "--phase-result",
                 "dotnet-sdk=passed",
                 "--phase-evidence",
-                f"dotnet-sdk={corridor_log}",
-                str(evidence),
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -31748,10 +33900,11 @@ def test_release_readiness_report_rejects_dotnet_padded_or_tabbed_marker_separat
                     "--phase-result",
                     "dotnet-sdk=passed",
                     "--phase-evidence",
-                    f"dotnet-sdk={corridor_log}",
-                    str(evidence),
+                    f"dotnet-sdk={corridor_log.name}",
+                    evidence.name,
                 ],
                 check=False,
+                cwd=corridor_log.parent,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -31818,10 +33971,11 @@ def test_release_readiness_report_rejects_dotnet_hidden_success_markers(
                 "--phase-result",
                 "dotnet-sdk=passed",
                 "--phase-evidence",
-                f"dotnet-sdk={corridor_log}",
-                str(evidence),
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -31877,10 +34031,11 @@ def test_release_readiness_report_rejects_inert_swift_phase_command_fragment(
             "--phase-result",
             "swift-sdk=passed",
             "--phase-evidence",
-            f"swift-sdk={corridor_log}",
-            str(evidence),
+            f"swift-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -31926,10 +34081,11 @@ def test_release_readiness_report_rejects_suffix_argument_phase_command_fragment
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -31985,10 +34141,11 @@ def test_release_readiness_report_rejects_inert_dotnet_project_phase_command_fra
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32040,10 +34197,11 @@ def test_release_readiness_report_rejects_narrow_dotnet_sccp_filter(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32099,10 +34257,11 @@ def test_release_readiness_report_rejects_extra_narrow_dotnet_test_command(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32157,10 +34316,11 @@ def test_release_readiness_report_rejects_extra_dotnet_setup_command(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32213,10 +34373,11 @@ def test_release_readiness_report_rejects_unparseable_dotnet_command(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32273,10 +34434,11 @@ def test_release_readiness_report_rejects_shell_commented_dotnet_command(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32331,10 +34493,11 @@ def test_release_readiness_report_rejects_hidden_dotnet_command_trace(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32387,10 +34550,11 @@ def test_release_readiness_report_rejects_hidden_non_dotnet_command_trace(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32448,10 +34612,11 @@ def test_release_readiness_report_rejects_obfuscated_dotnet_command_trace(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32516,10 +34681,11 @@ def test_release_readiness_report_rejects_parenthesized_dotnet_logger_argument(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32577,10 +34743,11 @@ def test_release_readiness_report_rejects_parenthesized_dotnet_command_group(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32638,10 +34805,11 @@ def test_release_readiness_report_rejects_wrong_dotnet_runner_cd_wrapper(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32708,10 +34876,11 @@ def test_release_readiness_report_rejects_extra_dotnet_env_assignment(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32770,10 +34939,11 @@ def test_release_readiness_report_rejects_mismatched_dotnet_root_binary(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32832,10 +35002,11 @@ def test_release_readiness_report_rejects_env_prefixed_bare_dotnet_binary(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -32897,10 +35068,11 @@ def test_release_readiness_report_rejects_mismatched_dotnet_path_prefix(
             "--phase-result",
             "dotnet-sdk=passed",
             "--phase-evidence",
-            f"dotnet-sdk={corridor_log}",
-            str(evidence),
+            f"dotnet-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -33001,10 +35173,11 @@ def test_release_readiness_report_rejects_dotnet_empty_path_segments(
                 "--phase-result",
                 "dotnet-sdk=passed",
                 "--phase-evidence",
-                f"dotnet-sdk={corridor_log}",
-                str(evidence),
+                f"dotnet-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -33059,10 +35232,11 @@ def test_release_readiness_report_rejects_inert_contract_smoke_test_fragment(
             "--phase-result",
             "contract-smoke=passed",
             "--phase-evidence",
-            f"contract-smoke={corridor_log}",
-            str(evidence),
+            f"contract-smoke={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -33114,10 +35288,11 @@ def test_release_readiness_report_rejects_echoed_js_phase_command_fragment(
             "--phase-result",
             "js-sdk=passed",
             "--phase-evidence",
-            f"js-sdk={corridor_log}",
-            str(evidence),
+            f"js-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -33174,10 +35349,11 @@ def test_release_readiness_report_requires_mobile_jdk21_transcripts(
                 "--phase-result",
                 f"{phase}=passed",
                 "--phase-evidence",
-                f"{phase}={corridor_log}",
-                str(evidence),
+                f"{phase}={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -33227,10 +35403,11 @@ def test_release_readiness_report_requires_js_package_dist_transcript(
             "--phase-result",
             "js-sdk=passed",
             "--phase-evidence",
-            f"js-sdk={corridor_log}",
-            str(evidence),
+            f"js-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -33286,10 +35463,11 @@ def test_release_readiness_report_requires_bsc_browser_no_wasm_marker(
             "--phase-result",
             "js-sdk=passed",
             "--phase-evidence",
-            f"js-sdk={corridor_log}",
-            str(evidence),
+            f"js-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -33345,10 +35523,11 @@ def test_release_readiness_report_requires_ethereum_browser_no_wasm_marker(
             "--phase-result",
             "js-sdk=passed",
             "--phase-evidence",
-            f"js-sdk={corridor_log}",
-            str(evidence),
+            f"js-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -33432,10 +35611,11 @@ def test_release_readiness_report_requires_bsc_parlia_declaration_marker(
             "--phase-result",
             "js-sdk=passed",
             "--phase-evidence",
-            f"js-sdk={corridor_log}",
-            str(evidence),
+            f"js-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -33489,10 +35669,11 @@ def test_release_readiness_report_requires_ethereum_facade_declaration_marker(
             "--phase-result",
             "js-sdk=passed",
             "--phase-evidence",
-            f"js-sdk={corridor_log}",
-            str(evidence),
+            f"js-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -33544,10 +35725,11 @@ def test_release_readiness_report_requires_js_package_export_transcript(
             "--phase-result",
             "js-sdk=passed",
             "--phase-evidence",
-            f"js-sdk={corridor_log}",
-            str(evidence),
+            f"js-sdk={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -33606,10 +35788,11 @@ def test_release_readiness_report_requires_js_mainnet_facade_transcripts(
                 "--phase-result",
                 "js-sdk=passed",
                 "--phase-evidence",
-                f"js-sdk={corridor_log}",
-                str(evidence),
+                f"js-sdk={corridor_log.name}",
+                evidence.name,
             ],
             check=False,
+            cwd=corridor_log.parent,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -33637,6 +35820,8 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             "/source event log data must be 0x/u",
             "/source event digest must not be zero/u",
             "/removed logs/u",
+            "/receipt\\.logs\\[0\\]\\.removed must be a boolean/u",
+            "secret-token-removed",
             'for (const missingField of ["transactionHash", "blockHash", "blockNumber"])',
             '["transaction_hash", hex32("ab"), "receipt.logs[0].transactionHash"]',
             '["block_hash", hex32("ac"), "receipt.logs[0].blockHash"]',
@@ -33753,6 +35938,9 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             "duplicateLogReceipt",
             "removedLogReceipt",
             'invalidPublicInputs("receipt.logs")',
+            'invalidPublicInputs("receipt.logs[0].removed")',
+            '.invalidRlp("receipt.logs[0].removed")',
+            "secret-token-removed",
             'for missingField in ["transactionHash", "blockHash", "blockNumber"]',
             "EthereumMainnetInboundEvidence(receiptProofHash: receiptProofHash)",
             'String(repeating: "00", count: 32)',
@@ -33839,6 +36027,8 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             '"data" to "0x01"',
             '"0x" + "00".repeat(32)',
             'sourceEventLog + ("removed" to true)',
+            '"receipt.logs[0].removed must be a boolean"',
+            '"secret-token-removed"',
             "SccpEthereumMainnet.sourceEventTopic()",
             "receiptProof.executionReceiptsRoot",
             'for (missingField in listOf("transactionHash", "blockHash", "blockNumber"))',
@@ -33900,6 +36090,9 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             "Ethereum source-event validation must reject non-empty source-event data",
             "Ethereum source-event validation must reject zero source-event digest",
             "Ethereum source-event validation must reject removed logs",
+            "source-event validation must reject non-boolean removed flags",
+            "receipt.logs[0].removed must be a boolean",
+            "secret-token-removed",
             "EthereumMainnetSccp.sourceEventTopic()",
             'Arrays.asList("transactionHash", "blockHash", "blockNumber")',
             "hash-only receiptProofHash evidence",
@@ -33963,6 +36156,9 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             'Assert.Contains("digest must not be zero", zeroDigest.Message)',
             "duplicateReceipt",
             'Assert.Contains("removed logs", removedSourceEventLog.Message)',
+            'Assert.Contains("receipt.logs[0].removed must be a boolean", malformedRemovedError.Message)',
+            'Assert.DoesNotContain("secret-token", malformedRemovedError.Message)',
+            "secret-token-removed",
             'foreach (var missingField in new[] { "transactionHash", "blockHash", "blockNumber" })',
             "Assert.Null(receiptProofHashOnlyEvidence.ReceiptProof)",
             "ReceiptProofHash must not be zero",
@@ -34010,6 +36206,16 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             "Assert.Throws<ArgumentException>(() => BuildBytes(sourceDomain: 2));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(nodes: Array.Empty<byte[]>()));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(inclusionBranch: Array.Empty<byte[]>()));",
+        ),
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "SccpBscMainnetTests.cs": (
+            'Assert.Contains("removed logs", removedBscSourceError.Message)',
+            "receipt.logs[0].removed must be a boolean",
+            'Assert.DoesNotContain("secret-token", malformedRemovedBscSourceError.Message)',
+            "secret-token-removed",
         ),
     }
     missing: list[str] = []
@@ -34804,8 +37010,10 @@ def test_release_readiness_guards_ethereum_noncanonical_chain_id_tests() -> None
         ),
         ROOT / "pytests" / "scripts" / "sccp_evm_receipt_proof_evidence_test.py": (
             "test_collect_receipt_proof_rejects_noncanonical_chain_id_quantity",
+            "test_receipt_cli_parsers_reject_non_string_values_without_stringification",
             'for chain_id_result in ("0x01", "0X1", " 0x1", "0x1 ", 1):',
             "rpc_response(chain_id_result)",
+            "secret-token-receipt-parser-value",
         ),
     }
     missing = []
@@ -35676,10 +37884,11 @@ def test_release_readiness_report_rejects_phase_command_outside_claimed_block(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -35725,10 +37934,11 @@ def test_release_readiness_report_rejects_phase_log_without_success_marker(
             "--phase-result",
             "rust-sccp=passed",
             "--phase-evidence",
-            f"rust-sccp={corridor_log}",
-            str(evidence),
+            f"rust-sccp={corridor_log.name}",
+            evidence.name,
         ],
         check=False,
+        cwd=corridor_log.parent,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -35773,6 +37983,75 @@ def test_release_readiness_report_rejects_symlinked_phase_evidence(
     assert completed.returncode == 2
     assert "release artifact path must not be a symlink" in completed.stderr
     assert "sccp-corridor-link.log" not in completed.stderr
+
+
+def test_release_readiness_report_rejects_symlinked_phase_evidence_ancestor(
+    tmp_path: Path,
+) -> None:
+    """Strict release notes must reject phase artifacts under symlinked parents."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    real_dir = tmp_path / "real-corridor"
+    real_dir.mkdir()
+    corridor_log = real_dir / "sccp-corridor.log"
+    corridor_log.write_text(complete_corridor_log(), encoding="utf-8")
+    parent_link = tmp_path / "corridor-parent-link"
+    parent_link.symlink_to(real_dir, target_is_directory=True)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence",
+            f"all={parent_link / 'sccp-corridor.log'}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "release artifact path must not be a symlink" in completed.stderr
+    assert "corridor-parent-link" not in completed.stderr
+    assert "corridor-parent-link" not in completed.stdout
+
+
+def test_release_readiness_report_rejects_directory_phase_evidence(
+    tmp_path: Path,
+) -> None:
+    """Strict release notes must reject non-regular phase artifacts."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_dir = tmp_path / "corridor-directory"
+    corridor_dir.mkdir()
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence",
+            f"all={corridor_dir}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "release artifact path must be a regular file" in completed.stderr
+    assert "IsADirectory" not in completed.stderr
+    assert "corridor-directory" not in completed.stderr
+    assert "corridor-directory" not in completed.stdout
 
 
 def test_release_readiness_rejects_control_character_artifact_paths(
@@ -35865,6 +38144,41 @@ def test_release_readiness_rejects_padded_artifact_paths(
     )
     assert "secret-token" not in completed.stderr
     assert "secret-token" not in completed.stdout
+
+
+def test_release_readiness_rejects_uri_or_drive_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    """Release-readiness artifact paths must reject URI/drive aliases."""
+
+    if sys.platform == "win32":
+        return
+
+    _, payload = write_complete_evidence(tmp_path)
+    evidence = tmp_path / "operator-drive:C.toml"
+    evidence.write_text(payload, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "release artifact path must not contain URI schemes or drive prefixes"
+        in completed.stderr
+    )
+    assert "operator-drive" not in completed.stderr
+    assert "operator-drive" not in completed.stdout
 
 
 def test_release_readiness_rejects_percent_encoded_artifact_traversal_paths(

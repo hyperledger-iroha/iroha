@@ -2,7 +2,26 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use norito::json::Value;
 use sorafs_car::ChunkStore;
 use sorafs_chunker::fixtures::FixtureProfile;
-use tempfile::{NamedTempFile, tempdir};
+use tempfile::{NamedTempFile, TempDir};
+
+fn canonical_temp_base() -> std::path::PathBuf {
+    std::env::temp_dir()
+        .canonicalize()
+        .expect("canonical temp dir")
+}
+
+fn tempdir() -> std::io::Result<TempDir> {
+    tempfile::Builder::new()
+        .prefix("sorafs-chunk-store-cli-")
+        .tempdir_in(canonical_temp_base())
+}
+
+fn named_temp_file(label: &str) -> NamedTempFile {
+    tempfile::Builder::new()
+        .prefix(label)
+        .tempfile_in(canonical_temp_base())
+        .expect(label)
+}
 
 fn write_payload(path: &std::path::PathBuf, size: usize) -> Vec<u8> {
     let mut buf = vec![0u8; size];
@@ -16,7 +35,7 @@ fn write_payload(path: &std::path::PathBuf, size: usize) -> Vec<u8> {
 #[test]
 fn cli_emits_chunk_metadata_for_fixture() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
-    let mut file = NamedTempFile::new().expect("tempfile");
+    let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
 
     let output = cargo_bin_cmd!("sorafs_chunk_store")
@@ -124,7 +143,7 @@ fn cli_lists_registered_profiles() {
 #[test]
 fn cli_accepts_profile_handle() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
-    let mut file = NamedTempFile::new().expect("tempfile");
+    let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
 
     let output = cargo_bin_cmd!("sorafs_chunk_store")
@@ -165,7 +184,7 @@ fn cli_accepts_profile_handle() {
 #[test]
 fn cli_rejects_conflicting_profile_flags() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
-    let mut file = NamedTempFile::new().expect("tempfile");
+    let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
 
     let output = cargo_bin_cmd!("sorafs_chunk_store")
@@ -188,9 +207,9 @@ fn cli_rejects_conflicting_profile_flags() {
 #[test]
 fn cli_writes_por_json() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
-    let mut file = NamedTempFile::new().expect("tempfile");
+    let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
-    let por_path = NamedTempFile::new().expect("por file");
+    let por_path = named_temp_file("por file");
     let por_path = por_path.into_temp_path();
 
     let output = cargo_bin_cmd!("sorafs_chunk_store")
@@ -214,9 +233,9 @@ fn cli_writes_por_json() {
 #[test]
 fn cli_writes_por_proof() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
-    let mut file = NamedTempFile::new().expect("tempfile");
+    let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
-    let proof_path = NamedTempFile::new().expect("proof file").into_temp_path();
+    let proof_path = named_temp_file("proof file").into_temp_path();
 
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(file.path())
@@ -279,9 +298,9 @@ fn cli_writes_por_proof() {
 #[test]
 fn cli_writes_chunk_fetch_plan_json() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
-    let mut file = NamedTempFile::new().expect("tempfile");
+    let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
-    let plan_path = NamedTempFile::new().expect("plan file").into_temp_path();
+    let plan_path = named_temp_file("plan file").into_temp_path();
 
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(file.path())
@@ -514,6 +533,60 @@ fn manifest_cli_persists_chunks_to_directory() {
 }
 
 #[test]
+fn manifest_cli_writes_report_to_json_out() {
+    let tempdir = tempdir().expect("tempdir");
+    let temp_path = tempdir.path().canonicalize().expect("canonical tempdir");
+    let payload_path = temp_path.join("payload.bin");
+    write_payload(&payload_path, 4096);
+    let report_path = temp_path.join("manifest-report.json");
+
+    let output = cargo_bin_cmd!("sorafs_manifest_chunk_store")
+        .arg(&payload_path)
+        .arg(format!("--json-out={}", report_path.display()))
+        .output()
+        .expect("run manifest chunk store CLI");
+    assert!(output.status.success(), "cli exited with failure");
+
+    let report: Value =
+        norito::json::from_slice(&std::fs::read(&report_path).expect("read report"))
+            .expect("parse report json");
+    assert_eq!(
+        report
+            .get("chunk_count")
+            .and_then(Value::as_u64)
+            .expect("chunk_count"),
+        1
+    );
+}
+
+#[test]
+fn cli_writes_report_to_json_out() {
+    let tempdir = tempdir().expect("tempdir");
+    let temp_path = tempdir.path().canonicalize().expect("canonical tempdir");
+    let payload_path = temp_path.join("payload.bin");
+    write_payload(&payload_path, 4096);
+    let report_path = temp_path.join("chunk-report.json");
+
+    let output = cargo_bin_cmd!("sorafs_chunk_store")
+        .arg(&payload_path)
+        .arg(format!("--json-out={}", report_path.display()))
+        .output()
+        .expect("run chunk store CLI");
+    assert!(output.status.success(), "cli exited with failure");
+
+    let report: Value =
+        norito::json::from_slice(&std::fs::read(&report_path).expect("read report"))
+            .expect("parse report json");
+    assert_eq!(
+        report
+            .get("chunk_count")
+            .and_then(Value::as_u64)
+            .expect("chunk_count"),
+        1
+    );
+}
+
+#[test]
 fn cli_writes_report_to_stdout_when_json_dash() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
@@ -579,9 +652,9 @@ fn cli_writes_chunk_fetch_plan_to_stdout_when_dash() {
 #[test]
 fn cli_samples_por_leaves() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
-    let mut file = NamedTempFile::new().expect("tempfile");
+    let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
-    let sample_path = NamedTempFile::new().expect("sample file").into_temp_path();
+    let sample_path = named_temp_file("sample file").into_temp_path();
 
     let output = cargo_bin_cmd!("sorafs_chunk_store")
         .arg(file.path())
@@ -653,7 +726,7 @@ fn cli_samples_por_leaves() {
 #[test]
 fn car_cli_truncates_samples_when_request_exceeds_leaves() {
     let fixture = FixtureProfile::SF1_V1.generate_vectors();
-    let mut file = NamedTempFile::new().expect("tempfile");
+    let mut file = named_temp_file("tempfile");
     std::io::Write::write_all(&mut file, &fixture.input).expect("write fixture");
 
     let total_leaves = {

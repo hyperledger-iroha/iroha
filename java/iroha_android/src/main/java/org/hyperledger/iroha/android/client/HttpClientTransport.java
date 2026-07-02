@@ -13,6 +13,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -82,6 +83,9 @@ public final class HttpClientTransport implements IrohaClient {
       new BigInteger("009713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2", 16);
   private static final String TRON_BASE58_ALPHABET =
       "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  private static final List<String> TRANSACTION_HASH_HEADERS =
+      Collections.unmodifiableList(
+          Arrays.asList("x-iroha-transaction-hash", "x-iroha-tx-hash"));
 
   private final HttpTransportExecutor executor;
   private final ClientConfig config;
@@ -367,7 +371,8 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<UaidPortfolioResponse> getUaidPortfolio(
       final String uaid, final UaidPortfolioQuery query) {
     final String canonical = UaidLiteral.canonicalize(uaid, "uaid portfolio");
-    final Map<String, String> params = query == null ? Map.of() : query.toQueryParameters();
+    final Map<String, String> params =
+        query == null ? Collections.emptyMap() : query.toQueryParameters();
     final TransportRequest request =
         buildJsonGetRequest(
             "/v1/accounts/" + encodePathSegment(canonical) + "/portfolio", params);
@@ -384,7 +389,7 @@ public final class HttpClientTransport implements IrohaClient {
       final String uaid, final UaidBindingsQuery query) {
     final String canonical = UaidLiteral.canonicalize(uaid, "uaid bindings");
     final Map<String, String> params =
-        query == null ? Map.of() : query.toQueryParameters();
+        query == null ? Collections.emptyMap() : query.toQueryParameters();
     final TransportRequest request =
         buildJsonGetRequest(
             "/v1/space-directory/uaids/" + encodePathSegment(canonical), params);
@@ -396,7 +401,7 @@ public final class HttpClientTransport implements IrohaClient {
       final String uaid, final UaidManifestQuery query) {
     final String canonical = UaidLiteral.canonicalize(uaid, "uaid manifests");
     final Map<String, String> params =
-        query == null ? Map.of() : query.toQueryParameters();
+        query == null ? Collections.emptyMap() : query.toQueryParameters();
     final TransportRequest request =
         buildJsonGetRequest(
             "/v1/space-directory/uaids/" + encodePathSegment(canonical) + "/manifests", params);
@@ -405,14 +410,15 @@ public final class HttpClientTransport implements IrohaClient {
 
   /** Fetches globally registered identifier policies from `/v1/identifier-policies`. */
   public CompletableFuture<IdentifierPolicyListResponse> listIdentifierPolicies() {
-    final TransportRequest request = buildJsonGetRequest("/v1/identifier-policies", Map.of());
+    final TransportRequest request =
+        buildJsonGetRequest("/v1/identifier-policies", Collections.emptyMap());
     return fetchJson(request, IdentifierJsonParser::parsePolicyList, "identifier policy list");
   }
 
   /** Fetches globally registered RAM-LFE program policies from `/v1/ram-lfe/program-policies`. */
   public CompletableFuture<RamLfeProgramPolicyListResponse> listRamLfeProgramPolicies() {
     final TransportRequest request =
-        buildJsonGetRequest("/v1/ram-lfe/program-policies", Map.of());
+        buildJsonGetRequest("/v1/ram-lfe/program-policies", Collections.emptyMap());
     return fetchJson(request, RamLfeJsonParser::parsePolicyList, "ram-lfe program policy list");
   }
 
@@ -422,7 +428,8 @@ public final class HttpClientTransport implements IrohaClient {
     final String normalizedReceiptHash = normalizeHex32(receiptHash, "receiptHash");
     final TransportRequest request =
         buildJsonGetRequest(
-            "/v1/identifiers/receipts/" + encodePathSegment(normalizedReceiptHash), Map.of());
+            "/v1/identifiers/receipts/" + encodePathSegment(normalizedReceiptHash),
+            Collections.emptyMap());
     return fetchJsonAllowingNotFound(
         request, IdentifierJsonParser::parseClaimRecord, "identifier claim lookup");
   }
@@ -525,7 +532,8 @@ public final class HttpClientTransport implements IrohaClient {
 
   /** Fetches the public Sora VPN profile. */
   public CompletableFuture<VpnProfile> getVpnProfile() {
-    final TransportRequest request = buildJsonGetRequest("/v1/vpn/profile", Map.of());
+    final TransportRequest request =
+        buildJsonGetRequest("/v1/vpn/profile", Collections.emptyMap());
     return fetchJson(request, VpnJsonParser::parseProfile, "vpn profile");
   }
 
@@ -690,7 +698,8 @@ public final class HttpClientTransport implements IrohaClient {
     final String normalizedAddress = normalizeNonBlank(contractAddress, "contractAddress");
     final TransportRequest request =
         buildJsonGetRequest(
-            "/v1/gov/contracts/" + encodePathSegment(normalizedAddress), Map.of());
+            "/v1/gov/contracts/" + encodePathSegment(normalizedAddress),
+            Collections.emptyMap());
     return fetchJson(
         request,
         ContractJsonParser::parseGovernanceContractResponse,
@@ -702,7 +711,7 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<Optional<AccountAliasResolution>> resolveAccountAlias(
       final String alias) {
     final String normalizedAlias = normalizeNonBlank(alias, "alias");
-    final byte[] body = encodeJsonBody(Map.of("alias", normalizedAlias));
+    final byte[] body = encodeJsonBody(objectMapOf("alias", normalizedAlias));
     final TransportRequest request = buildJsonPostRequest("/v1/aliases/resolve", body);
     return fetchJsonAllowingNotFound(
         request, AccountAliasJsonParser::parseResolution, "account alias resolve");
@@ -975,7 +984,7 @@ public final class HttpClientTransport implements IrohaClient {
       return;
     }
     final Optional<TelemetrySink> sink = config.telemetrySink();
-    if (sink.isEmpty()) {
+    if (!sink.isPresent()) {
       return;
     }
     final int depth;
@@ -988,7 +997,7 @@ public final class HttpClientTransport implements IrohaClient {
     sink.get()
         .emitSignal(
             "android.pending_queue.depth",
-            Map.of(
+            objectMapOf(
                 "queue", queue.telemetryQueueName(),
                 "depth", depthValue));
   }
@@ -1001,7 +1010,7 @@ public final class HttpClientTransport implements IrohaClient {
       return;
     }
     final Optional<TelemetrySink> sink = config.telemetrySink();
-    if (sink.isEmpty()) {
+    if (!sink.isPresent()) {
       return;
     }
     final DeviceProfileProvider provider = config.deviceProfileProvider();
@@ -1009,14 +1018,14 @@ public final class HttpClientTransport implements IrohaClient {
       return;
     }
     final Optional<DeviceProfile> profile = provider.snapshot();
-    if (profile.isEmpty()) {
+    if (!profile.isPresent()) {
       return;
     }
     sink
         .get()
         .emitSignal(
             "android.telemetry.device_profile",
-            Map.of("profile_bucket", profile.get().bucket()));
+            objectMapOf("profile_bucket", profile.get().bucket()));
   }
 
   private void emitNetworkContextTelemetry() {
@@ -1024,11 +1033,11 @@ public final class HttpClientTransport implements IrohaClient {
       return;
     }
     final Optional<TelemetrySink> sink = config.telemetrySink();
-    if (sink.isEmpty()) {
+    if (!sink.isPresent()) {
       return;
     }
     final Optional<NetworkContext> context = config.networkContextProvider().snapshot();
-    if (context.isEmpty()) {
+    if (!context.isPresent()) {
       return;
     }
     sink
@@ -1046,7 +1055,7 @@ public final class HttpClientTransport implements IrohaClient {
       return;
     }
     final Optional<TelemetrySink> sink = config.telemetrySink();
-    if (sink.isEmpty()) {
+    if (!sink.isPresent()) {
       return;
     }
     final Map<String, Object> fields = new LinkedHashMap<>();
@@ -1069,12 +1078,12 @@ public final class HttpClientTransport implements IrohaClient {
       return;
     }
     final Optional<TelemetrySink> sink = config.telemetrySink();
-    if (sink.isEmpty()) {
+    if (!sink.isPresent()) {
       return;
     }
     final Map<String, Object> fields = new LinkedHashMap<>();
     maybePutAuthorityHash(fields, request, sink.get(), PIPELINE_STATUS_SIGNAL);
-    if (transactionHash != null && !transactionHash.isBlank()) {
+    if (transactionHash != null && !transactionHash.trim().isEmpty()) {
       fields.put("tx_hash", transactionHash);
     }
     fields.put("status_kind", statusKind == null ? "" : statusKind);
@@ -1137,7 +1146,7 @@ public final class HttpClientTransport implements IrohaClient {
     if (response == null) {
       return Optional.empty();
     }
-    for (final String headerName : List.of("x-iroha-transaction-hash", "x-iroha-tx-hash")) {
+    for (final String headerName : TRANSACTION_HASH_HEADERS) {
       final List<String> values = response.headers().get(headerName);
       if (values == null) {
         continue;
@@ -1190,7 +1199,7 @@ public final class HttpClientTransport implements IrohaClient {
       final TelemetrySink sink, final String signalId, final String reason) {
     sink.emitSignal(
         REDACTION_FAILURE_SIGNAL,
-        Map.of(
+        objectMapOf(
             "signal_id", signalId,
             "reason", reason));
   }
@@ -1280,7 +1289,7 @@ public final class HttpClientTransport implements IrohaClient {
                 }
 
                 if (isSuccess) {
-                  future.complete(payload != null ? payload : Map.of());
+                  future.complete(payload != null ? payload : Collections.emptyMap());
                   return;
                 }
                 if (isFailure) {
@@ -1487,7 +1496,7 @@ public final class HttpClientTransport implements IrohaClient {
     }
 
     if (isSuccess) {
-      future.complete(payload != null ? payload : Map.of());
+      future.complete(payload != null ? payload : Collections.emptyMap());
       return true;
     }
     if (isFailure) {
@@ -1558,7 +1567,7 @@ public final class HttpClientTransport implements IrohaClient {
 
   @SuppressWarnings("unchecked")
   private Map<String, Object> parsePipelineEventPayload(final String json) {
-    if (json == null || json.isBlank()) {
+    if (json == null || json.trim().isEmpty()) {
       throw new IllegalStateException("Pipeline event payload must be a JSON object");
     }
     final Object parsed = JsonParser.parse(json.trim());
@@ -1581,9 +1590,9 @@ public final class HttpClientTransport implements IrohaClient {
 
   private static String transactionHashFilter(final String hashHex) {
     return JsonEncoder.encode(
-        Map.of(
+        objectMapOf(
             "op", "eq",
-            "args", List.of("tx_hash", hashHex)));
+            "args", Collections.unmodifiableList(Arrays.asList("tx_hash", hashHex))));
   }
 
   private static TransactionStatusHttpException buildPipelineStatusHttpException(
@@ -1696,7 +1705,7 @@ public final class HttpClientTransport implements IrohaClient {
   }
 
   private URI resolvePath(final String path) {
-    if (path == null || path.isBlank()) {
+    if (path == null || path.trim().isEmpty()) {
       return config.baseUri();
     }
     if (path.startsWith("http://") || path.startsWith("https://")) {
@@ -1909,6 +1918,37 @@ public final class HttpClientTransport implements IrohaClient {
         .getBytes(StandardCharsets.UTF_8);
   }
 
+  private static Map<String, Object> objectMapOf(final String key, final Object value) {
+    final Map<String, Object> map = new LinkedHashMap<>();
+    map.put(key, value);
+    return Collections.unmodifiableMap(map);
+  }
+
+  private static Map<String, Object> objectMapOf(
+      final String key1,
+      final Object value1,
+      final String key2,
+      final Object value2) {
+    final Map<String, Object> map = new LinkedHashMap<>();
+    map.put(key1, value1);
+    map.put(key2, value2);
+    return Collections.unmodifiableMap(map);
+  }
+
+  private static Map<String, Object> objectMapOf(
+      final String key1,
+      final Object value1,
+      final String key2,
+      final Object value2,
+      final String key3,
+      final Object value3) {
+    final Map<String, Object> map = new LinkedHashMap<>();
+    map.put(key1, value1);
+    map.put(key2, value2);
+    map.put(key3, value3);
+    return Collections.unmodifiableMap(map);
+  }
+
   static IdentifierResolveRequest buildIdentifierResolveRequest(
       final String policyId,
       final String encryptedInputHex,
@@ -2092,7 +2132,8 @@ public final class HttpClientTransport implements IrohaClient {
         payload,
         request.validationFeePolicyVersion(),
         request.validationFeePolicyHash(),
-        request.validationFeeInstructionIndex());
+        request.validationFeeInstructionIndex(),
+        request.validationFeeTransferEntryIndex());
     final List<String> instructions = new ArrayList<>();
     int index = 0;
     for (final byte[] instruction : request.instructions()) {
@@ -2110,10 +2151,12 @@ public final class HttpClientTransport implements IrohaClient {
       final Map<String, Object> payload,
       final Long validationFeePolicyVersion,
       final String validationFeePolicyHash,
-      final Long validationFeeInstructionIndex) {
+      final Long validationFeeInstructionIndex,
+      final Long validationFeeTransferEntryIndex) {
     final boolean hasPolicyVersion = validationFeePolicyVersion != null;
     final boolean hasPolicyHash = validationFeePolicyHash != null;
     final boolean hasInstructionIndex = validationFeeInstructionIndex != null;
+    final boolean hasTransferEntryIndex = validationFeeTransferEntryIndex != null;
     if (hasPolicyVersion != hasPolicyHash) {
       throw new IllegalArgumentException(
           "validationFeePolicyVersion and validationFeePolicyHash must be provided together");
@@ -2121,6 +2164,14 @@ public final class HttpClientTransport implements IrohaClient {
     if (!hasPolicyVersion && hasInstructionIndex) {
       throw new IllegalArgumentException(
           "validationFeeInstructionIndex requires validation fee policy metadata");
+    }
+    if (!hasPolicyVersion && hasTransferEntryIndex) {
+      throw new IllegalArgumentException(
+          "validationFeeTransferEntryIndex requires validation fee policy metadata");
+    }
+    if (hasTransferEntryIndex && !hasInstructionIndex) {
+      throw new IllegalArgumentException(
+          "validationFeeTransferEntryIndex requires validationFeeInstructionIndex");
     }
     if (!hasPolicyVersion) {
       return;
@@ -2131,12 +2182,18 @@ public final class HttpClientTransport implements IrohaClient {
     if (hasInstructionIndex && validationFeeInstructionIndex.longValue() < 0L) {
       throw new IllegalArgumentException("validationFeeInstructionIndex must be non-negative");
     }
+    if (hasTransferEntryIndex && validationFeeTransferEntryIndex.longValue() < 0L) {
+      throw new IllegalArgumentException("validationFeeTransferEntryIndex must be non-negative");
+    }
     payload.put("validation_fee_policy_version", validationFeePolicyVersion.toString());
     payload.put(
         "validation_fee_policy_hash",
         normalizeHex32(validationFeePolicyHash, "validationFeePolicyHash"));
     if (hasInstructionIndex) {
       payload.put("validation_fee_instruction_index", validationFeeInstructionIndex.toString());
+    }
+    if (hasTransferEntryIndex) {
+      payload.put("validation_fee_transfer_entry_index", validationFeeTransferEntryIndex.toString());
     }
   }
 

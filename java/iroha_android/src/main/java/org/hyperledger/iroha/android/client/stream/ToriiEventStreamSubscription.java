@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.client.stream;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ScheduledExecutorService;
@@ -47,7 +48,7 @@ public final class ToriiEventStreamSubscription implements AutoCloseable {
     this.initialBackoffMs = builder.initialBackoffMs;
     this.maxBackoffMs = builder.maxBackoffMs;
     this.nextBackoffMs = new AtomicLong(initialBackoffMs);
-    this.observers = List.copyOf(builder.observers);
+    this.observers = Collections.unmodifiableList(new ArrayList<>(builder.observers));
   }
 
   /** Returns a builder that opens streams via the provided client/path/options triple. */

@@ -3,7 +3,7 @@
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs, clippy::too_many_lines)]
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::{Router, routing::post};
 use base64::Engine as _;
@@ -21,6 +21,7 @@ use iroha_data_model::{
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     name::Name,
     smart_contract::ContractAddress,
+    transaction::SignedTransaction,
 };
 use ivm::kotodama::compiler::CompilerOptions;
 use mv::storage::StorageReadOnly;
@@ -233,7 +234,7 @@ seiyaku ContractCallNestedTransferCallerTest {{
   }}
 
   kotoage fn open(amount: int) -> int permission(AssetOps) {{
-    transfer_asset(authority(), CallerAccount, SettlementAsset, amount);
+    transfer_asset(authority(), CallerAccount, SettlementAsset, amount, dataspace_id("0"));
     let payload = json_object();
     let payload = json_set_int(payload, name("amount"), amount);
     return decode_int(call_contract(VaultContract, "deposit", payload));
@@ -264,7 +265,7 @@ seiyaku ContractCallNestedTransferVaultTest {{
   }}
 
   kotoage fn deposit(amount: int) -> int permission(AssetOps) {{
-    transfer_asset(authority(), VaultAccount, SettlementAsset, amount);
+    transfer_asset(authority(), VaultAccount, SettlementAsset, amount, dataspace_id("0"));
     return amount;
   }}
 }}
@@ -643,17 +644,16 @@ async fn contracts_call_enqueues_transaction() {
     let zero_limit_resp = app.clone().oneshot(zero_limit_req).await.unwrap();
     assert_eq!(zero_limit_resp.status(), http::StatusCode::BAD_REQUEST);
 
-    let call_body = iroha_torii::test_utils::contract_call_request_json(
-        &creds.account,
-        &creds.private_key,
-        contract_address.as_str(),
-        iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("main"),
-            payload: None,
-            gas_asset_id: None,
-            gas_limit: 5_000,
-        },
-    );
+    let transaction_ttl_ms = 900_000_u64;
+    let call_payload = iroha_torii::json_object(vec![
+        iroha_torii::json_entry("authority", creds.account.clone()),
+        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
+        iroha_torii::json_entry("contract_address", contract_address.as_str()),
+        iroha_torii::json_entry("entrypoint", "main"),
+        iroha_torii::json_entry("transaction_ttl_ms", transaction_ttl_ms),
+        iroha_torii::json_entry("gas_limit", 5_000u64),
+    ]);
+    let call_body = json::to_json(&call_payload).expect("serialize call request");
     let call_req = http::Request::builder()
         .method("POST")
         .uri("/v1/contracts/call")
@@ -686,6 +686,12 @@ async fn contracts_call_enqueues_transaction() {
     );
     assert_eq!(
         call_json
+            .get("transaction_ttl_ms")
+            .and_then(json::Value::as_u64),
+        Some(transaction_ttl_ms)
+    );
+    assert_eq!(
+        call_json
             .get("code_hash_hex")
             .and_then(json::Value::as_str)
             .unwrap(),
@@ -710,6 +716,49 @@ async fn contracts_call_enqueues_transaction() {
             .unwrap_or(false),
         true
     );
+    let call_receipt = call_json
+        .get("operation_receipt")
+        .and_then(json::Value::as_object)
+        .expect("operation_receipt present");
+    assert_eq!(
+        call_receipt
+            .get("operation_kind")
+            .and_then(json::Value::as_str),
+        Some("contract_call")
+    );
+    assert_eq!(
+        call_receipt.get("status").and_then(json::Value::as_str),
+        Some("submitted")
+    );
+    assert_eq!(
+        call_receipt.get("transport").and_then(json::Value::as_str),
+        Some("torii")
+    );
+    assert_eq!(
+        call_receipt.get("dataspace").and_then(json::Value::as_str),
+        Some("universal")
+    );
+    assert_eq!(
+        call_receipt
+            .get("contract_address")
+            .and_then(json::Value::as_str),
+        Some(contract_address.as_str())
+    );
+    assert_eq!(
+        call_receipt
+            .get("tx_hash_hex")
+            .and_then(json::Value::as_str),
+        Some(tx_hash_hex)
+    );
+    assert_eq!(
+        call_receipt
+            .get("payload_digest_hex")
+            .and_then(json::Value::as_str)
+            .map(str::len),
+        Some(64)
+    );
+    assert!(!call_receipt.contains_key("private_key"));
+    assert!(!call_receipt.contains_key("payload"));
 
     let applied_call =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
@@ -719,6 +768,7 @@ async fn contracts_call_enqueues_transaction() {
         iroha_torii::json_entry("authority", creds.account.clone()),
         iroha_torii::json_entry("contract_address", contract_address.as_str()),
         iroha_torii::json_entry("entrypoint", "main"),
+        iroha_torii::json_entry("transaction_ttl_ms", transaction_ttl_ms),
         iroha_torii::json_entry("gas_limit", 5_000u64),
     ]);
     let draft_body = json::to_json(&draft_body).expect("serialize draft call request");
@@ -746,10 +796,48 @@ async fn contracts_call_enqueues_transaction() {
             .is_some(),
         "expected contract call draft scaffold when private_key is omitted"
     );
+    assert_eq!(
+        draft_json
+            .get("transaction_ttl_ms")
+            .and_then(json::Value::as_u64),
+        Some(transaction_ttl_ms)
+    );
+    let draft_receipt = draft_json
+        .get("operation_receipt")
+        .and_then(json::Value::as_object)
+        .expect("draft operation_receipt present");
+    assert_eq!(
+        draft_receipt
+            .get("operation_kind")
+            .and_then(json::Value::as_str),
+        Some("contract_call")
+    );
+    assert_eq!(
+        draft_receipt.get("status").and_then(json::Value::as_str),
+        Some("pending_signature")
+    );
+    assert_eq!(
+        draft_receipt.get("transport").and_then(json::Value::as_str),
+        Some("torii")
+    );
+    assert!(!draft_receipt.contains_key("private_key"));
+    assert!(!draft_receipt.contains_key("payload"));
     let transaction_scaffold_b64 = draft_json
         .get("transaction_scaffold_b64")
         .and_then(json::Value::as_str)
         .expect("transaction_scaffold_b64 present");
+    let transaction_scaffold_bytes = base64::engine::general_purpose::STANDARD
+        .decode(transaction_scaffold_b64)
+        .expect("decode transaction scaffold");
+    let transaction_scaffold: SignedTransaction = {
+        let _guard = norito::core::PayloadCtxGuard::enter(&transaction_scaffold_bytes);
+        let mut cursor = std::io::Cursor::new(transaction_scaffold_bytes.as_slice());
+        norito::codec::Decode::decode(&mut cursor).expect("decode transaction scaffold")
+    };
+    assert_eq!(
+        transaction_scaffold.time_to_live(),
+        Some(Duration::from_millis(transaction_ttl_ms))
+    );
     assert_eq!(
         draft_json
             .get("signed_transaction_b64")
@@ -787,6 +875,7 @@ async fn contracts_call_enqueues_transaction() {
         iroha_torii::json_entry("contract_address", contract_address.as_str()),
         iroha_torii::json_entry("entrypoint", "main"),
         iroha_torii::json_entry("creation_time_ms", creation_time_ms),
+        iroha_torii::json_entry("transaction_ttl_ms", transaction_ttl_ms),
         iroha_torii::json_entry("gas_limit", 5_000u64),
     ]);
     let detached_submit_body =
@@ -818,6 +907,34 @@ async fn contracts_call_enqueues_transaction() {
         .and_then(json::Value::as_str)
         .expect("detached submit tx hash present");
     assert_eq!(detached_submit_hash.len(), 64);
+    let detached_receipt = detached_submit_json
+        .get("operation_receipt")
+        .and_then(json::Value::as_object)
+        .expect("detached operation_receipt present");
+    assert_eq!(
+        detached_receipt
+            .get("operation_kind")
+            .and_then(json::Value::as_str),
+        Some("contract_call")
+    );
+    assert_eq!(
+        detached_receipt.get("status").and_then(json::Value::as_str),
+        Some("submitted")
+    );
+    assert_eq!(
+        detached_receipt
+            .get("tx_hash_hex")
+            .and_then(json::Value::as_str),
+        Some(detached_submit_hash)
+    );
+    assert!(!detached_receipt.contains_key("private_key"));
+    assert!(!detached_receipt.contains_key("payload"));
+    assert_eq!(
+        detached_submit_json
+            .get("transaction_ttl_ms")
+            .and_then(json::Value::as_u64),
+        Some(transaction_ttl_ms)
+    );
     assert!(
         draft_json.get("tx_hash_hex").is_none()
             || draft_json

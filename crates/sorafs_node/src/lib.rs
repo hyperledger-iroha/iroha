@@ -6551,9 +6551,10 @@ mod tests {
 
     fn storage_config_with_temp_dir() -> (StorageConfig, TempDir) {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
         let cfg = StorageConfig::builder()
             .enabled(true)
-            .data_dir(temp_dir.path().join("storage"))
+            .data_dir(root.join("storage"))
             .build();
         (cfg, temp_dir)
     }
@@ -9929,10 +9930,11 @@ mod tests {
     #[test]
     fn publish_due_configured_privacy_aggregate_cycle_uses_storage_config() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
         let schedule = privacy_aggregate_schedule_config();
         let cfg = StorageConfig::builder()
             .enabled(true)
-            .data_dir(temp_dir.path().join("storage"))
+            .data_dir(root.join("storage"))
             .privacy_aggregate_schedule(Some(schedule))
             .build();
         let handle = NodeHandle::new(cfg);
@@ -10090,10 +10092,11 @@ mod tests {
     #[test]
     fn settle_deal_writes_filesystem_governance_payloads() {
         let temp = tempfile::tempdir().expect("temp dir");
-        let governance_dir = temp.path().join("governance");
+        let root = temp.path().canonicalize().expect("canonical temp dir");
+        let governance_dir = root.join("governance");
         let cfg = StorageConfig::builder()
             .enabled(true)
-            .data_dir(temp.path().join("storage"))
+            .data_dir(root.join("storage"))
             .governance_dir(Some(governance_dir.clone()))
             .build();
         let handle = NodeHandle::new(cfg);
@@ -11319,10 +11322,11 @@ mod tests {
     #[test]
     fn node_handle_reconciliation_includes_appeal_finance_rollups() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
         let cfg = StorageConfig::builder()
             .enabled(true)
-            .data_dir(temp_dir.path().join("storage"))
-            .governance_dir(Some(temp_dir.path().join("governance")))
+            .data_dir(root.join("storage"))
+            .governance_dir(Some(root.join("governance")))
             .build();
         let handle = NodeHandle::new(cfg);
         assert!(handle.has_governance_publisher());
@@ -12666,6 +12670,13 @@ mod tests {
         assert!(forced.vrf_output.is_none());
         assert!(forced.sample_count > 0);
         assert_eq!(forced.sample_count, 128);
+
+        let mut inert_randomness = randomness.clone();
+        inert_randomness.drand_signature = vec![0; 96];
+        assert!(matches!(
+            handle.plan_por_challenges(inert_randomness, &HashMap::new()),
+            Err(PorChallengePlannerError::InvalidDrandSignature)
+        ));
 
         let mut vrf_records = HashMap::new();
         vrf_records.insert(

@@ -313,9 +313,14 @@ public final class PrivacyConfidentialWitness {
       this.assetDefinitionId = canonicalText(assetDefinitionId, "assetDefinitionId");
       this.spendKey = fixed32(spendKey, "spendKey");
       this.treeCommitments = copyFixed32List(treeCommitments, "treeCommitments");
-      this.inputs = List.copyOf(Objects.requireNonNull(inputs, "inputs"));
-      this.transferOutputs = List.copyOf(Objects.requireNonNull(transferOutputs, "transferOutputs"));
-      this.unshieldChange = List.copyOf(Objects.requireNonNull(unshieldChange, "unshieldChange"));
+      this.inputs =
+          Collections.unmodifiableList(new ArrayList<>(Objects.requireNonNull(inputs, "inputs")));
+      this.transferOutputs =
+          Collections.unmodifiableList(
+              new ArrayList<>(Objects.requireNonNull(transferOutputs, "transferOutputs")));
+      this.unshieldChange =
+          Collections.unmodifiableList(
+              new ArrayList<>(Objects.requireNonNull(unshieldChange, "unshieldChange")));
       this.publicAmount = canonicalU128(publicAmount, "publicAmount");
       this.rootHint = fixed32(rootHint, "rootHint");
       validateShape();

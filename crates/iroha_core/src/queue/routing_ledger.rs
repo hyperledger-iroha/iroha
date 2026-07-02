@@ -110,6 +110,17 @@ impl RoutingLedgerStore {
         removed
     }
 
+    fn take_route(&self, hash: &HashOf<SignedTransaction>) -> Option<RoutingDecision> {
+        if let Some((_, plan)) = self.plans.remove(hash) {
+            let route = plan.coordinator_route();
+            self.decisions.remove(hash);
+            self.remove_from_order(hash);
+            return Some(route);
+        }
+
+        self.take(hash)
+    }
+
     #[cfg(test)]
     fn get(&self, hash: &HashOf<SignedTransaction>) -> Option<RoutingDecision> {
         self.decisions.get(hash).map(|entry| *entry.value())
@@ -136,11 +147,10 @@ impl RoutingLedgerStore {
             .plans
             .remove_if(hash, |_, current| current.digest() == expected_digest)
             .is_some()
-            && !self.decisions.contains_key(hash)
         {
+            self.decisions.remove(hash);
             self.remove_from_order(hash);
         }
-        self.discard_if_matches(hash, expected.coordinator_route());
     }
 
     fn remove_from_order(&self, hash: &HashOf<SignedTransaction>) {
@@ -183,6 +193,15 @@ pub fn take(hash: &HashOf<SignedTransaction>) -> Option<RoutingDecision> {
 /// Remove and return the full routing plan for `hash`, if present.
 pub fn take_plan(hash: &HashOf<SignedTransaction>) -> Option<RoutingPlan> {
     ROUTING_LEDGER.take_plan(hash)
+}
+
+/// Remove and return the authoritative coordinator route for `hash`, if present.
+///
+/// Full routing plans are preferred over legacy single-route decisions because
+/// they are the queue's digest-checked routing artifact. When a plan exists,
+/// any shadow legacy decision for the same transaction is cleared as well.
+pub fn take_route(hash: &HashOf<SignedTransaction>) -> Option<RoutingDecision> {
+    ROUTING_LEDGER.take_route(hash)
 }
 
 /// Retrieve the routing decision for `hash` without removing it.
@@ -275,5 +294,38 @@ mod tests {
         assert_eq!(ledger.len_for_tests(), 2);
         assert!(ledger.get_plan(&second).is_some());
         assert!(ledger.get_plan(&third).is_some());
+    }
+
+    #[test]
+    fn take_route_prefers_full_plan_over_divergent_legacy_decision() {
+        let ledger = RoutingLedgerStore::new();
+        let hash = tx_hash(21);
+        let plan = plan(7);
+        let plan_route = plan.coordinator_route();
+        let stale_decision = RoutingDecision::new(LaneId::new(99), DataSpaceId::new(99));
+
+        ledger.record_plan_bounded(hash, plan, 2);
+        ledger.decisions.insert(hash, stale_decision);
+
+        assert_eq!(ledger.take_route(&hash), Some(plan_route));
+        assert!(ledger.get_plan(&hash).is_none());
+        assert!(ledger.get(&hash).is_none());
+    }
+
+    #[test]
+    fn discard_plan_if_matches_removes_divergent_legacy_decision() {
+        let ledger = RoutingLedgerStore::new();
+        let hash = tx_hash(22);
+        let plan = plan(8);
+        let stale_decision = RoutingDecision::new(LaneId::new(77), DataSpaceId::new(77));
+
+        ledger.record_plan_bounded(hash, plan.clone(), 2);
+        ledger.decisions.insert(hash, stale_decision);
+
+        ledger.discard_plan_if_matches(&hash, &plan);
+
+        assert!(ledger.get_plan(&hash).is_none());
+        assert!(ledger.get(&hash).is_none());
+        assert_eq!(ledger.len_for_tests(), 0);
     }
 }

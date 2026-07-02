@@ -700,22 +700,22 @@ fn offline_paths() -> Map {
         (
             "/v1/offline/v2/keys/refill",
             "Refill Offline V2 issuer keys.",
-            "POST Offline V2 issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "POST Offline V2 issuer key-refill material. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
             "/v1/offline/v2/notes/issue",
             "Retired Offline V2 note issue route.",
-            "Classic Offline V2 note issuance is retired and this compatibility route fails closed. Use Kagemusha online-to-offline top-up flows. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Classic Offline V2 note issuance is retired and this retired route fails closed. Use Kagemusha online-to-offline top-up flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
         (
             "/v1/offline/v2/notes/redeem",
             "Redeem an Offline V2 note.",
-            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Legacy X-Iroha-* app-auth headers are rejected on this endpoint. Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64, compact_payment_token_norito_base64, or projection_verifier_record_norito_base64. Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive in redeem_request_norito_base64 with no surrounding whitespace. Optional amount and source_note_commitment echo fields, when present, must be canonical non-empty strings matching the archive. Once redeem_request_norito_base64 is present, compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields instead of being silently accepted.",
+            "POST an Offline V2 note redemption request. The JSON body must include account_id, timestamp_ms, nonce, and exactly one non-empty exact proof field: signature_base64 or witness_base64. The canonical request signs the body after removing only the top-level proof fields. Retired X-Iroha-* app-auth headers are rejected on this endpoint. Kagemusha recursive redemption is selected when the body carries redeem_request_norito_base64, compact_payment_token_norito_base64, or projection_verifier_record_norito_base64. Production Kagemusha redemption requires a canonical standard-base64 KagemushaRecursiveSpendRedeemRequestV1 archive in redeem_request_norito_base64 with no surrounding whitespace. Optional amount and source_note_commitment echo fields, when present, must be canonical non-empty strings matching the archive. Once redeem_request_norito_base64 is present, compact_payment_token_norito_base64 and projection_verifier_record_norito_base64 are rejected as ignored auxiliary fields instead of being silently accepted.",
         ),
         (
             "/v1/offline/v2/audit",
             "Retired Offline V2 audit route.",
-            "Classic Offline V2 audit is retired and this compatibility route fails closed. Use Kagemusha payment flows. Legacy X-Iroha-* app-auth headers are rejected on this endpoint.",
+            "Classic Offline V2 audit is retired and this retired route fails closed. Use Kagemusha payment flows. Retired X-Iroha-* app-auth headers are rejected on this endpoint.",
         ),
     ] {
         paths.insert(
@@ -4402,7 +4402,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch appeal pricing readiness.",
-            "Fetch SoraFS appeal finance API readiness, including which mutating deposit, report, and settlement paths are still pending runtime escrow and ledger integration.",
+            "Fetch SoraFS appeal finance API readiness for the local quote, native deposit lifecycle, report/rollup publication, configured-signer settlement submission, moderation-derived settlement worker, reconciliation, and dashboard readback paths; hosted dashboard and multi-peer rollout evidence remain promotion gates.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -5521,6 +5521,16 @@ fn sorafs_paths() -> Map {
 fn soracloud_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
+        "/v1/soracloud/status".to_owned(),
+        Value::Object(json_get_operation(
+            "Soracloud",
+            "Fetch Soracloud status.",
+            "Fetch Soracloud service health, resource pressure, runtime manager, control-plane, and routing status. The routing section reports `configured_lane_count`/legacy `lane_count`, `declared_lane_count`, active lane ids/count, and autoscale-capacity lane ids/count separately.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/soracloud/model/upload/private/execute".to_owned(),
         Value::Object(json_post_operation(
             "Soracloud",
@@ -5925,14 +5935,7 @@ fn nexus_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
         "/v1/nexus/lifecycle".to_owned(),
-        Value::Object(json_post_operation(
-            "Nexus",
-            "Apply a lane lifecycle plan.",
-            "Apply a Nexus lane lifecycle plan.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object(nexus_lane_lifecycle_operation()),
     );
     paths.insert(
         "/v1/nexus/public_lanes/{lane_id}/validators".to_owned(),
@@ -5951,6 +5954,66 @@ fn nexus_paths() -> Map {
         Value::Object(nexus_dataspaces_account_summary_operation()),
     );
     paths
+}
+
+fn nexus_lane_lifecycle_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Nexus".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Apply a lane lifecycle plan.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Apply a Nexus lane lifecycle plan. Accepted responses report configured lane namespace size, active lane ids/count, and live autoscale-capacity lane ids/count separately."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("nexusLaneLifecycle".to_owned()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body("#/components/schemas/JsonValue")),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "202".to_owned(),
+        json_response(
+            "Lane lifecycle plan accepted.",
+            schema_ref("NexusLaneLifecycleResponse"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "Lane lifecycle plan failed validation.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "401".to_owned(),
+        json_response(
+            "Operator authentication is required or invalid.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Operator is not authorized to apply lane lifecycle plans.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
 }
 
 fn sumeragi_paths() -> Map {
@@ -7757,6 +7820,7 @@ fn is_operator_operation(method: &str, path: &str) -> bool {
             path,
             uri::CONFIGURATION
                 | "/v1/internal/torii/proxy"
+                | "/v1/nexus/lifecycle"
                 | "/v1/nexus/lane-lifecycle"
                 | "/v1/sumeragi/evidence"
                 | "/v1/sumeragi/vrf/commit"
@@ -9140,6 +9204,64 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "NexusLaneLifecycleResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "ok",
+                "configured_lane_count",
+                "lane_count",
+                "active_lane_count",
+                "active_lane_ids",
+                "autoscale_capacity_lane_count",
+                "autoscale_capacity_lane_ids"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "ok": {
+                    "type": "boolean",
+                    "enum": [true],
+                    "description": "True when the signed lane lifecycle plan was accepted and applied."
+                },
+                "configured_lane_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Configured lane namespace size after the lifecycle plan."
+                },
+                "lane_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "deprecated": true,
+                    "description": "Legacy alias for `configured_lane_count`."
+                },
+                "active_lane_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Number of lanes active at the committed lane-authority height."
+                },
+                "active_lane_ids": {
+                    "type": "array",
+                    "items": { "type": "integer", "format": "uint64", "minimum": 0 },
+                    "description": "Lane ids active at the committed lane-authority height."
+                },
+                "autoscale_capacity_lane_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Number of active autoscale-managed elastic lanes that currently count as horizontal capacity."
+                },
+                "autoscale_capacity_lane_ids": {
+                    "type": "array",
+                    "items": { "type": "integer", "format": "uint64", "minimum": 0 },
+                    "description": "Active autoscale-managed elastic lane ids that currently count as horizontal capacity."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "AppPageMetadata".to_owned(),
         norito::json!({
             "type": "object",
@@ -9858,7 +9980,7 @@ fn openapi_schemas() -> Map {
                 },
                 "fees": {
                     "type": "object",
-                    "required": ["fee_asset_id", "fee_sink_account_id", "base_fee", "per_byte_fee", "per_instruction_fee", "per_gas_unit_fee", "sponsorship_enabled", "sponsor_max_fee", "sponsor_verified_balance_safety_floor", "fee_receipts_activation_height", "external_settlement_enabled", "burn_from_unix_timestamp_ms", "settlement_mode", "successful_claim_fee_exempt_authorities", "sponsored_contract_operation_allowlist"],
+                    "required": ["fee_asset_id", "fee_sink_account_id", "base_fee", "per_byte_fee", "per_instruction_fee", "per_gas_unit_fee", "sponsorship_enabled", "sponsor_max_fee", "sponsor_verified_balance_safety_floor", "fee_receipts_activation_height", "external_settlement_enabled", "burn_from_unix_timestamp_ms", "settlement_mode", "successful_claim_fee_exempt_authorities"],
                     "additionalProperties": false,
                     "properties": {
                         "fee_asset_id": { "type": "string" },
@@ -9878,22 +10000,6 @@ fn openapi_schemas() -> Map {
                         "successful_claim_fee_exempt_authorities": {
                             "type": "array",
                             "items": { "type": "string" }
-                        },
-                        "sponsored_contract_operation_allowlist": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "required": ["entrypoints"],
-                                "additionalProperties": false,
-                                "properties": {
-                                    "contract_alias": { "type": ["string", "null"] },
-                                    "contract_address": { "type": ["string", "null"] },
-                                    "entrypoints": {
-                                        "type": "array",
-                                        "items": { "type": "string" }
-                                    }
-                                }
-                            }
                         }
                     }
                 }
@@ -13490,6 +13596,27 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/por/trigger"));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/config"));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/status"));
+        let appeal_pricing_status_description = paths
+            .get("/v1/sorafs/appeals/pricing/status")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|get| get.get("description"))
+            .and_then(Value::as_str)
+            .expect("appeal pricing status description");
+        assert!(appeal_pricing_status_description.contains("native deposit lifecycle"));
+        assert!(
+            appeal_pricing_status_description.contains("configured-signer settlement submission")
+        );
+        assert!(appeal_pricing_status_description.contains("moderation-derived settlement worker"));
+        assert!(
+            appeal_pricing_status_description.contains(
+                "hosted dashboard and multi-peer rollout evidence remain promotion gates"
+            )
+        );
+        let stale_pending_runtime_phrase =
+            ["still pending runtime escrow", " and ledger integration"].concat();
+        assert!(!appeal_pricing_status_description.contains(&stale_pending_runtime_phrase));
         assert!(paths.contains_key("/v1/sorafs/appeals/pricing/quote"));
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/settle"));
         assert!(paths.contains_key("/v1/sorafs/appeals/finance/disburse"));
@@ -13587,6 +13714,8 @@ mod tests {
             .and_then(Value::as_str)
             .expect("offline issue description");
         assert!(issue_description.contains("retired"));
+        assert!(issue_description.contains("retired route fails closed"));
+        assert!(!issue_description.contains("compatibility route"));
         assert!(issue_description.contains("Kagemusha online-to-offline top-up"));
         let audit_post = paths
             .get("/v1/offline/v2/audit")
@@ -13599,6 +13728,8 @@ mod tests {
             .and_then(Value::as_str)
             .expect("offline audit description");
         assert!(audit_description.contains("retired"));
+        assert!(audit_description.contains("retired route fails closed"));
+        assert!(!audit_description.contains("compatibility route"));
         assert!(audit_description.contains("Kagemusha payment flows"));
         let redeem_post = paths
             .get("/v1/offline/v2/notes/redeem")
@@ -13781,6 +13912,19 @@ mod tests {
             .expect("protected namespaces post operation");
         assert_eq!(
             protected_namespaces
+                .get(TOOL_EFFECT_EXTENSION)
+                .and_then(Value::as_str),
+            Some("operator")
+        );
+
+        let nexus_lifecycle = paths
+            .get("/v1/nexus/lifecycle")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("Nexus lifecycle post operation");
+        assert_eq!(
+            nexus_lifecycle
                 .get(TOOL_EFFECT_EXTENSION)
                 .and_then(Value::as_str),
             Some("operator")
@@ -14796,7 +14940,7 @@ mod tests {
             PathCase {
                 label: "soracloud",
                 builder: soracloud_paths,
-                expected: "/v1/soracloud/model/upload/private/execute",
+                expected: "/v1/soracloud/status",
             },
             PathCase {
                 label: "soradns",
@@ -14867,6 +15011,7 @@ mod tests {
         for key in [
             "JsonValue",
             "JsonList",
+            "NexusLaneLifecycleResponse",
             "AppPageMetadata",
             "AccountQueryResponse",
             "DomainQueryResponse",
@@ -14891,6 +15036,100 @@ mod tests {
         ] {
             assert!(schemas.contains_key(key), "schema missing {key}");
         }
+    }
+
+    #[test]
+    fn generated_spec_documents_nexus_lifecycle_response_contract() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let responses = paths
+            .get("/v1/nexus/lifecycle")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .and_then(|post| post.get("responses"))
+            .and_then(Value::as_object)
+            .expect("Nexus lifecycle responses");
+        assert!(
+            !responses.contains_key("200"),
+            "lifecycle accepts plans with 202, not 200"
+        );
+        let accepted_schema_ref = responses
+            .get("202")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            accepted_schema_ref,
+            Some("#/components/schemas/NexusLaneLifecycleResponse")
+        );
+
+        let schema = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .and_then(|schemas| schemas.get("NexusLaneLifecycleResponse"))
+            .and_then(Value::as_object)
+            .expect("NexusLaneLifecycleResponse schema");
+        assert_eq!(
+            schema.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("required lifecycle response fields");
+        for field in [
+            "ok",
+            "configured_lane_count",
+            "lane_count",
+            "active_lane_count",
+            "active_lane_ids",
+            "autoscale_capacity_lane_count",
+            "autoscale_capacity_lane_ids",
+        ] {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(field)),
+                "Nexus lifecycle response should require {field}"
+            );
+        }
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("lifecycle response properties");
+        assert_eq!(
+            properties
+                .get("active_lane_ids")
+                .and_then(Value::as_object)
+                .and_then(|property| property.get("type"))
+                .and_then(Value::as_str),
+            Some("array")
+        );
+        assert_eq!(
+            properties
+                .get("autoscale_capacity_lane_ids")
+                .and_then(Value::as_object)
+                .and_then(|property| property.get("type"))
+                .and_then(Value::as_str),
+            Some("array")
+        );
+        assert_eq!(
+            properties
+                .get("lane_count")
+                .and_then(Value::as_object)
+                .and_then(|property| property.get("deprecated")),
+            Some(&Value::Bool(true))
+        );
     }
 
     #[test]
@@ -15052,8 +15291,21 @@ mod tests {
             .get("paths")
             .and_then(Value::as_object)
             .expect("paths section");
+        assert!(paths.contains_key("/v1/soracloud/status"));
         assert!(paths.contains_key("/v1/soracloud/model/upload/private/execute"));
         assert!(paths.contains_key("/v1/soracloud/model/upload/private/receipts"));
+        let status_description = paths
+            .get("/v1/soracloud/status")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|get| get.get("description"))
+            .and_then(Value::as_str)
+            .expect("Soracloud status description");
+        assert!(status_description.contains("configured_lane_count"));
+        assert!(status_description.contains("declared_lane_count"));
+        assert!(status_description.contains("active lane ids/count"));
+        assert!(status_description.contains("autoscale-capacity lane ids/count"));
 
         let schemas = doc
             .get("components")

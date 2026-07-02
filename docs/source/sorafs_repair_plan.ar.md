@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_repair_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: dc4d510176f12b96075467cdef53e54e186c67affa3128eee429f4eef5200196
+source_hash: 5b7cab5babd679e794e286d1de337e02c346a87d6666f81b59eb85a8ef277380
 source_last_modified: "2026-06-25T17:31:52+00:00"
 translation_last_reviewed: 2026-06-25
 ---
@@ -36,12 +36,40 @@ roster and SF-9 coordinator publish their runbooks.
 `scripts/check_sorafs_repair_rollout_evidence.py` now provides the fail-closed
 SF-8b rollout evidence gate for deployed repair promotion packets, and
 `scripts/run_sorafs_repair_rollout_evidence.py` provides the matching reviewed
-evidence collection planner/runner. Signed auditor API, worker lifecycle,
-event stream, governance handoff, and approval artifacts must bind to a valid
+evidence collection planner/runner. The checker exports its required top-level
+payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the planner includes the
+checker-backed `evidence_contract` map in dry-run output for the selected
+required kinds, and validates the schema-closed collection plan, required
+kinds, thresholds, external evidence map, evidence contract, and command steps
+before dry-run output or verifier execution. The shared runner plan guard also
+rejects non-canonical nested required-kind, threshold, external-evidence,
+evidence-contract, and command-step shapes before dry-run output or verifier
+execution. Signed auditor API, worker lifecycle, event stream, governance
+handoff, and approval artifacts must bind to a valid
 auditor roster digest; worker, event stream, and handoff artifacts must also
-bind to a valid failure-capture evidence bundle digest. Roster or failure
-bundle mismatches are recorded on the offending artifact in the JSON summary
-before required-kind validity is reported.
+bind to a valid failure-capture evidence bundle digest; governance approval
+artifacts must additionally bind to the valid governance handoff digest. Roster,
+failure-bundle, or handoff-digest mismatches are recorded on the offending
+artifact in the JSON summary before required-kind validity is reported.
+Governance handoff artifacts also publish `policy_digest_hex`; governance
+approval artifacts must bind `policy_digest_hex` to that valid handoff policy
+digest, and the checker emits those valid handoff policies as
+`valid_policy_digests`. Signed auditor API, worker lifecycle, and event stream
+artifacts also bind `route_count` to the unique canonical `routes[].name`
+inventory and reject duplicate route entries before promotion can report ready.
+`scripts/build_sorafs_repair_canary.py` builds individual payload-free SF-8b
+canary artifacts for auditor roster, failure capture, signed auditor API,
+worker lifecycle, event streams, governance handoff, observability, and
+governance approval evidence. The builder requires reviewed deployment
+context, complete failure-source, repair route, lifecycle-status,
+handoff-target, and metric coverage where applicable, auditor-roster and
+failure-bundle digest bindings, governance handoff digest bindings, auditor
+minimum counts, route, event-lag, and repair-latency threshold facts,
+config-backed governance metadata, reviewed policy-digest input for
+governance handoff and approval evidence, and
+validates every generated artifact through
+`scripts/check_sorafs_repair_rollout_evidence.py` before writing. Checked-in
+response-file examples cover auditor-roster and worker-lifecycle canaries.
 
 ## Component Overview
 | Component | Responsibilities | Implementation Notes |
@@ -386,7 +414,20 @@ auditor roster meets the configured minimum, governance is bound to
 handoff / governance approval artifacts carry a `roster_digest_hex` that
 matches a valid auditor-roster artifact, and worker lifecycle / event stream /
 governance handoff artifacts carry an `evidence_bundle_digest_hex` that matches
-a valid PoR/PoTR failure-capture artifact in the same rollout bundle.
+a valid PoR/PoTR failure-capture artifact in the same rollout bundle, and
+governance approval artifacts carry a `handoff_digest_hex` that matches a valid
+governance handoff artifact.
+Governance handoff artifacts also carry `policy_digest_hex`; the checker emits
+those values as `valid_policy_digests`, and governance approval artifacts must
+carry a matching `policy_digest_hex`. Signed auditor API, worker lifecycle, and
+event stream artifacts must also keep `route_count` equal to the unique
+canonical `routes[].name` inventory and reject duplicate route entries.
+Its collection planner exposes those exact required payload fields through
+`--dry-run` and validates the schema-closed collection plan, required kinds,
+thresholds, external evidence map, evidence contract, and command steps before
+touching live repair services. The shared runner plan guard rejects
+non-canonical nested required-kind, threshold, external-evidence,
+evidence-contract, and command-step shapes before any live repair contact.
 
 ## Rollout Status
 Implemented engineering coverage:
@@ -395,10 +436,13 @@ Implemented engineering coverage:
 - Local golden and integration coverage now exercises the repair schemas, scheduler state transitions, auditor request validation, PoR failure binding, REST endpoints, and repair worker flows.
 - `iroha sorafs repair` and `iroha sorafs gc` provide operator CLI coverage;
   `sorafs-validate repair` provides release/fixture validation.
+- `scripts/build_sorafs_repair_canary.py` provides checked-in payload-free
+  canary generation for the local SF-8b rollout gate.
 - The SF-8b rollout evidence gate, collection planner, operator argfile
   templates, and focused tests are implemented for payload-free deployed
   evidence review, including cross-artifact auditor-roster and failure-bundle
-  digest binding.
+  digest binding plus governance handoff digest and handoff policy digest
+  binding.
 
 Remaining rollout work is live operator evidence: collect production PoR
 failure, repair, and governance handoff artifacts once the deployed auditor

@@ -149,12 +149,14 @@ use iroha_sccp::{
     build_nexus_sccp_message_transparent_proof_with_destination_binding_and_signer_allow_unready,
     build_nexus_sccp_message_transparent_proof_with_evm_groth16_proof_and_destination_binding_allow_unready,
     build_nexus_sccp_message_transparent_proof_with_signer_allow_unready,
+    build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready,
     build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready,
     build_nexus_sccp_message_transparent_proof_with_tron_groth16_proof_and_destination_binding_allow_unready,
     build_sccp_counterparty_proof_job_from_bundle_allow_unready,
     build_sccp_counterparty_proof_job_from_bundle_with_destination_binding_and_signer_allow_unready,
     build_sccp_counterparty_proof_job_from_bundle_with_evm_groth16_proof_and_destination_binding_allow_unready,
     build_sccp_counterparty_proof_job_from_bundle_with_signer_allow_unready,
+    build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_allow_unready,
     build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_and_deployment_allow_unready,
     build_sccp_counterparty_proof_job_from_bundle_with_tron_groth16_proof_and_destination_binding_allow_unready,
     build_sccp_message_transparent_inner_proof_from_artifact,
@@ -164,11 +166,14 @@ use iroha_sccp::{
     recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
     sccp_message_payload_kind_key, sccp_message_source_domain, sccp_message_target_domain,
     sccp_message_transparent_public_inputs,
+    sccp_message_transparent_public_inputs_with_source_verifier_material,
     sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment,
     sccp_payload_projection, summarize_sccp_message_transparent_open_verify_proof_from_artifact,
     verified_sccp_message_nexus_finality_proof_for_production,
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material,
     verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment,
     verify_burn_bundle_structure, verify_burn_payload_structure, verify_message_bundle_structure,
+    verify_message_bundle_structure_with_source_verifier_material,
     verify_message_bundle_structure_with_source_verifier_material_and_deployment,
     verify_nexus_bridge_finality_proof_cryptographic, verify_sccp_payload_structure,
 };
@@ -534,22 +539,6 @@ pub(crate) struct PipelinePreflightQueue {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-pub(crate) struct PipelinePreflightSponsoredContractOperation {
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub contract_alias: Option<String>,
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub contract_address: Option<String>,
-    pub entrypoints: Vec<String>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
 pub(crate) struct PipelinePreflightFees {
     pub fee_asset_id: String,
     pub fee_sink_account_id: String,
@@ -567,7 +556,6 @@ pub(crate) struct PipelinePreflightFees {
     pub burn_from_unix_timestamp_ms: u64,
     pub settlement_mode: String,
     pub successful_claim_fee_exempt_authorities: Vec<String>,
-    pub sponsored_contract_operation_allowlist: Vec<PipelinePreflightSponsoredContractOperation>,
 }
 
 #[derive(
@@ -3689,12 +3677,104 @@ fn sign_app_api_scaffold_transaction(
         .map(|tx| tx.with_authority(authority))
 }
 
+#[cfg(feature = "app_api")]
+fn decode_app_api_detached_signature(signature_b64: &str) -> Result<Signature> {
+    use base64::Engine as _;
+
+    let signature_bytes = base64::engine::general_purpose::STANDARD
+        .decode(signature_b64.as_bytes())
+        .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+    validate_app_api_ed25519_signature_bytes(&signature_bytes)?;
+    Signature::try_from_bytes(&signature_bytes)
+        .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))
+}
+
+#[cfg(feature = "app_api")]
+fn validate_app_api_ed25519_signature_bytes(signature: &[u8]) -> Result<()> {
+    if signature.len() != ed25519_dalek::SIGNATURE_LENGTH {
+        return Err(conversion_error(format!(
+            "invalid signature_b64: signature must be {} bytes",
+            ed25519_dalek::SIGNATURE_LENGTH
+        )));
+    }
+    if signature.iter().all(|byte| *byte == 0) {
+        return Err(conversion_error(
+            "invalid signature_b64: signature payload must not be all zero".to_owned(),
+        ));
+    }
+    let r_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = signature
+        .get(..ed25519_dalek::PUBLIC_KEY_LENGTH)
+        .ok_or_else(|| conversion_error("invalid signature_b64: signature R missing".to_owned()))?
+        .try_into()
+        .map_err(|_| {
+            conversion_error("invalid signature_b64: signature R has invalid length".to_owned())
+        })?;
+    if !app_api_ed25519_compressed_y_is_canonical(&r_bytes) {
+        return Err(conversion_error(
+            "invalid signature_b64: signature R is not a canonical Ed25519 point".to_owned(),
+        ));
+    }
+    let r_point = ed25519_dalek::VerifyingKey::from_bytes(&r_bytes).map_err(|err| {
+        conversion_error(format!(
+            "invalid signature_b64: signature R is not a canonical Ed25519 point: {err}"
+        ))
+    })?;
+    if r_point.is_weak() {
+        return Err(conversion_error(
+            "invalid signature_b64: signature R is small-order".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn app_api_ed25519_compressed_y_is_canonical(
+    bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
+) -> bool {
+    const ED25519_FIELD_MODULUS_LE: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    let mut y = *bytes;
+    y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
+    for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
+        match y[idx].cmp(&ED25519_FIELD_MODULUS_LE[idx]) {
+            std::cmp::Ordering::Less => return true,
+            std::cmp::Ordering::Greater => return false,
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+    false
+}
+
 #[cfg(all(feature = "app_api", test))]
 mod app_api_transaction_signing_tests {
     use super::*;
 
+    const ED25519_SMALL_ORDER_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const ED25519_NONCANONICAL_IDENTITY: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn checked_app_api_fixture_keypair(seed: Vec<u8>, context: &'static str) -> KeyPair {
         KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect(context)
+    }
+
+    fn expect_conversion(err: Error) -> String {
+        match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => message,
+            other => panic!("expected conversion error, got {other:?}"),
+        }
     }
 
     #[test]
@@ -3759,6 +3839,52 @@ mod app_api_transaction_signing_tests {
         assert_eq!(tx.authority(), &requested_authority);
         tx.verify_signature()
             .expect_err("scaffold signature is not meant to verify after restoring authority");
+    }
+
+    #[test]
+    fn app_api_detached_signature_rejects_all_zero_payload() {
+        use base64::Engine as _;
+
+        let signature_b64 = base64::engine::general_purpose::STANDARD.encode([0_u8; 64]);
+        let err = decode_app_api_detached_signature(&signature_b64)
+            .expect_err("all-zero detached signatures must fail at admission");
+
+        assert!(expect_conversion(err).contains("signature payload must not be all zero"));
+    }
+
+    #[test]
+    fn app_api_detached_signature_rejects_malformed_ed25519_payloads() {
+        use base64::Engine as _;
+
+        let short_signature_b64 = base64::engine::general_purpose::STANDARD.encode([0xAA_u8; 3]);
+        let err = decode_app_api_detached_signature(&short_signature_b64)
+            .expect_err("short detached signature must fail at admission");
+        assert!(expect_conversion(err).contains("signature must be 64 bytes"));
+
+        for (label, r_bytes, expected) in [
+            (
+                "small-order",
+                ED25519_SMALL_ORDER_POINT,
+                "signature R is small-order",
+            ),
+            (
+                "noncanonical",
+                ED25519_NONCANONICAL_IDENTITY,
+                "signature R is not a canonical Ed25519 point",
+            ),
+        ] {
+            let mut signature = [0x42_u8; ed25519_dalek::SIGNATURE_LENGTH];
+            signature[..ed25519_dalek::PUBLIC_KEY_LENGTH].copy_from_slice(&r_bytes);
+            let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature);
+            let err = decode_app_api_detached_signature(&signature_b64)
+                .expect_err("invalid Ed25519 signature R must fail at admission");
+
+            let message = expect_conversion(err);
+            assert!(
+                message.contains(expected),
+                "{label} Ed25519 R failed with unexpected error: {message}"
+            );
+        }
     }
 }
 
@@ -6186,6 +6312,45 @@ impl SccpDestinationQueryMaterial {
     }
 }
 
+fn sccp_default_source_material_for_verified_bundle(
+    bundle: &NexusSccpMessageProofV1,
+) -> Option<iroha_sccp::SccpSourceVerifierMaterialV1> {
+    if let Some(material) =
+        iroha_sccp::sccp_source_verifier_material_from_message_bundle_evidence(bundle)
+    {
+        return Some(material);
+    }
+    let source_domain = sccp_message_source_domain(&bundle.payload);
+    if source_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+        return None;
+    }
+    let material = iroha_sccp::sccp_source_verifier_material_for_domain(source_domain)?;
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material(
+        bundle, &material,
+    )
+    .is_some()
+    .then_some(material)
+}
+
+fn sccp_destination_query_material_for_message_bundle(
+    bundle: &NexusSccpMessageProofV1,
+    fields: &SccpEvmDestinationQuery,
+    allow_unready: bool,
+    configured_source_lane: Option<&SccpConfiguredSourceLaneV1>,
+) -> Result<SccpDestinationQueryMaterial> {
+    if configured_source_lane.is_some()
+        || sccp_default_source_material_for_verified_bundle(bundle).is_some()
+    {
+        if sccp_destination_query_fields_present(fields) {
+            return Err(sccp_bad_request(
+                "deployment destination fields and proof_bytes_hex are not valid for non-SORA source-chain proof envelope submissions",
+            ));
+        }
+        return Ok(SccpDestinationQueryMaterial::default());
+    }
+    sccp_destination_query_material_for_bundle(bundle, fields, allow_unready)
+}
+
 fn sccp_destination_query_material_for_bundle(
     bundle: &NexusSccpMessageProofV1,
     fields: &SccpEvmDestinationQuery,
@@ -7100,6 +7265,18 @@ pub struct SccpRouteManifestDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub native_evm_prover_bundle: Option<IrohaJson>,
+    /// Optional source verifier material used to verify counterparty-to-TAIRA messages.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source_verifier_material: Option<IrohaJson>,
+    /// Optional source adapter engine deployment evidence used by counterparty-to-TAIRA proofs.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source_adapter_engine_deployment: Option<IrohaJson>,
+    /// Optional source adapter engine descriptor used by counterparty-to-TAIRA proofs.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source_adapter_engine: Option<IrohaJson>,
     /// Optional route-bound TAIRA-to-counterparty browser prover manifest reference.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -7176,49 +7353,120 @@ fn sccp_codec_capabilities() -> Result<Vec<SccpCodecCapabilityDto>> {
     .collect()
 }
 
-fn sccp_counterparty_capabilities() -> Result<Vec<SccpCounterpartyCapabilityDto>> {
+fn sccp_configured_counterparty_capability(
+    zk_config: &iroha_config::parameters::actual::Zk,
+    domain: u32,
+) -> Result<SccpCounterpartyCapabilityDto> {
+    let manifest = iroha_sccp::sccp_proof_manifest_for_domain(domain).ok_or_else(|| {
+        conversion_error(format!(
+            "unsupported SCCP domain for manifest discovery: {domain}"
+        ))
+    })?;
+    let mut production_ready = iroha_sccp::sccp_manifest_is_production_ready(&manifest);
+    let mut disabled_reason = manifest.disabled_reason;
+    let mut destination_rollout = manifest.destination_rollout;
+    let mut production_readiness = iroha_sccp::sccp_lane_production_readiness_for_domain(domain)
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "unsupported SCCP domain for production readiness: {domain}"
+            ))
+        })?;
+
+    let configured = (|| -> Result<Option<iroha_sccp::SccpLaneProductionReadinessV1>> {
+        let Some(material) = sccp_configured_source_verifier_material_for_domain(zk_config, domain)?
+        else {
+            return Ok(None);
+        };
+        let Some(deployment) =
+            sccp_configured_source_adapter_deployment_for_domain(zk_config, domain, &material)?
+        else {
+            return Ok(None);
+        };
+        let Some(rollout) = sccp_configured_destination_rollout_for_domain(zk_config, domain)?
+        else {
+            return Ok(None);
+        };
+        let Some(allowlist) = sccp_configured_route_allowlist_for_domain(zk_config, domain)? else {
+            return Ok(None);
+        };
+        destination_rollout = rollout.clone();
+        Ok(
+            iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                domain,
+                &material,
+                &deployment,
+                &rollout,
+                &allowlist,
+            ),
+        )
+    })();
+
+    match configured {
+        Ok(Some(readiness)) => {
+            production_ready = readiness.production_ready;
+            if production_ready {
+                if let Err(error) = sccp_configured_launch_ready_for_domain(zk_config, domain) {
+                    production_ready = false;
+                    disabled_reason = Some(error.to_string());
+                } else {
+                    disabled_reason = None;
+                }
+            } else if disabled_reason.is_none() && !readiness.blockers.is_empty() {
+                disabled_reason = Some(readiness.blockers.join("; "));
+            }
+            production_readiness = readiness;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            production_ready = false;
+            disabled_reason = Some(format!(
+                "configured SCCP lane material for domain {domain} is invalid: {error}"
+            ));
+        }
+    }
+
+    Ok(SccpCounterpartyCapabilityDto {
+        domain,
+        chain: manifest.chain,
+        verifier_backend: manifest.verifier_backend,
+        message_backend: manifest.message_backend,
+        registry_backend: manifest.registry_backend,
+        counterparty_account_codec: manifest.counterparty_account_codec,
+        counterparty_account_codec_key: manifest.counterparty_account_codec_key,
+        destination_rollout,
+        production_ready,
+        disabled_reason,
+        production_readiness,
+    })
+}
+
+fn sccp_counterparty_capabilities(
+    zk_config: &iroha_config::parameters::actual::Zk,
+) -> Result<Vec<SccpCounterpartyCapabilityDto>> {
     iroha_sccp::SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1
         .into_iter()
-        .map(|domain| {
-            let manifest = iroha_sccp::sccp_proof_manifest_for_domain(domain).ok_or_else(|| {
-                conversion_error(format!(
-                    "unsupported SCCP domain for manifest discovery: {domain}"
-                ))
-            })?;
-            let production_ready = iroha_sccp::sccp_manifest_is_production_ready(&manifest);
-            Ok(SccpCounterpartyCapabilityDto {
-                domain,
-                chain: manifest.chain,
-                verifier_backend: manifest.verifier_backend,
-                message_backend: manifest.message_backend,
-                registry_backend: manifest.registry_backend,
-                counterparty_account_codec: manifest.counterparty_account_codec,
-                counterparty_account_codec_key: manifest.counterparty_account_codec_key,
-                destination_rollout: manifest.destination_rollout,
-                production_ready,
-                disabled_reason: manifest.disabled_reason,
-                production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(domain)
-                    .ok_or_else(|| {
-                        conversion_error(format!(
-                            "unsupported SCCP domain for production readiness: {domain}"
-                        ))
-                    })?,
-            })
-        })
+        .map(|domain| sccp_configured_counterparty_capability(zk_config, domain))
         .collect()
 }
 
-fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
+fn sccp_capabilities_snapshot(state: &CoreState) -> Result<SccpCapabilitiesDto> {
+    let zk_config = state.zk_snapshot();
     let production_policy = iroha_sccp::sccp_production_policy_v1();
     let launch_ready = match production_policy.launch_mode {
         iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => {
-            iroha_sccp::sccp_all_lanes_launch_ready_v1()
+            sccp_configured_all_lanes_launch_ready(&zk_config).is_ok()
         }
         iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => {
-            iroha_sccp::sccp_lane_production_ready_for_domain(iroha_sccp::SCCP_DOMAIN_ETH)
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_ETH)
+                .is_ok()
         }
         iroha_sccp::SccpLaunchModeV1::BscMainnetLane => {
-            iroha_sccp::sccp_lane_production_ready_for_domain(iroha_sccp::SCCP_DOMAIN_BSC)
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_BSC)
+                .is_ok()
+        }
+        iroha_sccp::SccpLaunchModeV1::TonMainnetLane => {
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_TON)
+                .is_ok()
         }
     };
     Ok(SccpCapabilitiesDto {
@@ -7244,7 +7492,7 @@ fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
         launch_ready,
         message_payload_kinds: iroha_sccp::sccp_message_payload_kind_keys_v1(),
         codecs: sccp_codec_capabilities()?,
-        counterparties: sccp_counterparty_capabilities()?,
+        counterparties: sccp_counterparty_capabilities(&zk_config)?,
     })
 }
 
@@ -7373,6 +7621,9 @@ fn sccp_route_manifest_dto(
         post_deploy_live_evidence: sccp_route_manifest_post_deploy_evidence(manifest),
         native_evm_prover_bundle_hash: manifest.native_evm_prover_bundle_hash.clone(),
         native_evm_prover_bundle: manifest.native_evm_prover_bundle.clone(),
+        source_verifier_material: manifest.source_verifier_material.clone(),
+        source_adapter_engine_deployment: manifest.source_adapter_engine_deployment.clone(),
+        source_adapter_engine: manifest.source_adapter_engine.clone(),
         destination_browser_prover: manifest
             .destination_browser_prover
             .as_ref()
@@ -8562,12 +8813,24 @@ fn sccp_configured_launch_ready_for_domain(
                 "SCCP BSC mainnet lane launch policy",
                 "BSC mainnet",
             ),
+            iroha_sccp::SccpLaunchModeV1::TonMainnetLane => (
+                iroha_sccp::SCCP_DOMAIN_TON,
+                "SCCP TON mainnet lane launch policy",
+                "TON mainnet",
+            ),
         };
     if domain != launch_domain {
-        return Err(sccp_bad_request(format!(
-            "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
-        )));
+        if sccp_configured_source_lane_for_domain(zk_config, domain)?.is_none() {
+            return Err(sccp_bad_request(format!(
+                "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
+            )));
+        }
     }
+    let launch_policy_label = if domain == launch_domain {
+        launch_policy_label
+    } else {
+        "on-chain SCCP lane activation policy"
+    };
 
     let lane = sccp_configured_source_lane_for_domain(zk_config, domain)?.ok_or_else(|| {
         sccp_bad_request(format!(
@@ -8630,7 +8893,11 @@ fn sccp_configured_source_lane_for_bundle_with_policy(
     allow_unready: bool,
 ) -> Result<Option<SccpConfiguredSourceLaneV1>> {
     if allow_unready {
-        return Ok(None);
+        let source_domain = sccp_message_source_domain(&bundle.payload);
+        if source_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+            return Ok(None);
+        }
+        return sccp_configured_source_lane_for_domain(&state.zk_snapshot(), source_domain);
     }
     sccp_configured_source_lane_for_bundle(state, bundle)
 }
@@ -8771,6 +9038,18 @@ fn sccp_message_artifact_for_destination_material(
 ) -> Result<Option<NexusSccpMessageTransparentProofV1>> {
     require_sccp_message_supported_launch_scope(bundle, "proof artifact generation")?;
     let manifest = sccp_message_manifest_for_bundle(bundle)?;
+    if let Some(material) = sccp_default_source_material_for_verified_bundle(bundle) {
+        if destination_binding.is_some() || proof_bytes.is_some() {
+            return Err(sccp_bad_request(
+                "deployment destination fields and proof_bytes_hex are not valid for non-SORA source-chain proof envelope submissions",
+            ));
+        }
+        return Ok(
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_allow_unready(
+                bundle, &material, true,
+            ),
+        );
+    }
     if let Some(configured_source_lane) = configured_source_lane {
         if destination_binding.is_some() || proof_bytes.is_some() {
             return Err(sccp_bad_request(
@@ -8873,6 +9152,20 @@ fn sccp_message_proof_job_for_destination_material(
 ) -> Result<Option<SccpCounterpartyProofJobV1>> {
     require_sccp_message_supported_launch_scope(bundle, "proof job generation")?;
     let manifest = sccp_message_manifest_for_bundle(bundle)?;
+    if let Some(material) = sccp_default_source_material_for_verified_bundle(bundle) {
+        if destination_binding.is_some() || proof_bytes.is_some() {
+            return Err(sccp_bad_request(
+                "deployment destination fields and proof_bytes_hex are not valid for non-SORA source-chain proof envelope submissions",
+            ));
+        }
+        return Ok(
+            build_sccp_counterparty_proof_job_from_bundle_with_source_verifier_material_allow_unready(
+                bundle,
+                &material,
+                true,
+            ),
+        );
+    }
     if let Some(configured_source_lane) = configured_source_lane {
         if destination_binding.is_some() || proof_bytes.is_some() {
             return Err(sccp_bad_request(
@@ -8977,8 +9270,11 @@ fn bridge_proof_from_sccp_message_bundle(
         && destination_binding.is_none()
         && proof_bytes.is_none()
         && iroha_sccp::sccp_taira_tron_xor_diagnostic_message_bundle_structure(bundle);
+    let fallback_source_material = sccp_default_source_material_for_verified_bundle(bundle);
     let bundle_structure_is_valid = if diagnostic_taira_tron_xor {
         true
+    } else if let Some(material) = fallback_source_material.as_ref() {
+        verify_message_bundle_structure_with_source_verifier_material(bundle, material)
     } else if let Some(configured_source_lane) = configured_source_lane {
         verify_message_bundle_structure_with_source_verifier_material_and_deployment(
             bundle,
@@ -9002,7 +9298,11 @@ fn bridge_proof_from_sccp_message_bundle(
         return Err(conversion_error(message));
     }
     require_sccp_sora_message_nexus_finality_for_production(bundle, allow_unready)?;
-    let fallback_destination_binding = if allow_unready && destination_binding.is_none() {
+    let fallback_destination_binding = if allow_unready
+        && destination_binding.is_none()
+        && fallback_source_material.is_none()
+        && configured_source_lane.is_none()
+    {
         let manifest = sccp_message_manifest_for_bundle(bundle)?;
         (!iroha_sccp::sccp_manifest_is_production_ready(&manifest)
             && matches!(
@@ -9016,6 +9316,8 @@ fn bridge_proof_from_sccp_message_bundle(
     let destination_binding = destination_binding.or(fallback_destination_binding.as_ref());
     let public_inputs = if diagnostic_taira_tron_xor {
         iroha_sccp::sccp_taira_tron_xor_diagnostic_message_public_inputs(bundle)
+    } else if let Some(material) = fallback_source_material.as_ref() {
+        sccp_message_transparent_public_inputs_with_source_verifier_material(bundle, material)
     } else if let Some(configured_source_lane) = configured_source_lane {
         sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment(
             bundle,
@@ -9082,6 +9384,8 @@ fn sccp_message_bundle_structure_error(bundle: &NexusSccpMessageProofV1) -> Stri
 #[cfg(all(test, feature = "app_api"))]
 mod sccp_message_backend_tests {
     use super::*;
+    use iroha_core::queue::{LaneRouter, QueueLimits};
+    use iroha_data_model::nexus::{DataSpaceMetadata, LaneCatalog};
 
     fn conversion_message(err: &crate::Error) -> Option<&str> {
         match err {
@@ -9090,6 +9394,198 @@ mod sccp_message_backend_tests {
             )) => Some(message.as_str()),
             _ => None,
         }
+    }
+
+    #[derive(Debug)]
+    struct StaticSccpMessageRouter {
+        decision: RoutingDecision,
+    }
+
+    impl LaneRouter for StaticSccpMessageRouter {
+        fn route(&self, _tx: &iroha_core::tx::AcceptedTransaction<'_>) -> RoutingDecision {
+            self.decision
+        }
+    }
+
+    fn sccp_message_submit_state_and_queue_for_route(
+        route: RoutingDecision,
+    ) -> (Arc<CoreState>, Arc<Queue>) {
+        let mut state = CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        state.zk.sccp_allow_unready_transparent_proofs = true;
+
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: route.dataspace_id,
+                alias: "sccp-message-submit".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("valid SCCP message submit dataspace catalog");
+        let lane_catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(route.lane_id.as_u32() + 1).expect("non-zero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: route.lane_id,
+                    dataspace_id: route.dataspace_id,
+                    alias: "sccp-message-submit".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("valid SCCP message submit lane catalog");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.dataspace_catalog = dataspace_catalog.clone();
+        }
+
+        let lane_catalog = Arc::new(lane_catalog);
+        let dataspace_catalog = Arc::new(dataspace_catalog);
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticSccpMessageRouter { decision: route });
+        let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+        let queue = Arc::new(Queue::from_config_with_router_limits_and_catalogs(
+            iroha_config::parameters::actual::Queue::default(),
+            events,
+            router,
+            QueueLimits::default(),
+            &lane_catalog,
+            &dataspace_catalog,
+            None,
+        ));
+
+        (Arc::new(state), queue)
+    }
+
+    fn sccp_message_submit_authority() -> iroha_data_model::account::AccountId {
+        let authority_key = checked_routing_fixture_keypair(
+            b"iroha:torii:routing:test:bridge-message-submit-authority".to_vec(),
+            Algorithm::Ed25519,
+            "derive bridge-message submit authority fixture key",
+        );
+        iroha_data_model::account::AccountId::new(authority_key.public_key().clone())
+    }
+
+    fn sccp_message_submit_signer() -> KeyPair {
+        checked_routing_fixture_keypair(
+            b"iroha:torii:routing:test:bridge-message-submit-signer".to_vec(),
+            Algorithm::Secp256k1,
+            "derive bridge-message submit signer fixture key",
+        )
+    }
+
+    fn sccp_message_submit_request(
+        authority: iroha_data_model::account::AccountId,
+        bundle: NexusSccpMessageProofV1,
+        receipt_lane: Option<u32>,
+    ) -> BridgeMessageSubmitDto {
+        BridgeMessageSubmitDto {
+            authority,
+            private_key: None,
+            public_key_hex: None,
+            signature_b64: None,
+            message_bundle: norito::json::to_value(&bundle).expect("message bundle JSON"),
+            network_id_hex: None,
+            verifier_address_hex: None,
+            bridge_address_hex: None,
+            verifier_code_hash_hex: None,
+            verifier_key_hash_hex: None,
+            expected_destination_binding_hash_hex: None,
+            tron_verifier_address: None,
+            proof_bytes_hex: None,
+            receipt_lane,
+            settlement: None,
+            creation_time_ms: Some(1_700_000_000_111),
+        }
+    }
+
+    async fn decode_bridge_message_response(response: impl IntoResponse) -> norito::json::Value {
+        use http_body_util::BodyExt as _;
+
+        let body = response
+            .into_response()
+            .into_body()
+            .collect()
+            .await
+            .expect("collect bridge message response body")
+            .to_bytes();
+        norito::json::from_slice(&body).expect("bridge message JSON body")
+    }
+
+    fn decode_bridge_message_scaffold(payload: &norito::json::Value) -> SignedTransaction {
+        use base64::Engine as _;
+
+        let scaffold_b64 = payload["transaction_scaffold_b64"]
+            .as_str()
+            .expect("transaction scaffold is present");
+        let scaffold_bytes = base64::engine::general_purpose::STANDARD
+            .decode(scaffold_b64)
+            .expect("decode transaction scaffold");
+        let _guard = norito::core::PayloadCtxGuard::enter(&scaffold_bytes);
+        let mut cursor = std::io::Cursor::new(scaffold_bytes.as_slice());
+        norito::codec::Decode::decode(&mut cursor).expect("decode scaffolded transaction")
+    }
+
+    fn bridge_receipt_from_scaffold(
+        tx: &SignedTransaction,
+    ) -> &iroha_data_model::isi::bridge::RecordBridgeReceipt {
+        let Executable::Instructions(instructions) = tx.instructions() else {
+            panic!("bridge message scaffold must contain instruction executable");
+        };
+        instructions
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::bridge::RecordBridgeReceipt>()
+            })
+            .expect("bridge message scaffold records a bridge receipt")
+    }
+
+    fn sample_sccp_finality_block_header(height: u64, commitment_root: [u8; 32]) -> BlockHeader {
+        let mut header = BlockHeader::new(
+            core::num::NonZeroU64::new(height).expect("non-zero finality height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        header.set_sccp_commitment_root(Some(commitment_root));
+        header
+    }
+
+    fn sample_sccp_validator_public_keys(count: usize) -> Vec<String> {
+        (0..count)
+            .map(|idx| {
+                let seed_byte = 0x40_u8 + u8::try_from(idx).expect("fixture index fits u8");
+                checked_routing_fixture_keypair(
+                    vec![seed_byte; 32],
+                    Algorithm::Ed25519,
+                    "derive Torii routing SCCP validator fixture key",
+                )
+                .public_key()
+                .to_string()
+            })
+            .collect()
+    }
+
+    fn sample_sccp_validator_set_hash(public_keys: &[String]) -> [u8; 32] {
+        let validator_set = public_keys
+            .iter()
+            .map(|key| {
+                key.parse::<PublicKey>()
+                    .expect("sample validator public key should parse")
+            })
+            .map(PeerId::from)
+            .collect::<Vec<_>>();
+        hash_of_to_h256(&HashOf::<Vec<PeerId>>::new(&validator_set))
     }
 
     #[test]
@@ -9363,13 +9859,17 @@ mod sccp_message_backend_tests {
         };
         let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
         let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+        let block_header = sample_sccp_finality_block_header(19, commitment_root);
+        let block_hash = hash_of_to_h256(&block_header.hash());
+        let validator_public_keys = sample_sccp_validator_public_keys(1);
+        let validator_set_hash = sample_sccp_validator_set_hash(&validator_public_keys);
         let finality_proof = NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 19,
-            block_hash: [0x44; 32],
+            block_hash,
             commitment_root,
-            block_header_bytes: vec![0x01, 0x02, 0x03],
+            block_header_bytes: to_bytes(&block_header).expect("encode sample Nexus block header"),
             commit_qc: NexusCommitQcV1 {
                 version: 1,
                 phase: NexusConsensusPhaseV1::Commit,
@@ -9377,14 +9877,16 @@ mod sccp_message_backend_tests {
                 view: 1,
                 epoch: 1,
                 mode_tag: "normal".to_owned(),
-                subject_block_hash: [0x44; 32],
+                subject_block_hash: block_hash,
                 parent_state_root: [0u8; 32],
                 post_state_root: [0u8; 32],
                 chain_order_hash: [0u8; 32],
                 rechain_seq: 0,
                 highest_qc: None,
-                validator_set_hash_version: 1,
-                validator_public_keys: vec!["validator-1".to_owned()],
+                validator_set_hash,
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_public_keys,
                 validator_set_pops: vec![vec![0xAA]],
                 signers_bitmap: vec![0x01],
                 bls_aggregate_signature: vec![0xBB],
@@ -9536,7 +10038,7 @@ mod sccp_message_backend_tests {
         seed: u8,
     ) -> iroha_sccp::SccpSourceVerifierMaterialV1 {
         match domain {
-            iroha_sccp::SCCP_DOMAIN_ETH | iroha_sccp::SCCP_DOMAIN_BSC => {
+            iroha_sccp::SCCP_DOMAIN_ETH => {
                 iroha_sccp::sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
                     domain,
                     [seed; 32],
@@ -9547,6 +10049,19 @@ mod sccp_message_backend_tests {
                     [seed + 5; 32],
                 )
                 .expect("EVM-family SCCP source verifier material")
+            }
+            iroha_sccp::SCCP_DOMAIN_BSC => {
+                iroha_sccp::sccp_bsc_source_verifier_material_with_hashes_emitter_and_config_v1(
+                    [seed; 32],
+                    [seed + 1; 32],
+                    [seed + 2; 32],
+                    [seed + 3; 32],
+                    [seed + 4; 20],
+                    [seed + 5; 32],
+                    iroha_sccp::sccp_bsc_mainnet_network_id_word_v1(),
+                    [seed + 6; 20],
+                )
+                .expect("BSC SCCP source verifier material")
             }
             iroha_sccp::SCCP_DOMAIN_SOL => {
                 iroha_sccp::sccp_solana_mainnet_source_verifier_material_with_hashes_and_accounts_db_v1(
@@ -9603,38 +10118,28 @@ mod sccp_message_backend_tests {
         material: &iroha_sccp::SccpSourceVerifierMaterialV1,
         seed: u8,
     ) -> iroha_sccp::SccpSourceAdapterEngineDeploymentV1 {
-        let mut deployment = iroha_sccp::sccp_source_adapter_engine_deployment_from_material_v1(
-            material,
-            [seed + 9; 32],
-        )
-        .expect("SCCP source adapter deployment");
         if domain == iroha_sccp::SCCP_DOMAIN_SOL {
-            deployment.solana_tower_replay_verifier_hash = [0xb1; 32];
-            deployment.solana_full_accountsdb_lattice_verifier_hash = [0xb2; 32];
-            deployment.solana_bank_fork_choice_verifier_hash = [0xb3; 32];
-            assert!(
-                iroha_sccp::sccp_solana_full_light_client_gate_hash_from_deployment_v1(
-                    material,
-                    &deployment,
-                )
-                .is_some(),
-                "audited Solana SCCP deployment must derive the gate hash"
-            );
+            return iroha_sccp::build_sccp_solana_mainnet_source_adapter_deployment_with_full_light_client_audit_v1(
+                material,
+                [seed + 9; 32],
+                [0xB7; 32],
+                [0xC8; 32],
+                [0xD9; 32],
+            )
+            .expect("audited Solana SCCP source adapter deployment");
         }
         if domain == iroha_sccp::SCCP_DOMAIN_TON {
-            deployment.ton_masterchain_config_verifier_hash = [0xc1; 32];
-            deployment.ton_validator_set_transition_verifier_hash = [0xc2; 32];
-            deployment.ton_shard_accounts_dictionary_verifier_hash = [0xc3; 32];
-            assert!(
-                iroha_sccp::sccp_ton_full_light_client_gate_hash_from_deployment_v1(
-                    material,
-                    &deployment,
-                )
-                .is_some(),
-                "audited TON SCCP deployment must derive the gate hash"
-            );
+            return iroha_sccp::build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit_v1(
+                material,
+                [seed + 9; 32],
+                [0x26; 32],
+                [0x27; 32],
+                [0x28; 32],
+            )
+            .expect("audited TON SCCP source adapter deployment");
         }
-        deployment
+        iroha_sccp::sccp_source_adapter_engine_deployment_from_material_v1(material, [seed + 9; 32])
+            .expect("SCCP source adapter deployment")
     }
 
     fn test_sccp_destination_rollout_for_domain(
@@ -9695,6 +10200,27 @@ mod sccp_message_backend_tests {
         deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
         rollout: &iroha_sccp::SccpDestinationRolloutV1,
     ) -> iroha_sccp::SccpRouteAllowlistReadinessV1 {
+        let source_adapter_readiness =
+            iroha_sccp::sccp_source_adapter_engine_readiness_with_material_and_deployment_for_domain(
+                domain, material, deployment,
+            )
+            .expect("SCCP source adapter readiness");
+        assert!(
+            source_adapter_readiness.production_ready,
+            "domain {domain} source adapter should be production-ready with fixture material: {:?}",
+            source_adapter_readiness.blockers
+        );
+        assert!(
+            iroha_sccp::sccp_destination_rollout_is_production_ready(domain, rollout),
+            "domain {domain} destination rollout should be production-ready"
+        );
+        assert!(
+            iroha_sccp::sccp_route_allowlist_hash_from_deployment_materials_v1(
+                domain, material, deployment, rollout,
+            )
+            .is_some(),
+            "domain {domain} route allowlist hash should derive from fixture lane evidence"
+        );
         let allowlist = iroha_sccp::sccp_profiled_route_allowlist_for_lane_evidence_v1(
             domain, material, deployment, rollout,
         )
@@ -10170,13 +10696,17 @@ mod sccp_message_backend_tests {
     }
 
     fn sample_sccp_finality_proof_bytes(commitment_root: [u8; 32]) -> Vec<u8> {
+        let block_header = sample_sccp_finality_block_header(31, commitment_root);
+        let block_hash = hash_of_to_h256(&block_header.hash());
+        let validator_public_keys = sample_sccp_validator_public_keys(1);
+        let validator_set_hash = sample_sccp_validator_set_hash(&validator_public_keys);
         norito::to_bytes(&NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 31,
-            block_hash: [0x31; 32],
+            block_hash,
             commitment_root,
-            block_header_bytes: vec![0x01, 0x02, 0x03],
+            block_header_bytes: to_bytes(&block_header).expect("encode sample Nexus block header"),
             commit_qc: NexusCommitQcV1 {
                 version: 1,
                 phase: NexusConsensusPhaseV1::Commit,
@@ -10184,14 +10714,16 @@ mod sccp_message_backend_tests {
                 view: 1,
                 epoch: 1,
                 mode_tag: "normal".to_owned(),
-                subject_block_hash: [0x31; 32],
+                subject_block_hash: block_hash,
                 parent_state_root: [0u8; 32],
                 post_state_root: [0u8; 32],
                 chain_order_hash: [0u8; 32],
                 rechain_seq: 0,
                 highest_qc: None,
-                validator_set_hash_version: 1,
-                validator_public_keys: vec!["validator-1".to_owned()],
+                validator_set_hash,
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_public_keys,
                 validator_set_pops: vec![vec![0xAA]],
                 signers_bitmap: vec![0x01],
                 bls_aggregate_signature: vec![0xBB],
@@ -10269,6 +10801,13 @@ mod sccp_message_backend_tests {
             ),
         ];
         let chain_id = iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned();
+        let block_header = sample_sccp_finality_block_header(31, commitment_root);
+        let block_hash = hash_of_to_h256(&block_header.hash());
+        let validator_public_keys = keypairs
+            .iter()
+            .map(|keypair| keypair.public_key().to_string())
+            .collect::<Vec<_>>();
+        let validator_set_hash = sample_sccp_validator_set_hash(&validator_public_keys);
         let mut commit_qc = NexusCommitQcV1 {
             version: 1,
             phase: NexusConsensusPhaseV1::Commit,
@@ -10276,17 +10815,15 @@ mod sccp_message_backend_tests {
             view: 1,
             epoch: 1,
             mode_tag: "normal".to_owned(),
-            subject_block_hash: [0x31; 32],
+            subject_block_hash: block_hash,
             parent_state_root: [0u8; 32],
             post_state_root: [0u8; 32],
             chain_order_hash: [0u8; 32],
             rechain_seq: 0,
             highest_qc: None,
-            validator_set_hash_version: 1,
-            validator_public_keys: keypairs
-                .iter()
-                .map(|keypair| keypair.public_key().to_string())
-                .collect(),
+            validator_set_hash,
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_public_keys,
             validator_set_pops: keypairs
                 .iter()
                 .map(|keypair| {
@@ -10319,9 +10856,9 @@ mod sccp_message_backend_tests {
             version: 1,
             chain_id,
             height: 31,
-            block_hash: [0x31; 32],
+            block_hash,
             commitment_root,
-            block_header_bytes: vec![0x01, 0x02, 0x03],
+            block_header_bytes: to_bytes(&block_header).expect("encode sample Nexus block header"),
             commit_qc,
         })
         .expect("encode signed finality proof")
@@ -10472,6 +11009,8 @@ mod sccp_message_backend_tests {
     ) -> NexusSccpMessageTransparentProofV1 {
         let mut artifact = sample_ton_artifact_with_proof_bytes(vec![0xAA, 0xBB]);
         let bundle = sample_eth_inbound_message_bundle_with_nexus_finality(nonce);
+        let finality = decode_nexus_bridge_finality_proof(&bundle.finality_proof)
+            .expect("sample bundle carries Nexus finality proof");
         let manifest = iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_ETH)
             .expect("eth manifest");
         artifact.counterparty_domain = manifest.counterparty_domain;
@@ -10488,8 +11027,8 @@ mod sccp_message_backend_tests {
             payload_hash: bundle.commitment.payload_hash,
             target_domain: bundle.commitment.target_domain,
             commitment_root: bundle.commitment_root,
-            finality_height: 31,
-            finality_block_hash: [0x31; 32],
+            finality_height: finality.height,
+            finality_block_hash: finality.block_hash,
         };
         artifact.bundle = bundle;
         artifact
@@ -12242,6 +12781,84 @@ mod sccp_message_backend_tests {
         assert_eq!(fields.proof_bytes_hex, dto.proof_bytes_hex);
     }
 
+    #[tokio::test]
+    async fn bridge_message_submit_scaffold_uses_resolved_route_lane_for_receipt() {
+        let route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
+        let (state, queue) = sccp_message_submit_state_and_queue_for_route(route);
+        let authority = sccp_message_submit_authority();
+        let signer = sccp_message_submit_signer();
+        let bundle = sample_taira_tron_xor_diagnostic_message_bundle(61);
+        let message_id = bundle.commitment.message_id;
+        let chain_id: Arc<ChainId> = Arc::new(
+            "bridge-message-submit-route-test"
+                .parse()
+                .expect("chain id"),
+        );
+
+        let response = match handle_post_bridge_message_submit(
+            chain_id,
+            queue,
+            state,
+            &signer,
+            MaybeTelemetry::disabled(),
+            JsonOnly(sccp_message_submit_request(authority, bundle, None)),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(err) => panic!("bridge message scaffold should succeed: {err:?}"),
+        };
+        let payload = decode_bridge_message_response(response).await;
+
+        assert_eq!(payload["submitted"].as_bool(), Some(false));
+        assert_eq!(
+            payload["receipt_lane"].as_u64(),
+            Some(u64::from(route.lane_id.as_u32()))
+        );
+        let tx = decode_bridge_message_scaffold(&payload);
+        let receipt = bridge_receipt_from_scaffold(&tx);
+        assert_eq!(receipt.receipt.lane, route.lane_id);
+        assert_eq!(receipt.receipt.source_tx, message_id);
+    }
+
+    #[tokio::test]
+    async fn bridge_message_submit_rejects_explicit_receipt_lane_that_differs_from_route() {
+        let route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(10));
+        let stale_receipt_lane = 7;
+        let (state, queue) = sccp_message_submit_state_and_queue_for_route(route);
+        let authority = sccp_message_submit_authority();
+        let signer = sccp_message_submit_signer();
+        let bundle = sample_taira_tron_xor_diagnostic_message_bundle(62);
+        let chain_id: Arc<ChainId> = Arc::new(
+            "bridge-message-submit-stale-lane-test"
+                .parse()
+                .expect("chain id"),
+        );
+
+        let err = match handle_post_bridge_message_submit(
+            chain_id,
+            queue,
+            state,
+            &signer,
+            MaybeTelemetry::disabled(),
+            JsonOnly(sccp_message_submit_request(
+                authority,
+                bundle,
+                Some(stale_receipt_lane),
+            )),
+        )
+        .await
+        {
+            Ok(_) => panic!("stale explicit receipt lane must be rejected"),
+            Err(err) => err,
+        };
+        let message = conversion_message(&err).expect("conversion error");
+        assert!(
+            message.contains("receipt_lane 7 does not match transaction route lane 2"),
+            "unexpected stale-lane rejection: {message}"
+        );
+    }
+
     #[test]
     fn evm_destination_binding_query_rejects_evm_fields_on_non_evm_lanes() {
         let bundle = sample_ton_artifact_with_proof_bytes(vec![0xAA, 0xBB]).bundle;
@@ -12461,7 +13078,12 @@ mod sccp_message_backend_tests {
 
     #[test]
     fn sccp_capabilities_snapshot_lists_remote_domains_and_codecs() {
-        let snapshot = sccp_capabilities_snapshot().expect("capabilities");
+        let state = CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        let snapshot = sccp_capabilities_snapshot(&state).expect("capabilities");
         assert_eq!(snapshot.local_domain, iroha_sccp::SCCP_DOMAIN_SORA);
         assert_eq!(snapshot.local_chain, "sora");
         assert_eq!(
@@ -12655,6 +13277,7 @@ mod sccp_message_backend_tests {
             tron_network: chain.clone(),
             chain,
             chain_id_hex: "0x61".to_owned(),
+            ton_finalize_message_value_nano: None,
             explorer_url: is_bsc.then(|| "https://testnet.bscscan.com".to_owned()),
             explorer_host: is_bsc.then(|| "testnet.bscscan.com".to_owned()),
             counterparty_account_codec: is_bsc.then_some(iroha_sccp::SCCP_CODEC_EVM_HEX),
@@ -12669,12 +13292,16 @@ mod sccp_message_backend_tests {
             sccp_tron_source_bridge_address: "0x3333333333333333333333333333333333333333"
                 .to_owned(),
             tron_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
+            ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", "45".repeat(32)),
             verifier_key_hash: format!("0x{}", "46".repeat(32)),
             proof_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
             proving_key_hash: Some(format!("0x{}", "4d".repeat(32))),
             native_evm_prover_bundle_hash: None,
             native_evm_prover_bundle: None,
+            source_verifier_material: None,
+            source_adapter_engine_deployment: None,
+            source_adapter_engine: None,
             destination_browser_prover: None,
             source_browser_prover: None,
             deployment_evidence_sha256: Some(format!("0x{}", "4f".repeat(32))),
@@ -13136,177 +13763,7 @@ mod sccp_message_backend_tests {
 
     #[test]
     fn message_bundle_bridge_proof_wraps_typed_transparent_artifact() {
-        let bundle = NexusSccpMessageProofV1 {
-            version: 1,
-            commitment_root: commitment_leaf_hash(&SccpHubCommitmentV1 {
-                version: 1,
-                kind: SccpHubMessageKind::Transfer,
-                target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-                message_id: iroha_sccp::sccp_message_id(&SccpPayloadV1::Transfer(
-                    iroha_sccp::TransferPayloadV1 {
-                        version: 1,
-                        source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                        dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-                        nonce: 99,
-                        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                        asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                        asset_id: b"xor#universal".to_vec(),
-                        amount: 5,
-                        sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                        sender: b"sora:bridge".to_vec(),
-                        recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-                        recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
-                        route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                        route_id: b"nexus:eth:xor".to_vec(),
-                    },
-                )),
-                payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
-                    &SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-                        version: 1,
-                        source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                        dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-                        nonce: 99,
-                        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                        asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                        asset_id: b"xor#universal".to_vec(),
-                        amount: 5,
-                        sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                        sender: b"sora:bridge".to_vec(),
-                        recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-                        recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
-                        route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                        route_id: b"nexus:eth:xor".to_vec(),
-                    }),
-                )),
-            }),
-            commitment: SccpHubCommitmentV1 {
-                version: 1,
-                kind: SccpHubMessageKind::Transfer,
-                target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-                message_id: iroha_sccp::transfer_message_id(&iroha_sccp::TransferPayloadV1 {
-                    version: 1,
-                    source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                    dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-                    nonce: 99,
-                    asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                    asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                    asset_id: b"xor#universal".to_vec(),
-                    amount: 5,
-                    sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                    sender: b"sora:bridge".to_vec(),
-                    recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-                    recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
-                    route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                    route_id: b"nexus:eth:xor".to_vec(),
-                }),
-                payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
-                    &SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-                        version: 1,
-                        source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                        dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-                        nonce: 99,
-                        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                        asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                        asset_id: b"xor#universal".to_vec(),
-                        amount: 5,
-                        sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                        sender: b"sora:bridge".to_vec(),
-                        recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-                        recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
-                        route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                        route_id: b"nexus:eth:xor".to_vec(),
-                    }),
-                )),
-            },
-            merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
-            payload: SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-                version: 1,
-                source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-                nonce: 99,
-                asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                asset_id: b"xor#universal".to_vec(),
-                amount: 5,
-                sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                sender: b"sora:bridge".to_vec(),
-                recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-                recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
-                route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                route_id: b"nexus:eth:xor".to_vec(),
-            }),
-            finality_proof: norito::to_bytes(&iroha_sccp::NexusBridgeFinalityProofV1 {
-                version: 1,
-                chain_id: "00000000-0000-0000-0000-000000000753".to_owned(),
-                height: 7,
-                block_hash: [7u8; 32],
-                commitment_root: commitment_leaf_hash(&SccpHubCommitmentV1 {
-                    version: 1,
-                    kind: SccpHubMessageKind::Transfer,
-                    target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-                    message_id: iroha_sccp::transfer_message_id(&iroha_sccp::TransferPayloadV1 {
-                        version: 1,
-                        source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                        dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-                        nonce: 99,
-                        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                        asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                        asset_id: b"xor#universal".to_vec(),
-                        amount: 5,
-                        sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                        sender: b"sora:bridge".to_vec(),
-                        recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-                        recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
-                        route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                        route_id: b"nexus:eth:xor".to_vec(),
-                    }),
-                    payload_hash: iroha_sccp::payload_hash(
-                        &iroha_sccp::canonical_sccp_payload_bytes(&SccpPayloadV1::Transfer(
-                            iroha_sccp::TransferPayloadV1 {
-                                version: 1,
-                                source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                                dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-                                nonce: 99,
-                                asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-                                asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                                asset_id: b"xor#universal".to_vec(),
-                                amount: 5,
-                                sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                                sender: b"sora:bridge".to_vec(),
-                                recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-                                recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
-                                route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                                route_id: b"nexus:eth:xor".to_vec(),
-                            },
-                        )),
-                    ),
-                }),
-                block_header_bytes: vec![0x42; 4],
-                commit_qc: iroha_sccp::NexusCommitQcV1 {
-                    version: 1,
-                    phase: iroha_sccp::NexusConsensusPhaseV1::Commit,
-                    height: 7,
-                    view: 0,
-                    epoch: 0,
-                    mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_owned(),
-                    subject_block_hash: [7u8; 32],
-                    parent_state_root: [0u8; 32],
-                    post_state_root: [0u8; 32],
-                    chain_order_hash: [0u8; 32],
-                    rechain_seq: 0,
-                    highest_qc: None,
-                    validator_set_hash_version: 1,
-                    validator_public_keys: vec![
-                        "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                            .to_owned(),
-                    ],
-                    validator_set_pops: vec![vec![1u8; 48]],
-                    signers_bitmap: vec![0b0000_0001],
-                    bls_aggregate_signature: vec![2u8; 96],
-                },
-            })
-            .expect("encode finality"),
-        };
+        let bundle = sample_eth_message_bundle(99);
 
         let signer = checked_routing_fixture_keypair(
             b"iroha:torii:routing:test:evm-attestor".to_vec(),
@@ -13433,6 +13890,7 @@ fn build_sccp_finality_proof_bytes(
                 .highest_qc
                 .as_ref()
                 .map(sccp_qc_ref),
+            validator_set_hash: hash_of_to_h256(&finality_proof.commit_qc.validator_set_hash),
             validator_set_hash_version: finality_proof.commit_qc.validator_set_hash_version,
             validator_public_keys: finality_proof
                 .commit_qc
@@ -13562,6 +14020,52 @@ fn verified_sccp_message_bundle_from_proof_registry(
     Ok(None)
 }
 
+fn sccp_message_bundle_from_recorded_messages(
+    state: &CoreState,
+    height: u64,
+    messages: &[iroha_core::bridge::RecordedSccpMessage],
+    index: usize,
+) -> Result<NexusSccpMessageProofV1> {
+    let message = messages.get(index).ok_or_else(|| {
+        sccp_internal_error(format!(
+            "SCCP message index {index} is out of bounds for block {height}"
+        ))
+    })?;
+    let Some(commitment_root) = iroha_core::bridge::sccp_commitment_root_from_messages(messages)
+    else {
+        return Err(sccp_internal_error(format!(
+            "failed to reconstruct SCCP commitment root for block {height}"
+        )));
+    };
+    let commitments: Vec<_> = messages
+        .iter()
+        .map(|message| message.commitment.clone())
+        .collect();
+    let merkle_proof =
+        iroha_sccp::commitment_merkle_proof(&commitments, index).ok_or_else(|| {
+            sccp_internal_error(format!(
+                "failed to derive SCCP Merkle proof for message {} in block {height}",
+                hex::encode(message.commitment.message_id)
+            ))
+        })?;
+    let finality_proof = iroha_core::bridge::build_finality_proof(state, height)
+        .map_err(map_bridge_finality_error)?;
+
+    Ok(NexusSccpMessageProofV1 {
+        version: 1,
+        commitment_root,
+        commitment: message.commitment.clone(),
+        merkle_proof,
+        payload: message.payload.clone(),
+        finality_proof: build_sccp_message_finality_proof_bytes(
+            &finality_proof,
+            &message.commitment,
+            &message.payload,
+            commitment_root,
+        )?,
+    })
+}
+
 fn reconstruct_sccp_message_bundle_from_block(
     state: &CoreState,
     height: u64,
@@ -13594,33 +14098,9 @@ fn reconstruct_sccp_message_bundle_from_block(
         )));
     }
 
-    let commitments: Vec<_> = messages
-        .iter()
-        .map(|message| message.commitment.clone())
-        .collect();
-    let merkle_proof =
-        iroha_sccp::commitment_merkle_proof(&commitments, index).ok_or_else(|| {
-            sccp_internal_error(format!(
-                "failed to derive SCCP Merkle proof for message {} in block {height}",
-                hex::encode(message_id)
-            ))
-        })?;
-    let finality_proof = iroha_core::bridge::build_finality_proof(state, height)
-        .map_err(map_bridge_finality_error)?;
-
-    Ok(Some(NexusSccpMessageProofV1 {
-        version: 1,
-        commitment_root,
-        commitment: messages[index].commitment.clone(),
-        merkle_proof,
-        payload: messages[index].payload.clone(),
-        finality_proof: build_sccp_message_finality_proof_bytes(
-            &finality_proof,
-            &messages[index].commitment,
-            &messages[index].payload,
-            commitment_root,
-        )?,
-    }))
+    Ok(Some(sccp_message_bundle_from_recorded_messages(
+        state, height, &messages, index,
+    )?))
 }
 
 fn reconstruct_sccp_message_bundle_from_committed_blocks(
@@ -13659,20 +14139,41 @@ fn cached_sccp_message_bundle(message_id: [u8; 32]) -> Option<NexusSccpMessagePr
         .cloned()
 }
 
-fn cached_sora_sccp_message_bundle(message_id: [u8; 32]) -> Option<NexusSccpMessageProofV1> {
-    let bundle = cached_sccp_message_bundle(message_id)?;
-    (sccp_message_source_domain(&bundle.payload) == iroha_sccp::SCCP_DOMAIN_SORA
-        && verify_message_bundle_structure(&bundle))
-    .then_some(bundle)
+fn cached_verified_non_sora_sccp_message_bundle(
+    state: &CoreState,
+    message_id: [u8; 32],
+) -> Result<Option<NexusSccpMessageProofV1>> {
+    let Some(bundle) = cached_sccp_message_bundle(message_id) else {
+        return Ok(None);
+    };
+    if sccp_message_source_domain(&bundle.payload) == iroha_sccp::SCCP_DOMAIN_SORA {
+        return Ok(None);
+    }
+
+    let configured_source_lane = sccp_configured_source_lane_for_bundle(state, &bundle)?;
+    let valid = if let Some(configured_source_lane) = configured_source_lane {
+        verify_message_bundle_structure_with_source_verifier_material_and_deployment(
+            &bundle,
+            &configured_source_lane.material,
+            &configured_source_lane.deployment,
+        ) && verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+            &bundle,
+            &configured_source_lane.material,
+            &configured_source_lane.deployment,
+        )
+        .is_some()
+    } else {
+        verify_message_bundle_structure(&bundle)
+            && iroha_sccp::verified_sccp_message_source_chain_proof_envelope_for_production(&bundle)
+                .is_some()
+    };
+    Ok(valid.then_some(bundle))
 }
 
 fn sccp_message_bundle_for_request(
     state: &CoreState,
     message_id: [u8; 32],
 ) -> Result<Option<NexusSccpMessageProofV1>> {
-    if let Some(bundle) = cached_sora_sccp_message_bundle(message_id) {
-        return Ok(Some(bundle));
-    }
     if let Some(bundle) = reconstruct_sccp_message_bundle_from_committed_blocks(state, message_id)?
     {
         return Ok(Some(bundle));
@@ -13680,7 +14181,7 @@ fn sccp_message_bundle_for_request(
     if let Some(bundle) = verified_sccp_message_bundle_from_proof_registry(state, message_id)? {
         return Ok(Some(bundle));
     }
-    Ok(cached_sccp_message_bundle(message_id))
+    cached_verified_non_sora_sccp_message_bundle(state, message_id)
 }
 
 fn projection_text_value(value: &SccpNormalizedCodecValueV1) -> Option<String> {
@@ -13845,7 +14346,7 @@ fn collect_recent_sccp_messages(
             continue;
         }
         let height_u64 = u64::try_from(height).unwrap_or(u64::MAX);
-        for message in messages.iter().rev() {
+        for (message_index, message) in messages.iter().enumerate().rev() {
             if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
                 if let Some(bundle) = verified_sccp_message_bundle_from_proof_registry(
                     state,
@@ -13858,27 +14359,12 @@ fn collect_recent_sccp_messages(
                 }
                 continue;
             }
-            let commitment_root = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
-                .ok_or_else(|| {
-                    sccp_internal_error(format!(
-                        "failed to reconstruct SCCP commitment root for block {height_u64}"
-                    ))
-                })?;
-            let finality_proof = iroha_core::bridge::build_finality_proof(state, height_u64)
-                .map_err(map_bridge_finality_error)?;
-            let bundle = NexusSccpMessageProofV1 {
-                version: 1,
-                commitment_root,
-                commitment: message.commitment.clone(),
-                merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
-                payload: message.payload.clone(),
-                finality_proof: build_sccp_message_finality_proof_bytes(
-                    &finality_proof,
-                    &message.commitment,
-                    &message.payload,
-                    commitment_root,
-                )?,
-            };
+            let bundle = sccp_message_bundle_from_recorded_messages(
+                state,
+                height_u64,
+                &messages,
+                message_index,
+            )?;
             items.push(recent_message_entry_from_bundle(height_u64, &bundle)?);
             if items.len() >= limit {
                 return Ok(SccpRecentMessagesDto { items });
@@ -13925,7 +14411,8 @@ pub fn publish_sccp_burn_bundle(
     Ok(bundle)
 }
 
-pub fn publish_sccp_message_bundle(
+#[cfg(test)]
+pub(crate) fn publish_sccp_message_bundle(
     state: &CoreState,
     height: u64,
     payload: SccpPayloadV1,
@@ -14114,9 +14601,10 @@ pub async fn handle_v1_sccp_message_proof_job(
 /// GET /v1/sccp/capabilities — relay-operator SCCP capability discovery for proof backends, codecs, and routes.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_capabilities(
+    state: &CoreState,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let snapshot = sccp_capabilities_snapshot()?;
+    let snapshot = sccp_capabilities_snapshot(state)?;
     sccp_bundle_response(&snapshot, accept.as_ref())
 }
 
@@ -14652,16 +15140,6 @@ pub(crate) fn build_pipeline_preflight_response(
             successful_claim_fee_exempt_authorities: nexus
                 .fees
                 .successful_claim_fee_exempt_authorities,
-            sponsored_contract_operation_allowlist: nexus
-                .fees
-                .sponsored_contract_operation_allowlist
-                .into_iter()
-                .map(|entry| PipelinePreflightSponsoredContractOperation {
-                    contract_alias: entry.contract_alias.map(|alias| alias.to_string()),
-                    contract_address: entry.contract_address.map(|address| address.to_string()),
-                    entrypoints: entry.entrypoints.into_iter().collect(),
-                })
-                .collect(),
         },
     }
 }
@@ -15911,6 +16389,7 @@ mod zk_roots_selector_tests {
             Some("7".to_owned()),
             Some(policy_hash.to_owned()),
             Some("1".to_owned()),
+            Some("2".to_owned()),
         )
         .expect("valid policy metadata");
 
@@ -15918,11 +16397,16 @@ mod zk_roots_selector_tests {
             state.as_ref(),
             Some("sponsor@cbsi"),
             Some("memo"),
-            validation_fee_policy_metadata
-                .as_ref()
-                .map(|(version, hash, instruction_index)| {
-                    (*version, hash.as_str(), *instruction_index)
-                }),
+            validation_fee_policy_metadata.as_ref().map(
+                |(version, hash, instruction_index, transfer_entry_index)| {
+                    (
+                        *version,
+                        hash.as_str(),
+                        *instruction_index,
+                        *transfer_entry_index,
+                    )
+                },
+            ),
         );
         let gas_asset_id = metadata
             .get("gas_asset_id")
@@ -15940,10 +16424,15 @@ mod zk_roots_selector_tests {
             .get(iroha_data_model::validation_fee::VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY)
             .cloned()
             .and_then(|value| value.try_into_any_norito::<u64>().ok());
+        let transfer_entry_index = metadata
+            .get(iroha_data_model::validation_fee::VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY)
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<u64>().ok());
 
         assert_eq!(gas_asset_id, Some(definition_id.to_string()));
         assert_eq!(policy_version, Some(7));
         assert_eq!(instruction_index, Some(1));
+        assert_eq!(transfer_entry_index, Some(2));
         assert_eq!(
             policy_hash.as_deref(),
             Some("abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000")
@@ -15953,7 +16442,7 @@ mod zk_roots_selector_tests {
     #[test]
     fn normalize_validation_fee_policy_metadata_requires_complete_well_formed_pair() {
         assert!(
-            normalize_validation_fee_policy_metadata(None, None, None)
+            normalize_validation_fee_policy_metadata(None, None, None, None)
                 .expect("absent policy metadata is allowed")
                 .is_none()
         );
@@ -15965,28 +16454,51 @@ mod zk_roots_selector_tests {
                         .to_owned(),
                 ),
                 Some(" 1 ".to_owned()),
+                Some(" 2 ".to_owned()),
             )
             .expect("valid metadata")
             .as_ref()
-            .map(|(version, hash, instruction_index)| {
-                (*version, hash.as_str(), *instruction_index)
+            .map(|(version, hash, instruction_index, transfer_entry_index)| {
+                (
+                    *version,
+                    hash.as_str(),
+                    *instruction_index,
+                    *transfer_entry_index,
+                )
             }),
             Some((
                 7,
                 "abcdefabcdef0123456789abcdef0123456789abcdef0123456789abcdef0000",
                 Some(1),
+                Some(2),
             )),
         );
         assert!(
-            normalize_validation_fee_policy_metadata(None, None, Some("1".to_owned())).is_err()
+            normalize_validation_fee_policy_metadata(None, None, Some("1".to_owned()), None)
+                .is_err()
         );
         assert!(
-            normalize_validation_fee_policy_metadata(Some("7".to_owned()), None, None,).is_err()
+            normalize_validation_fee_policy_metadata(None, None, None, Some("2".to_owned()))
+                .is_err()
+        );
+        assert!(
+            normalize_validation_fee_policy_metadata(Some("7".to_owned()), None, None, None,)
+                .is_err()
+        );
+        assert!(
+            normalize_validation_fee_policy_metadata(
+                Some("7".to_owned()),
+                Some("0".repeat(64)),
+                None,
+                Some("2".to_owned()),
+            )
+            .is_err()
         );
         assert!(
             normalize_validation_fee_policy_metadata(
                 Some("x".to_owned()),
                 Some("0".repeat(64)),
+                None,
                 None,
             )
             .is_err()
@@ -15996,6 +16508,16 @@ mod zk_roots_selector_tests {
                 Some("7".to_owned()),
                 Some("0".repeat(64)),
                 Some("not-integer".to_owned()),
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            normalize_validation_fee_policy_metadata(
+                Some("7".to_owned()),
+                Some("0".repeat(64)),
+                Some("1".to_owned()),
+                Some("not-integer".to_owned()),
             )
             .is_err()
         );
@@ -16003,6 +16525,7 @@ mod zk_roots_selector_tests {
             normalize_validation_fee_policy_metadata(
                 Some("7".to_owned()),
                 Some("0".repeat(63)),
+                None,
                 None,
             )
             .is_err()
@@ -20198,6 +20721,7 @@ async fn submit_contract_call_request(
         entrypoint,
         payload,
         creation_time_ms,
+        transaction_ttl_ms,
         gas_asset_id,
         fee_sponsor,
         gas_limit,
@@ -20224,6 +20748,7 @@ async fn submit_contract_call_request(
     let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
     let entrypoint_descriptor = ensure_public_contract_entrypoint(&manifest, resolved_entrypoint)?;
     let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
+    let payload_digest_hex = contract_payload_digest_hex(normalized_payload.as_ref());
 
     let metadata = build_contract_call_metadata(
         &manifest,
@@ -20239,6 +20764,9 @@ async fn submit_contract_call_request(
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
+    if let Some(transaction_ttl_ms) = transaction_ttl_ms {
+        builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
+    }
     let executable = iroha_data_model::transaction::executable::ContractInvocation {
         contract_address: contract_address.clone(),
         entrypoint: resolved_entrypoint.to_owned(),
@@ -20260,16 +20788,32 @@ async fn submit_contract_call_request(
             submitted: true,
             dataspace: dataspace.clone(),
             contract_address: Some(contract_address.clone()),
-            code_hash_hex,
-            abi_hash_hex,
+            code_hash_hex: code_hash_hex.clone(),
+            abi_hash_hex: abi_hash_hex.clone(),
             creation_time_ms,
+            transaction_ttl_ms,
             tx_hash_hex: Some(tx_hash_hex.clone()),
-            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
-            entrypoint_hash_hex: Some(entrypoint_hash_hex),
+            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex.clone())),
+            entrypoint_hash_hex: Some(entrypoint_hash_hex.clone()),
             transaction_scaffold_b64: None,
             signed_transaction_b64: None,
             signing_message_b64: None,
             entrypoint: response_entrypoint.clone(),
+            operation_receipt: contract_call_operation_receipt(ContractCallReceiptInput {
+                status: "submitted",
+                dataspace: &dataspace,
+                contract_alias: contract_alias.as_ref(),
+                contract_address: &contract_address,
+                code_hash_hex: &code_hash_hex,
+                abi_hash_hex: &abi_hash_hex,
+                tx_hash_hex: Some(tx_hash_hex),
+                entrypoint: response_entrypoint.clone(),
+                entrypoint_hash_hex: Some(entrypoint_hash_hex),
+                gas_limit,
+                gas_asset_id: gas_asset_id.clone(),
+                fee_sponsor: fee_sponsor_literal.clone(),
+                payload_digest_hex: &payload_digest_hex,
+            }),
         });
     }
 
@@ -20297,15 +20841,12 @@ async fn submit_contract_call_request(
                 "public_key_hex does not match authority".to_owned(),
             ));
         }
-        let signature_bytes = base64::engine::general_purpose::STANDARD
-            .decode(signature_b64.as_bytes())
-            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let signature = decode_app_api_detached_signature(signature_b64)?;
         let mut tx = sign_app_api_scaffold_transaction(
             builder,
             authority.clone().into(),
             "contract call detached signature",
         )?;
-        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
         tx.set_signature(
             iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
@@ -20326,16 +20867,32 @@ async fn submit_contract_call_request(
             submitted: true,
             dataspace: dataspace.clone(),
             contract_address: Some(contract_address.clone()),
-            code_hash_hex,
-            abi_hash_hex,
+            code_hash_hex: code_hash_hex.clone(),
+            abi_hash_hex: abi_hash_hex.clone(),
             creation_time_ms,
+            transaction_ttl_ms,
             tx_hash_hex: Some(tx_hash_hex.clone()),
-            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex)),
-            entrypoint_hash_hex: Some(entrypoint_hash_hex),
+            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex.clone())),
+            entrypoint_hash_hex: Some(entrypoint_hash_hex.clone()),
             transaction_scaffold_b64: None,
             signed_transaction_b64: None,
             signing_message_b64: None,
             entrypoint: response_entrypoint.clone(),
+            operation_receipt: contract_call_operation_receipt(ContractCallReceiptInput {
+                status: "submitted",
+                dataspace: &dataspace,
+                contract_alias: contract_alias.as_ref(),
+                contract_address: &contract_address,
+                code_hash_hex: &code_hash_hex,
+                abi_hash_hex: &abi_hash_hex,
+                tx_hash_hex: Some(tx_hash_hex),
+                entrypoint: response_entrypoint.clone(),
+                entrypoint_hash_hex: Some(entrypoint_hash_hex),
+                gas_limit,
+                gas_asset_id: gas_asset_id.clone(),
+                fee_sponsor: fee_sponsor_literal.clone(),
+                payload_digest_hex: &payload_digest_hex,
+            }),
         });
     }
 
@@ -20348,18 +20905,34 @@ async fn submit_contract_call_request(
     Ok(ContractCallResponseDto {
         ok: true,
         submitted: false,
-        dataspace,
-        contract_address: Some(contract_address),
-        code_hash_hex,
-        abi_hash_hex,
+        dataspace: dataspace.clone(),
+        contract_address: Some(contract_address.clone()),
+        code_hash_hex: code_hash_hex.clone(),
+        abi_hash_hex: abi_hash_hex.clone(),
         creation_time_ms,
+        transaction_ttl_ms,
         tx_hash_hex: None,
         pipeline_status: None,
-        entrypoint_hash_hex: Some(entrypoint_hash_hex),
+        entrypoint_hash_hex: Some(entrypoint_hash_hex.clone()),
         transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
         signed_transaction_b64: Some(signed_transaction_b64),
         signing_message_b64: Some(signing_message_b64),
-        entrypoint: response_entrypoint,
+        entrypoint: response_entrypoint.clone(),
+        operation_receipt: contract_call_operation_receipt(ContractCallReceiptInput {
+            status: "pending_signature",
+            dataspace: &dataspace,
+            contract_alias: contract_alias.as_ref(),
+            contract_address: &contract_address,
+            code_hash_hex: &code_hash_hex,
+            abi_hash_hex: &abi_hash_hex,
+            tx_hash_hex: None,
+            entrypoint: response_entrypoint,
+            entrypoint_hash_hex: Some(entrypoint_hash_hex),
+            gas_limit,
+            gas_asset_id,
+            fee_sponsor: fee_sponsor_literal,
+            payload_digest_hex: &payload_digest_hex,
+        }),
     })
 }
 
@@ -20677,10 +21250,11 @@ pub async fn handle_post_bridge_proof_submit(
                     bundle,
                     allow_unready,
                 )?;
-                let destination_material = sccp_destination_query_material_for_bundle(
+                let destination_material = sccp_destination_query_material_for_message_bundle(
                     bundle,
                     &evm_destination_fields,
                     allow_unready,
+                    configured_source_lane.as_ref(),
                 )?;
                 validate_sccp_destination_binding_matches_configured_rollout_for_bundle(
                     state.as_ref(),
@@ -20772,15 +21346,12 @@ pub async fn handle_post_bridge_proof_submit(
                 "public_key_hex does not match authority".to_owned(),
             ));
         }
-        let signature_bytes = base64::engine::general_purpose::STANDARD
-            .decode(signature_b64.as_bytes())
-            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let signature = decode_app_api_detached_signature(signature_b64)?;
         let mut tx = sign_app_api_scaffold_transaction(
             builder,
             authority.clone().into(),
             "bridge proof detached signature",
         )?;
-        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
         tx.set_signature(
             iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
@@ -20902,20 +21473,21 @@ pub async fn handle_post_bridge_message_submit(
         sccp_counterparty_for_message_payload(&message_bundle.payload)?;
     let message_id_hex = hex::encode(message_bundle.commitment.message_id);
     let allow_unready = sccp_allow_unready_transparent_proofs(state.as_ref());
-    let destination_material = sccp_destination_query_material_for_bundle(
+    let configured_source_lane = sccp_configured_source_lane_for_bundle_with_policy(
+        state.as_ref(),
+        &message_bundle,
+        allow_unready,
+    )?;
+    let destination_material = sccp_destination_query_material_for_message_bundle(
         &message_bundle,
         &evm_destination_fields,
         allow_unready,
+        configured_source_lane.as_ref(),
     )?;
     validate_sccp_destination_binding_matches_configured_rollout_for_bundle(
         state.as_ref(),
         &message_bundle,
         destination_material.binding_for_configured_rollout(),
-        allow_unready,
-    )?;
-    let configured_source_lane = sccp_configured_source_lane_for_bundle_with_policy(
-        state.as_ref(),
-        &message_bundle,
         allow_unready,
     )?;
     let bridge_proof = bridge_proof_from_sccp_message_bundle(
@@ -20930,12 +21502,6 @@ pub async fn handle_post_bridge_message_submit(
     let range_end_height = bridge_proof.range.end_height;
     let manifest_hash_hex = hex::encode(bridge_proof.manifest_hash);
     let backend = bridge_proof.backend_label();
-    let lane = LaneId::new(receipt_lane.unwrap_or(LaneId::SINGLE.as_u32()));
-    let receipt = bridge_receipt_from_message_bundle(&message_bundle, &bridge_proof, lane)?;
-    let receipt_lane = receipt.as_ref().map(|receipt| receipt.lane.as_u32());
-    let receipt_direction = receipt
-        .as_ref()
-        .map(|receipt| String::from_utf8_lossy(&receipt.direction).into_owned());
     let settlement = prepare_bridge_message_settlement(
         state.as_ref(),
         &authority,
@@ -20956,29 +21522,96 @@ pub async fn handle_post_bridge_message_submit(
     });
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
-    let mut instructions: Vec<dm::InstructionBox> =
-        vec![dm::SubmitBridgeProof::new(bridge_proof).into()];
-    if let Some(receipt) = receipt {
-        instructions.push(dm::RecordBridgeReceipt::new(receipt).into());
+    let tx_metadata = metadata_with_default_gas_asset(state.as_ref());
+    let settlement_instructions = settlement
+        .as_ref()
+        .map(|prepared| prepared.instructions.clone())
+        .unwrap_or_default();
+    let build_instructions = |receipt: Option<iroha_data_model::bridge::BridgeReceipt>| {
+        let mut instructions: Vec<dm::InstructionBox> =
+            vec![dm::SubmitBridgeProof::new(bridge_proof.clone()).into()];
+        if let Some(receipt) = receipt {
+            instructions.push(dm::RecordBridgeReceipt::new(receipt).into());
+        }
+        instructions.extend(settlement_instructions.clone());
+        instructions
+    };
+
+    let requested_receipt_lane = receipt_lane.map(LaneId::new);
+    let provisional_receipt_lane = requested_receipt_lane.unwrap_or(LaneId::SINGLE);
+    let provisional_receipt = bridge_receipt_from_message_bundle(
+        &message_bundle,
+        &bridge_proof,
+        provisional_receipt_lane,
+    )?;
+    if requested_receipt_lane.is_some() && provisional_receipt.is_none() {
+        return Err(conversion_error(
+            "receipt_lane is only valid for SCCP transfer message bundles".to_owned(),
+        ));
     }
-    if let Some(settlement) = settlement {
-        instructions.extend(settlement.instructions);
+    let provisional_instructions = build_instructions(provisional_receipt);
+    let provisional_plan = scaffold_transaction_routing_plan(
+        chain_id.as_ref(),
+        queue.as_ref(),
+        state.as_ref(),
+        &authority,
+        creation_time_ms,
+        tx_metadata.clone(),
+        dm::Executable::Instructions(ConstVec::from(provisional_instructions)),
+        "/v1/bridge/messages",
+    )?;
+    let routed_lane = provisional_plan.coordinator_route().lane_id;
+    if let Some(requested_lane) = requested_receipt_lane
+        && requested_lane != routed_lane
+    {
+        return Err(conversion_error(format!(
+            "receipt_lane {} does not match transaction route lane {}",
+            requested_lane.as_u32(),
+            routed_lane.as_u32()
+        )));
+    }
+    let receipt = bridge_receipt_from_message_bundle(&message_bundle, &bridge_proof, routed_lane)?;
+    let receipt_lane = receipt.as_ref().map(|receipt| receipt.lane.as_u32());
+    let receipt_direction = receipt
+        .as_ref()
+        .map(|receipt| String::from_utf8_lossy(&receipt.direction).into_owned());
+    let instructions = build_instructions(receipt.clone());
+    let routing_plan = scaffold_transaction_routing_plan(
+        chain_id.as_ref(),
+        queue.as_ref(),
+        state.as_ref(),
+        &authority,
+        creation_time_ms,
+        tx_metadata.clone(),
+        dm::Executable::Instructions(ConstVec::from(instructions.clone())),
+        "/v1/bridge/messages",
+    )?;
+    let final_route = routing_plan.coordinator_route();
+    if let Some(receipt) = receipt.as_ref()
+        && receipt.lane != final_route.lane_id
+    {
+        return Err(conversion_error(format!(
+            "bridge receipt lane {} does not match resolved transaction route lane {}",
+            receipt.lane.as_u32(),
+            final_route.lane_id.as_u32()
+        )));
     }
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     let builder = builder
-        .with_metadata(metadata_with_default_gas_asset(state.as_ref()))
+        .with_metadata(tx_metadata)
         .with_executable(dm::Executable::Instructions(ConstVec::from(instructions)));
 
     let response = if let Some(private_key) = private_key {
         let tx = sign_app_api_transaction(builder, &private_key.0, "/v1/bridge/messages")?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
-        handle_transaction_with_metrics(
+        handle_transaction_with_metrics_and_routing_plan(
             chain_id.clone(),
             queue.clone(),
             state.clone(),
             tx,
             telemetry.clone(),
+            Some(routing_plan.clone()),
             "/v1/bridge/messages",
         )
         .await?;
@@ -21028,15 +21661,12 @@ pub async fn handle_post_bridge_message_submit(
                 "public_key_hex does not match authority".to_owned(),
             ));
         }
-        let signature_bytes = base64::engine::general_purpose::STANDARD
-            .decode(signature_b64.as_bytes())
-            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let signature = decode_app_api_detached_signature(signature_b64)?;
         let mut tx = sign_app_api_scaffold_transaction(
             builder,
             authority.clone().into(),
             "bridge message detached signature",
         )?;
-        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
         tx.set_signature(
             iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
@@ -21050,12 +21680,13 @@ pub async fn handle_post_bridge_message_submit(
             ))
         })?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
-        handle_transaction_with_metrics(
+        handle_transaction_with_metrics_and_routing_plan(
             chain_id.clone(),
             queue.clone(),
             state.clone(),
             tx,
             telemetry.clone(),
+            Some(routing_plan.clone()),
             "/v1/bridge/messages",
         )
         .await?;
@@ -22318,7 +22949,8 @@ fn normalize_validation_fee_policy_metadata(
     version: Option<String>,
     hash: Option<String>,
     instruction_index: Option<String>,
-) -> Result<Option<(u64, String, Option<u64>)>> {
+    transfer_entry_index: Option<String>,
+) -> Result<Option<(u64, String, Option<u64>, Option<u64>)>> {
     let version = version
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
@@ -22328,15 +22960,18 @@ fn normalize_validation_fee_policy_metadata(
     let instruction_index = instruction_index
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
-    match (version, hash, instruction_index) {
-        (None, None, None) => Ok(None),
-        (None, None, Some(_)) => Err(conversion_error(
-            "validation_fee_instruction_index requires validation fee policy metadata".to_owned(),
+    let transfer_entry_index = transfer_entry_index
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    match (version, hash, instruction_index, transfer_entry_index) {
+        (None, None, None, None) => Ok(None),
+        (None, None, Some(_), _) | (None, None, _, Some(_)) => Err(conversion_error(
+            "validation fee coordinate metadata requires validation fee policy metadata".to_owned(),
         )),
-        (Some(_), None, _) | (None, Some(_), _) => Err(conversion_error(
+        (Some(_), None, _, _) | (None, Some(_), _, _) => Err(conversion_error(
             "validation fee policy metadata requires both version and hash".to_owned(),
         )),
-        (Some(version), Some(hash), instruction_index) => {
+        (Some(version), Some(hash), instruction_index, transfer_entry_index) => {
             let version = version.parse::<u64>().map_err(|_| {
                 conversion_error(
                     "validation_fee_policy_version must be an unsigned integer".to_owned(),
@@ -22357,10 +22992,27 @@ fn normalize_validation_fee_policy_metadata(
                     })
                 })
                 .transpose()?;
+            let transfer_entry_index = transfer_entry_index
+                .map(|value| {
+                    value.parse::<u64>().map_err(|_| {
+                        conversion_error(
+                            "validation_fee_transfer_entry_index must be an unsigned integer"
+                                .to_owned(),
+                        )
+                    })
+                })
+                .transpose()?;
+            if transfer_entry_index.is_some() && instruction_index.is_none() {
+                return Err(conversion_error(
+                    "validation_fee_transfer_entry_index requires validation_fee_instruction_index"
+                        .to_owned(),
+                ));
+            }
             Ok(Some((
                 version,
                 hash.to_ascii_lowercase(),
                 instruction_index,
+                transfer_entry_index,
             )))
         }
     }
@@ -22404,14 +23056,16 @@ fn build_multisig_propose_metadata_with_default_gas_asset(
     state: &CoreState,
     fee_sponsor: Option<&str>,
     memo: Option<&str>,
-    validation_fee_policy_metadata: Option<(u64, &str, Option<u64>)>,
+    validation_fee_policy_metadata: Option<(u64, &str, Option<u64>, Option<u64>)>,
 ) -> Metadata {
     let mut metadata = build_fee_sponsor_metadata_with_default_gas_asset(state, fee_sponsor);
     if let Some(memo) = memo {
         let memo_key = Name::from_str("memo").expect("static metadata key `memo`");
         metadata.insert(memo_key, IrohaJson::new(memo.to_owned()));
     }
-    if let Some((policy_version, policy_hash, instruction_index)) = validation_fee_policy_metadata {
+    if let Some((policy_version, policy_hash, instruction_index, transfer_entry_index)) =
+        validation_fee_policy_metadata
+    {
         let version_key = Name::from_str(
             iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
         )
@@ -22429,12 +23083,22 @@ fn build_multisig_propose_metadata_with_default_gas_asset(
             .expect("static metadata key `validation_fee_instruction_index`");
             metadata.insert(instruction_index_key, IrohaJson::new(instruction_index));
         }
+        if let Some(transfer_entry_index) = transfer_entry_index {
+            let transfer_entry_index_key = Name::from_str(
+                iroha_data_model::validation_fee::VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY,
+            )
+            .expect("static metadata key `validation_fee_transfer_entry_index`");
+            metadata.insert(
+                transfer_entry_index_key,
+                IrohaJson::new(transfer_entry_index),
+            );
+        }
     }
     metadata
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_immediate_execution_routing_plan(
+fn scaffold_transaction_routing_plan(
     chain_id: &ChainId,
     queue: &Queue,
     state: &CoreState,
@@ -22460,6 +23124,29 @@ fn multisig_immediate_execution_routing_plan(
             }),
             backpressure: queue.current_backpressure(),
         })
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_immediate_execution_routing_plan(
+    chain_id: &ChainId,
+    queue: &Queue,
+    state: &CoreState,
+    routing_authority: &AccountId,
+    creation_time_ms: u64,
+    metadata: Metadata,
+    executable: Executable,
+    context: &'static str,
+) -> Result<RoutingPlan> {
+    scaffold_transaction_routing_plan(
+        chain_id,
+        queue,
+        state,
+        routing_authority,
+        creation_time_ms,
+        metadata,
+        executable,
+        context,
+    )
 }
 
 #[cfg(feature = "app_api")]
@@ -25437,6 +26124,7 @@ mod multisig_selector_tests {
                 entrypoint: Some("main".to_owned()),
                 payload: None,
                 creation_time_ms: Some(1_700_000_000_234),
+                transaction_ttl_ms: None,
                 gas_asset_id: None,
                 fee_sponsor: None,
                 gas_limit: 10_000,
@@ -25479,6 +26167,7 @@ mod multisig_selector_tests {
                 entrypoint: Some("main".to_owned()),
                 payload: None,
                 creation_time_ms: Some(1_700_000_000_234),
+                transaction_ttl_ms: None,
                 gas_asset_id: None,
                 fee_sponsor: None,
                 gas_limit: 10_000,
@@ -27528,6 +28217,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27576,6 +28266,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27600,6 +28291,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27624,6 +28316,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27658,6 +28351,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27691,6 +28385,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27720,6 +28415,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction.clone()],
             }),
         )
@@ -27745,15 +28441,13 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction],
             }),
         )
         .await
-        .expect_err("forged detached signature must be rejected");
-        assert!(
-            expect_conversion(err)
-                .contains("multisig propose detached signature verification failed")
-        );
+        .expect_err("all-zero detached signature must be rejected");
+        assert!(expect_conversion(err).contains("signature payload must not be all zero"));
     }
 
     #[tokio::test]
@@ -27855,6 +28549,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: inner_instructions,
             }),
         )
@@ -27958,6 +28653,7 @@ seiyaku BlobPayloadNormalizeTest {
                 validation_fee_policy_version: None,
                 validation_fee_policy_hash: None,
                 validation_fee_instruction_index: None,
+                validation_fee_transfer_entry_index: None,
                 instructions: vec![instruction],
             }),
         )
@@ -27992,6 +28688,7 @@ seiyaku BlobPayloadNormalizeTest {
             validation_fee_policy_version: None,
             validation_fee_policy_hash: None,
             validation_fee_instruction_index: None,
+            validation_fee_transfer_entry_index: None,
             instructions: vec![instruction.clone()],
         };
 
@@ -28130,6 +28827,7 @@ seiyaku BlobPayloadNormalizeTest {
             validation_fee_policy_version: None,
             validation_fee_policy_hash: None,
             validation_fee_instruction_index: None,
+            validation_fee_transfer_entry_index: None,
             instructions: vec![instruction],
         };
         let raw = norito::json::to_string(&request).expect("serialize multisig propose dto");
@@ -28343,15 +29041,12 @@ pub async fn handle_post_contract_call_multisig_propose(
                 "public_key_hex does not match signer_account_id".to_owned(),
             ));
         }
-        let signature_bytes = base64::engine::general_purpose::STANDARD
-            .decode(signature_b64.as_bytes())
-            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let signature = decode_app_api_detached_signature(signature_b64)?;
         let mut tx = sign_app_api_scaffold_transaction(
             builder,
             signer_account_id.clone().into(),
             ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
         )?;
-        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
         tx.set_signature(
             iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
@@ -28523,15 +29218,12 @@ pub async fn handle_post_contract_call_multisig_approve(
                     "public_key_hex does not match signer_account_id".to_owned(),
                 ));
             }
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(signature_b64.as_bytes())
-                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+            let signature = decode_app_api_detached_signature(signature_b64)?;
             let mut tx = sign_app_api_scaffold_transaction(
                 builder,
                 signer_account_id.clone().into(),
                 ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE,
             )?;
-            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
             tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
                     iroha_data_model::transaction::signed::TransactionPayload,
@@ -28704,15 +29396,12 @@ pub async fn handle_post_multisig_cancel(
                 "public_key_hex does not match signer_account_id".to_owned(),
             ));
         }
-        let signature_bytes = base64::engine::general_purpose::STANDARD
-            .decode(signature_b64.as_bytes())
-            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let signature = decode_app_api_detached_signature(signature_b64)?;
         let mut tx = sign_app_api_scaffold_transaction(
             builder,
             signer_account_id.clone().into(),
             ENDPOINT_MULTISIG_CANCEL,
         )?;
-        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
         tx.set_signature(
             iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
@@ -28816,6 +29505,7 @@ pub async fn handle_post_multisig_propose(
         validation_fee_policy_version,
         validation_fee_policy_hash,
         validation_fee_instruction_index,
+        validation_fee_transfer_entry_index,
         instructions,
     } = req;
     let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
@@ -28824,6 +29514,7 @@ pub async fn handle_post_multisig_propose(
         validation_fee_policy_version,
         validation_fee_policy_hash,
         validation_fee_instruction_index,
+        validation_fee_transfer_entry_index,
     )?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
@@ -28858,11 +29549,16 @@ pub async fn handle_post_multisig_propose(
         state.as_ref(),
         fee_sponsor.as_deref(),
         memo.as_deref(),
-        validation_fee_policy_metadata
-            .as_ref()
-            .map(|(version, hash, instruction_index)| {
-                (*version, hash.as_str(), *instruction_index)
-            }),
+        validation_fee_policy_metadata.as_ref().map(
+            |(version, hash, instruction_index, transfer_entry_index)| {
+                (
+                    *version,
+                    hash.as_str(),
+                    *instruction_index,
+                    *transfer_entry_index,
+                )
+            },
+        ),
     );
     let builder = builder
         .with_metadata(tx_metadata.clone())
@@ -28895,15 +29591,12 @@ pub async fn handle_post_multisig_propose(
                     "public_key_hex does not match signer_account_id".to_owned(),
                 ));
             }
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(signature_b64.as_bytes())
-                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+            let signature = decode_app_api_detached_signature(signature_b64)?;
             let mut tx = sign_app_api_scaffold_transaction(
                 builder,
                 signer_account_id.clone().into(),
                 ENDPOINT_MULTISIG_PROPOSE,
             )?;
-            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
             tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
                     iroha_data_model::transaction::signed::TransactionPayload,
@@ -29064,15 +29757,12 @@ pub async fn handle_post_multisig_approve(
                     "public_key_hex does not match signer_account_id".to_owned(),
                 ));
             }
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(signature_b64.as_bytes())
-                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+            let signature = decode_app_api_detached_signature(signature_b64)?;
             let mut tx = sign_app_api_scaffold_transaction(
                 builder,
                 signer_account_id.clone().into(),
                 ENDPOINT_MULTISIG_APPROVE,
             )?;
-            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
             tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
                     iroha_data_model::transaction::signed::TransactionPayload,
@@ -30444,6 +31134,12 @@ pub struct DeployContractDto {
     /// Optional lease expiry timestamp (unix ms) for the alias binding.
     #[norito(default)]
     pub lease_expiry_ms: Option<u64>,
+    /// Optional transaction time-to-live in milliseconds; nodes still clamp to their configured maximum.
+    #[norito(default)]
+    pub transaction_ttl_ms: Option<u64>,
+    /// Optional governance manifest approvers, in addition to the transaction authority.
+    #[norito(default)]
+    pub gov_manifest_approvers: Vec<iroha_data_model::account::AccountId>,
 }
 
 #[cfg(feature = "app_api")]
@@ -30528,6 +31224,12 @@ pub struct DeployContractBundleDto {
     /// Optional default dataspace alias used by contracts that omit one.
     #[norito(default)]
     pub default_dataspace: Option<String>,
+    /// Optional transaction time-to-live in milliseconds applied to deploy and init transactions.
+    #[norito(default)]
+    pub transaction_ttl_ms: Option<u64>,
+    /// Optional governance manifest approvers, in addition to the transaction authority.
+    #[norito(default)]
+    pub gov_manifest_approvers: Vec<iroha_data_model::account::AccountId>,
     /// Contracts to deploy as part of the bundle.
     pub contracts: Vec<DeployContractBundleContractDto>,
     /// Optional initialization calls to run after deployment.
@@ -31075,6 +31777,23 @@ fn metadata_with_default_gas_asset(state: &CoreState) -> Metadata {
 }
 
 #[cfg(feature = "app_api")]
+fn insert_gov_manifest_approvers_metadata(
+    metadata: &mut Metadata,
+    approvers: &[iroha_data_model::account::AccountId],
+) {
+    if approvers.is_empty() {
+        return;
+    }
+    let key = Name::from_str("gov_manifest_approvers")
+        .expect("static metadata key `gov_manifest_approvers`");
+    let accounts = approvers
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    metadata.insert(key, IrohaJson::new(accounts));
+}
+
+#[cfg(feature = "app_api")]
 const CONTRACT_BUNDLE_RECEIPTS_DIR: &str = "contract_deploy_bundles";
 #[cfg(feature = "app_api")]
 const CONTRACT_BUNDLE_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -31468,6 +32187,9 @@ pub struct ContractCallDto {
     /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
+    /// Optional transaction time-to-live in milliseconds; nodes still clamp to their configured maximum.
+    #[norito(default)]
+    pub transaction_ttl_ms: Option<u64>,
     /// Optional gas asset id forwarded to transaction metadata.
     #[norito(default)]
     pub gas_asset_id: Option<String>,
@@ -31513,6 +32235,73 @@ pub struct ContractCallSimulateDto {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Public, normalized evidence for a contract operation.
+pub struct OperationReceiptDto {
+    /// Operation category, for example `contract_call` or `contract_deploy`.
+    pub operation_kind: String,
+    /// Public operation status such as `submitted`, `committed`, or `pending_signature`.
+    pub status: String,
+    /// Submission surface that produced the receipt.
+    pub transport: String,
+    /// Dataspace targeted by the operation.
+    pub dataspace: String,
+    /// Optional contract alias used for the operation.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_alias: Option<String>,
+    /// Optional canonical contract address.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_address: Option<String>,
+    /// Optional code hash of the deployed or invoked artifact.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub code_hash_hex: Option<String>,
+    /// Optional ABI hash of the deployed or invoked artifact.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub abi_hash_hex: Option<String>,
+    /// Optional submitted transaction hash.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub tx_hash_hex: Option<String>,
+    /// Optional contract entrypoint for calls.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    /// Optional transaction entrypoint hash.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint_hash_hex: Option<String>,
+    /// Optional gas limit attached to the operation.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub gas_limit: Option<u64>,
+    /// Optional gas actually consumed when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub gas_used: Option<u64>,
+    /// Optional gas asset identifier.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub gas_asset_id: Option<String>,
+    /// Optional fee sponsor account.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub fee_sponsor: Option<String>,
+    /// Public digest of the normalized operation payload or artifact bytes.
+    pub payload_digest_hex: String,
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Response payload returned after enqueuing a contract call transaction.
 pub struct ContractCallResponseDto {
@@ -31531,6 +32320,10 @@ pub struct ContractCallResponseDto {
     pub abi_hash_hex: String,
     /// Creation timestamp used for the transaction payload.
     pub creation_time_ms: u64,
+    /// Optional transaction time-to-live in milliseconds embedded in the payload.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub transaction_ttl_ms: Option<u64>,
     /// Hex-encoded transaction hash submitted to the queue.
     #[norito(default)]
     pub tx_hash_hex: Option<String>,
@@ -31553,6 +32346,55 @@ pub struct ContractCallResponseDto {
     /// Entrypoint selector used for the call, if provided.
     #[norito(default)]
     pub entrypoint: Option<String>,
+    /// Public normalized operation evidence.
+    pub operation_receipt: OperationReceiptDto,
+}
+
+#[cfg(feature = "app_api")]
+fn contract_payload_digest_hex(payload: Option<&IrohaJson>) -> String {
+    let canonical = payload
+        .and_then(|value| norito::json::to_json(value).ok())
+        .unwrap_or_default();
+    hex::encode(blake3_hash(canonical.as_bytes()).as_bytes())
+}
+
+#[cfg(feature = "app_api")]
+struct ContractCallReceiptInput<'a> {
+    status: &'a str,
+    dataspace: &'a str,
+    contract_alias: Option<&'a iroha_data_model::smart_contract::ContractAlias>,
+    contract_address: &'a iroha_data_model::smart_contract::ContractAddress,
+    code_hash_hex: &'a str,
+    abi_hash_hex: &'a str,
+    tx_hash_hex: Option<String>,
+    entrypoint: Option<String>,
+    entrypoint_hash_hex: Option<String>,
+    gas_limit: u64,
+    gas_asset_id: Option<String>,
+    fee_sponsor: Option<String>,
+    payload_digest_hex: &'a str,
+}
+
+#[cfg(feature = "app_api")]
+fn contract_call_operation_receipt(input: ContractCallReceiptInput<'_>) -> OperationReceiptDto {
+    OperationReceiptDto {
+        operation_kind: "contract_call".to_owned(),
+        status: input.status.to_owned(),
+        transport: "torii".to_owned(),
+        dataspace: input.dataspace.to_owned(),
+        contract_alias: input.contract_alias.map(ToString::to_string),
+        contract_address: Some(input.contract_address.to_string()),
+        code_hash_hex: Some(input.code_hash_hex.to_owned()),
+        abi_hash_hex: Some(input.abi_hash_hex.to_owned()),
+        tx_hash_hex: input.tx_hash_hex,
+        entrypoint: input.entrypoint,
+        entrypoint_hash_hex: input.entrypoint_hash_hex,
+        gas_limit: Some(input.gas_limit),
+        gas_used: None,
+        gas_asset_id: input.gas_asset_id,
+        fee_sponsor: input.fee_sponsor,
+        payload_digest_hex: input.payload_digest_hex.to_owned(),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -32056,6 +32898,9 @@ pub struct MultisigProposeDto {
     /// Optional validation-fee instruction index forwarded to transaction metadata.
     #[norito(default)]
     pub validation_fee_instruction_index: Option<String>,
+    /// Optional validation-fee transfer entry index forwarded to transaction metadata.
+    #[norito(default)]
+    pub validation_fee_transfer_entry_index: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -33813,6 +34658,8 @@ async fn submit_contract_deploy_request(
         code_b64,
         contract_alias,
         lease_expiry_ms,
+        transaction_ttl_ms,
+        gov_manifest_approvers,
     } = req;
     let signer = KeyPair::from(private_key.0.clone());
     let prepared = prepare_contract_deployment(&code_b64, &signer)?;
@@ -33882,14 +34729,16 @@ async fn submit_contract_deploy_request(
         deploy_nonce_key,
         dm::Json::new(next_nonce),
     )));
-    let metadata = metadata_with_default_gas_asset(&state);
-    let tx = sign_app_api_transaction(
-        dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
-            .with_metadata(metadata)
-            .with_instructions(instructions.into_iter()),
-        &private_key.0,
-        endpoint,
-    )?;
+    let mut metadata = metadata_with_default_gas_asset(&state);
+    insert_gov_manifest_approvers_metadata(&mut metadata, &gov_manifest_approvers);
+    let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone());
+    if let Some(transaction_ttl_ms) = transaction_ttl_ms {
+        builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
+    }
+    let builder = builder
+        .with_metadata(metadata)
+        .with_instructions(instructions.into_iter());
+    let tx = sign_app_api_transaction(builder, &private_key.0, endpoint)?;
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
@@ -34126,6 +34975,8 @@ async fn execute_contract_bundle_request(
                     code_b64: contract.code_b64.clone(),
                     contract_alias: contract.contract_alias.clone(),
                     lease_expiry_ms: contract.lease_expiry_ms,
+                    transaction_ttl_ms: req.transaction_ttl_ms,
+                    gov_manifest_approvers: req.gov_manifest_approvers.clone(),
                 },
                 Some(deploy_nonce),
                 "/v1/contracts/deploy-bundle",
@@ -34204,6 +35055,7 @@ async fn execute_contract_bundle_request(
                     entrypoint: call.entrypoint.clone(),
                     payload: call.payload.clone(),
                     creation_time_ms: None,
+                    transaction_ttl_ms: req.transaction_ttl_ms,
                     gas_asset_id: call.gas_asset_id.clone(),
                     fee_sponsor: call.fee_sponsor.clone(),
                     gas_limit: call.gas_limit,
@@ -34277,12 +35129,16 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
         code_b64,
         contract_alias,
         lease_expiry_ms,
+        transaction_ttl_ms,
+        gov_manifest_approvers,
     } = req;
     DeployContractBundleDto {
         bundle_name: "single-contract-deploy".to_owned(),
         authority,
         private_key,
         default_dataspace: None,
+        transaction_ttl_ms,
+        gov_manifest_approvers,
         contracts: vec![DeployContractBundleContractDto {
             name: contract_alias.to_string(),
             contract_alias,
@@ -34296,20 +35152,28 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
 }
 
 #[cfg(feature = "app_api")]
-const SINGLE_CONTRACT_DEPLOY_COMPAT_FIELDS: &[&str] = &[
-    "name",
-    "contract_alias",
-    "contract_address",
-    "previous_contract_address",
-    "upgraded",
-    "dataspace",
-    "deploy_nonce",
-    "code_hash_hex",
-    "abi_hash_hex",
-    "tx_hash_hex",
-    "pipeline_status",
-    "status",
-];
+fn deploy_operation_receipt(
+    contract: &DeployContractBundleContractReceiptDto,
+) -> OperationReceiptDto {
+    OperationReceiptDto {
+        operation_kind: "contract_deploy".to_owned(),
+        status: contract.status.clone(),
+        transport: "torii".to_owned(),
+        dataspace: contract.dataspace.clone(),
+        contract_alias: Some(contract.contract_alias.to_string()),
+        contract_address: Some(contract.contract_address.to_string()),
+        code_hash_hex: Some(contract.code_hash_hex.clone()),
+        abi_hash_hex: Some(contract.abi_hash_hex.clone()),
+        tx_hash_hex: contract.tx_hash_hex.clone(),
+        entrypoint: None,
+        entrypoint_hash_hex: None,
+        gas_limit: None,
+        gas_used: None,
+        gas_asset_id: None,
+        fee_sponsor: None,
+        payload_digest_hex: contract.code_hash_hex.clone(),
+    }
+}
 
 #[cfg(feature = "app_api")]
 fn single_contract_deploy_receipt_json(
@@ -34323,18 +35187,14 @@ fn single_contract_deploy_receipt_json(
     let Some(contract) = receipt.contracts.first() else {
         return Ok(value);
     };
-    let contract_value = norito::json::to_value(contract).map_err(|err| {
+    let operation_receipt = deploy_operation_receipt(contract);
+    let operation_receipt_value = norito::json::to_value(&operation_receipt).map_err(|err| {
         conversion_error(format!(
-            "failed to encode single contract deploy receipt item: {err}"
+            "failed to encode single contract deploy operation receipt: {err}"
         ))
     })?;
-    if let (Some(root), Some(contract_object)) = (value.as_object_mut(), contract_value.as_object())
-    {
-        for field in SINGLE_CONTRACT_DEPLOY_COMPAT_FIELDS {
-            if let Some(field_value) = contract_object.get(*field).cloned() {
-                root.insert((*field).to_owned(), field_value);
-            }
-        }
+    if let Some(root) = value.as_object_mut() {
+        root.insert("operation_receipt".to_owned(), operation_receipt_value);
     }
     Ok(value)
 }
@@ -34560,6 +35420,8 @@ mod contract_bundle_tests {
             authority,
             private_key,
             default_dataspace: None,
+            transaction_ttl_ms: None,
+            gov_manifest_approvers: Vec::new(),
             contracts: vec![DeployContractBundleContractDto {
                 name: "demo.greeter".to_owned(),
                 contract_alias: sample_alias("greeter::universal"),
@@ -34682,7 +35544,7 @@ mod contract_bundle_tests {
     }
 
     #[test]
-    fn single_contract_deploy_receipt_keeps_top_level_fields() {
+    fn single_contract_deploy_receipt_keeps_canonical_bundle_shape() {
         let address = sample_address(0);
         let receipt = DeployContractBundleReceiptDto {
             ok: true,
@@ -34713,31 +35575,27 @@ mod contract_bundle_tests {
         let value = single_contract_deploy_receipt_json(&receipt).expect("receipt json");
         let address_literal = address.to_string();
 
+        assert!(value.get("contract_address").is_none());
+        assert!(value.get("code_hash_hex").is_none());
+        assert!(value.get("tx_hash_hex").is_none());
+        assert!(value.get("pipeline_status").is_none());
         assert_eq!(
             value
-                .get("contract_address")
+                .get("contracts")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|contracts| contracts.first())
+                .and_then(|contract| contract.get("contract_address"))
                 .and_then(norito::json::Value::as_str),
             Some(address_literal.as_str())
         );
         assert_eq!(
             value
-                .get("code_hash_hex")
+                .get("contracts")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|contracts| contracts.first())
+                .and_then(|contract| contract.get("code_hash_hex"))
                 .and_then(norito::json::Value::as_str),
             Some("code")
-        );
-        assert_eq!(
-            value
-                .get("tx_hash_hex")
-                .and_then(norito::json::Value::as_str),
-            Some("tx")
-        );
-        assert_eq!(
-            value
-                .get("pipeline_status")
-                .and_then(|pipeline_status| pipeline_status.get("status"))
-                .and_then(|status| status.get("kind"))
-                .and_then(norito::json::Value::as_str),
-            Some("Queued")
         );
         assert_eq!(
             value
@@ -34749,6 +35607,20 @@ mod contract_bundle_tests {
                 .and_then(|status| status.get("kind"))
                 .and_then(norito::json::Value::as_str),
             Some("Queued")
+        );
+        assert_eq!(
+            value
+                .get("operation_receipt")
+                .and_then(|receipt| receipt.get("operation_kind"))
+                .and_then(norito::json::Value::as_str),
+            Some("contract_deploy")
+        );
+        assert_eq!(
+            value
+                .get("operation_receipt")
+                .and_then(|receipt| receipt.get("contract_address"))
+                .and_then(norito::json::Value::as_str),
+            Some(address_literal.as_str())
         );
         assert!(
             value
@@ -37896,6 +38768,8 @@ mod deploy_tests {
             code_b64,
             contract_alias: "fixture::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
+            transaction_ttl_ms: None,
+            gov_manifest_approvers: Vec::new(),
         };
 
         #[cfg(feature = "telemetry")]
@@ -61058,7 +61932,13 @@ pub async fn handle_v1_sumeragi_status(
             },
             tx_queue_depth: snap.tx_queue_depth,
             tx_queue_capacity: snap.tx_queue_capacity,
+            tx_queue_retained_bytes: snap.tx_queue_retained_bytes,
+            tx_queue_max_retained_bytes: snap.tx_queue_max_retained_bytes,
             tx_queue_saturated: snap.tx_queue_saturated,
+            tx_queue_saturated_by_count: snap.tx_queue_saturated_by_count,
+            tx_queue_saturated_by_bytes: snap.tx_queue_saturated_by_bytes,
+            tx_queue_saturated_by_age: snap.tx_queue_saturated_by_age,
+            tx_queue_oldest_queued_age_ms: snap.tx_queue_oldest_queued_age_ms,
             epoch_length_blocks: snap.epoch_length_blocks,
             epoch_commit_deadline_offset: snap.epoch_commit_deadline_offset,
             epoch_reveal_deadline_offset: snap.epoch_reveal_deadline_offset,
@@ -72539,6 +73419,7 @@ pub async fn handle_v1_accounts_onboard(
         let permission = iroha_data_model::permission::Permission::from(
             iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
                 sponsor: sponsor.clone(),
+                policy: "default".parse().expect("default fee sponsor policy"),
             },
         );
         permission_instructions.push(InstructionBox::from(Grant::account_permission(
@@ -80533,6 +81414,10 @@ pub async fn handle_v1_nexus_public_lane_validators(
 ) -> Result<impl IntoResponse> {
     record_account_literal_selection(&telemetry, ENDPOINT_NEXUS_PUBLIC_LANE_VALIDATORS);
 
+    if !state.is_lane_active_for_authority(lane_id) {
+        return lane_items_response(lane_id, Vec::new());
+    }
+
     let world = state.world_view();
     let mut entries = Vec::new();
     for (key, record) in world.public_lane_validators().iter() {
@@ -80549,17 +81434,10 @@ pub async fn handle_v1_nexus_public_lane_validators(
         );
     }
     entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
-    let payload = build_lane_items_payload(
+    lane_items_response(
         lane_id,
         entries.into_iter().map(|(_, value)| value).collect(),
-    );
-    let body = norito::json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    )
 }
 
 #[iroha_futures::telemetry_future]
@@ -80595,6 +81473,10 @@ pub async fn handle_v1_nexus_public_lane_stake(
     };
     record_account_literal_selection(&telemetry, ENDPOINT_NEXUS_PUBLIC_LANE_STAKE);
 
+    if !state.is_lane_active_for_authority(lane_id) {
+        return lane_items_response(lane_id, Vec::new());
+    }
+
     let world = state.world_view();
     let mut entries = Vec::new();
     for (key, share) in world.public_lane_stake_shares().iter() {
@@ -80613,17 +81495,10 @@ pub async fn handle_v1_nexus_public_lane_stake(
         entries.push(stake_share_to_json(share));
     }
     entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
-    let payload = build_lane_items_payload(
+    lane_items_response(
         lane_id,
         entries.into_iter().map(|(_, value)| value).collect(),
-    );
-    let body = norito::json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    )
 }
 
 #[iroha_futures::telemetry_future]
@@ -80668,6 +81543,10 @@ pub async fn handle_v1_nexus_public_lane_rewards(
     record_account_literal_selection(&telemetry, ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS);
     let upto_epoch = params.upto_epoch.unwrap_or(u64::MAX);
 
+    if !state.is_lane_active_for_authority(lane_id) {
+        return lane_items_response(lane_id, Vec::new());
+    }
+
     let world = state.world_view();
     let rewards = collect_pending_public_lane_rewards(
         lane_id,
@@ -80684,17 +81563,10 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         .collect::<Vec<_>>();
     entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
 
-    let payload = build_lane_items_payload(
+    lane_items_response(
         lane_id,
         entries.into_iter().map(|(_, value)| value).collect(),
-    );
-    let body = norito::json::to_json_pretty(&payload).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    )
 }
 
 #[cfg(feature = "app_api")]
@@ -80790,6 +81662,18 @@ fn build_lane_items_payload(lane_id: LaneId, items: Vec<Value>) -> Map {
     root.insert("total".into(), Value::from(items.len() as u64));
     root.insert("items".into(), Value::Array(items));
     root
+}
+
+#[cfg(feature = "app_api")]
+fn lane_items_response(lane_id: LaneId, items: Vec<Value>) -> Result<Response> {
+    let payload = build_lane_items_payload(lane_id, items);
+    let body = norito::json::to_json_pretty(&payload).map_err(norito_internal_error)?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
 }
 
 #[cfg(feature = "app_api")]
@@ -80955,6 +81839,187 @@ fn public_lane_reward_record_matches_key_rejects_mismatched_rows() {
     record.lane_id = key.0;
     record.epoch = 9;
     assert!(!public_lane_reward_record_matches_key(&key, &record));
+}
+
+#[cfg(all(test, feature = "app_api"))]
+async fn public_lane_items_payload(response: Response) -> Value {
+    let body = http_body_util::BodyExt::collect(response.into_body())
+        .await
+        .expect("collect lane items response")
+        .to_bytes();
+    norito::json::from_slice(&body).expect("decode lane items response")
+}
+
+#[cfg(all(test, feature = "app_api"))]
+fn assert_empty_public_lane_items(payload: &Value, lane_id: LaneId) {
+    assert_eq!(payload["lane_id"].as_u64(), Some(u64::from(lane_id)));
+    assert_eq!(payload["total"].as_u64(), Some(0));
+    assert!(
+        payload["items"].as_array().is_some_and(Vec::is_empty),
+        "inactive lane payload must contain an empty items array: {payload:?}"
+    );
+}
+
+#[cfg(all(test, feature = "app_api"))]
+#[tokio::test]
+async fn public_lane_handlers_hide_future_created_autoscale_stale_rows() {
+    let future_lane = LaneId::new(1);
+    let validator = AccountId::new(
+        checked_routing_fixture_keypair(
+            0x79,
+            Algorithm::Ed25519,
+            "derive future-created public lane validator fixture",
+        )
+        .public_key()
+        .clone(),
+    );
+    let staker = AccountId::new(
+        checked_routing_fixture_keypair(
+            0x7A,
+            Algorithm::Ed25519,
+            "derive future-created public lane staker fixture",
+        )
+        .public_key()
+        .clone(),
+    );
+    let peer = PeerId::new(
+        checked_routing_fixture_keypair(
+            0x7B,
+            Algorithm::BlsNormal,
+            "derive future-created public lane peer fixture",
+        )
+        .public_key()
+        .clone(),
+    );
+    let asset = AssetId::new(
+        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554407a1"),
+        staker.clone(),
+    );
+
+    let state = CoreState::new_for_testing(
+        iroha_core::state::World::default(),
+        Kura::blank_kura_for_testing(),
+        iroha_core::query::store::LiveQueryStore::start_test(),
+    );
+    {
+        let mut autoscale_lane = LaneConfig {
+            id: future_lane,
+            alias: "elastic-lane-1".to_owned(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: iroha_data_model::nexus::LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+            "true".to_owned(),
+        );
+        autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            "7".to_owned(),
+        );
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            nonzero_ext::nonzero!(2_u32),
+            vec![LaneConfig::default(), autoscale_lane],
+        )
+        .expect("future-created autoscale lane catalog");
+        let mut nexus = state.nexus.write();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = nonzero_ext::nonzero!(1_u32);
+        nexus.autoscale.max_lanes = nonzero_ext::nonzero!(2_u32);
+        nexus.lane_catalog = lane_catalog;
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    }
+    {
+        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        stx.world.public_lane_validators_mut_for_testing().insert(
+            (future_lane, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: future_lane,
+                validator: validator.clone(),
+                peer_id: peer,
+                stake_account: validator.clone(),
+                total_stake: iroha_primitives::numeric::Numeric::new(7, 0),
+                self_stake: iroha_primitives::numeric::Numeric::new(7, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: Some(1),
+                activation_height: Some(1),
+                last_reward_epoch: None,
+            },
+        );
+        stx.world.public_lane_stake_shares_mut_for_testing().insert(
+            (future_lane, validator.clone(), staker.clone()),
+            PublicLaneStakeShare {
+                lane_id: future_lane,
+                validator: validator.clone(),
+                staker: staker.clone(),
+                bonded: iroha_primitives::numeric::Numeric::new(5, 0),
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
+            },
+        );
+        stx.world.public_lane_rewards_mut_for_testing().insert(
+            (future_lane, 1),
+            PublicLaneRewardRecord {
+                lane_id: future_lane,
+                epoch: 1,
+                asset,
+                total_reward: iroha_primitives::numeric::Numeric::new(3, 0),
+                shares: vec![PublicLaneRewardShare {
+                    account: staker.clone(),
+                    role: PublicLaneRewardRole::Nominator,
+                    amount: iroha_primitives::numeric::Numeric::new(3, 0),
+                }],
+                metadata: Metadata::default(),
+            },
+        );
+        stx.apply();
+        block
+            .commit()
+            .expect("commit stale future-created lane fixture");
+    }
+
+    let state = Arc::new(state);
+    let validators = handle_v1_nexus_public_lane_validators(
+        Arc::clone(&state),
+        future_lane,
+        PublicLaneValidatorsQueryParams::default(),
+        MaybeTelemetry::disabled(),
+    )
+    .await
+    .expect("validators handler should succeed")
+    .into_response();
+    assert_empty_public_lane_items(&public_lane_items_payload(validators).await, future_lane);
+
+    let stake = handle_v1_nexus_public_lane_stake(
+        Arc::clone(&state),
+        future_lane,
+        PublicLaneStakeQueryParams::default(),
+        MaybeTelemetry::disabled(),
+    )
+    .await
+    .expect("stake handler should succeed")
+    .into_response();
+    assert_empty_public_lane_items(&public_lane_items_payload(stake).await, future_lane);
+
+    let rewards = handle_v1_nexus_public_lane_rewards(
+        state,
+        future_lane,
+        PublicLaneRewardsQueryParams {
+            account: Some(staker.to_string()),
+            asset_id: None,
+            upto_epoch: None,
+        },
+        MaybeTelemetry::disabled(),
+    )
+    .await
+    .expect("rewards handler should succeed")
+    .into_response();
+    assert_empty_public_lane_items(&public_lane_items_payload(rewards).await, future_lane);
 }
 
 #[cfg(feature = "app_api")]
@@ -88167,6 +89232,42 @@ impl LaneLifecyclePlanDto {
     }
 }
 
+fn nexus_lifecycle_active_lane_ids_for_response(
+    state: &CoreState,
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> Vec<u32> {
+    let mut lane_ids = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| state.is_lane_active_for_authority(lane.id))
+        .map(|lane| lane.id.as_u32())
+        .collect::<Vec<_>>();
+    lane_ids.sort_unstable();
+    lane_ids.dedup();
+    lane_ids
+}
+
+fn nexus_lifecycle_autoscale_capacity_lane_ids_for_response(
+    state: &CoreState,
+    nexus: &iroha_config::parameters::actual::Nexus,
+) -> Vec<u32> {
+    if !nexus.autoscale.enabled {
+        return Vec::new();
+    }
+    let mut lane_ids = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| lane.is_autoscale_managed_elastic())
+        .filter(|lane| state.is_lane_active_for_authority(lane.id))
+        .map(|lane| lane.id.as_u32())
+        .collect::<Vec<_>>();
+    lane_ids.sort_unstable();
+    lane_ids.dedup();
+    lane_ids
+}
+
 /// Apply a Nexus lane lifecycle plan and refresh queue routing/telemetry.
 pub async fn handle_post_nexus_lane_lifecycle(
     state: Arc<CoreState>,
@@ -88196,11 +89297,36 @@ pub async fn handle_post_nexus_lane_lifecycle(
     let lane_compliance = queue.lane_compliance_engine();
     queue.reconfigure_nexus_with_state(&nexus, state.as_ref(), lane_compliance);
 
+    let configured_lane_count = u64::from(nexus.lane_catalog.lane_count().get());
+    let active_lane_ids = nexus_lifecycle_active_lane_ids_for_response(state.as_ref(), &nexus);
+    let active_lane_count = u64::try_from(active_lane_ids.len()).unwrap_or(u64::MAX);
+    let autoscale_capacity_lane_ids =
+        nexus_lifecycle_autoscale_capacity_lane_ids_for_response(state.as_ref(), &nexus);
+    let autoscale_capacity_lane_count =
+        u64::try_from(autoscale_capacity_lane_ids.len()).unwrap_or(u64::MAX);
+
     let mut payload = norito::json::Map::new();
     payload.insert("ok".into(), norito::json::Value::from(true));
     payload.insert(
+        "configured_lane_count".into(),
+        norito::json::Value::from(configured_lane_count),
+    );
+    payload.insert(
         "lane_count".into(),
-        norito::json::Value::from(nexus.lane_catalog.lane_count().get()),
+        norito::json::Value::from(configured_lane_count),
+    );
+    payload.insert(
+        "active_lane_count".into(),
+        norito::json::Value::from(active_lane_count),
+    );
+    payload.insert("active_lane_ids".into(), json_value(&active_lane_ids));
+    payload.insert(
+        "autoscale_capacity_lane_count".into(),
+        norito::json::Value::from(autoscale_capacity_lane_count),
+    );
+    payload.insert(
+        "autoscale_capacity_lane_ids".into(),
+        json_value(&autoscale_capacity_lane_ids),
     );
     Ok(utils::respond_json_document_with_status_and_format(
         StatusCode::ACCEPTED,
@@ -88212,6 +89338,7 @@ pub async fn handle_post_nexus_lane_lifecycle(
 #[cfg(test)]
 mod nexus_lane_lifecycle_tests {
     use super::*;
+    use core::num::{NonZeroU32, NonZeroU64};
 
     fn enabled_state_for_lifecycle_test() -> Arc<CoreState> {
         let mut state = CoreState::new_for_testing(
@@ -88257,6 +89384,107 @@ mod nexus_lane_lifecycle_tests {
         lane
     }
 
+    async fn response_body_json(response: Response) -> norito::json::Value {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect response body");
+        norito::json::from_slice(&body).expect("decode JSON response")
+    }
+
+    fn future_autoscale_lane_for_lifecycle_test(
+        lane_id: LaneId,
+        created_height: u64,
+    ) -> LaneConfig {
+        let mut lane = LaneConfig {
+            id: lane_id,
+            alias: format!("elastic-lane-{}", lane_id.as_u32()),
+            visibility: iroha_data_model::nexus::LaneVisibility::Public,
+            ..Default::default()
+        };
+        lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+            "true".to_owned(),
+        );
+        lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            created_height.to_string(),
+        );
+        lane
+    }
+
+    fn install_future_autoscale_catalog_for_lifecycle_test(
+        state: &CoreState,
+        lane: LaneConfig,
+        authority_height: u64,
+    ) {
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(lane.id.as_u32().saturating_add(1)).expect("nonzero lane count"),
+            vec![LaneConfig::default(), lane],
+        )
+        .expect("future autoscale lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+            lane_catalog,
+            ..Default::default()
+        };
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("nonzero max lanes");
+        {
+            let mut current = state.nexus.write();
+            *current = nexus;
+        }
+        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+            NonZeroU64::new(authority_height).expect("nonzero authority height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+    }
+
+    #[test]
+    fn nexus_lifecycle_response_lane_ids_filter_inactive_autoscale_capacity() {
+        let state = enabled_state_for_lifecycle_test();
+        let future_lane = LaneId::new(1);
+        install_future_autoscale_catalog_for_lifecycle_test(
+            state.as_ref(),
+            future_autoscale_lane_for_lifecycle_test(future_lane, 7),
+            1,
+        );
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus_lifecycle_active_lane_ids_for_response(state.as_ref(), &nexus),
+            vec![0],
+            "future-created autoscale lanes must not count as active before creation height"
+        );
+        assert_eq!(
+            nexus_lifecycle_autoscale_capacity_lane_ids_for_response(state.as_ref(), &nexus),
+            Vec::<u32>::new(),
+            "future-created autoscale lanes must not count as live capacity"
+        );
+
+        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+            NonZeroU64::new(7).expect("nonzero authority height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        assert_eq!(
+            nexus_lifecycle_active_lane_ids_for_response(state.as_ref(), &nexus),
+            vec![0, 1]
+        );
+        assert_eq!(
+            nexus_lifecycle_autoscale_capacity_lane_ids_for_response(state.as_ref(), &nexus),
+            vec![1]
+        );
+    }
+
     #[tokio::test]
     async fn nexus_lane_lifecycle_rejects_autoscale_spoof_without_queue_refresh() {
         let state = enabled_state_for_lifecycle_test();
@@ -88285,7 +89513,7 @@ mod nexus_lane_lifecycle_tests {
         assert!(matches!(
             err,
             Error::LaneLifecycle { reason }
-                if reason == "lane 1 uses reserved autoscale-managed metadata"
+                if reason == "lane 1 uses reserved autoscale metadata"
         ));
 
         let nexus = state.nexus_snapshot();
@@ -88376,6 +89604,47 @@ mod nexus_lane_lifecycle_tests {
             queue.queue_limits().for_lane(LaneId::SINGLE),
             before_limits,
             "rejected default-lane retire plan must not refresh queue limits"
+        );
+    }
+
+    #[tokio::test]
+    async fn nexus_lane_lifecycle_rejects_same_plan_default_lane_replacement_without_queue_refresh()
+    {
+        let state = enabled_state_for_lifecycle_test();
+        let queue = queue_for_lifecycle_test();
+        let before_nexus = state.nexus_snapshot();
+        let before_limits = queue.queue_limits().for_lane(LaneId::SINGLE);
+        let plan = LaneLifecyclePlanDto {
+            additions: vec![lane_with_teu_capacity(
+                LaneId::SINGLE,
+                "fresh-default-route",
+                987_654,
+            )],
+            retire: vec![LaneId::SINGLE],
+        };
+
+        let err =
+            match handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                .await
+            {
+                Ok(_) => panic!("same-plan default-lane replacement must be rejected"),
+                Err(err) => err,
+            };
+        assert!(matches!(
+            err,
+            Error::LaneLifecycle { reason }
+                if reason.contains("lane lifecycle plan cannot replace routing default lane 0")
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus.lane_catalog, before_nexus.lane_catalog,
+            "rejected default-lane replacement plan must not mutate the committed lane catalog"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(LaneId::SINGLE),
+            before_limits,
+            "rejected default-lane replacement plan must not refresh queue limits"
         );
     }
 
@@ -88621,11 +89890,62 @@ mod nexus_lane_lifecycle_tests {
         };
 
         let response =
-            handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
-                .await
-                .expect("manual lifecycle plan should be accepted")
-                .into_response();
+            utils::with_current_response_format(crate::utils::ResponseFormat::Json, async {
+                handle_post_nexus_lane_lifecycle(Arc::clone(&state), Arc::clone(&queue), plan)
+                    .await
+                    .expect("manual lifecycle plan should be accepted")
+                    .into_response()
+            })
+            .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let payload = response_body_json(response).await;
+        assert_eq!(
+            payload.get("ok").and_then(norito::json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .get("configured_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            payload
+                .get("lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(2),
+            "legacy lane_count remains the configured lane count"
+        );
+        assert_eq!(
+            payload
+                .get("active_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            payload
+                .get("active_lane_ids")
+                .and_then(norito::json::Value::as_array)
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(norito::json::Value::as_u64)
+                        .collect::<Vec<_>>()
+                }),
+            Some(vec![0, 1])
+        );
+        assert_eq!(
+            payload
+                .get("autoscale_capacity_lane_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            payload
+                .get("autoscale_capacity_lane_ids")
+                .and_then(norito::json::Value::as_array)
+                .is_some_and(Vec::is_empty)
+        );
 
         let nexus = state.nexus_snapshot();
         assert!(

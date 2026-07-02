@@ -137,12 +137,124 @@ def test_receipt_hex_parser_redacts_parser_causes():
         raise AssertionError("invalid EVM receipt transaction hash hex was accepted")
 
 
+def test_receipt_cli_parsers_reject_non_string_values_without_stringification():
+    """Receipt CLI parsers must reject hostile non-string values before coercion."""
+
+    module = load_module()
+
+    class HostileParserValue:
+        def __str__(self):
+            raise AssertionError("secret-token-receipt-parser-value was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token-receipt-parser-value was repr'd")
+
+        def strip(self):
+            raise AssertionError("secret-token-receipt-parser-value strip ran")
+
+        def startswith(self, _prefix):
+            raise AssertionError("secret-token-receipt-parser-value startswith ran")
+
+        def lower(self):
+            raise AssertionError("secret-token-receipt-parser-value lower ran")
+
+        def isascii(self):
+            raise AssertionError("secret-token-receipt-parser-value isascii ran")
+
+        def isdecimal(self):
+            raise AssertionError("secret-token-receipt-parser-value isdecimal ran")
+
+    cases = (
+        (
+            lambda value: module.parse_hex_bytes(
+                value,
+                label="transaction hash",
+                byte_length=32,
+            ),
+            "transaction hash must be canonical lowercase 0x hex",
+        ),
+        (
+            module.parse_domain,
+            "domain must be eth, bsc, 1, or 2",
+        ),
+        (
+            module.parse_rpc_chain_id,
+            "--expected-rpc-chain-id must be a canonical decimal integer",
+        ),
+    )
+
+    for parser, expected_message in cases:
+        try:
+            parser(HostileParserValue())
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert "HostileParserValue" not in rendered
+        else:
+            raise AssertionError("hostile receipt parser value was accepted")
+
+
+def test_receipt_hex_nonzero_controls_reject_non_booleans():
+    """Receipt fixed-hex nonzero policy must not accept truthy aliases."""
+
+    module = load_module()
+    malformed_values = (1, "true", None)
+
+    for nonzero in malformed_values:
+        try:
+            module.parse_hex_bytes(
+                "0x" + "00" * 32,
+                label="transaction hash",
+                byte_length=32,
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == "parse_hex_bytes nonzero must be a boolean"
+        else:
+            raise AssertionError("malformed receipt hex nonzero control was accepted")
+
+        try:
+            module._rpc_fixed_hex_data(
+                "0x" + "00" * 32,
+                method="eth_getProof",
+                byte_length=32,
+                nonzero=nonzero,
+            )
+        except ValueError as exc:
+            assert str(exc) == "RPC fixed hex nonzero must be a boolean"
+        else:
+            raise AssertionError(
+                "malformed receipt RPC fixed-hex nonzero control was accepted"
+            )
+
+
+def test_receipt_compact_path_leaf_control_rejects_non_booleans():
+    """Receipt trie path type selection must not accept truthy aliases."""
+
+    module = load_module()
+
+    for leaf in (1, "true", None):
+        try:
+            module._encode_compact_path((1, 2, 3), leaf=leaf)
+        except ValueError as exc:
+            assert str(exc) == "compact trie path leaf must be a boolean"
+        else:
+            raise AssertionError("malformed receipt trie path leaf control was accepted")
+
+
 def test_receipt_hex_parser_redacts_helper_exit_parser_causes(monkeypatch):
     """Parser helper exits must collapse to the same fixed public hex category."""
 
     module = load_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
         detail = (
             "secret-token EVM receipt hex TypeError detail"
             if exception_type is TypeError
@@ -168,6 +280,10 @@ def test_receipt_hex_parser_redacts_helper_exit_parser_causes(monkeypatch):
                 assert rendered == "transaction hash must be hex"
                 assert "secret-token" not in rendered
                 assert exception_type.__name__ not in rendered
+                if exception_type is module.argparse.ArgumentTypeError:
+                    assert (
+                        "ArgumentTypeError" not in rendered
+                    ), "EVM receipt hex ArgumentTypeError detail leaked"
                 assert exc.__cause__ is None
                 assert exc.__suppress_context__ is True
             else:
@@ -181,7 +297,13 @@ def test_receipt_rpc_hex_data_redacts_helper_exit_parser_causes(monkeypatch):
 
     module = load_module()
 
-    for exception_type in (SystemExit, RuntimeError, TypeError, ValueError):
+    for exception_type in (
+        module.argparse.ArgumentTypeError,
+        SystemExit,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
 
         class SecretBytes:
             @staticmethod
@@ -204,6 +326,10 @@ def test_receipt_rpc_hex_data_redacts_helper_exit_parser_causes(monkeypatch):
                 )
                 assert "secret-token" not in rendered
                 assert exception_type.__name__ not in rendered
+                if exception_type is module.argparse.ArgumentTypeError:
+                    assert (
+                        "ArgumentTypeError" not in rendered
+                    ), "EVM receipt RPC hex ArgumentTypeError detail leaked"
                 assert exc.__cause__ is None
                 assert exc.__suppress_context__ is True
             else:
@@ -391,6 +517,28 @@ def test_collect_receipt_proof_allows_explicit_receipt_only_mode():
     assert "source_event_digest" not in summary
 
 
+def test_collect_receipt_proof_rejects_malformed_receipt_only_flag_before_rpc():
+    module = load_module()
+
+    def opener(_request, timeout=15.0):
+        del timeout
+        raise AssertionError("malformed receipt-only flag reached RPC")
+
+    for malformed_flag in (1, "true", None):
+        try:
+            module.collect_receipt_proof_evidence(
+                "https://rpc.example",
+                domain=module.SCCP_DOMAIN_ETH,
+                transaction_hash=bytes.fromhex("11" * 32),
+                allow_receipt_only_evidence=malformed_flag,
+                opener=opener,
+            )
+        except ValueError as exc:
+            assert str(exc) == "allow_receipt_only_evidence must be a boolean"
+        else:
+            raise AssertionError("malformed receipt-only flag was accepted")
+
+
 def test_cli_requires_source_bridge_or_explicit_receipt_only_mode():
     module = load_module()
     stderr = io.StringIO()
@@ -527,6 +675,43 @@ def test_collect_receipt_proof_rejects_non_mainnet_chain_id():
     else:
         raise AssertionError("non-mainnet ETH chain id was accepted")
     assert [call[0] for call in opener.calls] == ["eth_chainId"]
+
+
+def test_collect_receipt_proof_rejects_boolean_domain_and_expected_chain_id_before_rpc():
+    module = load_module()
+
+    def opener(_request, timeout=15.0):
+        del timeout
+        raise AssertionError("boolean receipt proof metadata reached RPC")
+
+    for kwargs, expected_message in (
+        (
+            {
+                "domain": True,
+                "expected_rpc_chain_id": None,
+            },
+            "domain must be an EVM-family source lane",
+        ),
+        (
+            {
+                "domain": module.SCCP_DOMAIN_ETH,
+                "expected_rpc_chain_id": True,
+            },
+            "expected RPC chain id must be an exact integer",
+        ),
+    ):
+        try:
+            module.collect_receipt_proof_evidence(
+                "https://rpc.example",
+                transaction_hash=bytes.fromhex("11" * 32),
+                allow_receipt_only_evidence=True,
+                opener=opener,
+                **kwargs,
+            )
+        except ValueError as exc:
+            assert str(exc) == expected_message
+        else:
+            raise AssertionError("boolean receipt proof domain metadata was accepted")
 
 
 def test_collect_receipt_proof_rejects_noncanonical_chain_id_quantity():
@@ -730,6 +915,56 @@ def test_receipt_json_rpc_redacts_transport_and_error_response_details():
             raise AssertionError(failure)
 
 
+def test_receipt_json_rpc_rejects_envelope_drift():
+    module = load_module()
+
+    cases = (
+        (
+            {"jsonrpc": "2.0", "id": 2, "result": "0x1"},
+            "response id",
+            "mismatched receipt JSON-RPC id was accepted",
+        ),
+        (
+            {"jsonrpc": "2.0", "id": "1", "result": "0x1"},
+            "response id",
+            "string receipt JSON-RPC id was accepted",
+        ),
+        (
+            {"jsonrpc": "2.0", "id": True, "result": "0x1"},
+            "response id",
+            "boolean receipt JSON-RPC id was accepted",
+        ),
+        (
+            {"id": 1, "result": "0x1"},
+            "protocol version",
+            "missing receipt JSON-RPC protocol version was accepted",
+        ),
+        (
+            {"jsonrpc": "2.0 ", "id": 1, "result": "0x1"},
+            "protocol version",
+            "padded receipt JSON-RPC protocol version was accepted",
+        ),
+    )
+
+    for payload, expected_message, failure in cases:
+        def opener(_request, timeout=15.0, payload=payload):
+            del timeout
+            return FakeResponse(payload)
+
+        try:
+            module._json_rpc(
+                "https://rpc.example",
+                "eth_chainId",
+                [],
+                opener=opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            assert expected_message in str(exc)
+        else:
+            raise AssertionError(failure)
+
+
 def test_collect_receipt_proof_rejects_failed_receipt():
     module = load_module()
     receipts = block_receipts(module, status="0x0")
@@ -784,6 +1019,67 @@ def test_collect_receipt_proof_rejects_duplicate_source_event_logs():
         assert "duplicate SCCP source event logs" in str(exc)
     else:
         raise AssertionError("duplicate SCCP source event logs were accepted")
+
+
+def test_receipt_trie_builder_rejects_non_boolean_removed_log_flags():
+    module = load_module()
+
+    for removed, expected_message in (
+        (True, "receipt.logs[0] must not be removed"),
+        (None, "receipt.logs[0].removed must be a boolean"),
+        ("secret-token-removed", "receipt.logs[0].removed must be a boolean"),
+        (1, "receipt.logs[0].removed must be a boolean"),
+    ):
+        receipts = block_receipts(
+            module,
+            source_log_overrides={"removed": removed},
+        )
+
+        try:
+            module.build_receipt_trie_proof_from_receipts(
+                receipts,
+                transaction_index=0,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError(
+                f"receipt trie builder accepted removed log flag {removed!r}"
+            )
+
+
+def test_source_event_digest_rejects_non_boolean_removed_log_flags_directly():
+    module = load_module()
+
+    for removed, expected_message in (
+        (True, "receipt.logs[0] must not be removed"),
+        (None, "receipt.logs[0].removed must be a boolean"),
+        ("secret-token-removed", "receipt.logs[0].removed must be a boolean"),
+        (1, "receipt.logs[0].removed must be a boolean"),
+    ):
+        try:
+            module._source_event_digest_from_receipt(
+                receipt(
+                    module,
+                    index=0,
+                    tx_byte=0x11,
+                    logs=source_log(module, removed=removed),
+                ),
+                source_bridge_address=bytes.fromhex("33" * 20),
+                transaction_hash=bytes.fromhex("11" * 32),
+                block_hash=bytes.fromhex("aa" * 32),
+                block_number=0x1234,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError(
+                f"source event digest accepted removed log flag {removed!r}"
+            )
 
 
 def test_collect_receipt_proof_rejects_source_event_missing_context_fields():

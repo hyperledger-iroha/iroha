@@ -138,6 +138,31 @@ def _is_allowed_inclusion_marker_value(value: Any) -> bool:
     return value is False
 
 
+def _inclusion_marker_stem_variants(normalized_key: str) -> tuple[str, ...]:
+    stem = normalized_key[: -len("included")]
+    variants = {stem}
+    if stem.endswith("s"):
+        variants.add(stem[:-1])
+    if "bodies" in stem:
+        variants.add(stem.replace("bodies", "body"))
+    return tuple(variant for variant in variants if variant)
+
+
+def _is_sensitive_inclusion_marker(
+    normalized_key: str,
+    *,
+    normalized_keys: frozenset[str],
+) -> bool:
+    if not _is_inclusion_marker(normalized_key):
+        return False
+    for stem in _inclusion_marker_stem_variants(normalized_key):
+        if any(fragment in stem for fragment in HIGH_RISK_SENSITIVE_KEY_FRAGMENTS):
+            return True
+        if any(sensitive_key in stem for sensitive_key in normalized_keys):
+            return True
+    return False
+
+
 def _is_payload_free_sensitive_reference(normalized_key: str) -> bool:
     return any(
         normalized_key.endswith(suffix)
@@ -163,6 +188,24 @@ def _is_sensitive_key(
     )
 
 
+def _is_canonical_path_segment(value: str) -> bool:
+    return (
+        bool(value.strip())
+        and value == value.strip()
+        and not any(ord(character) < 32 or ord(character) == 127 for character in value)
+    )
+
+
+def _diagnostic_path_segment(key: Any) -> str:
+    if isinstance(key, str):
+        return key if _is_canonical_path_segment(key) else "<non-canonical-key>"
+    return "<non-string-key>"
+
+
+def _join_diagnostic_path(path: str, segment: str) -> str:
+    return f"{path}.{segment}" if path else segment
+
+
 def _visit_sensitive_fields(
     value: Any,
     path: str,
@@ -183,7 +226,8 @@ def _visit_sensitive_fields(
         return
     if isinstance(value, Mapping):
         for key, child in value.items():
-            child_path = f"{path}.{key}" if path else str(key)
+            key_segment = _diagnostic_path_segment(key)
+            child_path = _join_diagnostic_path(path, key_segment)
             if not isinstance(key, str):
                 errors.append(f"{child_path} key must be a string")
                 _visit_sensitive_fields(
@@ -198,20 +242,31 @@ def _visit_sensitive_fields(
                 continue
             key_lower = key.lower()
             normalized_key = normalize_sensitive_key(key)
+            visit_path = child_path
             if _is_sensitive_key(
                 key_lower,
                 normalized_key,
                 exact_keys=exact_keys,
                 normalized_keys=normalized_keys,
             ):
-                errors.append(f"{child_path} must not be present in {evidence_label}")
+                visit_path = _join_diagnostic_path(path, "<sensitive-key>")
+                errors.append(f"{visit_path} must not be present in {evidence_label}")
             if _is_inclusion_marker(
                 normalized_key
             ) and not _is_allowed_inclusion_marker_value(child):
-                errors.append(f"{child_path} must be false")
+                marker_path = child_path
+                if _is_sensitive_inclusion_marker(
+                    normalized_key,
+                    normalized_keys=normalized_keys,
+                ):
+                    marker_path = _join_diagnostic_path(
+                        path,
+                        "<sensitive-inclusion-marker>",
+                    )
+                errors.append(f"{marker_path} must be false")
             _visit_sensitive_fields(
                 child,
-                child_path,
+                visit_path,
                 errors,
                 exact_keys=exact_keys,
                 normalized_keys=normalized_keys,

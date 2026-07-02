@@ -64,6 +64,7 @@ const EXPECTED_DATA_MODEL_VERSION = 1;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
+const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
 const MAX_SIGNED_INT32 = 0x7fffffff;
 const MAX_SIGNED_INT32_BIGINT = BigInt(MAX_SIGNED_INT32);
 const MAX_NUMERIC_SCALE = 28;
@@ -330,7 +331,7 @@ function toVersionedTransactionPayload(payload, nativeBinding) {
   ) {
     try {
       const encoded = Buffer.from(native.encodeSignedTransactionVersioned(rawPayload));
-      if (encoded[0] === VERSIONED_TRANSACTION_PAYLOAD_VERSION) {
+      if (encoded.length > 0) {
         return encoded;
       }
     } catch {
@@ -12136,6 +12137,58 @@ export class ToriiClient {
   }
 }
 
+function normalizeUint64DecimalString(value, name, options = {}) {
+  const allowZero = options.allowZero !== false;
+  let integer;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || !Number.isInteger(value) || !Number.isSafeInteger(value)) {
+      const qualifier = allowZero ? "non-negative integer" : "positive integer";
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a ${qualifier}`,
+        name,
+      );
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^[0-9]+$/.test(trimmed)) {
+      const qualifier = allowZero ? "non-negative integer" : "positive integer";
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a ${qualifier}`,
+        name,
+      );
+    }
+    integer = BigInt(trimmed);
+  } else {
+    const qualifier = allowZero ? "non-negative" : "positive";
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a ${qualifier} integer`,
+      name,
+    );
+  }
+  if (integer < 0n || (!allowZero && integer === 0n)) {
+    const qualifier = allowZero ? "non-negative integer" : "positive integer";
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a ${qualifier}`,
+      name,
+    );
+  }
+  if (integer > MAX_UINT64_BIGINT) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be at most ${MAX_UINT64_BIGINT.toString(10)}`,
+      name,
+    );
+  }
+  return integer.toString(10);
+}
+
 function normalizeIsoSubmissionResponse(payload, context, options = {}) {
   const record = ToriiClient._requirePlainObject(payload, context);
   const rawMessageId = record.message_id;
@@ -14876,7 +14929,7 @@ function normalizeSccpPlatformSubmissionPayload(value, context) {
             payload.message_body_boc,
             `${context}.payload.message_body_boc`,
           ),
-          queryId: ToriiClient._normalizeUnsignedInteger(
+          queryId: normalizeUint64DecimalString(
             payload.query_id,
             `${context}.payload.query_id`,
             { allowZero: true },
@@ -20500,68 +20553,259 @@ function normalizeDeployContractRequest(input) {
 
 function normalizeDeployContractResponse(payload) {
   const record = ensureRecord(payload, "deployContract response");
-  const contractAlias =
-    record.contract_alias === undefined || record.contract_alias === null
-      ? null
-      : requireNonEmptyString(
-          record.contract_alias,
-          "deployContract.response.contract_alias",
-        );
-  const contractAddress =
-    record.contract_address === undefined || record.contract_address === null
-      ? null
-      : requireNonEmptyString(
-          record.contract_address,
-          "deployContract.response.contract_address",
-        );
-  const previousContractAddress =
-    record.previous_contract_address === undefined
-      || record.previous_contract_address === null
-      ? null
-      : requireNonEmptyString(
-          record.previous_contract_address,
-          "deployContract.response.previous_contract_address",
-        );
-  const dataspace =
-    record.dataspace === undefined || record.dataspace === null
-      ? null
-      : requireNonEmptyString(record.dataspace, "deployContract.response.dataspace");
-  const deployNonce =
-    record.deploy_nonce === undefined || record.deploy_nonce === null
-      ? null
-      : coerceInteger(record.deploy_nonce, "deployContract.response.deploy_nonce");
-  const txHashHex =
-    record.tx_hash_hex === undefined || record.tx_hash_hex === null
-      ? null
-      : normalizeHex32String(record.tx_hash_hex, "deployContract.response.tx_hash_hex");
-  const hasPipelineStatus = record.pipeline_status !== undefined;
-  const pipelineStatus =
-    !hasPipelineStatus || record.pipeline_status === null
-      ? null
-      : normalizePipelineTransactionStatus(
-          record.pipeline_status,
-          "deployContract.response.pipeline_status",
-        );
+  if (!Array.isArray(record.contracts)) {
+    throw new TypeError("deployContract.response.contracts must be an array");
+  }
+  if (!Array.isArray(record.completed_stages)) {
+    throw new TypeError("deployContract.response.completed_stages must be an array");
+  }
+  const normalizeOptionalString = (value, context) =>
+    value === undefined || value === null ? null : requireNonEmptyString(value, context);
+  const normalizeOptionalHash = (value, context) =>
+    value === undefined || value === null ? null : normalizeHex32String(value, context);
+  const normalizeContract = (contractPayload, index) => {
+    const contract = ensureRecord(
+      contractPayload,
+      `deployContract.response.contracts[${index}]`,
+    );
+    const contractResult = {
+      name: requireNonEmptyString(
+        contract.name,
+        `deployContract.response.contracts[${index}].name`,
+      ),
+      contract_alias: requireNonEmptyString(
+        contract.contract_alias,
+        `deployContract.response.contracts[${index}].contract_alias`,
+      ),
+      contract_address: requireNonEmptyString(
+        contract.contract_address,
+        `deployContract.response.contracts[${index}].contract_address`,
+      ),
+      previous_contract_address: normalizeOptionalString(
+        contract.previous_contract_address,
+        `deployContract.response.contracts[${index}].previous_contract_address`,
+      ),
+      upgraded: Boolean(contract.upgraded),
+      dataspace: requireNonEmptyString(
+        contract.dataspace,
+        `deployContract.response.contracts[${index}].dataspace`,
+      ),
+      deploy_nonce: coerceInteger(
+        contract.deploy_nonce,
+        `deployContract.response.contracts[${index}].deploy_nonce`,
+      ),
+      code_hash_hex: normalizeHex32String(
+        contract.code_hash_hex,
+        `deployContract.response.contracts[${index}].code_hash_hex`,
+      ),
+      abi_hash_hex: normalizeHex32String(
+        contract.abi_hash_hex,
+        `deployContract.response.contracts[${index}].abi_hash_hex`,
+      ),
+      tx_hash_hex: normalizeOptionalHash(
+        contract.tx_hash_hex,
+        `deployContract.response.contracts[${index}].tx_hash_hex`,
+      ),
+      status: requireNonEmptyString(
+        contract.status,
+        `deployContract.response.contracts[${index}].status`,
+      ),
+    };
+    if (contract.pipeline_status !== undefined) {
+      contractResult.pipeline_status =
+        contract.pipeline_status === null
+          ? null
+          : normalizePipelineTransactionStatus(
+              contract.pipeline_status,
+              `deployContract.response.contracts[${index}].pipeline_status`,
+            );
+    }
+    return contractResult;
+  };
+  const normalizeCall = (callPayload, index) => {
+    const call = ensureRecord(callPayload, `deployContract.response.init_calls[${index}]`);
+    const callResult = {
+      id: requireNonEmptyString(call.id, `deployContract.response.init_calls[${index}].id`),
+      contract_alias: requireNonEmptyString(
+        call.contract_alias,
+        `deployContract.response.init_calls[${index}].contract_alias`,
+      ),
+      entrypoint: normalizeOptionalString(
+        call.entrypoint,
+        `deployContract.response.init_calls[${index}].entrypoint`,
+      ),
+      tx_hash_hex: normalizeOptionalHash(
+        call.tx_hash_hex,
+        `deployContract.response.init_calls[${index}].tx_hash_hex`,
+      ),
+      status: requireNonEmptyString(
+        call.status,
+        `deployContract.response.init_calls[${index}].status`,
+      ),
+    };
+    if (call.pipeline_status !== undefined) {
+      callResult.pipeline_status =
+        call.pipeline_status === null
+          ? null
+          : normalizePipelineTransactionStatus(
+              call.pipeline_status,
+              `deployContract.response.init_calls[${index}].pipeline_status`,
+            );
+    }
+    return callResult;
+  };
+  const normalizeAssertion = (assertionPayload, index) => {
+    const assertion = ensureRecord(
+      assertionPayload,
+      `deployContract.response.assertions[${index}]`,
+    );
+    const assertionResult = {
+      id: requireNonEmptyString(
+        assertion.id,
+        `deployContract.response.assertions[${index}].id`,
+      ),
+      contract_alias: requireNonEmptyString(
+        assertion.contract_alias,
+        `deployContract.response.assertions[${index}].contract_alias`,
+      ),
+      entrypoint: normalizeOptionalString(
+        assertion.entrypoint,
+        `deployContract.response.assertions[${index}].entrypoint`,
+      ),
+      status: requireNonEmptyString(
+        assertion.status,
+        `deployContract.response.assertions[${index}].status`,
+      ),
+    };
+    if (assertion.actual_result !== undefined) {
+      assertionResult.actual_result = assertion.actual_result;
+    }
+    if (assertion.expected_result !== undefined) {
+      assertionResult.expected_result = assertion.expected_result;
+    }
+    if (assertion.error !== undefined) {
+      assertionResult.error = normalizeOptionalString(
+        assertion.error,
+        `deployContract.response.assertions[${index}].error`,
+      );
+    }
+    return assertionResult;
+  };
+  const normalizeOperationReceipt = (receiptPayload) => {
+    const receipt = ensureRecord(
+      receiptPayload,
+      "deployContract.response.operation_receipt",
+    );
+    const receiptResult = {
+      operation_kind: requireNonEmptyString(
+        receipt.operation_kind,
+        "deployContract.response.operation_receipt.operation_kind",
+      ),
+      status: requireNonEmptyString(
+        receipt.status,
+        "deployContract.response.operation_receipt.status",
+      ),
+      transport: requireNonEmptyString(
+        receipt.transport,
+        "deployContract.response.operation_receipt.transport",
+      ),
+      dataspace: requireNonEmptyString(
+        receipt.dataspace,
+        "deployContract.response.operation_receipt.dataspace",
+      ),
+      contract_alias: normalizeOptionalString(
+        receipt.contract_alias,
+        "deployContract.response.operation_receipt.contract_alias",
+      ),
+      contract_address: normalizeOptionalString(
+        receipt.contract_address,
+        "deployContract.response.operation_receipt.contract_address",
+      ),
+      code_hash_hex: normalizeOptionalHash(
+        receipt.code_hash_hex,
+        "deployContract.response.operation_receipt.code_hash_hex",
+      ),
+      abi_hash_hex: normalizeOptionalHash(
+        receipt.abi_hash_hex,
+        "deployContract.response.operation_receipt.abi_hash_hex",
+      ),
+      tx_hash_hex: normalizeOptionalHash(
+        receipt.tx_hash_hex,
+        "deployContract.response.operation_receipt.tx_hash_hex",
+      ),
+      entrypoint: normalizeOptionalString(
+        receipt.entrypoint,
+        "deployContract.response.operation_receipt.entrypoint",
+      ),
+      entrypoint_hash_hex: normalizeOptionalHash(
+        receipt.entrypoint_hash_hex,
+        "deployContract.response.operation_receipt.entrypoint_hash_hex",
+      ),
+      gas_limit:
+        receipt.gas_limit === undefined || receipt.gas_limit === null
+          ? null
+          : coerceInteger(
+              receipt.gas_limit,
+              "deployContract.response.operation_receipt.gas_limit",
+            ),
+      gas_used:
+        receipt.gas_used === undefined || receipt.gas_used === null
+          ? null
+          : coerceInteger(
+              receipt.gas_used,
+              "deployContract.response.operation_receipt.gas_used",
+            ),
+      gas_asset_id: normalizeOptionalString(
+        receipt.gas_asset_id,
+        "deployContract.response.operation_receipt.gas_asset_id",
+      ),
+      fee_sponsor: normalizeOptionalString(
+        receipt.fee_sponsor,
+        "deployContract.response.operation_receipt.fee_sponsor",
+      ),
+      payload_digest_hex: normalizeHex32String(
+        receipt.payload_digest_hex,
+        "deployContract.response.operation_receipt.payload_digest_hex",
+      ),
+    };
+    return receiptResult;
+  };
   const normalized = {
     ok: Boolean(record.ok),
-    contract_alias: contractAlias,
-    contract_address: contractAddress,
-    previous_contract_address: previousContractAddress,
-    upgraded: Boolean(record.upgraded),
-    dataspace,
-    deploy_nonce: deployNonce,
-    tx_hash_hex: txHashHex,
-    code_hash_hex: normalizeHex32String(
-      record.code_hash_hex,
-      "deployContract.response.code_hash_hex",
+    bundle_name: requireNonEmptyString(
+      record.bundle_name,
+      "deployContract.response.bundle_name",
     ),
-    abi_hash_hex: normalizeHex32String(
-      record.abi_hash_hex,
-      "deployContract.response.abi_hash_hex",
+    bundle_digest: normalizeHex32String(
+      record.bundle_digest,
+      "deployContract.response.bundle_digest",
+      { allowShort: true },
     ),
+    chain_fingerprint: requireNonEmptyString(
+      record.chain_fingerprint,
+      "deployContract.response.chain_fingerprint",
+    ),
+    dry_run: Boolean(record.dry_run),
+    completed_stages: record.completed_stages.map((stage, index) =>
+      requireNonEmptyString(stage, `deployContract.response.completed_stages[${index}]`),
+    ),
+    failure_point: normalizeOptionalString(
+      record.failure_point,
+      "deployContract.response.failure_point",
+    ),
+    contracts: record.contracts.map(normalizeContract),
+    init_calls: Array.isArray(record.init_calls)
+      ? record.init_calls.map(normalizeCall)
+      : [],
+    assertions: Array.isArray(record.assertions)
+      ? record.assertions.map(normalizeAssertion)
+      : [],
   };
-  if (hasPipelineStatus) {
-    normalized.pipeline_status = pipelineStatus;
+  if (record.operation_receipt !== undefined) {
+    normalized.operation_receipt =
+      record.operation_receipt === null
+        ? null
+        : normalizeOperationReceipt(record.operation_receipt);
   }
   return normalized;
 }
@@ -21676,12 +21920,19 @@ function normalizeMultisigProposeRequest(input) {
     "validation_fee_instruction_index",
     "validationFeeInstructionIndex",
   );
+  const validationFeeTransferEntryIndex = pickOverride(
+    record,
+    "validation_fee_transfer_entry_index",
+    "validationFeeTransferEntryIndex",
+  );
   const hasPolicyVersion =
     validationFeePolicyVersion !== undefined && validationFeePolicyVersion !== null;
   const hasPolicyHash =
     validationFeePolicyHash !== undefined && validationFeePolicyHash !== null;
   const hasInstructionIndex =
     validationFeeInstructionIndex !== undefined && validationFeeInstructionIndex !== null;
+  const hasTransferEntryIndex =
+    validationFeeTransferEntryIndex !== undefined && validationFeeTransferEntryIndex !== null;
   if (hasPolicyVersion !== hasPolicyHash) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
@@ -21694,6 +21945,20 @@ function normalizeMultisigProposeRequest(input) {
       ValidationErrorCode.INVALID_OBJECT,
       "proposeMultisig request validation fee instruction index requires policy metadata",
       "proposeMultisig.request.validation_fee_instruction_index",
+    );
+  }
+  if (!hasPolicyVersion && hasTransferEntryIndex) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "proposeMultisig request validation fee transfer entry index requires policy metadata",
+      "proposeMultisig.request.validation_fee_transfer_entry_index",
+    );
+  }
+  if (hasTransferEntryIndex && !hasInstructionIndex) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "proposeMultisig request validation fee transfer entry index requires instruction index",
+      "proposeMultisig.request.validation_fee_transfer_entry_index",
     );
   }
   if (hasPolicyVersion) {
@@ -21713,6 +21978,15 @@ function normalizeMultisigProposeRequest(input) {
         ToriiClient._normalizeUnsignedInteger(
           validationFeeInstructionIndex,
           "proposeMultisig request.validation_fee_instruction_index",
+          { allowZero: true },
+        ),
+      );
+    }
+    if (hasTransferEntryIndex) {
+      payload.validation_fee_transfer_entry_index = String(
+        ToriiClient._normalizeUnsignedInteger(
+          validationFeeTransferEntryIndex,
+          "proposeMultisig request.validation_fee_transfer_entry_index",
           { allowZero: true },
         ),
       );

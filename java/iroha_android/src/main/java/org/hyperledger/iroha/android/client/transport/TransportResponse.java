@@ -44,12 +44,14 @@ public final class TransportResponse {
 
   private static Map<String, List<String>> copyHeaders(final Map<String, List<String>> source) {
     if (source == null) {
-      return Map.of();
+      return Collections.emptyMap();
     }
     final Map<String, List<String>> copy = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
     for (final Map.Entry<String, List<String>> entry : source.entrySet()) {
       final List<String> values =
-          entry.getValue() == null ? List.of() : Collections.unmodifiableList(new ArrayList<>(entry.getValue()));
+          entry.getValue() == null
+              ? Collections.emptyList()
+              : Collections.unmodifiableList(new ArrayList<>(entry.getValue()));
       copy.put(entry.getKey(), values);
     }
     return copy;
@@ -92,7 +94,9 @@ public final class TransportResponse {
       if (headers != null) {
         for (final Map.Entry<String, List<String>> entry : headers.entrySet()) {
           final List<String> values =
-              entry.getValue() == null ? List.of() : new ArrayList<>(entry.getValue());
+              entry.getValue() == null
+                  ? Collections.emptyList()
+                  : new ArrayList<>(entry.getValue());
           this.headers.put(entry.getKey(), values);
         }
       }

@@ -9,12 +9,13 @@ public final class OfflineJsonParserTest {
 
   public static void main(final String[] args) {
     parsesOfflineReadiness();
-    parsesOfflineReadinessAbi7Aliases();
+    rejectsOfflineReadinessRemovedAbi7Aliases();
     rejectsOfflineReadinessMalformedCanonicalValues();
     parsesOfflineV2Readiness();
-    parsesOfflineV2ReadinessAbi7Aliases();
+    rejectsOfflineV2ReadinessRemovedAbi7Aliases();
     rejectsOfflineV2ReadinessMalformedCanonicalValues();
     parsesOfflineTransfers();
+    rejectsOfflineTransferMalformedIntegerFields();
     canonicalizesJson();
     System.out.println("[IrohaAndroid] OfflineJsonParserTest passed.");
   }
@@ -46,17 +47,19 @@ public final class OfflineJsonParserTest {
     assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();
   }
 
-  private static void parsesOfflineReadinessAbi7Aliases() {
-    final OfflineReadiness readiness = parseOfflineReadiness(abi7AliasReadinessBody());
-    assert readiness.offlineKagemushaRecursiveCompactAvailable();
-    assert "recursive_compact_v1".equals(readiness.offlineKagemushaRecursiveCompactMode());
-    assert Integer.valueOf(7).equals(readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion());
-    assert "kagemusha-recursive-compact-v1".equals(readiness.offlineKagemushaRecursiveCompactCircuitId());
-    assert readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();
+  private static void rejectsOfflineReadinessRemovedAbi7Aliases() {
+    for (final RemovedAbi7ReadinessCase item : REMOVED_ABI7_READINESS_CASES) {
+      expectIllegalState(
+          () -> parseOfflineReadiness(canonicalReadinessBody("\"" + item.field + "\": true,")),
+          item.message);
+    }
   }
 
   private static void rejectsOfflineReadinessMalformedCanonicalValues() {
     for (final MalformedReadinessCase item : malformedCanonicalReadinessCases()) {
+      expectIllegalState(() -> parseOfflineReadiness(item.body), item.message);
+    }
+    for (final MalformedReadinessCase item : malformedOptionalReadinessCases()) {
       expectIllegalState(() -> parseOfflineReadiness(item.body), item.message);
     }
   }
@@ -85,15 +88,12 @@ public final class OfflineJsonParserTest {
     assert !readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();
   }
 
-  private static void parsesOfflineV2ReadinessAbi7Aliases() {
-    final OfflineV2Readiness readiness = parseOfflineV2Readiness(abi7AliasReadinessBody());
-    assert readiness.offlineKagemushaRecursiveCompactAvailable();
-    assert "recursive_compact_v1".equals(readiness.offlineKagemushaRecursiveCompactMode());
-    assert Integer.valueOf(7).equals(
-        readiness.offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion());
-    assert "kagemusha-recursive-compact-v1".equals(
-        readiness.offlineKagemushaRecursiveCompactCircuitId());
-    assert readiness.offlineKagemushaRecursiveCompactArtifactsAvailable();
+  private static void rejectsOfflineV2ReadinessRemovedAbi7Aliases() {
+    for (final RemovedAbi7ReadinessCase item : REMOVED_ABI7_READINESS_CASES) {
+      expectIllegalState(
+          () -> parseOfflineV2Readiness(canonicalReadinessBody("\"" + item.field + "\": true,")),
+          item.message);
+    }
   }
 
   private static void rejectsOfflineV2ReadinessMalformedCanonicalValues() {
@@ -150,6 +150,12 @@ public final class OfflineJsonParserTest {
     assert "pkr#paynet".equals(item.toJsonMap().get("asset_id"));
   }
 
+  private static void rejectsOfflineTransferMalformedIntegerFields() {
+    for (final MalformedTransferIntegerCase item : malformedTransferIntegerCases()) {
+      expectIllegalState(() -> parseOfflineTransfers(item.body), item.message);
+    }
+  }
+
   private static void canonicalizesJson() {
     final String encoded =
         OfflineJsonParser.canonicalJson("{\"b\":2,\"a\":1}".getBytes(StandardCharsets.UTF_8));
@@ -164,7 +170,33 @@ public final class OfflineJsonParserTest {
     return OfflineJsonParser.parseOfflineV2Readiness(json.getBytes(StandardCharsets.UTF_8));
   }
 
+  private static OfflineTransferList parseOfflineTransfers(final String json) {
+    return OfflineJsonParser.parseTransfers(json.getBytes(StandardCharsets.UTF_8));
+  }
+
+  private record RemovedAbi7ReadinessCase(String field, String message) {}
+
+  private static final RemovedAbi7ReadinessCase[] REMOVED_ABI7_READINESS_CASES = {
+    new RemovedAbi7ReadinessCase(
+        "offline_kagemusha_abi7",
+        "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*"),
+    new RemovedAbi7ReadinessCase(
+        "offline_kagemusha_abi7_mode",
+        "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*"),
+    new RemovedAbi7ReadinessCase(
+        "offline_kagemusha_abi7_bridge_abi_version",
+        "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*"),
+    new RemovedAbi7ReadinessCase(
+        "offline_kagemusha_abi7_circuit_id",
+        "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*"),
+    new RemovedAbi7ReadinessCase(
+        "offline_kagemusha_abi7_artifacts",
+        "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*")
+  };
+
   private record MalformedReadinessCase(String body, String message) {}
+
+  private record MalformedTransferIntegerCase(String body, String message) {}
 
   private static MalformedReadinessCase[] malformedCanonicalReadinessCases() {
     return new MalformedReadinessCase[] {
@@ -203,6 +235,68 @@ public final class OfflineJsonParserTest {
     };
   }
 
+  private static MalformedReadinessCase[] malformedOptionalReadinessCases() {
+    return new MalformedReadinessCase[] {
+      new MalformedReadinessCase(
+          canonicalReadinessBody("\"offline_note\": \"true\","),
+          "offline_note must be a boolean"),
+      new MalformedReadinessCase(
+          canonicalReadinessBody("\"offline_sync_optional\": 1,"),
+          "offline_sync_optional must be a boolean")
+    };
+  }
+
+  private static MalformedTransferIntegerCase[] malformedTransferIntegerCases() {
+    return new MalformedTransferIntegerCase[] {
+      new MalformedTransferIntegerCase(
+          transferListBody("\"1\"", "1", "1", "1"),
+          "total must be a JSON integer number"),
+      new MalformedTransferIntegerCase(
+          transferListBody("\"\"", "1", "1", "1"),
+          "total must be a JSON integer number"),
+      new MalformedTransferIntegerCase(
+          transferListBody("1.5", "1", "1", "1"),
+          "total must be an integer"),
+      new MalformedTransferIntegerCase(
+          transferListBody("9223372036854775808", "1", "1", "1"),
+          "total must fit in signed 64-bit range"),
+      new MalformedTransferIntegerCase(
+          transferListBody("1", "\"1\"", "1", "1"),
+          "items[0].receipt_count must be a JSON integer number"),
+      new MalformedTransferIntegerCase(
+          transferListBody("1", "1", "1.5", "1"),
+          "items[0].recorded_at_ms must be an integer"),
+      new MalformedTransferIntegerCase(
+          transferListBody("1", "1", "1", "\"\""),
+          "items[0].recorded_at_height must be a JSON integer number")
+    };
+  }
+
+  private static String transferListBody(
+      final String total,
+      final String receiptCount,
+      final String recordedAtMs,
+      final String recordedAtHeight) {
+    return String.format(
+        Locale.ROOT,
+        """
+        {
+          "items": [
+            {
+              "receipt_count": %s,
+              "recorded_at_ms": %s,
+              "recorded_at_height": %s
+            }
+          ],
+          "total": %s
+        }
+        """,
+        receiptCount,
+        recordedAtMs,
+        recordedAtHeight,
+        total);
+  }
+
   private static String canonicalReadinessBody(final String extra) {
     return canonicalReadinessBody(
         extra,
@@ -211,19 +305,6 @@ public final class OfflineJsonParserTest {
         "7",
         "\"kagemusha-recursive-compact-v1\"",
         "false");
-  }
-
-  private static String abi7AliasReadinessBody() {
-    return """
-        {
-          "offline_telemetry": true,
-          "offline_kagemusha_abi7": true,
-          "offline_kagemusha_abi7_mode": "recursive_compact_v1",
-          "offline_kagemusha_abi7_bridge_abi_version": 7,
-          "offline_kagemusha_abi7_circuit_id": "kagemusha-recursive-compact-v1",
-          "offline_kagemusha_abi7_artifacts": true
-        }
-        """;
   }
 
   private static String canonicalReadinessBody(

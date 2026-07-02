@@ -9,7 +9,7 @@ use std::{
 };
 
 use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest};
-use iroha_data_model::Encode as _;
+use iroha_data_model::{Encode as _, nexus::LaneId};
 use iroha_logger::prelude::*;
 
 use super::locked_qc::qc_satisfies_locked_with_lookup;
@@ -1647,6 +1647,7 @@ impl Actor {
         let view = inflight.pending.view;
         let commit_id = inflight.id;
         super::status::record_commit_inflight_finish(commit_id);
+        self.subsystems.commit.remember_retired_result_id(commit_id);
         if self
             .pending
             .pending_processing
@@ -1725,6 +1726,15 @@ impl Actor {
                             continue;
                         }
                         None => {
+                            if self.subsystems.commit.take_retired_result_id(id) {
+                                debug!(
+                                    result_id = id,
+                                    "commit result arrived after committed-state catch-up retirement; dropping stale worker result"
+                                );
+                                summary.record(timings);
+                                summary.progress = true;
+                                continue;
+                            }
                             warn!(
                                 result_id = id,
                                 "commit result received without inflight; ignoring"
@@ -4801,6 +4811,64 @@ impl Actor {
         replayed
     }
 
+    pub(super) fn broadcast_certified_commit_proof_for_pending_block(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        commit_qc: &crate::sumeragi::consensus::Qc,
+        targets: &[PeerId],
+        trigger: &'static str,
+    ) -> usize {
+        let Some(block) = self
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .filter(|pending| pending.height == height && pending.view == view)
+            .map(|pending| pending.block.clone())
+        else {
+            return 0;
+        };
+        self.broadcast_certified_commit_proof_to_targets(&block, commit_qc, targets, trigger)
+    }
+
+    pub(super) fn broadcast_certified_commit_proof_to_targets(
+        &mut self,
+        block: &SignedBlock,
+        commit_qc: &crate::sumeragi::consensus::Qc,
+        targets: &[PeerId],
+        trigger: &'static str,
+    ) -> usize {
+        let Some(response) =
+            self.certified_block_fetch_response_for_block_with_qc(block, commit_qc.clone())
+        else {
+            debug!(
+                height = block.header().height().get(),
+                view = block.header().view_change_index(),
+                block = %block.hash(),
+                trigger,
+                "skipping certified commit proof broadcast: response unavailable"
+            );
+            return 0;
+        };
+        let local_peer_id = self.common_config.peer.id().clone();
+        let mut targets = targets
+            .iter()
+            .filter(|peer| *peer != &local_peer_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        targets.sort();
+        targets.dedup();
+
+        let mut replayed = 0usize;
+        for peer in targets {
+            if self.dispatch_certified_block_fetch_proof(peer, &response, trigger) {
+                replayed = replayed.saturating_add(1);
+            }
+        }
+        replayed
+    }
+
     pub(super) fn maybe_replay_known_block_commit_evidence(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -4875,7 +4943,11 @@ impl Actor {
             return false;
         }
 
+        let mut certified_proofs = 0usize;
         let replayed = if let Some(commit_qc) = commit_qc {
+            certified_proofs = self.broadcast_certified_commit_proof_for_pending_block(
+                block_hash, height, view, &commit_qc, &targets, trigger,
+            );
             self.broadcast_cached_commit_qc_to_targets_with_backpressure(
                 commit_qc, &targets, true, trigger,
             )
@@ -4890,7 +4962,7 @@ impl Actor {
                 trigger,
             )
         };
-        if replayed == 0 {
+        if replayed == 0 && certified_proofs == 0 {
             return false;
         }
         let rebroadcasted_block = self.maybe_rebroadcast_known_frontier_block_for_commit_evidence(
@@ -4908,6 +4980,7 @@ impl Actor {
             view,
             block = %block_hash,
             replayed,
+            certified_proofs,
             has_commit_qc,
             rebroadcasted_block,
             trigger,
@@ -5661,19 +5734,20 @@ impl Actor {
         }
         if self.latest_committed_qc().is_some_and(|highest_qc| {
             lock.as_ref().is_some_and(|lock| {
-                self.new_view_qc_supersedes_same_height_vote_lock(
+                self.new_view_qc_supersedes_noncommit_same_height_vote_lock(
                     request.height,
                     candidate_view,
                     highest_qc,
                     lock,
                 )
             }) || (local_commit_vote
-                && self.new_view_qc_supersedes_same_height_vote_conflict(
+                && self.new_view_qc_supersedes_noncommit_same_height_vote_conflict(
                     request.height,
                     candidate_view,
                     highest_qc,
                     block_hash,
                     request.view,
+                    crate::sumeragi::consensus::Phase::Commit,
                 ))
         }) {
             return None;
@@ -6534,24 +6608,24 @@ impl Actor {
         }
         let conflicting_vote = self.local_conflicting_slot_vote(height, epoch, block_hash);
         if let Some(conflict) = conflicting_vote {
+            let now = Instant::now();
             let new_view_qc_supersedes = self
                 .proposal_or_new_view_highest_qc_for_slot(height, view)
                 .is_some_and(|highest_qc| {
-                    self.new_view_qc_supersedes_same_height_vote_conflict(
+                    self.new_view_qc_supersedes_noncommit_same_height_vote_conflict(
                         height,
                         view,
                         highest_qc,
                         conflict.block_hash,
                         conflict.view,
-                    )
+                        conflict.phase,
+                    ) || self
+                        .new_view_qc_supersedes_stale_uncommitted_same_height_precommit_conflict(
+                            height, view, highest_qc, &conflict, now,
+                        )
                 });
-            let stale_vote_can_rotate = !self.local_same_height_vote_blocks_fresh_proposal(
-                height,
-                view,
-                &conflict,
-                Instant::now(),
-                true,
-            );
+            let stale_vote_can_rotate = !self
+                .local_same_height_vote_blocks_fresh_proposal(height, view, &conflict, now, true);
             let conflict_has_recoverable_qc = self.same_height_block_has_recoverable_qc(
                 conflict.block_hash,
                 height,
@@ -9847,7 +9921,20 @@ impl Actor {
         world: &impl WorldReadOnly,
         candidates: &[PeerId],
     ) -> Vec<election::CandidateProfile> {
-        collect_candidate_profiles_from_world(world, candidates)
+        let nexus = self.state.nexus_snapshot();
+        let active_lane_ids = nexus.enabled.then(|| {
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .filter_map(|lane| {
+                    self.state
+                        .is_lane_active_for_authority(lane.id)
+                        .then_some(lane.id)
+                })
+                .collect::<BTreeSet<_>>()
+        });
+        collect_candidate_profiles_from_world(world, candidates, active_lane_ids.as_ref())
     }
 
     #[allow(clippy::unnecessary_wraps)]
@@ -10147,13 +10234,11 @@ impl Actor {
 fn collect_candidate_profiles_from_world(
     world: &impl WorldReadOnly,
     candidates: &[PeerId],
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
 ) -> Vec<election::CandidateProfile> {
-    use iroha_data_model::{
-        account::AccountId,
-        nexus::{LaneId, staking::PublicLaneStakeShare},
-    };
+    use iroha_data_model::{account::AccountId, nexus::staking::PublicLaneStakeShare};
 
-    let record_map = public_lane_validator_records_by_peer(world);
+    let record_map = public_lane_validator_records_by_peer(world, active_lane_ids);
 
     let mut share_map: BTreeMap<(LaneId, AccountId), Vec<PublicLaneStakeShare>> = BTreeMap::new();
     for (key, share) in world.public_lane_stake_shares().iter() {
@@ -10161,6 +10246,11 @@ fn collect_candidate_profiles_from_world(
             continue;
         }
         let (lane_id, validator, _staker) = key;
+        if let Some(active_lane_ids) = active_lane_ids
+            && !active_lane_ids.contains(lane_id)
+        {
+            continue;
+        }
         share_map
             .entry((*lane_id, validator.clone()))
             .or_default()
@@ -10190,10 +10280,16 @@ fn collect_candidate_profiles_from_world(
 
 fn public_lane_validator_records_by_peer(
     world: &impl WorldReadOnly,
+    active_lane_ids: Option<&BTreeSet<iroha_data_model::nexus::LaneId>>,
 ) -> BTreeMap<PeerId, iroha_data_model::nexus::staking::PublicLaneValidatorRecord> {
     let mut record_map = BTreeMap::new();
     for (key, record) in world.public_lane_validators().iter() {
         if !crate::state::public_lane_validator_record_matches_key(key, record) {
+            continue;
+        }
+        if let Some(active_lane_ids) = active_lane_ids
+            && !active_lane_ids.contains(&key.0)
+        {
             continue;
         }
         record_map
@@ -10236,7 +10332,9 @@ mod tests {
         block::{BlockSignature, SignedBlock},
         metadata::Metadata,
         nexus::{
-            LaneId, PublicLaneStakeShare, PublicLaneValidatorRecord, PublicLaneValidatorStatus,
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
+            LaneConfig, LaneId, LaneVisibility, PublicLaneStakeShare, PublicLaneValidatorRecord,
+            PublicLaneValidatorStatus,
         },
         peer::{Peer, PeerId},
         prelude::{Account, AccountId, Domain, EventBox, Level, Log, TransactionBuilder},
@@ -10316,7 +10414,7 @@ mod tests {
             block.commit();
         }
 
-        let records = public_lane_validator_records_by_peer(&world.view());
+        let records = public_lane_validator_records_by_peer(&world.view(), None);
         assert!(records.contains_key(&valid_peer));
         assert!(!records.contains_key(&mismatched_lane_peer));
         assert!(!records.contains_key(&mismatched_account_peer));
@@ -10382,10 +10480,99 @@ mod tests {
             block.commit();
         }
 
-        let profiles = collect_candidate_profiles_from_world(&world.view(), &[peer]);
+        let profiles = collect_candidate_profiles_from_world(&world.view(), &[peer], None);
         assert_eq!(profiles.len(), 1);
         assert_eq!(profiles[0].stake_shares.len(), 1);
         assert_eq!(profiles[0].stake_shares[0].staker, staker);
+    }
+
+    #[test]
+    fn collect_candidate_profiles_excludes_future_created_autoscale_lane_rows() {
+        let world = World::default();
+        let validator_keypair = KeyPair::try_random().expect("validator test keypair");
+        let staker_keypair = KeyPair::try_random().expect("staker test keypair");
+        let validator = AccountId::new(validator_keypair.public_key().clone());
+        let staker = AccountId::new(staker_keypair.public_key().clone());
+        let peer = PeerId::new(validator_keypair.public_key().clone());
+        let future_lane = LaneId::new(1);
+        let mut autoscale_lane = LaneConfig {
+            id: future_lane,
+            alias: "elastic-lane-1".to_string(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        autoscale_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        autoscale_lane
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
+
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = core::num::NonZeroU32::new(1).expect("nonzero min");
+        nexus.autoscale.max_lanes = core::num::NonZeroU32::new(2).expect("nonzero max");
+        nexus.lane_catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(2).expect("lane count"),
+            vec![LaneConfig::default(), autoscale_lane],
+        )
+        .expect("future-created autoscale catalog");
+        nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
+
+        {
+            let mut block = world.public_lane_validators.block();
+            block.insert(
+                (future_lane, validator.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: future_lane,
+                    validator: validator.clone(),
+                    peer_id: peer.clone(),
+                    stake_account: validator.clone(),
+                    total_stake: Numeric::new(30, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: Some(1),
+                    activation_height: Some(1),
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+        {
+            let mut block = world.public_lane_stake_shares.block();
+            block.insert(
+                (future_lane, validator.clone(), staker.clone()),
+                PublicLaneStakeShare {
+                    lane_id: future_lane,
+                    validator,
+                    staker,
+                    bonded: Numeric::new(10, 0),
+                    pending_unbonds: BTreeMap::new(),
+                    metadata: Metadata::default(),
+                },
+            );
+            block.commit();
+        }
+
+        let active_lane_ids: BTreeSet<_> = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .filter_map(|lane| {
+                crate::state::nexus_active_lane_dataspace_at_height(lane.id, &nexus, 6)
+                    .map(|_| lane.id)
+            })
+            .collect();
+        assert!(!active_lane_ids.contains(&future_lane));
+
+        let profiles =
+            collect_candidate_profiles_from_world(&world.view(), &[peer], Some(&active_lane_ids));
+        assert_eq!(profiles.len(), 1);
+        assert!(profiles[0].record.is_none());
+        assert!(profiles[0].stake_shares.is_empty());
     }
 
     #[test]

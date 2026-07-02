@@ -367,6 +367,62 @@ fn signed_transfer_with_principal_and_fee_instruction(
         .sign(user_key_pair.private_key())
 }
 
+fn signed_transfer_with_explicit_fee_asset_instruction(
+    state: &State,
+    user: &AccountId,
+    user_key_pair: &KeyPair,
+    recipient: &AccountId,
+    principal_asset: &AssetDefinitionId,
+    fee_asset: &AssetDefinitionId,
+    fee_amount: Numeric,
+    fee_recipient: AccountId,
+    metadata: Metadata,
+) -> SignedTransaction {
+    TransactionBuilder::new(state.chain_id.clone(), user.clone())
+        .with_instructions([
+            InstructionBox::from(Transfer::asset_numeric(
+                AssetId::new(principal_asset.clone(), user.clone()),
+                Numeric::new(1, 0),
+                recipient.clone(),
+            )),
+            InstructionBox::from(Transfer::asset_numeric(
+                AssetId::new(fee_asset.clone(), user.clone()),
+                fee_amount,
+                fee_recipient,
+            )),
+        ])
+        .with_metadata(metadata)
+        .sign(user_key_pair.private_key())
+}
+
+fn signed_transfer_with_explicit_fee_source_instruction(
+    state: &State,
+    user: &AccountId,
+    user_key_pair: &KeyPair,
+    recipient: &AccountId,
+    fee_asset: &AssetDefinitionId,
+    fee_source: &AccountId,
+    fee_amount: Numeric,
+    fee_recipient: AccountId,
+    metadata: Metadata,
+) -> SignedTransaction {
+    TransactionBuilder::new(state.chain_id.clone(), user.clone())
+        .with_instructions([
+            InstructionBox::from(Transfer::asset_numeric(
+                AssetId::new(fee_asset.clone(), user.clone()),
+                Numeric::new(1, 0),
+                recipient.clone(),
+            )),
+            InstructionBox::from(Transfer::asset_numeric(
+                AssetId::new(fee_asset.clone(), fee_source.clone()),
+                fee_amount,
+                fee_recipient,
+            )),
+        ])
+        .with_metadata(metadata)
+        .sign(user_key_pair.private_key())
+}
+
 fn signed_batch_transfer_with_principal_amounts(
     state: &State,
     user: &AccountId,
@@ -739,6 +795,25 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         "policy-version payload mutation must fail signature admission, got {signature_error}"
     );
 
+    let wrong_fee_coordinate_tx = signed_transfer_with_metadata(
+        &state,
+        &user,
+        &user_key_pair,
+        &recipient,
+        &fee_asset,
+        &policy,
+        true,
+        metadata_for_policy(&policy, 0),
+    );
+    let mut fee_coordinate_mutation_tx = exact_fee_tx.clone();
+    fee_coordinate_mutation_tx.set_signature(wrong_fee_coordinate_tx.signature().clone());
+    let signature_error = accept_transaction_error(&state, fee_coordinate_mutation_tx);
+    assert!(
+        signature_error.contains("SignatureVerification")
+            || signature_error.contains("signature verification"),
+        "fee-coordinate payload mutation must fail signature admission, got {signature_error}"
+    );
+
     let wrong_principal_amount_tx = signed_transfer_with_principal_and_fee_instruction(
         &state,
         &user,
@@ -759,6 +834,29 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         signature_error.contains("SignatureVerification")
             || signature_error.contains("signature verification"),
         "principal-amount payload mutation must fail signature admission, got {signature_error}"
+    );
+
+    let (alternate_recipient, _) = account(4);
+    let wrong_principal_recipient_tx = signed_transfer_with_principal_and_fee_instruction(
+        &state,
+        &user,
+        &user_key_pair,
+        &alternate_recipient,
+        &fee_asset,
+        Numeric::new(1, 0),
+        Some((
+            policy.fee_amount_numeric(),
+            policy_treasury_account(&policy),
+        )),
+        metadata_for_policy(&policy, 1),
+    );
+    let mut principal_recipient_mutation_tx = exact_fee_tx.clone();
+    principal_recipient_mutation_tx.set_signature(wrong_principal_recipient_tx.signature().clone());
+    let signature_error = accept_transaction_error(&state, principal_recipient_mutation_tx);
+    assert!(
+        signature_error.contains("SignatureVerification")
+            || signature_error.contains("signature verification"),
+        "principal-recipient payload mutation must fail signature admission, got {signature_error}"
     );
 
     let exact_batch_tx = signed_batch_transfer_with_principal_amounts(
@@ -784,13 +882,32 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         Numeric::new(1, 0),
         Numeric::new(2, 0),
     );
-    let mut batch_principal_mutation_tx = exact_batch_tx;
+    let mut batch_principal_mutation_tx = exact_batch_tx.clone();
     batch_principal_mutation_tx.set_signature(wrong_batch_principal_tx.signature().clone());
     let signature_error = accept_transaction_error(&state, batch_principal_mutation_tx);
     assert!(
         signature_error.contains("SignatureVerification")
             || signature_error.contains("signature verification"),
         "batch-principal payload mutation must fail signature admission, got {signature_error}"
+    );
+
+    let wrong_batch_recipient_tx = signed_batch_transfer_with_principal_amounts(
+        &state,
+        &user,
+        &user_key_pair,
+        &alternate_recipient,
+        &fee_asset,
+        &policy,
+        Numeric::new(1, 0),
+        Numeric::new(1, 0),
+    );
+    let mut batch_recipient_mutation_tx = exact_batch_tx;
+    batch_recipient_mutation_tx.set_signature(wrong_batch_recipient_tx.signature().clone());
+    let signature_error = accept_transaction_error(&state, batch_recipient_mutation_tx);
+    assert!(
+        signature_error.contains("SignatureVerification")
+            || signature_error.contains("signature verification"),
+        "batch-recipient payload mutation must fail signature admission, got {signature_error}"
     );
 
     let wrong_fee_amount_tx = signed_transfer_with_fee_instruction(
@@ -815,6 +932,50 @@ fn fee_instruction_policy_hash_amount_and_treasury_are_covered_by_user_signature
         signature_error.contains("SignatureVerification")
             || signature_error.contains("signature verification"),
         "fee-amount payload mutation must fail signature admission, got {signature_error}"
+    );
+
+    let wrong_fee_asset = AssetDefinitionId::new(
+        DomainId::try_new("fees", "paynet").expect("domain id"),
+        "wrong_fee_token".parse().expect("asset name"),
+    );
+    let wrong_fee_asset_tx = signed_transfer_with_explicit_fee_asset_instruction(
+        &state,
+        &user,
+        &user_key_pair,
+        &recipient,
+        &fee_asset,
+        &wrong_fee_asset,
+        policy.fee_amount_numeric(),
+        policy_treasury_account(&policy),
+        metadata_for_policy(&policy, 1),
+    );
+    let mut fee_asset_mutation_tx = exact_fee_tx.clone();
+    fee_asset_mutation_tx.set_signature(wrong_fee_asset_tx.signature().clone());
+    let signature_error = accept_transaction_error(&state, fee_asset_mutation_tx);
+    assert!(
+        signature_error.contains("SignatureVerification")
+            || signature_error.contains("signature verification"),
+        "fee-asset payload mutation must fail signature admission, got {signature_error}"
+    );
+
+    let wrong_fee_source_tx = signed_transfer_with_explicit_fee_source_instruction(
+        &state,
+        &user,
+        &user_key_pair,
+        &recipient,
+        &fee_asset,
+        &recipient,
+        policy.fee_amount_numeric(),
+        policy_treasury_account(&policy),
+        metadata_for_policy(&policy, 1),
+    );
+    let mut fee_source_mutation_tx = exact_fee_tx.clone();
+    fee_source_mutation_tx.set_signature(wrong_fee_source_tx.signature().clone());
+    let signature_error = accept_transaction_error(&state, fee_source_mutation_tx);
+    assert!(
+        signature_error.contains("SignatureVerification")
+            || signature_error.contains("signature verification"),
+        "fee-source payload mutation must fail signature admission, got {signature_error}"
     );
 
     let wrong_treasury_tx = signed_transfer_with_fee_instruction(

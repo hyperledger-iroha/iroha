@@ -1,3 +1,4 @@
+use curve25519_dalek::edwards::CompressedEdwardsY;
 /// Digital signature verification helpers used by the VM.
 ///
 /// This module provides wrappers around common signature libraries so that
@@ -53,6 +54,40 @@ pub enum SignatureScheme {
     Secp256k1,
 }
 
+/// Returns true when supplied cryptographic material is an inert all-zero buffer.
+#[must_use]
+pub(crate) fn material_bytes_are_all_zero(bytes: &[u8]) -> bool {
+    bytes.iter().all(|byte| *byte == 0)
+}
+
+/// Returns true when the supplied signature payload is an inert all-zero buffer.
+#[must_use]
+pub(crate) fn signature_bytes_are_all_zero(signature: &[u8]) -> bool {
+    material_bytes_are_all_zero(signature)
+}
+
+/// Returns true when an Ed25519 signature carries a noncanonical or small-order `R`.
+#[must_use]
+pub(crate) fn signature_has_invalid_ed25519_r(signature: &[u8]) -> bool {
+    let Some(r_bytes) = signature.get(..32) else {
+        return false;
+    };
+    let Ok(r_bytes) = <[u8; 32]>::try_from(r_bytes) else {
+        return false;
+    };
+    let compressed = CompressedEdwardsY(r_bytes);
+    let Some(point) = compressed.decompress() else {
+        return true;
+    };
+    point.is_small_order() || point.compress().as_bytes() != &r_bytes
+}
+
+/// Returns true when an Ed25519 public key is weak and must not reach a verifier.
+#[must_use]
+pub(crate) fn ed25519_public_key_is_weak(public_key: &Ed25519VerifyingKey) -> bool {
+    public_key.is_weak()
+}
+
 /// Ed25519 batch verification input.
 #[derive(Clone, Debug)]
 pub struct Ed25519BatchItem<'a> {
@@ -100,10 +135,22 @@ pub fn verify_signature(
                 Ok(b) => b,
                 Err(_) => return false,
             };
+            if material_bytes_are_all_zero(pk_bytes) {
+                return false;
+            }
             let pk = match Ed25519VerifyingKey::from_bytes(pk_bytes) {
                 Ok(pk) => pk,
                 Err(_) => return false,
             };
+            if ed25519_public_key_is_weak(&pk) {
+                return false;
+            }
+            if signature_bytes_are_all_zero(signature) {
+                return false;
+            }
+            if signature_has_invalid_ed25519_r(signature) {
+                return false;
+            }
             let sig = match Ed25519Signature::from_slice(signature) {
                 Ok(s) => s,
                 Err(_) => return false,
@@ -114,6 +161,12 @@ pub fn verify_signature(
             if public_key.len() != dilithium::public_key_bytes()
                 || signature.len() != dilithium::signature_bytes()
             {
+                return false;
+            }
+            if material_bytes_are_all_zero(public_key) {
+                return false;
+            }
+            if signature_bytes_are_all_zero(signature) {
                 return false;
             }
             let pk = match dilithium::PublicKey::from_bytes(public_key) {
@@ -154,6 +207,32 @@ pub fn verify_ed25519_batch(
             actual: request.entries.len(),
         });
     }
+    for (index, entry) in request.entries.iter().enumerate() {
+        if entry.signature.len() != 64 || entry.public_key.len() != 32 {
+            return Err(Ed25519BatchError::InvalidEntry { index });
+        }
+        if signature_bytes_are_all_zero(&entry.signature) {
+            return Err(Ed25519BatchError::SignatureFailed { index });
+        }
+        if signature_has_invalid_ed25519_r(&entry.signature) {
+            return Err(Ed25519BatchError::SignatureFailed { index });
+        }
+        let pk_bytes: &[u8; 32] = entry
+            .public_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| Ed25519BatchError::InvalidEntry { index })?;
+        if material_bytes_are_all_zero(pk_bytes) {
+            return Err(Ed25519BatchError::InvalidEntry { index });
+        }
+        let pk = match Ed25519VerifyingKey::from_bytes(pk_bytes) {
+            Ok(pk) => pk,
+            Err(_) => return Err(Ed25519BatchError::InvalidEntry { index }),
+        };
+        if ed25519_public_key_is_weak(&pk) {
+            return Err(Ed25519BatchError::InvalidEntry { index });
+        }
+    }
 
     let messages: Vec<&[u8]> = request
         .entries
@@ -175,20 +254,31 @@ pub fn verify_ed25519_batch(
         Ok(()) => Ok(()),
         Err(_) => {
             for (index, entry) in request.entries.iter().enumerate() {
+                if signature_bytes_are_all_zero(&entry.signature) {
+                    return Err(Ed25519BatchError::SignatureFailed { index });
+                }
+                if signature_has_invalid_ed25519_r(&entry.signature) {
+                    return Err(Ed25519BatchError::SignatureFailed { index });
+                }
                 let sig = match Ed25519Signature::from_slice(entry.signature.as_slice()) {
                     Ok(sig) => sig,
                     Err(_) => return Err(Ed25519BatchError::InvalidEntry { index }),
                 };
-                let pk = match Ed25519VerifyingKey::from_bytes(
-                    entry
-                        .public_key
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| Ed25519BatchError::InvalidEntry { index })?,
-                ) {
+                let pk_bytes: &[u8; 32] = entry
+                    .public_key
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| Ed25519BatchError::InvalidEntry { index })?;
+                if material_bytes_are_all_zero(pk_bytes) {
+                    return Err(Ed25519BatchError::InvalidEntry { index });
+                }
+                let pk = match Ed25519VerifyingKey::from_bytes(pk_bytes) {
                     Ok(pk) => pk,
                     Err(_) => return Err(Ed25519BatchError::InvalidEntry { index }),
                 };
+                if ed25519_public_key_is_weak(&pk) {
+                    return Err(Ed25519BatchError::InvalidEntry { index });
+                }
                 if pk.verify_strict(entry.message.as_slice(), &sig).is_err() {
                     return Err(Ed25519BatchError::SignatureFailed { index });
                 }
@@ -223,14 +313,30 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
     };
 
     for item in items {
+        if signature_bytes_are_all_zero(&item.signature) {
+            parsed.push(None);
+            continue;
+        }
+        if signature_has_invalid_ed25519_r(&item.signature) {
+            parsed.push(None);
+            continue;
+        }
         let Ok(sig) = Ed25519Signature::from_slice(&item.signature) else {
             parsed.push(None);
             continue;
         };
+        if material_bytes_are_all_zero(&item.public_key) {
+            parsed.push(None);
+            continue;
+        }
         let Ok(pk) = Ed25519VerifyingKey::from_bytes(&item.public_key) else {
             parsed.push(None);
             continue;
         };
+        if ed25519_public_key_is_weak(&pk) {
+            parsed.push(None);
+            continue;
+        }
 
         #[cfg(all(target_os = "macos", feature = "metal"))]
         if let Some((ref mut sigs, ref mut pks, ref mut hrams, ref mut map)) = metal_inputs {
@@ -315,7 +421,11 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
 mod tests {
     use ed25519_dalek::{Signer, SigningKey};
 
-    use super::ed25519_challenge_scalar_bytes;
+    use super::{
+        Ed25519BatchEntry, Ed25519BatchError, Ed25519BatchItem, Ed25519BatchRequest,
+        SignatureScheme, ed25519_challenge_scalar_bytes, verify_ed25519_batch,
+        verify_ed25519_batch_items, verify_signature,
+    };
 
     #[test]
     fn ed25519_challenge_scalar_bytes_matches_cuda_selftest_vector() {
@@ -332,5 +442,79 @@ mod tests {
             ],
             "the shared Ed25519 GPU challenge helper must stay stable for the CUDA self-test truth set",
         );
+    }
+
+    #[test]
+    fn ed25519_verifiers_reject_weak_public_key_material() {
+        let key = SigningKey::from_bytes(&[0x31; 32]);
+        let message = b"ivm-ed25519-weak-public-key";
+        let signature = key.sign(message).to_bytes();
+        let weak_public_key = [0u8; 32];
+
+        assert!(!verify_signature(
+            SignatureScheme::Ed25519,
+            message,
+            &signature,
+            &weak_public_key
+        ));
+
+        let request = Ed25519BatchRequest {
+            seed: [0xA5; 32],
+            entries: vec![Ed25519BatchEntry {
+                message: message.to_vec(),
+                signature: signature.to_vec(),
+                public_key: weak_public_key.to_vec(),
+            }],
+        };
+        assert_eq!(
+            verify_ed25519_batch(&request, 1),
+            Err(Ed25519BatchError::InvalidEntry { index: 0 })
+        );
+
+        let items = [Ed25519BatchItem {
+            message,
+            signature,
+            public_key: weak_public_key,
+        }];
+        assert_eq!(verify_ed25519_batch_items(&items), vec![false]);
+    }
+
+    #[test]
+    fn ed25519_verifiers_reject_small_order_signature_r() {
+        let key = SigningKey::from_bytes(&[0x32; 32]);
+        let message = b"ivm-ed25519-small-order-r";
+        let mut signature = key.sign(message).to_bytes();
+        signature[..32].copy_from_slice(&[
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ]);
+        let public_key = key.verifying_key().to_bytes();
+
+        assert!(!verify_signature(
+            SignatureScheme::Ed25519,
+            message,
+            &signature,
+            &public_key
+        ));
+
+        let request = Ed25519BatchRequest {
+            seed: [0x5A; 32],
+            entries: vec![Ed25519BatchEntry {
+                message: message.to_vec(),
+                signature: signature.to_vec(),
+                public_key: public_key.to_vec(),
+            }],
+        };
+        assert_eq!(
+            verify_ed25519_batch(&request, 1),
+            Err(Ed25519BatchError::SignatureFailed { index: 0 })
+        );
+
+        let items = [Ed25519BatchItem {
+            message,
+            signature,
+            public_key,
+        }];
+        assert_eq!(verify_ed25519_batch_items(&items), vec![false]);
     }
 }

@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+if [[ "$SCRIPT_DIR" == "${BASH_SOURCE[0]}" ]]; then
+  SCRIPT_DIR="."
+fi
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target/sccp-production-corridor}"
@@ -305,9 +309,12 @@ import sys
 import unicodedata
 
 ASSEMBLY = "Hyperledger.Iroha.Sdk.Tests.dll (net8.0)"
+NUMBER = r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?"
 DURATION = (
-    r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?[ ]+(?:ms|s|m|h)"
-    r"(?:[ ]+(?:0|[1-9][0-9]*)(?:\.[0-9]+)?[ ]+(?:ms|s|m|h))*"
+    rf"(?:{NUMBER}[ ]+h(?:[ ]+{NUMBER}[ ]+m)?(?:[ ]+{NUMBER}[ ]+s)?(?:[ ]+{NUMBER}[ ]+ms)?"
+    rf"|{NUMBER}[ ]+m(?:[ ]+{NUMBER}[ ]+s)?(?:[ ]+{NUMBER}[ ]+ms)?"
+    rf"|{NUMBER}[ ]+s(?:[ ]+{NUMBER}[ ]+ms)?"
+    rf"|{NUMBER}[ ]+ms)"
 )
 SUMMARY_RE = re.compile(
     r"^[ ]*Passed![ ]+-[ ]+Failed:[ ]+0,[ ]+Passed:[ ]+(?P<passed>[1-9][0-9]*),"
@@ -344,19 +351,17 @@ malformed_summary_lines = 0
 for line in sys.stdin.read().splitlines():
     normalized = line.rstrip("\r")
     scan_line = normalized_summary_line(normalized)
-    scan_lines = (normalized,) if scan_line == normalized else (normalized, scan_line)
-    match = next(
-        (
-            candidate_match
-            for scan_line in scan_lines
-            for candidate_match in (SUMMARY_RE.fullmatch(scan_line),)
-            if candidate_match is not None
-        ),
-        None,
+    raw_match = SUMMARY_RE.fullmatch(normalized)
+    normalized_match = (
+        SUMMARY_RE.fullmatch(scan_line) if scan_line != normalized else None
     )
-    if match is not None:
-        matches.append(match)
-    elif any(SUMMARY_LIKE_RE.match(scan_line) for scan_line in scan_lines):
+    if raw_match is not None:
+        matches.append(raw_match)
+    elif normalized_match is not None:
+        malformed_summary_lines += 1
+    elif SUMMARY_LIKE_RE.match(normalized) or (
+        scan_line != normalized and SUMMARY_LIKE_RE.match(scan_line)
+    ):
         malformed_summary_lines += 1
 
 if malformed_summary_lines or len(matches) != 1:
@@ -382,6 +387,161 @@ print(passed)
 '
 }
 
+reject_dotnet_trx_symlink_path() {
+  local trx_dir="$1"
+  local trx_path="$2"
+  reject_symlinked_existing_path_components "$trx_dir" \
+    "SCCP .NET SDK validation requires direct TestResults TRX output path to be non-symlinked: $trx_path" || return 1
+  if [[ -L "$trx_dir" || -L "$trx_path" ]]; then
+    echo "SCCP .NET SDK validation requires direct TestResults TRX output path to be non-symlinked: $trx_path" >&2
+    return 1
+  fi
+}
+
+reject_symlinked_existing_path_components() {
+  local path="$1"
+  local error_message="$2"
+  local current
+  local drive_prefix
+  local path_parts
+  local path_without_trailing_slash
+  local part
+  local remaining
+  path_without_trailing_slash="${path//\\//}"
+  path_without_trailing_slash="${path_without_trailing_slash%/}"
+  case "$path_without_trailing_slash" in
+    [A-Za-z]:/*)
+      drive_prefix="${path_without_trailing_slash:0:2}"
+      current="$drive_prefix"
+      remaining="${path_without_trailing_slash:3}"
+      ;;
+    /*)
+      current="/"
+      remaining="${path_without_trailing_slash#/}"
+      ;;
+    *)
+      current="."
+      remaining="$path_without_trailing_slash"
+      ;;
+  esac
+  local IFS="/"
+  read -r -a path_parts <<< "$remaining"
+  for part in "${path_parts[@]}"; do
+    if [[ -z "$part" || "$part" == "." ]]; then
+      continue
+    fi
+    if [[ "$current" == "/" ]]; then
+      current="/$part"
+    else
+      current="$current/$part"
+    fi
+    if [[ -L "$current" ]]; then
+      echo "$error_message" >&2
+      return 1
+    fi
+    if [[ ! -e "$current" ]]; then
+      break
+    fi
+  done
+  return 0
+}
+
+reject_dotnet_bridge_path_text() {
+  local label="$1"
+  local path="$2"
+  if [[ -z "$path" || "$path" =~ [[:space:]] || "$path" =~ [[:cntrl:]] ]]; then
+    echo "SCCP .NET SDK validation requires $label path text to be non-empty and free of whitespace or control characters" >&2
+    return 1
+  fi
+}
+
+reject_dotnet_bridge_path_components() {
+  local label="$1"
+  local path="$2"
+  local index
+  local normalized
+  local part
+  local parts
+  local remaining
+  normalized="${path//\\//}"
+  if [[ "$normalized" == *//* || "$normalized" == */./* || "$normalized" == */../* || "$normalized" == */. || "$normalized" == */.. ]]; then
+    echo "SCCP .NET SDK validation requires $label path components to be direct and free of empty, dot, or parent segments" >&2
+    return 1
+  fi
+  remaining="${normalized#/}"
+  local IFS="/"
+  read -r -a parts <<< "$remaining"
+  for index in "${!parts[@]}"; do
+    part="${parts[$index]}"
+    if [[ -z "$part" ]]; then
+      continue
+    fi
+    if [[ "$index" -eq 0 && "$part" =~ ^[A-Za-z]:$ ]]; then
+      continue
+    fi
+    if [[ ! "$part" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+      echo "SCCP .NET SDK validation requires $label path components to be canonical and free of non-portable characters" >&2
+      return 1
+    fi
+  done
+}
+
+reject_dotnet_runtime_path_text() {
+  local label="$1"
+  local path="$2"
+  if [[ -z "$path" || "$path" =~ [[:cntrl:]] || "$path" =~ ^[[:space:]] || "$path" =~ [[:space:]]$ ]]; then
+    echo "SCCP .NET SDK validation requires $label path text to be non-empty and free of surrounding whitespace or control characters" >&2
+    return 1
+  fi
+}
+
+reject_dotnet_path_list_text() {
+  local label="$1"
+  local path_list="$2"
+  if [[ -z "$path_list" || "$path_list" =~ [[:cntrl:]] || "$path_list" == :* || "$path_list" == \;* || "$path_list" == *: || "$path_list" == *\; || "$path_list" == *::* || "$path_list" == *";;"* || "$path_list" == *":;"* || "$path_list" == *";:"* ]]; then
+    echo "SCCP .NET SDK validation requires $label to be non-empty, contain no control characters, and contain no empty path-list segments before native bridge loader setup" >&2
+    return 1
+  fi
+}
+
+reject_dotnet_bridge_symlink_path() {
+  local bridge_target_dir="$1"
+  local bridge_dir="$2"
+  local bridge_path="$3"
+  reject_symlinked_existing_path_components "$bridge_target_dir" \
+    "SCCP .NET SDK validation requires native bridge output path to be non-symlinked: $bridge_path" || return 1
+  if [[ -L "$bridge_target_dir" || -L "$bridge_dir" || -L "$bridge_path" ]]; then
+    echo "SCCP .NET SDK validation requires native bridge output path to be non-symlinked: $bridge_path" >&2
+    return 1
+  fi
+}
+
+compute_dotnet_bridge_sha256() {
+  local bridge_path="$1"
+  local digest_output
+  if ! digest_output="$("$SCCP_CORRIDOR_PYTHON_BIN" - "$bridge_path" 2>/dev/null <<'PY'
+import hashlib
+import sys
+
+path = sys.argv[1]
+hasher = hashlib.sha256()
+with open(path, "rb") as bridge_file:
+    for chunk in iter(lambda: bridge_file.read(1024 * 1024), b""):
+        hasher.update(chunk)
+print(hasher.hexdigest())
+PY
+)"; then
+    echo "SCCP .NET SDK validation requires Python hashlib to record the native bridge digest" >&2
+    return 1
+  fi
+  digest_output="${digest_output//$'\r'/}"
+  if [[ "$digest_output" == *$'\n'* || ! "$digest_output" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "SCCP .NET SDK validation requires canonical native bridge SHA-256 digest output" >&2
+    return 1
+  fi
+  printf '%s\n' "$digest_output"
+}
+
 validate_dotnet_trx_content() {
   local trx_path="$1"
   local expected_passed_count="$2"
@@ -402,9 +562,11 @@ validate_dotnet_trx_content() {
   "$SCCP_CORRIDOR_PYTHON_BIN" - "$trx_path" "$expected_passed_count" <<'PY'
 import sys
 import re
+import urllib.parse
 import xml.etree.ElementTree as ET
 
 ASSEMBLY = "Hyperledger.Iroha.Sdk.Tests.dll"
+EXPECTED_TEST_NAMESPACE = "Hyperledger.Iroha.Sdk.Tests."
 VSTEST_XML_NAMESPACE = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"
 TRUSTED_VSTEST_ELEMENT_NAMES = frozenset(
     (
@@ -417,11 +579,86 @@ TRUSTED_VSTEST_ELEMENT_NAMES = frozenset(
         "TestMethod",
     )
 )
+TRUSTED_VSTEST_ATTRIBUTES_BY_ELEMENT = {
+    "TestRun": frozenset(("id", "name", "runUser")),
+    "Results": frozenset(),
+    "TestDefinitions": frozenset(),
+    "UnitTestResult": frozenset(
+        (
+            "computerName",
+            "duration",
+            "endTime",
+            "executionId",
+            "isExecuted",
+            "outcome",
+            "relativeResultsDirectory",
+            "startTime",
+            "testId",
+            "testListId",
+            "testName",
+            "testType",
+        )
+    ),
+    "UnitTest": frozenset(("adapterTypeName", "id", "name", "storage")),
+    "Execution": frozenset(("id",)),
+    "TestMethod": frozenset(("adapterTypeName", "className", "codeBase", "name")),
+}
+TRUSTED_VSTEST_METADATA_ATTRIBUTES_BY_ELEMENT = {
+    "TestRun": frozenset(("id", "name", "runUser")),
+    "UnitTestResult": frozenset(
+        (
+            "computerName",
+            "duration",
+            "endTime",
+            "relativeResultsDirectory",
+            "startTime",
+            "testListId",
+            "testType",
+        )
+    ),
+    "UnitTest": frozenset(("adapterTypeName",)),
+    "TestMethod": frozenset(("adapterTypeName",)),
+}
 SCCP_TEST_NAME_RE = re.compile(r"(^|[.])Sccp[A-Za-z0-9_]+(?:$|[.])")
-TRX_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+TRX_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?$")
 ASCII_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 ASCII_WHITESPACE_RE = re.compile(r"\s")
 TRX_ASSEMBLY_PATH_FORBIDDEN_RE = re.compile(r"[<>\"']")
+TRX_ASSEMBLY_PATH_URI_DELIMITER_RE = re.compile(r"[?#&;%]")
+TRX_TEST_NAME_FORBIDDEN_RE = re.compile(r"[<>\"'`|\\/:#?&;%]")
+TRX_RELATIVE_RESULTS_DIRECTORY_FORBIDDEN_RE = re.compile(r"[<>\"'`|\\/:#?&;%]")
+TRX_DURATION_METADATA_RE = re.compile(
+    r"^(?:[0-9]+\.)?[0-9]{1,2}:[0-5][0-9]:[0-5][0-9](?:\.[0-9]{1,7})?$"
+)
+TRX_TIMESTAMP_METADATA_RE = re.compile(
+    r"^[1-9][0-9]{3}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T"
+    r"(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]{1,7})?"
+    r"(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$"
+)
+TRX_GUID_METADATA_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+TRX_ZERO_GUID_METADATA = "00000000-0000-0000-0000-000000000000"
+SENSITIVE_TRX_ATTRIBUTE_VALUE_MARKERS = (
+    "secret-token",
+    "private key",
+    "private-key",
+    "private_key",
+    "seed phrase",
+    "seed-phrase",
+    "seed_phrase",
+    "mnemonic",
+    "bearer ",
+    "client secret",
+    "client-secret",
+    "client_secret",
+    "password=",
+    "api key",
+    "api-key",
+    "api_key",
+    "operator/private",
+    "operator\\private",
+)
 trx_path = sys.argv[1]
 expected_passed_count = int(sys.argv[2])
 
@@ -440,6 +677,23 @@ lowered_trx = trx_bytes.lower()
 dtd_probe = lowered_trx.replace(b"\x00", b"")
 if b"<!doctype" in dtd_probe or b"<!entity" in dtd_probe:
     fail("requires TRX result to contain no DTD or entity declarations")
+if b"<!--" in dtd_probe:
+    fail("requires TRX result to contain no XML comments")
+processing_instruction_probe = dtd_probe
+stripped_processing_instruction_probe = processing_instruction_probe.lstrip()
+if (
+    stripped_processing_instruction_probe.startswith(b"<?xml")
+    and len(stripped_processing_instruction_probe) > len(b"<?xml")
+    and stripped_processing_instruction_probe[len(b"<?xml") : len(b"<?xml") + 1]
+    in b" \t\r\n"
+):
+    declaration_end = stripped_processing_instruction_probe.find(b"?>")
+    if declaration_end >= 0:
+        processing_instruction_probe = stripped_processing_instruction_probe[
+            declaration_end + len(b"?>") :
+        ]
+if b"<?" in processing_instruction_probe:
+    fail("requires TRX result to contain no XML processing instructions")
 
 try:
     root = ET.fromstring(trx_bytes)
@@ -467,6 +721,112 @@ def is_vstest_element(element, name):
     return element_name == name and is_allowed_vstest_namespace(namespace)
 
 
+def iter_percent_decoded_trx_attribute_values(value):
+    values_to_check = [value]
+    decoded_value = value
+    for _round in range(3):
+        next_decoded_value = urllib.parse.unquote(decoded_value)
+        if next_decoded_value == decoded_value:
+            break
+        values_to_check.append(next_decoded_value)
+        decoded_value = next_decoded_value
+    return values_to_check
+
+
+def has_sensitive_trx_attribute_value(value):
+    values_to_check = iter_percent_decoded_trx_attribute_values(value)
+    for candidate in values_to_check:
+        normalized_value = candidate.replace("\\", "/").lower()
+        if any(
+            marker.replace("\\", "/") in normalized_value
+            for marker in SENSITIVE_TRX_ATTRIBUTE_VALUE_MARKERS
+        ):
+            return True
+    return False
+
+
+def is_printable_ascii_trx_attribute_value(value):
+    return all(
+        candidate.isascii() and ASCII_CONTROL_RE.search(candidate) is None
+        for candidate in iter_percent_decoded_trx_attribute_values(value)
+    )
+
+
+def is_canonical_trx_guid_metadata_value(value):
+    return all(
+        candidate != TRX_ZERO_GUID_METADATA
+        and TRX_GUID_METADATA_RE.fullmatch(candidate) is not None
+        for candidate in iter_percent_decoded_trx_attribute_values(value)
+    )
+
+
+def has_empty_dotted_name_component(value):
+    return value.startswith(".") or value.endswith(".") or ".." in value
+
+
+def is_canonical_trx_relative_results_directory(value):
+    return all(
+        candidate
+        and candidate == candidate.strip()
+        and candidate.isascii()
+        and ASCII_CONTROL_RE.search(candidate) is None
+        and TRX_RELATIVE_RESULTS_DIRECTORY_FORBIDDEN_RE.search(candidate) is None
+        and "://" not in candidate
+        and not has_empty_dotted_name_component(candidate)
+        for candidate in iter_percent_decoded_trx_attribute_values(value)
+    )
+
+
+def is_canonical_trx_metadata_attribute(element_name, attribute_name, value):
+    if element_name == "TestRun" and attribute_name == "id":
+        return is_canonical_trx_guid_metadata_value(value)
+    if element_name != "UnitTestResult":
+        return True
+    if attribute_name in ("testListId", "testType"):
+        return is_canonical_trx_guid_metadata_value(value)
+    if attribute_name == "relativeResultsDirectory":
+        return is_canonical_trx_relative_results_directory(value)
+    validator_by_attribute = {
+        "duration": TRX_DURATION_METADATA_RE.fullmatch,
+        "startTime": TRX_TIMESTAMP_METADATA_RE.fullmatch,
+        "endTime": TRX_TIMESTAMP_METADATA_RE.fullmatch,
+    }
+    validator = validator_by_attribute.get(attribute_name)
+    if validator is None:
+        return True
+    return all(
+        validator(candidate) is not None
+        for candidate in iter_percent_decoded_trx_attribute_values(value)
+    )
+
+
+def reject_untrusted_trx_attribute_metadata(attribute_name, attribute_value):
+    attribute_namespace, local_attribute_name = split_tag(attribute_name)
+    if (
+        not is_printable_ascii_trx_attribute_value(attribute_namespace)
+        or not is_printable_ascii_trx_attribute_value(local_attribute_name)
+        or not is_printable_ascii_trx_attribute_value(attribute_value)
+    ):
+        fail("requires TRX XML attributes to contain only printable ASCII metadata")
+    if (
+        has_sensitive_trx_attribute_value(attribute_namespace)
+        or has_sensitive_trx_attribute_value(local_attribute_name)
+        or has_sensitive_trx_attribute_value(attribute_value)
+    ):
+        fail("requires TRX XML attributes to contain no sensitive metadata")
+
+
+def reject_untrusted_trx_element_metadata(namespace, name):
+    if not is_printable_ascii_trx_attribute_value(
+        namespace
+    ) or not is_printable_ascii_trx_attribute_value(name):
+        fail("requires TRX XML element names to contain only printable ASCII metadata")
+    if has_sensitive_trx_attribute_value(namespace) or has_sensitive_trx_attribute_value(
+        name
+    ):
+        fail("requires TRX XML element names to contain no sensitive metadata")
+
+
 root_namespace, _root_name = split_tag(root.tag)
 for element in root.iter():
     namespace, name = split_tag(element.tag)
@@ -476,6 +836,41 @@ for element in root.iter():
         )
     if name in TRUSTED_VSTEST_ELEMENT_NAMES and namespace != root_namespace:
         fail("requires TRX VSTest elements to use one consistent namespace")
+    if name in TRUSTED_VSTEST_ELEMENT_NAMES:
+        for attribute_name in element.attrib:
+            attribute_namespace, _attribute_name = split_tag(attribute_name)
+            if attribute_namespace:
+                fail("requires TRX VSTest attributes to be unqualified")
+            if (
+                _attribute_name
+                not in TRUSTED_VSTEST_ATTRIBUTES_BY_ELEMENT.get(name, frozenset())
+            ):
+                fail("requires TRX VSTest attributes to use the expected schema")
+            if (
+                _attribute_name
+                in TRUSTED_VSTEST_METADATA_ATTRIBUTES_BY_ELEMENT.get(
+                    name, frozenset()
+                )
+                and not is_printable_ascii_trx_attribute_value(
+                    element.attrib[attribute_name]
+                )
+            ):
+                fail(
+                    "requires TRX VSTest attributes to contain only printable ASCII metadata"
+                )
+            if not is_canonical_trx_metadata_attribute(
+                name, _attribute_name, element.attrib[attribute_name]
+            ):
+                fail("requires canonical TRX VSTest metadata attribute values")
+            if has_sensitive_trx_attribute_value(element.attrib[attribute_name]):
+                fail("requires TRX VSTest attributes to contain no sensitive metadata")
+    else:
+        reject_untrusted_trx_element_metadata(namespace, name)
+        for attribute_name, attribute_value in element.attrib.items():
+            reject_untrusted_trx_attribute_metadata(attribute_name, attribute_value)
+    for text_value in (element.text, element.tail):
+        if text_value is not None and text_value.strip():
+            fail("requires TRX XML elements to contain no non-whitespace text")
 
 if not is_vstest_element(root, "TestRun"):
     fail("requires TRX root to be a VSTest TestRun")
@@ -486,14 +881,13 @@ def path_basename(value):
 
 
 def trx_assembly_reference_problem(value):
-    if path_basename(value) != ASSEMBLY:
-        return None
     if (
         not value
         or value != value.strip()
-        or not value.isascii()
-        or ASCII_CONTROL_RE.search(value) is not None
+        or not is_printable_ascii_trx_attribute_value(value)
         or TRX_ASSEMBLY_PATH_FORBIDDEN_RE.search(value) is not None
+        or TRX_ASSEMBLY_PATH_URI_DELIMITER_RE.search(value) is not None
+        or has_sensitive_trx_attribute_value(value)
     ):
         return "requires canonical TRX assembly path values"
     normalized = value.replace("\\", "/")
@@ -502,12 +896,25 @@ def trx_assembly_reference_problem(value):
     segments = normalized.split("/")
     if any(segment in ("", ".", "..") for segment in segments):
         return "requires canonical TRX assembly path values"
+    colon_segments = [
+        index for index, segment in enumerate(segments) if ":" in segment
+    ]
+    if colon_segments and not (
+        colon_segments == [0] and re.fullmatch(r"[A-Za-z]:", segments[0])
+    ):
+        return "requires canonical TRX assembly path values"
+    if not segments[-1].endswith(".dll"):
+        return "requires canonical TRX assembly path values"
+    if any(segment.endswith(".dll") for segment in segments[:-1]):
+        return "requires canonical TRX assembly path values"
+    if path_basename(value) != ASSEMBLY:
+        if ASSEMBLY in value:
+            return "requires canonical TRX assembly path values"
+        return None
     assembly_segments = [
         index for index, segment in enumerate(segments) if segment == ASSEMBLY
     ]
     if assembly_segments != [len(segments) - 1]:
-        return "requires canonical TRX assembly path values"
-    if any(segment.endswith(".dll") for segment in segments[:-1]):
         return "requires canonical TRX assembly path values"
     return None
 
@@ -526,6 +933,8 @@ def is_canonical_trx_test_name(value):
         and value.isascii()
         and ASCII_CONTROL_RE.search(value) is None
         and ASCII_WHITESPACE_RE.search(value) is None
+        and not has_empty_dotted_name_component(value)
+        and TRX_TEST_NAME_FORBIDDEN_RE.search(value) is None
     )
 
 
@@ -536,12 +945,17 @@ def is_canonical_trx_identifier(value):
         and value.isascii()
         and ASCII_CONTROL_RE.search(value) is None
         and ASCII_WHITESPACE_RE.search(value) is None
+        and not has_empty_dotted_name_component(value)
         and TRX_IDENTIFIER_RE.fullmatch(value)
     )
 
 
 def has_sccp_test_name_token(value):
     return bool(is_canonical_trx_test_name(value) and SCCP_TEST_NAME_RE.search(value))
+
+
+def trx_unit_test_name_matches_method(value, method_result_name):
+    return value == method_result_name or method_result_name.endswith(f".{value}")
 
 
 assembly_sccp_test_ids = set()
@@ -576,6 +990,10 @@ if len(test_definition_sections) != len(all_test_definition_sections):
 all_unit_results = [
     element for element in root.iter() if is_vstest_element(element, "UnitTestResult")
 ]
+if len(results_sections) == 1 and any(
+    not is_vstest_element(child, "UnitTestResult") for child in results_sections[0]
+):
+    fail("requires VSTest Results section to contain only direct UnitTestResult rows")
 unit_results = (
     [child for child in results_sections[0] if is_vstest_element(child, "UnitTestResult")]
     if len(results_sections) == 1
@@ -596,6 +1014,12 @@ all_test_methods = [
 all_executions = [
     element for element in root.iter() if is_vstest_element(element, "Execution")
 ]
+if any(list(element) for element in all_unit_results):
+    fail("requires every TRX UnitTestResult row to be a leaf element")
+if any(list(element) for element in all_test_methods):
+    fail("requires every TRX TestMethod definition to be a leaf element")
+if any(list(element) for element in all_executions):
+    fail("requires every TRX Execution definition to be a leaf element")
 unit_tests = (
     [
         child
@@ -637,6 +1061,12 @@ if all_executions and (
     fail(
         "requires every TRX Execution definition to appear directly under a VSTest UnitTest definition"
     )
+if len(test_definition_sections) == 1 and any(
+    not is_vstest_element(child, "UnitTest") for child in test_definition_sections[0]
+):
+    fail(
+        "requires VSTest TestDefinitions section to contain only direct UnitTest definitions"
+    )
 if len(results_sections) != 1:
     fail("requires exactly one VSTest Results section")
 if len(test_definition_sections) != 1:
@@ -661,6 +1091,17 @@ for element in unit_tests:
     if test_id in seen_unit_test_ids:
         fail("requires unique TRX UnitTest id values")
     seen_unit_test_ids.add(test_id)
+    unit_test_name = element.attrib.get("name")
+    if unit_test_name is not None and not is_canonical_trx_test_name(unit_test_name):
+        fail("requires canonical TRX UnitTest definition name values")
+    if any(
+        not is_vstest_element(child, "Execution")
+        and not is_vstest_element(child, "TestMethod")
+        for child in element
+    ):
+        fail(
+            "requires every TRX UnitTest definition to contain only direct Execution and TestMethod children"
+        )
     direct_test_methods = [
         child for child in element if is_vstest_element(child, "TestMethod")
     ]
@@ -709,7 +1150,18 @@ for element in unit_tests:
                 fail("requires canonical TRX TestMethod className values")
             if not is_canonical_trx_test_name(child_name_value):
                 fail("requires canonical TRX TestMethod name values")
+            if not child_class_name.startswith(EXPECTED_TEST_NAMESPACE):
+                fail(
+                    "requires TRX TestMethod className values to use the Hyperledger.Iroha.Sdk.Tests namespace"
+                )
             method_result_name = f"{child_class_name}.{child_name_value}"
+            if (
+                unit_test_name is not None
+                and not trx_unit_test_name_matches_method(
+                    unit_test_name, method_result_name
+                )
+            ):
+                fail("requires TRX UnitTest definition name to match its TestMethod")
             if method_has_expected_assembly and has_sccp_test_name_token(
                 method_result_name
             ):
@@ -786,6 +1238,8 @@ for result in unit_results:
     result_test_name = result.attrib.get("testName")
     if result_test_name is None:
         fail("requires every TRX UnitTestResult to carry testName")
+    if not is_canonical_trx_test_name(result_test_name):
+        fail("requires canonical TRX UnitTestResult testName values")
     if result_test_name in seen_unit_result_test_names:
         fail("requires unique TRX UnitTestResult testName values")
     seen_unit_result_test_names.add(result_test_name)
@@ -954,26 +1408,36 @@ resolve_android_home() {
 resolve_dotnet() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     if [[ -n "${DOTNET_ROOT:-}" ]]; then
+      reject_dotnet_runtime_path_text ".NET SDK root" "$DOTNET_ROOT" || return 1
       printf '%s\n' "$DOTNET_ROOT/dotnet"
     else
+      reject_dotnet_runtime_path_text ".NET SDK executable" "$ROOT/target/dotnet/dotnet" || return 1
       printf '%s\n' "$ROOT/target/dotnet/dotnet"
     fi
     return 0
   fi
 
+  if [[ -n "${DOTNET_ROOT:-}" ]]; then
+    reject_dotnet_runtime_path_text ".NET SDK root" "$DOTNET_ROOT" || return 1
+  fi
   if [[ -n "${DOTNET_ROOT:-}" && -x "$DOTNET_ROOT/dotnet" ]]; then
+    reject_dotnet_runtime_path_text ".NET SDK executable" "$DOTNET_ROOT/dotnet" || return 1
     printf '%s\n' "$DOTNET_ROOT/dotnet"
     return 0
   fi
 
   local local_dotnet="/tmp/iroha-dotnet/sdk/dotnet"
   if [[ -x "$local_dotnet" ]]; then
+    reject_dotnet_runtime_path_text ".NET SDK executable" "$local_dotnet" || return 1
     printf '%s\n' "$local_dotnet"
     return 0
   fi
 
   if command -v dotnet >/dev/null 2>&1; then
-    command -v dotnet
+    local path_dotnet
+    path_dotnet="$(command -v dotnet)"
+    reject_dotnet_runtime_path_text ".NET SDK executable" "$path_dotnet" || return 1
+    printf '%s\n' "$path_dotnet"
     return 0
   fi
 
@@ -1089,7 +1553,10 @@ phase_dotnet_sdk() {
   local dotnet_rid
   local dotnet_rid_count
   local dotnet_arch
+  local dotnet_arch_count
   local dotnet_arch_lc
+  local dotnet_expected_trx_dir
+  local dotnet_expected_trx_path
   local dotnet_host_arch
   local dotnet_host_arch_count
   local dotnet_os_arch
@@ -1104,6 +1571,15 @@ phase_dotnet_sdk() {
   esac
   bridge_library_dir="$bridge_target_dir/debug"
   bridge_library_path="$bridge_library_dir/connect_norito_bridge.dll"
+  reject_dotnet_bridge_path_text "native bridge target" "$bridge_target_dir"
+  reject_dotnet_bridge_path_text "native bridge output directory" "$bridge_library_dir"
+  reject_dotnet_bridge_path_text "native bridge output" "$bridge_library_path"
+  reject_dotnet_bridge_path_components "native bridge target" "$bridge_target_dir"
+  reject_dotnet_bridge_path_components "native bridge output directory" "$bridge_library_dir"
+  reject_dotnet_bridge_path_components "native bridge output" "$bridge_library_path"
+  reject_dotnet_path_list_text ".NET phase PATH" "$PATH"
+  dotnet_expected_trx_dir="$ROOT/csharp/tests/Hyperledger.Iroha.Sdk.Tests/TestResults"
+  dotnet_expected_trx_path="$dotnet_expected_trx_dir/sccp-dotnet-sdk.trx"
   dotnet_artifacts_path="$bridge_target_dir/dotnet-artifacts"
   dotnet_cli="$(resolve_dotnet)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -1210,26 +1686,23 @@ phase_dotnet_sdk() {
     printf 'SCCP .NET SDK Architecture: %s\n' "$dotnet_arch_lc"
     validate_nonempty_path_list "PATH" "${PATH:-}"
   fi
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    reject_dotnet_bridge_symlink_path "$bridge_target_dir" "$bridge_library_dir" "$bridge_library_path"
+  fi
   run_in_dir "$ROOT" \
     env "CARGO_TARGET_DIR=$bridge_target_dir" \
     "CARGO_INCREMENTAL=0" \
     "CARGO_PROFILE_DEV_DEBUG=0" \
     cargo build -p connect_norito_bridge
   if [[ "$DRY_RUN" -eq 0 ]]; then
+    reject_dotnet_bridge_symlink_path "$bridge_target_dir" "$bridge_library_dir" "$bridge_library_path"
     if [[ ! -f "$bridge_library_path" ]]; then
       echo "SCCP .NET SDK validation requires freshly built connect_norito_bridge.dll at $bridge_library_path" >&2
       return 1
     fi
-    if command -v sha256sum >/dev/null 2>&1; then
-      bridge_library_sha256="$(sha256sum "$bridge_library_path" | cut -d ' ' -f 1)"
-    elif command -v shasum >/dev/null 2>&1; then
-      bridge_library_sha256="$(shasum -a 256 "$bridge_library_path" | cut -d ' ' -f 1)"
-    else
-      echo "SCCP .NET SDK validation requires sha256sum or shasum to record the native bridge digest" >&2
-      return 1
-    fi
+    bridge_library_sha256="$(compute_dotnet_bridge_sha256 "$bridge_library_path")" || return 1
     if [[ ! "$bridge_library_sha256" =~ ^[0-9a-f]{64}$ ]]; then
-      echo "SCCP .NET SDK validation produced a non-canonical native bridge SHA-256: $bridge_library_sha256" >&2
+      echo "SCCP .NET SDK validation produced a non-canonical native bridge SHA-256 digest" >&2
       return 1
     fi
     printf 'connect_norito_bridge native bridge: %s\n' "$bridge_library_path"
@@ -1255,6 +1728,7 @@ phase_dotnet_sdk() {
         -type f \
         -print0 2>/dev/null
     )
+    reject_dotnet_trx_symlink_path "$dotnet_expected_trx_dir" "$dotnet_expected_trx_path"
   fi
   run_capture_in_dir dotnet_test_output "$ROOT/csharp" \
     "${dotnet_env[@]}" \
@@ -1266,6 +1740,7 @@ phase_dotnet_sdk() {
     --nologo \
     --logger "trx;LogFileName=sccp-dotnet-sdk.trx"
   if [[ "$DRY_RUN" -eq 0 ]]; then
+    reject_dotnet_trx_symlink_path "$dotnet_expected_trx_dir" "$dotnet_expected_trx_path"
     if ! dotnet_passed_count="$(dotnet_test_passed_count "$dotnet_test_output")"; then
       return 1
     fi
@@ -1275,7 +1750,7 @@ phase_dotnet_sdk() {
     done < <(
       find "$ROOT/csharp/tests/Hyperledger.Iroha.Sdk.Tests" \
         -path '*/TestResults/sccp-dotnet-sdk.trx' \
-        -type f \
+        \( -type f -o -type l \) \
         -print0 2>/dev/null
     )
     if [[ "${#dotnet_trx_paths[@]}" -ne 1 ]]; then
