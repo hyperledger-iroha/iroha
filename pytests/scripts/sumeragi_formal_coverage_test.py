@@ -476,6 +476,10 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve quantified binding scope",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve unbounded quantified binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans reject relation-bearing quantified binding prefixes",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve tuple-pattern quantifier domains",
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve LET binding scope",
@@ -485,6 +489,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         "Undefined helper scans preserve CHOOSE binding scope",
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve LAMBDA binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes",
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve standard TLA set/operator identifiers",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -498,6 +504,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve arithmetic/set infix operand scope",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve sequence/function infix operand scope",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve explicit set literal element scope",
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve unary set-operator operand scope",
@@ -509,6 +517,12 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         "Undefined helper scans preserve function-constructor binding scope",
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve function-set domain and range scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Function-set scans preserve CASE domain branch arrows",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Function-set scans preserve record maplet CASE values",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Function-set scans preserve record set/update CASE values",
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve record field label scope",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -534,6 +548,10 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified formula prefix scans preserve escaped string literal colons",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified formula prefix scans preserve tuple literal maplet colons",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper formula scans require scoped binding prefixes",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Quantified bound identifier scans preserve escaped string literal domains",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper bound-domain checks preserve escaped string literal domains",
@@ -544,6 +562,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper singleton-domain checks preserve tuple literal elements",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper vacuity checks include unbounded static bodies",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Line comment scans preserve escaped string literal comment markers",
         f"Sumeragi formal README {readme} is missing required text: "
         "Static outer wrapper scans preserve escaped string literal parentheses",
@@ -551,6 +571,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         "Semantic identifier scans ignore escaped string literal contents",
         f"Sumeragi formal README {readme} is missing required text: "
         "Top-level relation and boolean scans preserve tuple literal operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level relation scans reject whole-body control/action wrappers",
         f"Sumeragi formal README {readme} is missing required text: "
         "Top-level boolean scans preserve escaped string literal operators",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -566,7 +588,11 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified exactness helper formulas must use their bound identifiers",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified exactness helper formulas must not duplicate bound identifiers",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Quantified unused-bound checks include later binding groups",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified unused-bound checks include unbounded bindings",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified bound identifier scans include later tuple-pattern binding groups",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -640,6 +666,14 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Unary-temporal exactness helper wrappers must not hide quantified formulas",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Static action/set/choice exactness helper wrappers must not hide quantified formulas",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Static action/set/choice exactness helper wrappers traverse structured operands",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Structured exactness helper operands must not hide quantified formulas",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Structured exactness helper operands must not hide control-flow predicate selection",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Unary-temporal quantified, parameterized-call, and control-flow checks split top-level boolean operands before peeling temporal wrappers",
         f"Sumeragi formal README {readme} is missing required text: "
         "Unary-temporal quantified checks unwrap one-line `LET` helper aliases",
@@ -675,6 +709,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         "Compound exactness helper traversal includes disjunction, implication, equivalence, and negation operands",
         f"Sumeragi formal README {readme} is missing required text: "
         "Helper reference traversal unwraps one-line `LET` helper aliases",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Exactness vacuous-helper checks inspect static and structured operands",
         f"Sumeragi formal README {readme} is missing required text: "
         "LET helper alias unwrapping preserves static unary result wrappers",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -720,6 +756,10 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve quantified binding scope",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve unbounded quantified binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans reject relation-bearing quantified binding prefixes",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve tuple-pattern quantifier domains",
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve LET binding scope",
@@ -729,6 +769,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         "Undefined helper scans preserve CHOOSE binding scope",
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve LAMBDA binding scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes",
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve standard TLA set/operator identifiers",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -742,6 +784,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve arithmetic/set infix operand scope",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Undefined helper scans preserve sequence/function infix operand scope",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve explicit set literal element scope",
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve unary set-operator operand scope",
@@ -753,6 +797,12 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         "Undefined helper scans preserve function-constructor binding scope",
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve function-set domain and range scope",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Function-set scans preserve CASE domain branch arrows",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Function-set scans preserve record maplet CASE values",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Function-set scans preserve record set/update CASE values",
         f"Sumeragi formal README {readme} is missing required text: "
         "Undefined helper scans preserve record field label scope",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -778,6 +828,10 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified formula prefix scans preserve escaped string literal colons",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified formula prefix scans preserve tuple literal maplet colons",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper formula scans require scoped binding prefixes",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Quantified bound identifier scans preserve escaped string literal domains",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper bound-domain checks preserve escaped string literal domains",
@@ -788,6 +842,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified helper singleton-domain checks preserve tuple literal elements",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified helper vacuity checks include unbounded static bodies",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Line comment scans preserve escaped string literal comment markers",
         f"Sumeragi formal README {readme} is missing required text: "
         "Static outer wrapper scans preserve escaped string literal parentheses",
@@ -795,6 +851,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         "Semantic identifier scans ignore escaped string literal contents",
         f"Sumeragi formal README {readme} is missing required text: "
         "Top-level relation and boolean scans preserve tuple literal operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Top-level relation scans reject whole-body control/action wrappers",
         f"Sumeragi formal README {readme} is missing required text: "
         "Top-level boolean/equality detector helpers preserve tuple literal operators",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -806,7 +864,11 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified temporal helper formulas must use their bound identifiers",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified temporal helper formulas must not duplicate bound identifiers",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Quantified unused-bound checks include later binding groups",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Quantified unused-bound checks include unbounded bindings",
         f"Sumeragi formal README {readme} is missing required text: "
         "Quantified bound identifier scans include later tuple-pattern binding groups",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -850,6 +912,14 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         f"Sumeragi formal README {readme} is missing required text: "
         "Unary-temporal temporal helper wrappers must not hide control-flow predicate selection",
         f"Sumeragi formal README {readme} is missing required text: "
+        "Static action/set/choice temporal helper wrappers must not hide quantified formulas",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Static action/set/choice temporal helper wrappers traverse structured operands",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Structured temporal helper operands must not hide quantified formulas",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Structured temporal helper operands must not hide control-flow predicate selection",
+        f"Sumeragi formal README {readme} is missing required text: "
         "Unary-temporal temporal LET-alias helper wrappers must name concrete temporal predicates",
         f"Sumeragi formal README {readme} is missing required text: "
         "Transitive allowlisted temporal helper chains must not hide whole-body temporal-helper boolean-composition helpers",
@@ -879,6 +949,8 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         "Compound temporal helper traversal includes equivalence operands",
         f"Sumeragi formal README {readme} is missing required text: "
         "Compound temporal helper traversal includes negation operands",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Temporal vacuous-helper checks inspect static and structured operands",
         f"Sumeragi formal README {readme} is missing required text: "
         "Exactness and correctness-envelope conjunct references must resolve to zero-arity",
         f"Sumeragi formal README {readme} is missing required text: "
@@ -1245,6 +1317,21 @@ def test_matching_case_prefers_exact_tlc_mutation_override() -> None:
 
     assert case is not None
     assert case.label == "rbc-bug-duplicate-ready"
+
+
+def test_matching_case_prefers_longest_cached_wildcard_prefix() -> None:
+    module = load_coverage_module()
+    cases = {
+        "block-sync-bug-*": module.RunnerCase("block-sync-bug-*", "", 1),
+        "block-sync-bug-known-roster-*": module.RunnerCase(
+            "block-sync-bug-known-roster-*", "", 2
+        ),
+    }
+
+    case = module.matching_case("block-sync-bug-known-roster-missing", cases)
+
+    assert case is not None
+    assert case.label == "block-sync-bug-known-roster-*"
 
 
 def test_expected_failure_marker_check_uses_matching_case_body() -> None:
@@ -3419,6 +3506,13 @@ def test_tla_static_constant_relation_detects_identifier_free_relations() -> Non
 def test_vacuous_quantified_helper_formulas_detect_bound_self_membership() -> None:
     module = load_coverage_module()
 
+    assert module.vacuous_quantified_helper_formulas("\\A c: TRUE") == [
+        "\\A c: TRUE"
+    ]
+    assert module.vacuous_quantified_helper_formulas("\\E c: [] FALSE") == [
+        "\\E c: [] FALSE"
+    ]
+    assert module.vacuous_quantified_helper_formulas("\\A c: Predicate(c)") == []
     assert module.vacuous_quantified_helper_formulas(
         "\\A c \\in Cases: c \\in {c}"
     ) == ["\\A c \\in Cases: c \\in {c}"]
@@ -3641,6 +3735,107 @@ def test_temporal_helper_references_descend_into_compound_temporal_bodies() -> N
         "selected) aliases IF ready THEN TemporalA ELSE TemporalB"
     ]
     assert module.unary_temporal_let_alias_parts("[] TemporalConcrete") == []
+
+
+def test_hidden_helper_references_descend_into_static_and_structured_operands() -> None:
+    module = load_coverage_module()
+
+    assert module.hidden_static_structured_helper_references("ENABLED LiteralLeaf") == [
+        "LiteralLeaf"
+    ]
+    assert module.hidden_static_structured_helper_references("DOMAIN LiteralLeaf") == [
+        "LiteralLeaf"
+    ]
+    assert module.hidden_static_structured_helper_references(
+        "CHOOSE BoundHelper \\in Cases: BoundHelper /\\ LiteralLeaf"
+    ) == ["Cases", "LiteralLeaf"]
+    assert module.hidden_static_structured_helper_references(
+        "LAMBDA BoundHelper \\in Cases: BoundHelper /\\ LiteralLeaf"
+    ) == ["Cases", "LiteralLeaf"]
+    assert module.hidden_static_structured_helper_references(
+        "[Field |-> LiteralLeaf] /\\ ConcreteLeaf"
+    ) == ["LiteralLeaf"]
+    assert module.hidden_static_structured_helper_references(
+        "ActualLeaf = LiteralLeaf"
+    ) == []
+    assert module.hidden_static_structured_helper_references(
+        "[Field |-> ActualLeaf = LiteralLeaf]"
+    ) == ["ActualLeaf", "LiteralLeaf"]
+    assert module.hidden_static_structured_helper_references(
+        "[BoundHelper \\in Cases |-> BoundHelper /\\ LiteralLeaf]"
+    ) == ["Cases", "LiteralLeaf"]
+    assert module.hidden_static_structured_helper_references(
+        "Helper(LiteralLeaf)"
+    ) == ["LiteralLeaf"]
+    assert module.hidden_static_structured_helper_references(
+        "[] [Field |-> LiteralLeaf]"
+    ) == ["LiteralLeaf"]
+    assert module.hidden_static_structured_helper_references(
+        "[] (ENABLED LiteralLeaf /\\ OtherLeaf)"
+    ) == ["LiteralLeaf"]
+    assert module.hidden_static_structured_helper_references(
+        "IF Ready THEN LiteralLeaf ELSE ConcreteLeaf"
+    ) == []
+
+
+def test_structured_control_flow_formulas_descend_into_structured_operands() -> None:
+    module = load_coverage_module()
+    definitions = {
+        "ConcreteLeaf": (1, "checked = ready"),
+        "FallbackLeaf": (2, "checked = committed"),
+        "QuorumMarker": (3, "1"),
+        "VoteBackedMarker": (4, "2"),
+    }
+
+    assert module.structured_operand_control_flow_formulas(
+        "IF Ready THEN ConcreteLeaf ELSE FallbackLeaf",
+        definitions,
+    ) == []
+    assert module.structured_operand_control_flow_formulas(
+        "[Field |-> IF Ready THEN ConcreteLeaf ELSE FallbackLeaf]",
+        definitions,
+    ) == [
+        "record literal contains IF expression "
+        "IF Ready THEN ConcreteLeaf ELSE FallbackLeaf"
+    ]
+    assert module.structured_operand_control_flow_formulas(
+        "[Field |-> CASE Ready -> ConcreteLeaf [] OTHER -> FallbackLeaf]",
+        definitions,
+    ) == [
+        "record literal contains CASE expression "
+        "CASE Ready -> ConcreteLeaf [] OTHER -> FallbackLeaf"
+    ]
+    assert module.structured_operand_control_flow_formulas(
+        "[Field: CASE Ready -> ConcreteLeaf [] OTHER -> FallbackLeaf]",
+        definitions,
+    ) == [
+        "record set contains CASE expression "
+        "CASE Ready -> ConcreteLeaf [] OTHER -> FallbackLeaf"
+    ]
+    assert module.structured_operand_control_flow_formulas(
+        "[record EXCEPT !.field = CASE Ready -> ConcreteLeaf [] OTHER -> FallbackLeaf]",
+        definitions,
+    ) == [
+        "record update contains CASE expression "
+        "CASE Ready -> ConcreteLeaf [] OTHER -> FallbackLeaf"
+    ]
+    assert module.structured_operand_control_flow_formulas(
+        "[CASE Ready -> ConcreteLeaf [] OTHER -> FallbackLeaf -> Cases]",
+        definitions,
+    ) == [
+        "function set contains CASE expression "
+        "CASE Ready -> ConcreteLeaf [] OTHER -> FallbackLeaf"
+    ]
+    assert module.structured_operand_control_flow_formulas(
+        "[Field |-> ENABLED ConcreteLeaf]",
+        definitions,
+    ) == [
+        "record literal contains ENABLED expression ENABLED ConcreteLeaf"
+    ]
+    assert module.structured_operand_control_flow_formulas(
+        "ActualMarker = IF Ready THEN VoteBackedMarker ELSE QuorumMarker",
+        definitions,
+    ) == []
 
 
 def test_helper_reference_traversal_unwraps_one_line_let_aliases() -> None:
@@ -4183,6 +4378,106 @@ def test_quantified_formulas_descend_into_unary_temporal_exactness_wrappers() ->
     ) == []
 
 
+def test_quantified_formulas_descend_into_static_wrappers() -> None:
+    module = load_coverage_module()
+
+    assert module.static_wrapped_quantified_formulas(
+        "ENABLED (\\A c \\in Cases: Predicate(c))"
+    ) == ["ENABLED wraps \\A c \\in Cases: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "UNCHANGED <<\\E c \\in Cases: Predicate(c)>>"
+    ) == ["UNCHANGED wraps \\E c \\in Cases: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "SUBSET (\\A c \\in Cases: Predicate(c))"
+    ) == ["SUBSET wraps \\A c \\in Cases: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "CHOOSE x \\in Cases: \\A c \\in Other: Predicate(c)"
+    ) == ["CHOOSE wraps \\A c \\in Other: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "LAMBDA x \\in Cases: \\A c \\in Other: Predicate(c)"
+    ) == ["LAMBDA wraps \\A c \\in Other: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "Ready /\\ [] (ENABLED (\\A c \\in Cases: Predicate(c)))"
+    ) == ["ENABLED wraps \\A c \\in Cases: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "DOMAIN [x \\in Cases |-> \\A c \\in Other: Predicate(c)]"
+    ) == ["DOMAIN wraps \\A c \\in Other: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "DOMAIN [Cases -> \\A c \\in Other: Predicate(c)]"
+    ) == ["DOMAIN wraps \\A c \\in Other: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "SUBSET [Field: \\A c \\in Cases: Predicate(c)]"
+    ) == ["SUBSET wraps \\A c \\in Cases: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "SUBSET {x \\in Cases: \\A c \\in Other: Predicate(c)}"
+    ) == ["SUBSET wraps \\A c \\in Other: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "UNCHANGED [record EXCEPT ![idx] = \\A c \\in Cases: Predicate(c)]"
+    ) == ["UNCHANGED wraps \\A c \\in Cases: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "ENABLED record[\\A c \\in Cases: Predicate(c)]"
+    ) == ["ENABLED wraps \\A c \\in Cases: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "ENABLED IF Ready THEN \\A c \\in Cases: Predicate(c) ELSE TRUE"
+    ) == ["ENABLED wraps \\A c \\in Cases: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "ENABLED Helper(\\A c \\in Cases: Predicate(c))"
+    ) == ["ENABLED wraps \\A c \\in Cases: Predicate(c)"]
+    assert module.static_wrapped_quantified_formulas(
+        "\\A c \\in Cases: Predicate(c)"
+    ) == []
+
+
+def test_quantified_formulas_descend_into_structured_operands() -> None:
+    module = load_coverage_module()
+
+    assert module.structured_operand_quantified_formulas(
+        "<<\\A c \\in Cases: Predicate(c)>>"
+    ) == ["tuple literal contains \\A c \\in Cases: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "{\\A c \\in Cases: Predicate(c)}"
+    ) == ["explicit set literal contains \\A c \\in Cases: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "{x \\in Cases: \\A c \\in Other: Predicate(c)}"
+    ) == ["set comprehension contains \\A c \\in Other: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "[x \\in Cases |-> \\A c \\in Other: Predicate(c)]"
+    ) == ["function constructor contains \\A c \\in Other: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "[Cases -> \\A c \\in Other: Predicate(c)]"
+    ) == ["function set contains \\A c \\in Other: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "[Field |-> \\A c \\in Cases: Predicate(c)]"
+    ) == ["record literal contains \\A c \\in Cases: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "[Field: \\A c \\in Cases: Predicate(c)]"
+    ) == ["record set contains \\A c \\in Cases: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "[record EXCEPT ![idx] = \\A c \\in Cases: Predicate(c)]"
+    ) == ["record update contains \\A c \\in Cases: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "record[\\A c \\in Cases: Predicate(c)]"
+    ) == ["selector expression contains \\A c \\in Cases: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "IF Ready THEN \\A c \\in Cases: Predicate(c) ELSE TRUE"
+    ) == ["IF expression contains \\A c \\in Cases: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "CASE Ready -> TRUE [] Other -> \\A c \\in Cases: Predicate(c)"
+    ) == ["CASE expression contains \\A c \\in Cases: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "Ready = (\\A c \\in Cases: Predicate(c))"
+    ) == ["relation expression contains \\A c \\in Cases: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "Known \\union (\\A c \\in Cases: Predicate(c))"
+    ) == ["infix expression contains \\A c \\in Cases: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "Helper(\\A c \\in Cases: Predicate(c))"
+    ) == ["operator call contains \\A c \\in Cases: Predicate(c)"]
+    assert module.structured_operand_quantified_formulas(
+        "\\A c \\in Cases: Predicate(c)"
+    ) == []
+
+
 def test_quantified_helper_formulas_descend_into_boolean_operands() -> None:
     module = load_coverage_module()
 
@@ -4201,6 +4496,50 @@ def test_quantified_helper_formulas_descend_into_boolean_operands() -> None:
     assert module.quantified_helper_formulas(
         "~(\\E c \\in Cases: Predicate(c))"
     ) == []
+
+
+def test_quantified_helper_formulas_require_scoped_binding_prefixes() -> None:
+    module = load_coverage_module()
+    definitions = {
+        "MalformedHelper": (
+            1,
+            "\\A MissingHelper \\subseteq MissingDomain: "
+            "Predicate(MissingHelper)",
+        ),
+        "ScopedHelper": (2, "\\A c \\in Cases: Predicate(c)"),
+    }
+    relation_prefix = (
+        "\\A MissingHelper \\subseteq MissingDomain: "
+        "IF MissingHelper THEN Good ELSE Bad"
+    )
+    infix_prefix = (
+        "\\A MissingHelper \\cup MissingDomain: "
+        "IF MissingHelper THEN Good ELSE Bad"
+    )
+    existential_relation_prefix = (
+        "\\E MissingHelper \\subseteq MissingDomain: Predicate(MissingHelper)"
+    )
+
+    assert module.is_scoped_quantified_formula("\\A c \\in Cases: Predicate(c)")
+    assert module.is_scoped_quantified_formula("\\A c: Predicate(c)")
+    assert not module.is_scoped_quantified_formula(relation_prefix)
+    assert not module.is_scoped_quantified_formula(infix_prefix)
+    assert module.is_quantified_helper_operand("ScopedHelper", definitions)
+    assert not module.is_quantified_helper_operand("MalformedHelper", definitions)
+    assert module.quantified_helper_formulas(relation_prefix) == []
+    assert module.quantified_helper_formulas(infix_prefix) == []
+    assert module.quantified_helper_formulas(
+        f"[] (LET selected == {existential_relation_prefix} IN selected)"
+    ) == []
+    assert module.unary_temporal_quantified_formulas(
+        f"[] ({existential_relation_prefix})"
+    ) == []
+    assert module.control_flow_quantified_helper_formulas(relation_prefix) == []
+    assert module.control_flow_quantified_helper_formulas(infix_prefix) == []
+    assert module.existential_quantified_helper_formulas(
+        existential_relation_prefix
+    ) == []
+    assert module.negated_quantified_helper_formulas(f"~({relation_prefix})") == []
 
 
 def test_vacuous_quantified_helper_formulas_detect_static_contradictions() -> None:
@@ -4289,6 +4628,21 @@ def test_unused_bound_quantified_helper_formulas_require_body_use() -> None:
     assert not module.quantified_formula_has_empty_bound_domain(
         '\\A c \\in {"left \\" : right"}: Predicate(c)'
     )
+    assert module.quantified_formula_prefix_and_body(
+        "\\A c \\in <<Left :> Right>>: Predicate(c)"
+    ) == ("\\A c \\in <<Left :> Right>>", "Predicate(c)")
+    assert module.tla_quantifier_scope(
+        "\\A c \\in <<Left :> Right>>: Predicate(c)"
+    ) == (["<<Left :> Right>>"], "Predicate(c)", {"c"})
+    assert module.quantified_formula_bound_domains(
+        "\\A c \\in <<Left :> Right>>: Predicate(c)"
+    ) == {"c": "<<Left :> Right>>"}
+    assert module.quantified_formula_domain_expressions(
+        "\\A c \\in <<Left :> Right>>: Predicate(c)"
+    ) == ["<<Left :> Right>>"]
+    assert module.quantified_helper_formulas(
+        "\\A c \\in <<Left :> Right>>: Predicate(c)"
+    ) == ["\\A c \\in <<Left :> Right>>: Predicate(c)"]
     assert module.tla_quantifier_prefixes(
         '\\A c \\in "left \\" : right": Predicate(c)'
     ) == ['\\A c \\in "left \\" : right"']
@@ -4327,9 +4681,46 @@ def test_unused_bound_quantified_helper_formulas_require_body_use() -> None:
     assert module.quantified_formula_bound_identifiers(
         "\\A c \\in Cases, d, e \\in Other: Predicate(c, d, e)"
     ) == {"c", "d", "e"}
+    assert module.quantified_formula_bound_identifier_sequence(
+        "\\A c, d \\in Cases: Predicate(c, d)"
+    ) == ["c", "d"]
+    assert module.quantified_formula_bound_identifier_sequence(
+        "\\A c \\in Cases, <<d, e>> \\in Pairs: Predicate(c, d, e)"
+    ) == ["c", "d", "e"]
+    assert module.quantified_formula_duplicate_bound_identifiers(
+        "\\A c, c \\in Cases: Predicate(c)"
+    ) == ["c"]
+    assert module.quantified_formula_duplicate_bound_identifiers(
+        "\\A c \\in Cases, c \\in Other: Predicate(c)"
+    ) == ["c"]
+    assert module.quantified_formula_duplicate_bound_identifiers(
+        "\\A <<c, c>> \\in Pairs: Predicate(c)"
+    ) == ["c"]
+    assert module.quantified_formula_duplicate_bound_identifiers(
+        "\\A c, <<d, c>> \\in Pairs: Predicate(c, d)"
+    ) == ["c"]
+    assert module.duplicate_bound_quantified_helper_formulas(
+        "\\A c, c \\in Cases: Predicate(c)"
+    ) == ["\\A c, c \\in Cases: Predicate(c) duplicates bound c"]
+    assert module.duplicate_bound_quantified_helper_formulas(
+        "\\A c \\in Cases, <<d, c>> \\in Pairs: Predicate(c, d)"
+    ) == [
+        "\\A c \\in Cases, <<d, c>> \\in Pairs: Predicate(c, d) "
+        "duplicates bound c"
+    ]
+    assert module.duplicate_bound_quantified_helper_formulas(
+        "\\A c \\in Cases, d \\in Other: Predicate(c, d)"
+    ) == []
     assert module.unused_bound_quantified_helper_formulas(
         "\\A c \\in Cases: ConcretePredicate"
     ) == ["\\A c \\in Cases: ConcretePredicate omits bound c"]
+    assert module.unused_bound_quantified_helper_formulas(
+        "\\A c: ConcretePredicate"
+    ) == ["\\A c: ConcretePredicate omits bound c"]
+    assert module.unused_bound_quantified_helper_formulas(
+        "\\E c, d: Predicate(c)"
+    ) == ["\\E c, d: Predicate(c) omits bound d"]
+    assert module.unused_bound_quantified_helper_formulas("\\A c: Predicate(c)") == []
     assert module.unused_bound_quantified_helper_formulas(
         '\\A c \\in Cases: label = "c" /\\ ConcretePredicate'
     ) == ['\\A c \\in Cases: label = "c" /\\ ConcretePredicate omits bound c']
@@ -4744,9 +5135,40 @@ def test_direct_operator_call_name_accepts_expression_arguments() -> None:
         "<<Left /\\ Right, Tail>>",
     ]
     assert module.tla_top_level_membership_parts("<<c \\in Cases, tail>>") is None
+    assert module.tla_top_level_membership_parts("Left \\subseteq Right") is None
+    assert module.tla_top_level_subset_relation_parts("Left \\subseteq Right") == (
+        "Left",
+        "\\subseteq",
+        "Right",
+    )
+    assert module.tla_top_level_relation_parts("Left \\subseteq Right") == (
+        "Left",
+        "\\subseteq",
+        "Right",
+    )
     assert (
         module.tla_top_level_equality_relation_parts("<<c = c, tail>>") is None
     )
+    assert module.tla_top_level_equality_relation_parts("Left = Right") == (
+        "Left",
+        "=",
+        "Right",
+    )
+    for wrapped_relation in (
+        "IF Left = Right THEN Good ELSE Bad",
+        "CASE Left = Right -> Good [] OTHER -> Bad",
+        "LET selected == Left = Right IN selected",
+        "CHOOSE Left \\in Cases: Left = Right",
+        "ENABLED Left = Right",
+        "UNCHANGED Left = Right",
+        "[] Left = Right",
+        "<> Left = Right",
+        "~Left = Right",
+    ):
+        assert module.tla_top_level_equality_relation_parts(wrapped_relation) is None
+        assert module.tla_top_level_relation_parts(wrapped_relation) is None
+        assert module.tla_top_level_relation_operator(wrapped_relation) is None
+        assert not module.tla_has_top_level_equality(wrapped_relation)
     assert module.tla_top_level_order_relation_parts("Left => Right") is None
     assert module.tla_top_level_order_relation_parts("Left <=> Right") is None
     assert module.tla_top_level_order_relation_parts("<<c < d, tail>>") is None
@@ -4757,6 +5179,38 @@ def test_direct_operator_call_name_accepts_expression_arguments() -> None:
     assert module.tla_top_level_static_infix_operands(
         "Left \\cup {Right, Tail}"
     ) == ["Left", "{Right, Tail}"]
+    assert module.tla_top_level_static_infix_operands("Left \\union Right") == [
+        "Left",
+        "Right",
+    ]
+    assert module.tla_top_level_static_infix_operands("Left \\intersect Right") == [
+        "Left",
+        "Right",
+    ]
+    assert module.tla_top_level_static_infix_operands("Left \\setminus Right") == [
+        "Left",
+        "Right",
+    ]
+    assert module.tla_top_level_static_infix_operands("Left \\cdot Right") == [
+        "Left",
+        "Right",
+    ]
+    assert module.tla_top_level_static_infix_operands("Left \\o Right") == [
+        "Left",
+        "Right",
+    ]
+    assert module.tla_top_level_static_infix_operands("Left @@ Right") == [
+        "Left",
+        "Right",
+    ]
+    assert module.tla_top_level_static_infix_operands("Left :> Right") == [
+        "Left",
+        "Right",
+    ]
+    assert module.tla_top_level_static_infix_operands("Left ^ Right") == [
+        "Left",
+        "Right",
+    ]
     assert module.tla_top_level_static_infix_operands(
         "<<Left + Right, Tail>>"
     ) is None
@@ -5491,6 +5945,12 @@ def test_tla_module_validation_errors_check_reachable_dependency_modules(
         f"frontier-fast: {helper} declares MODULE DriftedHelpers, "
         "expected LocalHelpers",
         f"frontier-fast: {helper}:4 uses top-level AXIOM directive; "
+        "Sumeragi formal modules must be assumption-free",
+    ]
+    assert module.tla_module_validation_errors("frontier-deep", root) == [
+        f"frontier-deep: {helper} declares MODULE DriftedHelpers, "
+        "expected LocalHelpers",
+        f"frontier-deep: {helper}:4 uses top-level AXIOM directive; "
         "Sumeragi formal modules must be assumption-free",
     ]
 
@@ -10165,6 +10625,8 @@ def test_cfg_correctness_envelope_shape_errors_rejects_vacuous_quantified_exactn
 
     for case_name, formula, expected_line in (
         ("literal", "\\A c \\in Cases: TRUE", 6),
+        ("unbounded_literal", "\\A c: TRUE", 6),
+        ("unbounded_unary_temporal_literal", "\\E c: [] FALSE", 6),
         (
             "chained_let_literal",
             "\\A c \\in Cases: LET first == TRUE second == first IN second",
@@ -10306,6 +10768,58 @@ def test_cfg_correctness_envelope_shape_errors_rejects_vacuous_quantified_exactn
             "self-inequality, empty-domain, singleton-domain, self-membership, or empty-set membership quantified helper bodies "
             "out of exactness predicate chains"
         ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_duplicate_bound_quantified_exactness_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDuplicateBoundQuantifiedEnvelope.tla"
+    cfg = tmp_path / "SumeragiDuplicateBoundQuantifiedEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDuplicateBoundQuantifiedEnvelope ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcretePredicate(c) == ready = c",
+                "DuplicateBoundLeaf == \\A c, c \\in Cases: ConcretePredicate(c)",
+                "DuplicateBoundQuantifiedExactness ==",
+                "  /\\ DuplicateBoundLeaf",
+                "DuplicateBoundQuantifiedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DuplicateBoundQuantifiedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT DuplicateBoundQuantifiedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "duplicate-bound-quantified-envelope-fast", tla, cfg, "TLC"
+    ) == [
+        f"duplicate-bound-quantified-envelope-fast: TLC cfg {cfg}:4 "
+        "references correctness envelope "
+        "DuplicateBoundQuantifiedCorrectnessEnvelope, but exactness conjunct "
+        f"DuplicateBoundQuantifiedExactness at {tla}:9 contains transitive "
+        "exactness predicate chain with duplicate quantified helper binding "
+        "DuplicateBoundLeaf reaches \\A c, c \\in Cases: ConcretePredicate(c) "
+        f"duplicates bound c through DuplicateBoundLeaf at {tla}:7; bind each "
+        "quantified identifier once before composing exactness predicate chains"
+    ]
 
 
 def test_cfg_correctness_envelope_shape_errors_rejects_unused_bound_quantified_exactness_helper(
@@ -10729,6 +11243,132 @@ def test_undefined_static_helper_identifiers_ignore_quantifier_context(
         exactness_operator="IdentifierScanExactness",
     ) == ["MissingHelper"]
 
+    unbounded_quantifier_bound_only = (
+        "\\A MissingHelper, OtherHelper: "
+        "MissingHelper /\\ OtherHelper /\\ Known"
+    )
+    assert module.tla_quantified_bound_identifiers(
+        unbounded_quantifier_bound_only
+    ) == {
+        "MissingHelper",
+        "OtherHelper",
+    }
+    assert module.tla_quantifier_scope(unbounded_quantifier_bound_only) == (
+        [],
+        "MissingHelper /\\ OtherHelper /\\ Known",
+        {"MissingHelper", "OtherHelper"},
+    )
+    assert module.tla_free_static_identifiers(
+        unbounded_quantifier_bound_only
+    ) == {"Known"}
+    assert module.undefined_static_helper_identifiers(
+        unbounded_quantifier_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    unbounded_quantifier_body_free = (
+        "\\E <<MissingLeft, MissingRight>>: "
+        "MissingLeft /\\ MissingRight /\\ FreeMissing"
+    )
+    assert module.tla_quantified_bound_identifiers(
+        unbounded_quantifier_body_free
+    ) == {
+        "MissingLeft",
+        "MissingRight",
+    }
+    assert module.tla_free_static_identifiers(unbounded_quantifier_body_free) == {
+        "FreeMissing"
+    }
+    assert module.undefined_static_helper_identifiers(
+        unbounded_quantifier_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    quantifier_subset_relation_prefix_not_bound = (
+        "\\A MissingHelper \\subseteq MissingDomain: "
+        "MissingHelper /\\ FreeMissing"
+    )
+    assert module.tla_quantifier_scope(
+        quantifier_subset_relation_prefix_not_bound
+    ) is None
+    assert module.tla_quantified_bound_identifiers(
+        quantifier_subset_relation_prefix_not_bound
+    ) == set()
+    assert module.tla_free_static_identifiers(
+        quantifier_subset_relation_prefix_not_bound
+    ) == {
+        "FreeMissing",
+        "MissingDomain",
+        "MissingHelper",
+    }
+    assert module.undefined_static_helper_identifiers(
+        quantifier_subset_relation_prefix_not_bound,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing", "MissingDomain", "MissingHelper"]
+
+    quantifier_nonmembership_prefix_not_bound = (
+        "\\E MissingHelper \\notin MissingDomain: "
+        "MissingHelper /\\ FreeMissing"
+    )
+    assert module.tla_quantifier_scope(
+        quantifier_nonmembership_prefix_not_bound
+    ) is None
+    assert module.tla_free_static_identifiers(
+        quantifier_nonmembership_prefix_not_bound
+    ) == {
+        "FreeMissing",
+        "MissingDomain",
+        "MissingHelper",
+    }
+    assert module.undefined_static_helper_identifiers(
+        quantifier_nonmembership_prefix_not_bound,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing", "MissingDomain", "MissingHelper"]
+
+    quantifier_infix_prefix_not_bound = (
+        "\\A MissingHelper \\cup MissingDomain: "
+        "MissingHelper /\\ FreeMissing"
+    )
+    assert module.tla_binding_identifiers_from_names(
+        "MissingHelper \\cup MissingDomain"
+    ) == set()
+    assert module.tla_binding_identifiers_from_names(
+        "<<MissingLeft, MissingRight>>"
+    ) == {
+        "MissingLeft",
+        "MissingRight",
+    }
+    assert module.tla_quantifier_scope(quantifier_infix_prefix_not_bound) is None
+    assert module.tla_quantified_bound_identifiers(
+        quantifier_infix_prefix_not_bound
+    ) == set()
+    assert module.tla_free_static_identifiers(
+        quantifier_infix_prefix_not_bound
+    ) == {
+        "FreeMissing",
+        "MissingDomain",
+        "MissingHelper",
+    }
+    assert module.undefined_static_helper_identifiers(
+        quantifier_infix_prefix_not_bound,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing", "MissingDomain", "MissingHelper"]
+
     standard_tla_string_set = "Known(Case) /\\ Case \\in STRING"
     assert module.tla_free_static_identifiers(standard_tla_string_set) == {
         "Case",
@@ -11023,6 +11663,127 @@ def test_undefined_static_helper_identifiers_ignore_quantifier_context(
         exactness_operator="IdentifierScanExactness",
     ) == ["FreeMissing"]
 
+    set_synonym_infix_body_free = (
+        "ConcreteRecord.MissingField \\union OtherRecord.OtherField "
+        "\\setminus {FreeMissing}"
+    )
+    assert module.tla_top_level_static_infix_operands(
+        set_synonym_infix_body_free
+    ) == [
+        "ConcreteRecord.MissingField",
+        "OtherRecord.OtherField",
+        "{FreeMissing}",
+    ]
+    assert module.tla_free_static_identifiers(set_synonym_infix_body_free) == {
+        "ConcreteRecord",
+        "FreeMissing",
+        "OtherRecord",
+    }
+    assert module.undefined_static_helper_identifiers(
+        set_synonym_infix_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    math_infix_body_free = (
+        "ConcreteRecord.MissingField ^ OtherRecord.OtherField \\cdot FreeMissing"
+    )
+    assert module.tla_top_level_static_infix_operands(math_infix_body_free) == [
+        "ConcreteRecord.MissingField",
+        "OtherRecord.OtherField",
+        "FreeMissing",
+    ]
+    assert module.tla_free_static_identifiers(math_infix_body_free) == {
+        "ConcreteRecord",
+        "FreeMissing",
+        "OtherRecord",
+    }
+    assert module.undefined_static_helper_identifiers(
+        math_infix_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    sequence_infix_body_free = "ConcreteRecord.MissingField \\o <<FreeMissing>>"
+    assert module.tla_top_level_static_infix_operands(sequence_infix_body_free) == [
+        "ConcreteRecord.MissingField",
+        "<<FreeMissing>>",
+    ]
+    assert module.tla_free_static_identifiers(sequence_infix_body_free) == {
+        "ConcreteRecord",
+        "FreeMissing",
+    }
+    assert module.undefined_static_helper_identifiers(
+        sequence_infix_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    override_infix_field_bound_only = (
+        "ConcreteRecord.MissingField @@ OtherRecord.OtherField"
+    )
+    assert module.tla_top_level_static_infix_operands(
+        override_infix_field_bound_only
+    ) == [
+        "ConcreteRecord.MissingField",
+        "OtherRecord.OtherField",
+    ]
+    assert module.tla_free_static_identifiers(override_infix_field_bound_only) == {
+        "ConcreteRecord",
+        "OtherRecord",
+    }
+    assert module.undefined_static_helper_identifiers(
+        override_infix_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
+    maplet_infix_body_free = "ConcreteRecord.MissingField :> FreeMissing"
+    assert module.tla_top_level_relation_parts(maplet_infix_body_free) is None
+    assert module.tla_top_level_static_infix_operands(maplet_infix_body_free) == [
+        "ConcreteRecord.MissingField",
+        "FreeMissing",
+    ]
+    assert module.tla_free_static_identifiers(maplet_infix_body_free) == {
+        "ConcreteRecord",
+        "FreeMissing",
+    }
+    assert module.undefined_static_helper_identifiers(
+        maplet_infix_body_free,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing"]
+
+    subset_relation_field_bound_only = (
+        "ConcreteRecord.MissingField \\subseteq OtherRecord.OtherField"
+    )
+    assert module.tla_top_level_relation_parts(subset_relation_field_bound_only) == (
+        "ConcreteRecord.MissingField",
+        "\\subseteq",
+        "OtherRecord.OtherField",
+    )
+    assert module.tla_free_static_identifiers(subset_relation_field_bound_only) == {
+        "ConcreteRecord",
+        "OtherRecord",
+    }
+    assert module.undefined_static_helper_identifiers(
+        subset_relation_field_bound_only,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == []
+
     call_argument_infix_body_free = (
         "Known(ConcreteRecord.MissingField + FreeMissing)"
     )
@@ -11298,6 +12059,44 @@ def test_undefined_static_helper_identifiers_ignore_quantifier_context(
         exactness_operator="IdentifierScanExactness",
     ) == ["FreeMissing"]
 
+    lambda_subset_relation_prefix_not_bound = (
+        "LAMBDA MissingHelper \\subseteq Cases: MissingHelper /\\ FreeMissing"
+    )
+    assert module.tla_lambda_scope(lambda_subset_relation_prefix_not_bound) is None
+    assert module.tla_free_static_identifiers(
+        lambda_subset_relation_prefix_not_bound
+    ) == {
+        "Cases",
+        "FreeMissing",
+        "MissingHelper",
+    }
+    assert module.undefined_static_helper_identifiers(
+        lambda_subset_relation_prefix_not_bound,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing", "MissingHelper"]
+
+    lambda_equality_relation_prefix_not_bound = (
+        "LAMBDA MissingHelper # Cases: MissingHelper /\\ FreeMissing"
+    )
+    assert module.tla_lambda_scope(lambda_equality_relation_prefix_not_bound) is None
+    assert module.tla_free_static_identifiers(
+        lambda_equality_relation_prefix_not_bound
+    ) == {
+        "Cases",
+        "FreeMissing",
+        "MissingHelper",
+    }
+    assert module.undefined_static_helper_identifiers(
+        lambda_equality_relation_prefix_not_bound,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing", "MissingHelper"]
+
     lambda_application_argument_free = (
         "(LAMBDA MissingHelper \\in Cases: MissingHelper)[Known]"
     )
@@ -11355,6 +12154,48 @@ def test_undefined_static_helper_identifiers_ignore_quantifier_context(
         current="Known",
         exactness_operator="IdentifierScanExactness",
     ) == ["MissingHelper"]
+
+    choose_subset_relation_prefix_not_bound = (
+        "CHOOSE MissingHelper \\subseteq Cases: MissingHelper /\\ FreeMissing"
+    )
+    assert module.tla_choose_binding_identifiers(
+        "CHOOSE MissingHelper \\subseteq Cases"
+    ) is None
+    assert module.tla_free_static_identifiers(
+        choose_subset_relation_prefix_not_bound
+    ) == {
+        "Cases",
+        "FreeMissing",
+        "MissingHelper",
+    }
+    assert module.undefined_static_helper_identifiers(
+        choose_subset_relation_prefix_not_bound,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing", "MissingHelper"]
+
+    choose_nonmembership_prefix_not_bound = (
+        "CHOOSE MissingHelper \\notin Cases: MissingHelper /\\ FreeMissing"
+    )
+    assert module.tla_choose_binding_identifiers(
+        "CHOOSE MissingHelper \\notin Cases"
+    ) is None
+    assert module.tla_free_static_identifiers(
+        choose_nonmembership_prefix_not_bound
+    ) == {
+        "Cases",
+        "FreeMissing",
+        "MissingHelper",
+    }
+    assert module.undefined_static_helper_identifiers(
+        choose_nonmembership_prefix_not_bound,
+        definitions,
+        tla,
+        current="Known",
+        exactness_operator="IdentifierScanExactness",
+    ) == ["FreeMissing", "MissingHelper"]
 
     set_bound_only = "{MissingHelper \\in Cases: Known /\\ MissingHelper}"
     assert module.tla_free_static_identifiers(set_bound_only) == {
@@ -11603,7 +12444,37 @@ def test_undefined_static_helper_identifiers_ignore_quantifier_context(
         "Cases",
         "[MissingField |-> Known]",
     )
+    assert module.tla_function_set_scope(
+        "[Cases -> CASE Ready -> Known [] OTHER -> Known]"
+    ) == (
+        "Cases",
+        "CASE Ready -> Known [] OTHER -> Known",
+    )
+    assert module.tla_function_set_scope(
+        "[CASE Ready -> Known [] OTHER -> Known -> Cases]"
+    ) == (
+        "CASE Ready -> Known [] OTHER -> Known",
+        "Cases",
+    )
     assert module.tla_function_set_scope("[MissingField |-> Known]") is None
+    assert (
+        module.tla_function_set_scope(
+            "[MissingField |-> CASE Ready -> Known [] OTHER -> Known]"
+        )
+        is None
+    )
+    assert (
+        module.tla_function_set_scope(
+            "[MissingField: CASE Ready -> Known [] OTHER -> Known]"
+        )
+        is None
+    )
+    assert (
+        module.tla_function_set_scope(
+            "[record EXCEPT !.field = CASE Ready -> Known [] OTHER -> Known]"
+        )
+        is None
+    )
     assert module.tla_free_static_identifiers(
         function_set_record_range_bound_only
     ) == {"Cases", "Known"}
@@ -12516,6 +13387,88 @@ def test_transitive_undefined_quantified_exactness_conjuncts_preserves_arithmeti
     ]
 
 
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_sequence_function_infix_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiSequenceFunctionInfixQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiSequenceFunctionInfixQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcreteRecord == [Present |-> TRUE]",
+                "OtherRecord == [Present |-> TRUE]",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    /\\ ConcreteRecord.MissingField \\o <<FreeMissing>>",
+                "    /\\ ConcreteRecord.MissingField @@ OtherRecord.OtherField",
+                "    /\\ ConcreteRecord.MissingField :> FreeMissing",
+                "    /\\ ConcreteRecord.MissingField \\subseteq OtherRecord.OtherField",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches FreeMissing through QuantifiedLeaf at {tla}:9"
+    ]
+
+
+def test_transitive_undefined_quantified_exactness_conjuncts_preserves_relation_bearing_binding_prefix_scope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiRelationBindingPrefixQuantifiedUndefined.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiRelationBindingPrefixQuantifiedUndefined ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "QuantifiedLeaf ==",
+                "  \\A Case \\in Cases:",
+                "    /\\ CHOOSE MissingHelper \\subseteq Cases: MissingHelper",
+                "    /\\ LAMBDA MissingHelper # Cases: MissingHelper",
+                "QuantifiedUndefinedExactness ==",
+                "  /\\ QuantifiedLeaf",
+                "QuantifiedUndefinedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ QuantifiedUndefinedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definitions = module.tla_single_expression_operator_definitions(tla)
+    assert module.transitive_undefined_quantified_exactness_conjuncts(
+        "QuantifiedUndefinedExactness",
+        "/\\ QuantifiedLeaf",
+        definitions,
+        tla,
+    ) == [
+        f"QuantifiedLeaf reaches MissingHelper through QuantifiedLeaf at {tla}:7"
+    ]
+
+
 def test_transitive_undefined_quantified_exactness_conjuncts_preserves_set_literal_and_unary_set_scope(
     tmp_path: Path,
 ) -> None:
@@ -12898,6 +13851,455 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_quantified
         "QuantifiedWrapper reaches \\A c \\in Cases: Predicate(c) through "
         f"QuantifiedWrapper at {tla}:7; name quantified model predicates "
         "before composing exactness predicate chains"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_static_wrapped_quantified_exactness_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiStaticWrappedQuantifiedEnvelope.tla"
+    cfg = tmp_path / "SumeragiStaticWrappedQuantifiedEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiStaticWrappedQuantifiedEnvelope ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "Predicate(c) == checked = c",
+                "QuantifiedWrapper == SUBSET (\\A c \\in Cases: Predicate(c))",
+                "StaticWrappedQuantifiedExactness ==",
+                "  /\\ QuantifiedWrapper",
+                "StaticWrappedQuantifiedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ StaticWrappedQuantifiedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT StaticWrappedQuantifiedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "static-wrapped-quantified-envelope-fast",
+        tla,
+        cfg,
+        "TLC",
+    ) == [
+        "static-wrapped-quantified-envelope-fast: TLC cfg "
+        f"{cfg}:4 references correctness envelope "
+        "StaticWrappedQuantifiedCorrectnessEnvelope, but exactness conjunct "
+        f"StaticWrappedQuantifiedExactness at {tla}:9 contains transitive "
+        "exactness predicate chain with static-wrapper quantified formula "
+        "QuantifiedWrapper reaches SUBSET wraps "
+        "\\A c \\in Cases: Predicate(c) through QuantifiedWrapper at "
+        f"{tla}:7; name quantified model predicates before composing "
+        "exactness predicate chains"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_structured_quantified_exactness_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiStructuredQuantifiedEnvelope.tla"
+    cfg = tmp_path / "SumeragiStructuredQuantifiedEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiStructuredQuantifiedEnvelope ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "Predicate(c) == checked = c",
+                "QuantifiedWrapper == [Field |-> \\A c \\in Cases: Predicate(c)]",
+                "StructuredQuantifiedExactness ==",
+                "  /\\ QuantifiedWrapper",
+                "StructuredQuantifiedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ StructuredQuantifiedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT StructuredQuantifiedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "structured-quantified-envelope-fast",
+        tla,
+        cfg,
+        "TLC",
+    ) == [
+        "structured-quantified-envelope-fast: TLC cfg "
+        f"{cfg}:4 references correctness envelope "
+        "StructuredQuantifiedCorrectnessEnvelope, but exactness conjunct "
+        f"StructuredQuantifiedExactness at {tla}:9 contains transitive "
+        "exactness predicate chain with structured quantified formula "
+        "QuantifiedWrapper reaches record literal contains "
+        "\\A c \\in Cases: Predicate(c) through QuantifiedWrapper at "
+        f"{tla}:7; name quantified model predicates before placing them in "
+        "structured helper operands"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_structured_control_flow_exactness_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiStructuredControlFlowEnvelope.tla"
+    cfg = tmp_path / "SumeragiStructuredControlFlowEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiStructuredControlFlowEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcreteLeaf == checked = ready",
+                "FallbackLeaf == checked = committed",
+                "StructuredWrapper == [Field |-> IF Ready THEN ConcreteLeaf ELSE FallbackLeaf]",
+                "StructuredControlFlowExactness ==",
+                "  /\\ StructuredWrapper",
+                "StructuredControlFlowCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ StructuredControlFlowExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT StructuredControlFlowCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "structured-control-flow-envelope-fast",
+        tla,
+        cfg,
+        "TLC",
+    ) == [
+        "structured-control-flow-envelope-fast: TLC cfg "
+        f"{cfg}:4 references correctness envelope "
+        "StructuredControlFlowCorrectnessEnvelope, but exactness conjunct "
+        f"StructuredControlFlowExactness at {tla}:9 contains transitive "
+        "exactness predicate chain with structured control-flow "
+        "predicate-selection helper StructuredWrapper reaches record literal "
+        "contains IF expression IF Ready THEN ConcreteLeaf ELSE FallbackLeaf "
+        f"through StructuredWrapper at {tla}:7; name concrete model "
+        "predicates before placing them in structured helper operands"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_bare_case_record_control_flow_exactness_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiStructuredCaseControlFlowEnvelope.tla"
+    cfg = tmp_path / "SumeragiStructuredCaseControlFlowEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiStructuredCaseControlFlowEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcreteLeaf == checked = ready",
+                "FallbackLeaf == checked = committed",
+                "StructuredWrapper == [Field |-> CASE Ready -> ConcreteLeaf [] OTHER -> FallbackLeaf]",
+                "StructuredControlFlowExactness ==",
+                "  /\\ StructuredWrapper",
+                "StructuredControlFlowCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ StructuredControlFlowExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT StructuredControlFlowCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "structured-case-control-flow-envelope-fast",
+        tla,
+        cfg,
+        "TLC",
+    ) == [
+        "structured-case-control-flow-envelope-fast: TLC cfg "
+        f"{cfg}:4 references correctness envelope "
+        "StructuredControlFlowCorrectnessEnvelope, but exactness conjunct "
+        f"StructuredControlFlowExactness at {tla}:9 contains transitive "
+        "exactness predicate chain with structured control-flow "
+        "predicate-selection helper StructuredWrapper reaches record literal "
+        "contains CASE expression CASE Ready -> ConcreteLeaf [] OTHER -> "
+        f"FallbackLeaf through StructuredWrapper at {tla}:7; name concrete "
+        "model predicates before placing them in structured helper operands"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_bare_case_record_set_control_flow_exactness_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiStructuredCaseRecordSetEnvelope.tla"
+    cfg = tmp_path / "SumeragiStructuredCaseRecordSetEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiStructuredCaseRecordSetEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcreteLeaf == checked = ready",
+                "FallbackLeaf == checked = committed",
+                "StructuredWrapper == [Field: CASE Ready -> ConcreteLeaf [] OTHER -> FallbackLeaf]",
+                "StructuredControlFlowExactness ==",
+                "  /\\ StructuredWrapper",
+                "StructuredControlFlowCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ StructuredControlFlowExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT StructuredControlFlowCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "structured-case-record-set-envelope-fast",
+        tla,
+        cfg,
+        "TLC",
+    ) == [
+        "structured-case-record-set-envelope-fast: TLC cfg "
+        f"{cfg}:4 references correctness envelope "
+        "StructuredControlFlowCorrectnessEnvelope, but exactness conjunct "
+        f"StructuredControlFlowExactness at {tla}:9 contains transitive "
+        "exactness predicate chain with structured control-flow "
+        "predicate-selection helper StructuredWrapper reaches record set "
+        "contains CASE expression CASE Ready -> ConcreteLeaf [] OTHER -> "
+        f"FallbackLeaf through StructuredWrapper at {tla}:7; name concrete "
+        "model predicates before placing them in structured helper operands"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_bare_case_record_update_control_flow_exactness_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiStructuredCaseRecordUpdateEnvelope.tla"
+    cfg = tmp_path / "SumeragiStructuredCaseRecordUpdateEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiStructuredCaseRecordUpdateEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcreteLeaf == checked = ready",
+                "FallbackLeaf == checked = committed",
+                "record == [field |-> 0]",
+                "StructuredWrapper == [record EXCEPT !.field = CASE Ready -> ConcreteLeaf [] OTHER -> FallbackLeaf]",
+                "StructuredControlFlowExactness ==",
+                "  /\\ StructuredWrapper",
+                "StructuredControlFlowCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ StructuredControlFlowExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT StructuredControlFlowCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "structured-case-record-update-envelope-fast",
+        tla,
+        cfg,
+        "TLC",
+    ) == [
+        "structured-case-record-update-envelope-fast: TLC cfg "
+        f"{cfg}:4 references correctness envelope "
+        "StructuredControlFlowCorrectnessEnvelope, but exactness conjunct "
+        f"StructuredControlFlowExactness at {tla}:10 contains transitive "
+        "exactness predicate chain with structured control-flow "
+        "predicate-selection helper StructuredWrapper reaches record update "
+        "contains CASE expression CASE Ready -> ConcreteLeaf [] OTHER -> "
+        f"FallbackLeaf through StructuredWrapper at {tla}:8; name concrete "
+        "model predicates before placing them in structured helper operands"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_bare_case_function_set_domain_control_flow_exactness_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiStructuredCaseFunctionSetDomainEnvelope.tla"
+    cfg = tmp_path / "SumeragiStructuredCaseFunctionSetDomainEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiStructuredCaseFunctionSetDomainEnvelope ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ConcreteLeaf == checked = ready",
+                "FallbackLeaf == checked = committed",
+                "StructuredWrapper == [CASE Ready -> ConcreteLeaf [] OTHER -> FallbackLeaf -> Cases]",
+                "StructuredControlFlowExactness ==",
+                "  /\\ StructuredWrapper",
+                "StructuredControlFlowCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ StructuredControlFlowExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT StructuredControlFlowCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "structured-case-function-set-domain-envelope-fast",
+        tla,
+        cfg,
+        "TLC",
+    ) == [
+        "structured-case-function-set-domain-envelope-fast: TLC cfg "
+        f"{cfg}:4 references correctness envelope "
+        "StructuredControlFlowCorrectnessEnvelope, but exactness conjunct "
+        f"StructuredControlFlowExactness at {tla}:10 contains transitive "
+        "exactness predicate chain with structured control-flow "
+        "predicate-selection helper StructuredWrapper reaches function set "
+        "contains CASE expression CASE Ready -> ConcreteLeaf [] OTHER -> "
+        f"FallbackLeaf through StructuredWrapper at {tla}:8; name concrete "
+        "model predicates before placing them in structured helper operands"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_structured_literal_exactness_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiStructuredLiteralEnvelope.tla"
+    cfg = tmp_path / "SumeragiStructuredLiteralEnvelope_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiStructuredLiteralEnvelope ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "LiteralLeaf == TRUE",
+                "StructuredWrapper == [Field |-> LiteralLeaf]",
+                "StructuredExactness ==",
+                "  /\\ StructuredWrapper",
+                "StructuredCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ StructuredExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT StructuredCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "structured-literal-fast",
+        tla,
+        cfg,
+        "TLC",
+    ) == [
+        "structured-literal-fast: TLC cfg "
+        f"{cfg}:4 references correctness envelope "
+        "StructuredCorrectnessEnvelope, but exactness conjunct "
+        f"StructuredExactness at {tla}:8 contains transitive exactness "
+        "predicate chain with vacuous conjunct StructuredWrapper reaches "
+        "LiteralLeaf through StructuredWrapper -> LiteralLeaf at "
+        f"{tla}:5 is literal TRUE; keep literal, self-equality, "
+        "self-inequality, and alias helpers out of named exactness predicate "
+        "chains"
     ]
 
 
@@ -17557,6 +18959,8 @@ def test_cfg_correctness_envelope_shape_errors_rejects_vacuous_quantified_tempor
 
     for case_name, formula, expected_line in (
         ("literal", "\\A c \\in Cases: TRUE", 9),
+        ("unbounded_literal", "\\A c: TRUE", 9),
+        ("unbounded_unary_temporal_literal", "\\E c: [] FALSE", 9),
         (
             "let_alias_literal",
             "\\A c \\in Cases: LET selected == TRUE IN selected",
@@ -17706,6 +19110,240 @@ def test_cfg_correctness_envelope_shape_errors_rejects_vacuous_quantified_tempor
             "empty-domain, singleton-domain, self-membership, or empty-set membership quantified helper "
             "bodies out of allowlisted temporal side-conjunct chains"
         ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_duplicate_bound_quantified_temporal_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "ConcreteTemporalPredicate(c) == c = committed",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "DuplicateBoundTemporalLeaf == \\A c, c \\in Cases: ConcreteTemporalPredicate(c)",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] DuplicateBoundTemporalLeaf",
+                "EventuallyCommit == [] (Gst => <> Committed)",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        "allowlisted temporal conjunct "
+        "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope at "
+        f"{tla}:11 contains transitive temporal side-conjunct chain with "
+        "duplicate quantified helper binding DuplicateBoundTemporalLeaf reaches "
+        "\\A c, c \\in Cases: ConcreteTemporalPredicate(c) duplicates bound c "
+        f"through DuplicateBoundTemporalLeaf at {tla}:10; bind each quantified "
+        "identifier once before composing allowlisted temporal side-conjunct "
+        "chains"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_static_wrapped_quantified_temporal_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "Predicate(c) == c = committed",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "StaticWrappedTemporalLeaf == SUBSET (\\A c \\in Cases: Predicate(c))",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] StaticWrappedTemporalLeaf",
+                "EventuallyCommit == [] (Gst => <> Committed)",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        "allowlisted temporal conjunct "
+        "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope at "
+        f"{tla}:11 contains transitive temporal side-conjunct chain with "
+        "static-wrapper quantified formula StaticWrappedTemporalLeaf reaches "
+        "SUBSET wraps \\A c \\in Cases: Predicate(c) through "
+        f"StaticWrappedTemporalLeaf at {tla}:10; name quantified temporal "
+        "predicates before composing allowlisted temporal side-conjunct chains"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_structured_quantified_temporal_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "CONSTANT Cases",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "Predicate(c) == c = committed",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "StructuredTemporalLeaf == [Field |-> \\A c \\in Cases: Predicate(c)]",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] StructuredTemporalLeaf",
+                "EventuallyCommit == [] (Gst => <> Committed)",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        "allowlisted temporal conjunct "
+        "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope at "
+        f"{tla}:11 contains transitive temporal side-conjunct chain with "
+        "structured quantified formula StructuredTemporalLeaf reaches record "
+        "literal contains \\A c \\in Cases: Predicate(c) through "
+        f"StructuredTemporalLeaf at {tla}:10; name quantified temporal "
+        "predicates before placing them in structured helper operands"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_structured_control_flow_temporal_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "ConcreteTemporal == [] (Gst => <> Done)",
+                "FallbackTemporal == [] (Gst => <> Fallback)",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "StructuredTemporalLeaf == [Field |-> IF Ready THEN ConcreteTemporal ELSE FallbackTemporal]",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] StructuredTemporalLeaf",
+                "EventuallyCommit == [] (Gst => <> Committed)",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        "allowlisted temporal conjunct "
+        "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope at "
+        f"{tla}:11 contains transitive temporal side-conjunct chain with "
+        "structured control-flow predicate-selection helper "
+        "StructuredTemporalLeaf reaches record literal contains IF expression "
+        "IF Ready THEN ConcreteTemporal ELSE FallbackTemporal through "
+        f"StructuredTemporalLeaf at {tla}:10; name concrete temporal "
+        "predicates before placing them in structured helper operands"
+    ]
 
 
 def test_cfg_correctness_envelope_shape_errors_rejects_unused_bound_quantified_temporal_helper(
@@ -18674,6 +20312,63 @@ def test_cfg_correctness_envelope_shape_errors_allows_repeated_state_terms_in_te
     assert module.cfg_correctness_envelope_shape_errors(
         "fast", tla, cfg, "Apalache"
     ) == []
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_structured_literal_temporal_helper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "LiteralLeaf == TRUE",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "StructuredTemporalLeaf == [Field |-> LiteralLeaf]",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] StructuredTemporalLeaf",
+                "EventuallyCommit == [] (Gst => <> Committed)",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        "allowlisted temporal conjunct "
+        "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope at "
+        f"{tla}:10 contains transitive temporal side-conjunct chain with "
+        "vacuous helper StructuredTemporalLeaf reaches LiteralLeaf through "
+        f"StructuredTemporalLeaf -> LiteralLeaf at {tla}:6 is literal TRUE; "
+        "keep literal, self-equality, self-inequality, and alias helpers out "
+        "of allowlisted temporal side-conjunct chains"
+    ]
 
 
 def test_cfg_correctness_envelope_shape_errors_rejects_transitive_vacuous_temporal_helper(

@@ -108,6 +108,9 @@ pub enum HybridError {
         /// Observed byte length.
         found: usize,
     },
+    /// X25519 secret key bytes were inert all-zero material.
+    #[error("x25519 secret key material must not be all zero")]
+    InvalidX25519SecretKey,
     /// X25519 shared secret resolved to the all-zero value (low-order public key).
     #[error("x25519 shared secret is all-zero (invalid public key)")]
     InvalidX25519SharedSecret,
@@ -186,10 +189,10 @@ impl HybridPublicKey {
                 found: kyber_bytes.len(),
             });
         }
+        validate_kyber_public_not_all_zero(kyber_bytes)?;
         HYBRID_KEM_SUITE
             .validate_public_key(kyber_bytes)
             .map_err(|_| HybridError::InvalidKyberPublicKey)?;
-        validate_kyber_public_not_all_zero(kyber_bytes)?;
 
         Ok(Self {
             x25519,
@@ -254,6 +257,9 @@ impl HybridSecretKey {
                 found: x25519_bytes.len(),
             });
         }
+        if x25519_bytes.iter().all(|&byte| byte == 0) {
+            return Err(HybridError::InvalidX25519SecretKey);
+        }
         let mut x25519_array = Zeroizing::new([0_u8; 32]);
         x25519_array.copy_from_slice(x25519_bytes);
         let x25519_secret = StaticSecret::from(*x25519_array);
@@ -267,10 +273,10 @@ impl HybridSecretKey {
                 found: kyber_bytes.len(),
             });
         }
+        validate_kyber_secret_not_all_zero(kyber_bytes)?;
         HYBRID_KEM_SUITE
             .validate_secret_key(kyber_bytes)
             .map_err(|_| HybridError::InvalidKyberSecretKey)?;
-        validate_kyber_secret_not_all_zero(kyber_bytes)?;
         let kyber_secret = Zeroizing::new(kyber_bytes.to_vec());
 
         // Kyber secret keys embed the public key in their trailing bytes per PQClean.
@@ -439,6 +445,7 @@ impl HybridKemCiphertext {
         if kyber_bytes.len() != expected_ct_len {
             return Err(HybridError::InvalidKyberCiphertext);
         }
+        validate_kyber_ciphertext_not_all_zero(kyber_bytes)?;
         HYBRID_KEM_SUITE
             .validate_ciphertext(kyber_bytes)
             .map_err(|_| HybridError::InvalidKyberCiphertext)?;
@@ -744,6 +751,13 @@ fn validate_kyber_public_not_all_zero(kyber_public: &[u8]) -> Result<(), HybridE
 fn validate_kyber_secret_not_all_zero(kyber_secret: &[u8]) -> Result<(), HybridError> {
     if kyber_secret.iter().all(|&byte| byte == 0) {
         return Err(HybridError::InvalidKyberSecretKey);
+    }
+    Ok(())
+}
+
+fn validate_kyber_ciphertext_not_all_zero(kyber_ciphertext: &[u8]) -> Result<(), HybridError> {
+    if kyber_ciphertext.iter().all(|&byte| byte == 0) {
+        return Err(HybridError::InvalidKyberCiphertext);
     }
     Ok(())
 }
@@ -1273,6 +1287,18 @@ mod tests {
     }
 
     #[test]
+    fn secret_key_decode_rejects_all_zero_x25519_secret_key() {
+        let mut rng = ChaCha20Rng::from_seed([0x79; 32]);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
+        let (_, kyber_secret) = pair.secret().to_bytes();
+
+        let err = HybridSecretKey::from_bytes([0u8; 32], kyber_secret)
+            .expect_err("all-zero X25519 secret key must be rejected while decoding");
+
+        assert_eq!(err, HybridError::InvalidX25519SecretKey);
+    }
+
+    #[test]
     fn secret_key_decode_rejects_all_zero_kyber_secret_key() {
         let mut rng = ChaCha20Rng::from_seed([0x7D; 32]);
         let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
@@ -1310,6 +1336,24 @@ mod tests {
         let err = HybridKemCiphertext::from_parts([0u8; 32], ciphertext.kyber_ciphertext())
             .expect_err("low-order ephemeral public key must be rejected while decoding");
         assert_eq!(err, HybridError::InvalidX25519PublicKey);
+    }
+
+    #[test]
+    fn ciphertext_decode_rejects_all_zero_kyber_ciphertext() {
+        let mut rng = ChaCha20Rng::from_seed([0x7F; 32]);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
+        let (ciphertext, _sender) = encapsulate(
+            HybridSuite::X25519MlKem768ChaCha20Poly1305,
+            pair.public(),
+            &mut rng,
+        )
+        .expect("encapsulation succeeds");
+        let all_zero_kyber = vec![0_u8; HYBRID_KEM_SUITE.ciphertext_len()];
+
+        let err = HybridKemCiphertext::from_parts(ciphertext.ephemeral_public(), all_zero_kyber)
+            .expect_err("all-zero Kyber ciphertext must be rejected while decoding");
+
+        assert_eq!(err, HybridError::InvalidKyberCiphertext);
     }
 
     #[test]

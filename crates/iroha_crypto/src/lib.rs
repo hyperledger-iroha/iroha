@@ -730,6 +730,18 @@ pub fn ed25519_parse_public_key(payload: &[u8]) -> Result<Ed25519ParsedPublicKey
         .map_err(Error::from)
 }
 
+/// Parse raw Ed25519 signature bytes for admission before storing them as an opaque signature.
+///
+/// # Errors
+/// Returns [`Error::BadSignature`] if the payload length is invalid or the
+/// signature `R` component is malformed, non-canonical, or small-order.
+/// Returns [`Error::Parse`] if the payload is empty or all zero.
+pub fn ed25519_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
+    let signature = Signature::try_from_bytes(payload).map_err(Error::from)?;
+    signature::ed25519::Ed25519Sha512::parse_signature(payload)?;
+    Ok(signature)
+}
+
 /// Deterministic Ed25519 batch verification wrapper (per-signature).
 /// The `seed32` parameter is reserved for API compatibility and is ignored.
 /// # Errors
@@ -3062,6 +3074,45 @@ mod tests {
 
     fn checked_signature(private_key: &PrivateKey, message: &[u8]) -> Signature {
         Signature::try_new(private_key, message).expect("sign checked top-level fixture")
+    }
+
+    #[test]
+    fn ed25519_parse_signature_rejects_inert_or_malformed_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let key_pair = checked_seed_keypair(&[0x31; 32], Algorithm::Ed25519);
+        let signature = checked_signature(key_pair.private_key(), b"ed25519 parse signature");
+        ed25519_parse_signature(signature.payload()).expect("valid Ed25519 signature parses");
+
+        let err = ed25519_parse_signature(&[0u8; 64])
+            .expect_err("all-zero Ed25519 signature material must fail admission");
+        assert!(
+            matches!(err, Error::Parse(ref parse) if parse.to_string().contains("all zero")),
+            "unexpected all-zero signature error: {err:?}"
+        );
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = signature.payload().to_vec();
+            malformed[..32].copy_from_slice(&replacement_r);
+            let err = ed25519_parse_signature(&malformed)
+                .expect_err("malformed Ed25519 signature R must fail admission");
+            assert_eq!(
+                err,
+                Error::BadSignature,
+                "{label} R should fail as a bad Ed25519 signature"
+            );
+        }
     }
 
     #[test]

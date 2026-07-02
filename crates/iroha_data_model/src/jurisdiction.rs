@@ -357,6 +357,9 @@ impl JdgSdnCommitment {
         if seal.payload().is_empty() {
             return Err(JdgSdnCommitmentError::EmptySeal);
         }
+        if seal.payload().iter().all(|byte| *byte == 0) {
+            return Err(JdgSdnCommitmentError::InertSeal);
+        }
         Ok(())
     }
 
@@ -821,6 +824,9 @@ pub enum JdgSdnCommitmentError {
     /// SDN seal must be non-empty.
     #[error("SDN seal must not be empty")]
     EmptySeal,
+    /// SDN seal must not be an inert all-zero payload.
+    #[error("SDN seal must not be all zero")]
+    InertSeal,
     /// SDN public key compact state is malformed.
     #[error("SDN public key is malformed")]
     MalformedSdnPublicKey,
@@ -1319,6 +1325,23 @@ mod tests {
             err,
             JdgAttestationError::SdnCommitment {
                 source: JdgSdnCommitmentError::EmptySeal,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn sdn_commitment_all_zero_seal_is_rejected() {
+        let mut attestation = sample_attestation();
+        attestation.sdn_commitments[0].seal =
+            SignatureOf::from_signature(Signature::from_bytes(&[0u8; 64]));
+        let err = attestation
+            .validate_with_sdn(true)
+            .expect_err("all-zero SDN seals must be rejected");
+        assert!(matches!(
+            err,
+            JdgAttestationError::SdnCommitment {
+                source: JdgSdnCommitmentError::InertSeal,
                 ..
             }
         ));

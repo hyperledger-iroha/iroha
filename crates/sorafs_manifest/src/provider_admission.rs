@@ -692,6 +692,25 @@ fn verify_council_signatures_over_digest(
                 length: signature.signature.len(),
             });
         }
+        crate::checked_ed25519_verifying_key_from_bytes(&signature.signer).map_err(|reason| {
+            ProviderAdmissionSignatureError::InvalidPublicKey {
+                signer: signature.signer,
+                reason,
+            }
+        })?;
+        let signature_bytes: [u8; ed25519_dalek::SIGNATURE_LENGTH] =
+            signature.signature.as_slice().try_into().map_err(|err| {
+                ProviderAdmissionSignatureError::Verification {
+                    signer: signature.signer,
+                    reason: format!("invalid signature material: {err}"),
+                }
+            })?;
+        crate::checked_ed25519_signature_from_bytes(&signature_bytes).map_err(|reason| {
+            ProviderAdmissionSignatureError::Verification {
+                signer: signature.signer,
+                reason,
+            }
+        })?;
         let public_key =
             PublicKey::from_bytes(Algorithm::Ed25519, &signature.signer).map_err(|err| {
                 ProviderAdmissionSignatureError::InvalidPublicKey {
@@ -1061,6 +1080,16 @@ mod tests {
             QosHints, RendezvousTopic,
         },
     };
+
+    const SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
 
     fn council_signature() -> CouncilSignature {
         CouncilSignature {
@@ -1468,6 +1497,46 @@ mod tests {
                 ProviderAdmissionSignatureError::Verification { .. }
             )
         ));
+    }
+
+    #[test]
+    fn verify_envelope_rejects_malformed_signature_r() {
+        for (label, replacement_r, expected_reason) in [
+            ("small-order", SMALL_ORDER_R, "small-order"),
+            ("noncanonical", NONCANONICAL_R, "not a canonical"),
+        ] {
+            let mut proposal = sample_proposal();
+            let provider_key = SigningKey::from_bytes(&[0x33; 32]);
+            proposal.advert_key = *provider_key.verifying_key().as_bytes();
+            let advert_body = advert_body_from_proposal(&proposal);
+            let advert_digest = compute_advert_body_digest(&advert_body).expect("digest");
+            let proposal_digest = compute_proposal_digest(&proposal).expect("digest");
+            let council_key = SigningKey::from_bytes(&[0x44; 32]);
+            let mut signature = council_signature_from_key(&council_key, &proposal_digest);
+            signature.signature[..32].copy_from_slice(&replacement_r);
+            let envelope = ProviderAdmissionEnvelopeV1 {
+                version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+                proposal,
+                proposal_digest,
+                advert_body,
+                advert_body_digest: advert_digest,
+                issued_at: 50,
+                retention_epoch: 150,
+                council_signatures: vec![signature],
+                notes: None,
+            };
+
+            let err = verify_envelope(&envelope).unwrap_err();
+            assert!(
+                matches!(
+                    &err,
+                    ProviderAdmissionEnvelopeError::Signature(
+                        ProviderAdmissionSignatureError::Verification { reason, .. }
+                    ) if reason.contains(expected_reason)
+                ),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

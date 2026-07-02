@@ -499,6 +499,38 @@ fn refresh_proposal_routing_from_state(
     Ok(changed)
 }
 
+fn collect_sccp_messages_for_active_proposal_routes<F>(
+    tx_batch: &[AcceptedTransaction<'static>],
+    routing_batch: &[RoutingDecision],
+    nexus: &iroha_config::parameters::actual::Nexus,
+    is_already_recorded: F,
+) -> Result<Vec<crate::bridge::RecordedSccpMessage>>
+where
+    F: Fn(&iroha_data_model::bridge::SccpOutboundMessageKey) -> bool,
+{
+    if tx_batch.len() != routing_batch.len() {
+        return Err(eyre!(
+            "proposal SCCP routing vector length mismatch: txs={} routes={}",
+            tx_batch.len(),
+            routing_batch.len()
+        ));
+    }
+    if !nexus.enabled {
+        return Ok(Vec::new());
+    }
+    Ok(
+        crate::bridge::collect_new_sccp_messages_from_accepted_transactions_where(
+            tx_batch,
+            |tx_index| {
+                let route = routing_batch[tx_index];
+                crate::state::nexus_active_lane_dataspace(route.lane_id, nexus)
+                    .is_some_and(|dataspace_id| dataspace_id == route.dataspace_id)
+            },
+            is_already_recorded,
+        ),
+    )
+}
+
 const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_millis(1);
 
 #[derive(Debug, Clone, Copy)]
@@ -3343,11 +3375,12 @@ impl Actor {
                     self.build_npos_consensus_effects_for_proposal(proposal_height)?;
                 builder = builder.with_npos_consensus_effects(npos_effects);
                 let world_view = self.state.world_view();
-                let sccp_messages =
-                    crate::bridge::collect_new_sccp_messages_from_accepted_transactions(
-                        &tx_batch,
-                        |key| world_view.sccp_outbound_messages().get(key).is_some(),
-                    );
+                let sccp_messages = collect_sccp_messages_for_active_proposal_routes(
+                    &tx_batch,
+                    &routing_batch,
+                    &nexus,
+                    |key| world_view.sccp_outbound_messages().get(key).is_some(),
+                )?;
                 builder = builder.with_sccp_commitment_root(
                     crate::bridge::sccp_commitment_root_from_messages(&sccp_messages),
                 );
@@ -7502,9 +7535,10 @@ mod tests {
         ProposalBackpressure, age_starved_queue_allows_stale_pending_override,
         cached_slot_timeout_hysteresis_remaining, canonicalize_parallel_batch_by_key,
         canonicalize_proposal_batch, canonicalize_proposal_batch_with_plans,
-        consensus_queue_backpressure, da_payload_budget, drain_aligned_batch,
-        next_cached_slot_timeout_streak, refresh_proposal_routing_from_state,
-        reorder_vec_by_indices, trim_batch_for_size_cap, trim_batch_for_size_cap_with_plans,
+        collect_sccp_messages_for_active_proposal_routes, consensus_queue_backpressure,
+        da_payload_budget, drain_aligned_batch, next_cached_slot_timeout_streak,
+        refresh_proposal_routing_from_state, reorder_vec_by_indices, trim_batch_for_size_cap,
+        trim_batch_for_size_cap_with_plans,
     };
     use crate::queue::{
         BackpressureState, ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingPlan,
@@ -7512,6 +7546,7 @@ mod tests {
     use crate::sumeragi::status;
     use crate::tx::AcceptedTransaction;
     use iroha_config::parameters::actual::LaneRoutingPolicy;
+    use iroha_crypto::Hash;
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         ChainId, Level,
@@ -7522,6 +7557,7 @@ mod tests {
             DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
         },
         prelude::{AccountId, InstructionBox, TransactionBuilder},
+        transaction::{Executable, IvmBytecode, IvmProved},
     };
     use std::borrow::Cow;
     use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
@@ -7543,6 +7579,47 @@ mod tests {
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
 
+    fn proposal_sccp_transfer_payload(nonce: u64) -> iroha_sccp::SccpPayloadV1 {
+        iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        })
+    }
+
+    fn accepted_sccp_record_transaction(nonce: u64) -> AcceptedTransaction<'static> {
+        let chain: ChainId = "proposal-sccp-root".parse().expect("chain id");
+        let key_pair = checked_key_pair();
+        let (_, private_key) = key_pair.clone().into_parts();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let payload =
+            iroha_sccp::canonical_sccp_payload_bytes(&proposal_sccp_transfer_payload(nonce));
+        let executable = Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+            overlay: vec![InstructionBox::from(
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(payload),
+            )]
+            .into(),
+            events_commitment: Hash::new(b"proposal-sccp-events"),
+            gas_policy_commitment: Hash::new(b"proposal-sccp-gas"),
+        });
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_executable(executable)
+            .sign(&private_key);
+        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
     fn blank_state() -> crate::state::State {
         let world = crate::state::World::default();
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -7556,6 +7633,85 @@ mod tests {
         {
             crate::state::State::new(world, kura, query)
         }
+    }
+
+    #[test]
+    fn proposal_sccp_collection_ignores_records_when_nexus_disabled() {
+        let state = blank_state();
+        let tx = accepted_sccp_record_transaction(1);
+        let routing = vec![RoutingDecision::default()];
+        let nexus = state.nexus_snapshot();
+
+        let messages =
+            collect_sccp_messages_for_active_proposal_routes(&[tx], &routing, &nexus, |_| false)
+                .expect("disabled Nexus should not be a routing error");
+
+        assert!(
+            messages.is_empty(),
+            "proposal roots must not commit SCCP records that disabled Nexus execution will reject"
+        );
+    }
+
+    #[test]
+    fn proposal_sccp_collection_includes_active_route_records() {
+        let mut state = blank_state();
+        state.nexus.get_mut().enabled = true;
+        let tx = accepted_sccp_record_transaction(2);
+        let routing = vec![RoutingDecision::default()];
+        let nexus = state.nexus_snapshot();
+
+        let messages =
+            collect_sccp_messages_for_active_proposal_routes(&[tx], &routing, &nexus, |_| false)
+                .expect("active default route should collect");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].tx_index, 0);
+        assert_eq!(messages[0].instruction_index, 0);
+    }
+
+    #[test]
+    fn proposal_sccp_collection_filters_inactive_routes_without_renumbering() {
+        let mut state = blank_state();
+        state.nexus.get_mut().enabled = true;
+        let skipped = accepted_sccp_record_transaction(3);
+        let included = accepted_sccp_record_transaction(4);
+        let routing = vec![
+            RoutingDecision::new(LaneId::new(99), DataSpaceId::UNIVERSAL),
+            RoutingDecision::default(),
+        ];
+        let nexus = state.nexus_snapshot();
+
+        let messages = collect_sccp_messages_for_active_proposal_routes(
+            &[skipped, included],
+            &routing,
+            &nexus,
+            |_| false,
+        )
+        .expect("inactive routed entries should be filtered, not fatal");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].tx_index, 1,
+            "route filtering must preserve canonical entrypoint indices"
+        );
+        assert_eq!(messages[0].instruction_index, 0);
+    }
+
+    #[test]
+    fn proposal_sccp_collection_rejects_routing_vector_length_drift() {
+        let mut state = blank_state();
+        state.nexus.get_mut().enabled = true;
+        let tx = accepted_sccp_record_transaction(5);
+        let nexus = state.nexus_snapshot();
+
+        let err = collect_sccp_messages_for_active_proposal_routes(&[tx], &[], &nexus, |_| false)
+            .expect_err("routing length drift must reject before root computation");
+
+        assert!(
+            err.to_string()
+                .contains("SCCP routing vector length mismatch"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

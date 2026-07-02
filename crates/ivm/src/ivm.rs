@@ -1976,6 +1976,14 @@ impl IVM {
                     self.registers.set(result_reg as usize, 0);
                     return Ok(());
                 }
+                if crate::signature::signature_has_invalid_ed25519_r(&sig_bytes_arr) {
+                    self.registers.set(result_reg as usize, 0);
+                    return Ok(());
+                }
+                if crate::signature::material_bytes_are_all_zero(&pk_bytes) {
+                    self.registers.set(result_reg as usize, 0);
+                    return Ok(());
+                }
                 #[cfg(feature = "cuda")]
                 if self.use_cuda {
                     if let Some(res) =
@@ -2003,6 +2011,10 @@ impl IVM {
                         return Ok(());
                     }
                 };
+                if crate::signature::ed25519_public_key_is_weak(&pk) {
+                    self.registers.set(result_reg as usize, 0);
+                    return Ok(());
+                }
                 let sig = match Signature::from_slice(&sig_bytes_arr) {
                     Ok(s) => s,
                     Err(_) => {
@@ -2045,7 +2057,9 @@ impl IVM {
                         let sig_slice = self
                             .memory
                             .load_region(sig_addr, dilithium2::signature_bytes() as u64)?;
-                        if crate::signature::signature_bytes_are_all_zero(sig_slice) {
+                        if crate::signature::material_bytes_are_all_zero(pk_slice)
+                            || crate::signature::signature_bytes_are_all_zero(sig_slice)
+                        {
                             self.registers.set(result_reg as usize, 0);
                             return Ok(());
                         }
@@ -2072,7 +2086,9 @@ impl IVM {
                         let sig_slice = self
                             .memory
                             .load_region(sig_addr, dilithium3::signature_bytes() as u64)?;
-                        if crate::signature::signature_bytes_are_all_zero(sig_slice) {
+                        if crate::signature::material_bytes_are_all_zero(pk_slice)
+                            || crate::signature::signature_bytes_are_all_zero(sig_slice)
+                        {
                             self.registers.set(result_reg as usize, 0);
                             return Ok(());
                         }
@@ -2099,7 +2115,9 @@ impl IVM {
                         let sig_slice = self
                             .memory
                             .load_region(sig_addr, dilithium5::signature_bytes() as u64)?;
-                        if crate::signature::signature_bytes_are_all_zero(sig_slice) {
+                        if crate::signature::material_bytes_are_all_zero(pk_slice)
+                            || crate::signature::signature_bytes_are_all_zero(sig_slice)
+                        {
                             self.registers.set(result_reg as usize, 0);
                             return Ok(());
                         }
@@ -2828,10 +2846,23 @@ impl IVM {
             if crate::signature::signature_bytes_are_all_zero(&sig_bytes) {
                 return Some(Err(index));
             }
+            if crate::signature::signature_has_invalid_ed25519_r(&sig_bytes) {
+                return Some(Err(index));
+            }
             let pk_bytes: [u8; 32] = match entry.public_key.as_slice().try_into() {
                 Ok(bytes) => bytes,
                 Err(_) => return Some(Err(index)),
             };
+            if crate::signature::material_bytes_are_all_zero(&pk_bytes) {
+                return Some(Err(index));
+            }
+            let pk = match ed25519_dalek::VerifyingKey::from_bytes(&pk_bytes) {
+                Ok(pk) => pk,
+                Err(_) => return Some(Err(index)),
+            };
+            if crate::signature::ed25519_public_key_is_weak(&pk) {
+                return Some(Err(index));
+            }
             match crate::cuda::ed25519_verify_cuda(entry.message.as_slice(), &sig_bytes, &pk_bytes)
             {
                 Some(true) => continue,
@@ -2864,14 +2895,23 @@ impl IVM {
             if crate::signature::signature_bytes_are_all_zero(&sig_bytes) {
                 return Some(Err(index));
             }
+            if crate::signature::signature_has_invalid_ed25519_r(&sig_bytes) {
+                return Some(Err(index));
+            }
             let pk_bytes: [u8; 32] = match entry.public_key.as_slice().try_into() {
                 Ok(bytes) => bytes,
                 Err(_) => return Some(Err(index)),
             };
+            if crate::signature::material_bytes_are_all_zero(&pk_bytes) {
+                return Some(Err(index));
+            }
             let pk = match VerifyingKey::from_bytes(&pk_bytes) {
                 Ok(pk) => pk,
                 Err(_) => return Some(Err(index)),
             };
+            if crate::signature::ed25519_public_key_is_weak(&pk) {
+                return Some(Err(index));
+            }
             let hram = crate::signature::ed25519_challenge_scalar_bytes(
                 &sig_bytes,
                 pk.as_bytes(),
@@ -6295,6 +6335,22 @@ fn compute_instruction(
                 });
                 return Ok(res);
             }
+            if crate::signature::signature_has_invalid_ed25519_r(&sig_bytes_arr) {
+                res.push(ResultUpdate::Reg {
+                    index: result_reg,
+                    value: 0,
+                    tag: false,
+                });
+                return Ok(res);
+            }
+            if crate::signature::material_bytes_are_all_zero(&pk_bytes) {
+                res.push(ResultUpdate::Reg {
+                    index: result_reg,
+                    value: 0,
+                    tag: false,
+                });
+                return Ok(res);
+            }
             let pk = match VerifyingKey::from_bytes(&pk_bytes) {
                 Ok(k) => k,
                 Err(_) => {
@@ -6306,6 +6362,14 @@ fn compute_instruction(
                     return Ok(res);
                 }
             };
+            if crate::signature::ed25519_public_key_is_weak(&pk) {
+                res.push(ResultUpdate::Reg {
+                    index: result_reg,
+                    value: 0,
+                    tag: false,
+                });
+                return Ok(res);
+            }
             let sig = match Signature::from_slice(&sig_bytes_arr) {
                 Ok(s) => s,
                 Err(_) => {
@@ -6343,7 +6407,9 @@ fn compute_instruction(
                         mem.load_region(pubkey_addr, dilithium2::public_key_bytes() as u64)?;
                     let sig_slice =
                         mem.load_region(sig_addr, dilithium2::signature_bytes() as u64)?;
-                    if crate::signature::signature_bytes_are_all_zero(sig_slice) {
+                    if crate::signature::material_bytes_are_all_zero(pk_slice)
+                        || crate::signature::signature_bytes_are_all_zero(sig_slice)
+                    {
                         res.push(ResultUpdate::Reg {
                             index: result_reg,
                             value: 0,
@@ -6380,7 +6446,9 @@ fn compute_instruction(
                         mem.load_region(pubkey_addr, dilithium3::public_key_bytes() as u64)?;
                     let sig_slice =
                         mem.load_region(sig_addr, dilithium3::signature_bytes() as u64)?;
-                    if crate::signature::signature_bytes_are_all_zero(sig_slice) {
+                    if crate::signature::material_bytes_are_all_zero(pk_slice)
+                        || crate::signature::signature_bytes_are_all_zero(sig_slice)
+                    {
                         res.push(ResultUpdate::Reg {
                             index: result_reg,
                             value: 0,
@@ -6417,7 +6485,9 @@ fn compute_instruction(
                         mem.load_region(pubkey_addr, dilithium5::public_key_bytes() as u64)?;
                     let sig_slice =
                         mem.load_region(sig_addr, dilithium5::signature_bytes() as u64)?;
-                    if crate::signature::signature_bytes_are_all_zero(sig_slice) {
+                    if crate::signature::material_bytes_are_all_zero(pk_slice)
+                        || crate::signature::signature_bytes_are_all_zero(sig_slice)
+                    {
                         res.push(ResultUpdate::Reg {
                             index: result_reg,
                             value: 0,

@@ -3056,7 +3056,7 @@ fn bridge_overlapping_ranges_are_rejected() {
 }
 
 #[test]
-fn re_submitting_identical_bridge_proof_is_idempotent() {
+fn re_submitting_identical_bridge_proof_is_rejected() {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -3086,8 +3086,13 @@ fn re_submitting_identical_bridge_proof_is_idempotent() {
     let mut stx2 = block2.transaction();
     let submit2: InstructionBox =
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
-    exec.execute_instruction(&mut stx2, &ALICE_ID.clone(), submit2)
-        .expect("identical proof should be a no-op");
+    let err = exec
+        .execute_instruction(&mut stx2, &ALICE_ID.clone(), submit2)
+        .expect_err("identical proof replay must reject");
+    assert!(
+        format!("{err:?}").contains("already been recorded"),
+        "unexpected duplicate proof error: {err:?}"
+    );
 
     let rec = stx2
         .world

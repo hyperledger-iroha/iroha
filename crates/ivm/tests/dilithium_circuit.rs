@@ -53,3 +53,20 @@ fn dilithium3_circuit_all_zero_signature_is_false() {
 
     assert!(circuit.verify().is_ok());
 }
+
+#[test]
+fn dilithium3_circuit_all_zero_public_key_is_false() {
+    let (_, sk) = dilithium3::keypair();
+    let msg = b"dilithium3 zero public key";
+    let sig = dilithium3::detached_sign(msg, &sk);
+    let public_key = vec![0u8; dilithium3::public_key_bytes()];
+    let circuit = DilithiumVerifyCircuit {
+        level: DilithiumLevel::Level3,
+        public_key: &public_key,
+        signature: sig.as_bytes(),
+        message: msg,
+        result: false,
+    };
+
+    assert!(circuit.verify().is_ok());
+}

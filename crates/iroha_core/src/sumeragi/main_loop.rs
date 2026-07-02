@@ -3741,6 +3741,7 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         | BlockValidationError::EmptyBlock
         | BlockValidationError::DuplicateTransactions
         | BlockValidationError::SccpCommitmentRootMismatch { .. }
+        | BlockValidationError::SccpDuplicateOutboundMessage { .. }
         | BlockValidationError::ExecutionContextInvalid(_)
         | BlockValidationError::CommittedFragmentCountMismatch { .. }
         | BlockValidationError::TransactionAccept(_)
@@ -47970,6 +47971,11 @@ impl RbcSession {
             if ready.signature.is_empty() {
                 return Err(PersistedLoadError::InvalidMetadata("empty READY signature"));
             }
+            if ready.signature.iter().all(|byte| *byte == 0) {
+                return Err(PersistedLoadError::InvalidMetadata(
+                    "all-zero READY signature",
+                ));
+            }
             if previous_ready_sender.is_some_and(|previous| ready.sender < previous) {
                 return Err(PersistedLoadError::InvalidMetadata(
                     "non-canonical READY sender order",
@@ -48000,7 +48006,13 @@ impl RbcSession {
                 persisted.deliver_sender,
                 persisted.deliver_signature.as_deref(),
             ) {
-                (Some(_), Some(signature)) if !signature.is_empty() => {}
+                (Some(_), Some(signature)) if !signature.is_empty() => {
+                    if signature.iter().all(|byte| *byte == 0) {
+                        return Err(PersistedLoadError::InvalidMetadata(
+                            "all-zero DELIVER signature",
+                        ));
+                    }
+                }
                 _ => {
                     return Err(PersistedLoadError::InvalidMetadata(
                         "delivered flag set without deliver sender/signature",

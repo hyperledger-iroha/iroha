@@ -849,6 +849,30 @@ public static partial class BscMainnetSccp
         return null;
     }
 
+    private static void RequireEvmReceiptLogNotRemoved(
+        IReadOnlyDictionary<string, object?> log,
+        string label,
+        string removedMessage,
+        string parameterName)
+    {
+        if (!log.TryGetValue("removed", out var removed))
+        {
+            return;
+        }
+
+        if (removed is false)
+        {
+            return;
+        }
+
+        if (removed is true)
+        {
+            throw new ArgumentException(removedMessage, parameterName);
+        }
+
+        throw new ArgumentException($"{label}.removed must be a boolean.", parameterName);
+    }
+
     private static string NormalizeRpcHex(object? value, string parameterName, int byteLength)
     {
         return NormalizeRpcHex(value, parameterName, byteLength, allowZero: false);
@@ -1124,10 +1148,11 @@ public static partial class BscMainnetSccp
                 throw new ArgumentException($"receipt.logs[{index}] must be an object.", nameof(receipt));
             }
 
-            if (FirstPresent(log, "removed") is true)
-            {
-                throw new ArgumentException("receipt.logs must not contain removed logs.", nameof(receipt));
-            }
+            RequireEvmReceiptLogNotRemoved(
+                log,
+                $"receipt.logs[{index}]",
+                "receipt.logs must not contain removed logs.",
+                nameof(receipt));
 
             var logAddress = NormalizeRpcHex(
                 FirstPresent(log, "address"),

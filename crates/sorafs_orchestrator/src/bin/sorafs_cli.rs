@@ -28,7 +28,7 @@ use base64::{
     },
 };
 use blake3::hash as blake3_hash;
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use hex::encode as hex_encode;
 use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
 use iroha_crypto::{Algorithm, PrivateKey, PublicKey};
@@ -17960,6 +17960,66 @@ fn manifest_sign(raw_args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+fn checked_manifest_ed25519_signature_from_bytes(
+    signature: &[u8; ed25519_dalek::SIGNATURE_LENGTH],
+) -> Result<Signature, String> {
+    if signature.iter().all(|byte| *byte == 0) {
+        return Err("signature material must not be all zero".to_string());
+    }
+
+    let r_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = signature
+        .get(..ed25519_dalek::PUBLIC_KEY_LENGTH)
+        .ok_or_else(|| "signature R bytes missing".to_string())?
+        .try_into()
+        .map_err(|_| "signature R bytes have invalid length".to_string())?;
+    if !ed25519_compressed_y_is_canonical(&r_bytes) {
+        return Err("signature R is not a canonical Ed25519 point".to_string());
+    }
+    let r_point = VerifyingKey::from_bytes(&r_bytes)
+        .map_err(|err| format!("signature R is not a canonical Ed25519 point: {err}"))?;
+    if r_point.is_weak() {
+        return Err("signature R is small-order (weak); rejected".to_string());
+    }
+
+    Ok(Signature::from_bytes(signature))
+}
+
+fn checked_manifest_ed25519_verifying_key_from_bytes(
+    public_key: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
+) -> Result<VerifyingKey, String> {
+    if public_key.iter().all(|byte| *byte == 0) {
+        return Err("public key material must not be all zero".to_string());
+    }
+    if !ed25519_compressed_y_is_canonical(public_key) {
+        return Err("public key is not a canonical Ed25519 point".to_string());
+    }
+    let verifying_key =
+        VerifyingKey::from_bytes(public_key).map_err(|err| format!("invalid public key: {err}"))?;
+    if verifying_key.is_weak() {
+        return Err("public key is small-order (weak); rejected".to_string());
+    }
+    Ok(verifying_key)
+}
+
+fn ed25519_compressed_y_is_canonical(bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]) -> bool {
+    const ED25519_FIELD_MODULUS_LE: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    let mut y = *bytes;
+    y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
+    for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
+        match y[idx].cmp(&ED25519_FIELD_MODULUS_LE[idx]) {
+            std::cmp::Ordering::Less => return true,
+            std::cmp::Ordering::Greater => return false,
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+    false
+}
+
 fn manifest_verify_signature(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut bundle_path: Option<PathBuf> = None;
@@ -18212,10 +18272,7 @@ fn manifest_verify_signature(raw_args: Vec<String>) -> Result<(), String> {
     let signature_bytes: [u8; 64] = signature_bytes_vec
         .try_into()
         .map_err(|_| "failed to convert signature bytes".to_string())?;
-    if signature_bytes.iter().all(|byte| *byte == 0) {
-        return Err("signature material must not be all zero".to_string());
-    }
-    let signature = Signature::from_bytes(&signature_bytes);
+    let signature = checked_manifest_ed25519_signature_from_bytes(&signature_bytes)?;
 
     let public_key_bytes_vec = parse_hex_vec(&public_key_hex)?;
     if public_key_bytes_vec.len() != 32 {
@@ -18227,11 +18284,10 @@ fn manifest_verify_signature(raw_args: Vec<String>) -> Result<(), String> {
     let public_key_bytes: [u8; 32] = public_key_bytes_vec
         .try_into()
         .map_err(|_| "failed to convert public key bytes".to_string())?;
-    let verifying_key = VerifyingKey::from_bytes(&public_key_bytes)
-        .map_err(|err| format!("invalid public key: {err}"))?;
+    let verifying_key = checked_manifest_ed25519_verifying_key_from_bytes(&public_key_bytes)?;
 
     verifying_key
-        .verify(manifest_digest.as_bytes(), &signature)
+        .verify_strict(manifest_digest.as_bytes(), &signature)
         .map_err(|err| format!("signature verification failed: {err}"))?;
 
     if let Some(expected_hash) = expect_token_hash {

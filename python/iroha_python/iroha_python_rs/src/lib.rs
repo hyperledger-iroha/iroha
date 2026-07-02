@@ -24,7 +24,7 @@ use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
 use iroha_config::parameters::defaults;
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyGenOption, KeyPair, LaneCommitmentId,
-    PrivateKey, PublicKey, Signature, derive_keyset_from_slice,
+    PrivateKey, PublicKey, Signature, derive_keyset_from_slice, ed25519_parse_signature,
     error::ParseError,
     kex::{KeyExchangeScheme, X25519Sha256},
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
@@ -582,6 +582,11 @@ fn fixed_array<const N: usize>(bytes: &[u8], context: &str) -> PyResult<[u8; N]>
     let mut arr = [0u8; N];
     arr.copy_from_slice(bytes);
     Ok(arr)
+}
+
+fn checked_signature_from_bytes(bytes: &[u8], context: &str) -> PyResult<Signature> {
+    Signature::try_from_bytes(bytes)
+        .map_err(|err| PyValueError::new_err(format!("{context} is malformed: {err}")))
 }
 
 fn py_text(value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
@@ -1437,7 +1442,7 @@ fn parse_wallet_signature(fields: &Bound<'_, PyDict>) -> PyResult<WalletSignatur
     };
     Ok(WalletSignatureV1::new(
         algorithm,
-        Signature::from_bytes(&sig),
+        checked_signature_from_bytes(&sig, "approve.signature")?,
     ))
 }
 
@@ -6496,6 +6501,93 @@ mod tests {
     fn py_err_message(err: pyo3::PyErr) -> String {
         ensure_python();
         Python::attach(|py| err.value(py).to_string())
+    }
+
+    #[test]
+    fn checked_signature_from_bytes_rejects_empty_and_all_zero_payloads() {
+        let empty = py_err_message(
+            checked_signature_from_bytes(&[], "signature").expect_err("empty signature must fail"),
+        );
+        assert!(
+            empty.contains("signature is malformed: signature payload must not be empty"),
+            "unexpected empty-signature error: {empty}"
+        );
+
+        let all_zero = py_err_message(
+            checked_signature_from_bytes(&[0u8; 64], "signature")
+                .expect_err("all-zero signature must fail"),
+        );
+        assert!(
+            all_zero.contains("signature is malformed: signature payload must not be all zero"),
+            "unexpected all-zero signature error: {all_zero}"
+        );
+
+        let accepted = checked_signature_from_bytes(&[0x42; 64], "signature")
+            .expect("nonzero opaque signature material is admitted for backend verification");
+        assert_eq!(accepted.payload(), &[0x42; 64]);
+    }
+
+    #[test]
+    fn verify_ed25519_rejects_malformed_signature_r_before_backend() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let key_pair = KeyPair::try_from_seed(
+            b"python-native-ed25519-signature-r-admission".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive checked Ed25519 fixture keypair");
+        let (_, public_key) = public_key_to_bytes(key_pair.public_key(), "fixture public key")
+            .expect("fixture public key bytes");
+        let message = b"python native Ed25519 signature admission";
+        let signature =
+            Signature::try_new(key_pair.private_key(), message).expect("checked fixture signature");
+
+        assert!(
+            verify_py(
+                Algorithm::Ed25519.as_static_str(),
+                public_key,
+                message,
+                signature.payload(),
+            )
+            .expect("generic Ed25519 verification returns a bool"),
+            "valid Ed25519 signature must verify through generic wrapper"
+        );
+        assert!(
+            verify_ed25519_py(public_key, message, signature.payload())
+                .expect("Ed25519 verification returns a bool"),
+            "valid Ed25519 signature must verify through Ed25519 wrapper"
+        );
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = signature.payload().to_vec();
+            malformed[..32].copy_from_slice(&replacement_r);
+            assert!(
+                !verify_py(
+                    Algorithm::Ed25519.as_static_str(),
+                    public_key,
+                    message,
+                    &malformed,
+                )
+                .expect("generic Ed25519 verification returns a bool"),
+                "{label} Ed25519 signature R must fail generic wrapper admission"
+            );
+            assert!(
+                !verify_ed25519_py(public_key, message, &malformed)
+                    .expect("Ed25519 verification returns a bool"),
+                "{label} Ed25519 signature R must fail Ed25519 wrapper admission"
+            );
+        }
     }
 
     #[test]
@@ -19621,7 +19713,10 @@ impl TransactionBuilder {
 
         let signed = self
             .to_model_builder()
-            .build_with_signature(Signature::from_bytes(signature));
+            .build_with_signature(checked_signature_from_bytes(
+                signature,
+                "Ed25519 signature",
+            )?);
         signed.verify_signature().map_err(|err| {
             PyValueError::new_err(format!("signature verification failed: {err}"))
         })?;
@@ -19962,7 +20057,14 @@ fn verify_py(
 ) -> PyResult<bool> {
     let algorithm = parse_algorithm_arg(algorithm)?;
     let public_key = parse_public_key_for_algorithm(algorithm, public_key)?;
-    let signature = Signature::from_bytes(signature);
+    let signature = match if algorithm == Algorithm::Ed25519 {
+        ed25519_parse_signature(signature)
+    } else {
+        Signature::try_from_bytes(signature).map_err(Into::into)
+    } {
+        Ok(signature) => signature,
+        Err(_) => return Ok(false),
+    };
     Ok(signature.verify(&public_key, message).is_ok())
 }
 
@@ -20085,7 +20187,10 @@ fn sign_ed25519_py(py: Python<'_>, private_key: &[u8], message: &[u8]) -> PyResu
 /// Verify `signature` against `message` and the provided Ed25519 public key.
 fn verify_ed25519_py(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResult<bool> {
     let public_key = parse_public_key(public_key)?;
-    let signature = Signature::from_bytes(signature);
+    let signature = match ed25519_parse_signature(signature) {
+        Ok(signature) => signature,
+        Err(_) => return Ok(false),
+    };
     Ok(signature.verify(&public_key, message).is_ok())
 }
 

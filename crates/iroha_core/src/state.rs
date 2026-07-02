@@ -8090,8 +8090,10 @@ impl<'state> StateBlock<'state> {
     }
 
     fn refresh_axt_policies_from_directory(&mut self) -> Option<AxtPolicySnapshot> {
-        let valid_lanes =
-            axt_active_lane_ids_at_height(&self.nexus, self._curr_block.height().get());
+        let valid_lanes = axt_cached_policy_retain_lane_ids_at_height(
+            &self.nexus,
+            self._curr_block.height().get(),
+        );
         let mut snapshot =
             crate::smartcontracts::ivm::host::CoreHost::derive_axt_policy_snapshot_from_directory(
                 self,
@@ -8321,6 +8323,8 @@ pub struct StateTransaction<'block, 'state> {
     pub last_tx_gas_used: u64,
     /// True while applying an overlay whose IVM proof was verified for this transaction.
     pub(crate) sccp_recording_proof_verified: bool,
+    /// Bridge proof hashes recorded by this transaction and still available for one receipt.
+    pub(crate) bridge_receipt_proofs_available_in_tx: BTreeSet<[u8; 32]>,
     /// Block-level gas limit, captured at the beginning of this block.
     pub gas_limit_per_block: u64,
     /// Gas used in this block so far, captured when this transaction started.
@@ -9029,6 +9033,9 @@ pub(crate) fn nexus_active_lane_dataspace(
     lane_id: LaneId,
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> Option<DataSpaceId> {
+    if !nexus.enabled {
+        return None;
+    }
     let dataspace_id = nexus_catalog_geometry_lane_dataspace(lane_id, nexus)?;
     nexus
         .dataspace_catalog
@@ -9080,6 +9087,22 @@ fn axt_active_lane_ids_at_height(
 ) -> BTreeSet<LaneId> {
     axt_active_lane_map_at_height(nexus, block_height)
         .into_values()
+        .collect()
+}
+
+fn axt_cached_policy_retain_lane_ids_at_height(
+    nexus: &iroha_config::parameters::actual::Nexus,
+    block_height: u64,
+) -> BTreeSet<LaneId> {
+    if nexus.enabled {
+        return axt_active_lane_ids_at_height(nexus, block_height);
+    }
+
+    nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter_map(|lane| nexus_catalog_geometry_lane_dataspace(lane.id, nexus).map(|_| lane.id))
         .collect()
 }
 
@@ -9706,6 +9729,14 @@ mod stake_snapshot_tests {
     #[test]
     fn nexus_active_lanes_require_catalog_geometry_and_dataspace_agreement() {
         let stale_lane = LaneId::new(1);
+        let disabled_nexus = iroha_config::parameters::actual::Nexus::default();
+        assert_eq!(nexus_active_lane_ids(&disabled_nexus), BTreeSet::new());
+        assert_eq!(
+            nexus_active_lane_dataspace(LaneId::SINGLE, &disabled_nexus),
+            None,
+            "disabled Nexus must not expose the default lane as active"
+        );
+
         let stale_geometry_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("nonzero lane count"),
             vec![
@@ -21458,7 +21489,7 @@ impl State {
         let view = self.view();
         let nexus = view.nexus.clone();
         let block_height = self.block_hashes.view().len() as u64;
-        let valid_lanes = axt_active_lane_ids_at_height(&nexus, block_height);
+        let valid_lanes = axt_cached_policy_retain_lane_ids_at_height(&nexus, block_height);
         let mut snapshot =
             crate::smartcontracts::ivm::host::CoreHost::derive_axt_policy_snapshot_from_directory(
                 &view,
@@ -31764,6 +31795,7 @@ impl<'state> StateBlock<'state> {
             current_dataspace_id: None,
             last_tx_gas_used: 0,
             sccp_recording_proof_verified: false,
+            bridge_receipt_proofs_available_in_tx: BTreeSet::new(),
             gas_limit_per_block: self.gas_limit_per_block,
             gas_used_in_block_so_far: self.gas_used_in_block,
             confidential_gas_used_in_tx: 0,
@@ -38699,6 +38731,22 @@ impl StateTransaction<'_, '_> {
     /// Refresh AXT policy cache from Space Directory manifests using the current lane catalog.
     #[inline]
     pub fn refresh_axt_policies_from_directory(&mut self) -> Option<AxtPolicySnapshot> {
+        if !self.nexus.enabled {
+            let valid_lanes =
+                axt_cached_policy_retain_lane_ids_at_height(&self.nexus, self.block_height());
+            let stale: Vec<_> = self
+                .world
+                .axt_policies
+                .iter()
+                .filter(|(_, policy)| !valid_lanes.contains(&policy.target_lane))
+                .map(|(dsid, _)| *dsid)
+                .collect();
+            for dsid in stale {
+                self.world.axt_policies.remove(dsid);
+            }
+            return None;
+        }
+
         let block_height = self.block_height();
         self.world.axt_lane_map = axt_active_lane_map_at_height(&self.nexus, block_height);
         self.world.rebuild_axt_policies_from_space_directory(
@@ -42671,6 +42719,7 @@ mod tests {
         nexus: &mut iroha_config::parameters::actual::Nexus,
         lane_catalog: LaneCatalog,
     ) {
+        nexus.enabled = true;
         let dataspace_metadata = lane_catalog
             .lanes()
             .iter()
@@ -75446,6 +75495,76 @@ mod tests {
     }
 
     #[test]
+    fn axt_policy_snapshot_ignores_directory_when_nexus_disabled() {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::disabled-nexus-axt"));
+        let dataspace = DataSpaceId::new(23);
+        let lane_id = LaneId::new(6);
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(7_u32),
+            vec![LaneConfig {
+                id: lane_id,
+                dataspace_id: dataspace,
+                alias: "disabled-axt".into(),
+                description: None,
+                visibility: iroha_data_model::nexus::LaneVisibility::Public,
+                lane_type: None,
+                governance: None,
+                settlement: None,
+                storage: iroha_data_model::nexus::LaneStorageProfile::FullReplica,
+                proof_scheme: DaProofScheme::default(),
+                metadata: BTreeMap::new(),
+            }],
+        )
+        .expect("lane catalog");
+
+        let domain_id: DomainId =
+            DomainId::try_new("disabled-axt", "universal").expect("domain id");
+        let keypair = crate::state::checked_keypair();
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let account = new_account_in_domain(&account_id, &domain_id)
+            .with_uaid(Some(uaid))
+            .build(&account_id);
+        let domain = Domain::new(domain_id).build(&account_id);
+
+        let mut world = World::with([domain], [account], []);
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut set = SpaceDirectoryManifestSet::default();
+        set.upsert(record);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(world, kura, query_handle);
+        {
+            let nexus = state.nexus.get_mut();
+            install_test_nexus_lane_catalog(nexus, lane_catalog);
+            nexus.enabled = false;
+        }
+
+        let snapshot = CoreHost::axt_policy_snapshot_from_state(&state.view());
+        assert!(
+            snapshot.is_none(),
+            "disabled Nexus must not derive AXT policies from directory manifests"
+        );
+        assert!(
+            state.world.axt_policies.view().get(&dataspace).is_none(),
+            "disabled Nexus must not populate cached AXT policy state"
+        );
+    }
+
+    #[test]
     fn axt_policy_snapshot_ignores_future_created_autoscale_lane() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::future-axt-snapshot"));
         let dataspace = DataSpaceId::UNIVERSAL;
@@ -76656,6 +76775,32 @@ mod tests {
             state.world.axt_policies.view().get(&dsid).copied(),
             Some(policy)
         );
+    }
+
+    #[test]
+    fn block_axt_policy_refresh_preserves_explicit_entries_when_nexus_disabled() {
+        let dsid = DataSpaceId::new(91);
+        let policy = AxtPolicyEntry {
+            manifest_root: [0x12; 32],
+            target_lane: LaneId::new(0),
+            min_handle_era: 2,
+            min_sub_nonce: 3,
+            current_slot: 0,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::new(), kura, query_handle);
+        state.set_axt_policy(dsid, policy);
+        state.nexus.get_mut().enabled = false;
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let snapshot = stx.refresh_axt_policies_from_directory();
+
+        assert!(snapshot.is_none());
+        assert_eq!(stx.world.axt_policies().get(&dsid).copied(), Some(policy));
     }
 
     #[test]

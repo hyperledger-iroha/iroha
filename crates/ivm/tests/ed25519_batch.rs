@@ -3,6 +3,15 @@
 use ed25519_dalek::{Signer, SigningKey};
 use ivm::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
 
+const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+const ED25519_NON_CANONICAL_IDENTITY: [u8; 32] = [
+    0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+];
+
 #[test]
 fn ed25519_batch_mixed_validity() {
     let key1 = SigningKey::from_bytes(&[7u8; 32]);
@@ -42,6 +51,25 @@ fn ed25519_batch_rejects_all_zero_signature_material() {
     };
 
     assert_eq!(verify_ed25519_batch_items(&[item]), vec![false]);
+}
+
+#[test]
+fn ed25519_batch_rejects_noncanonical_or_small_order_signature_r_before_accelerator_dispatch() {
+    let key = SigningKey::from_bytes(&[0x28; 32]);
+    let message = b"batch-invalid-r";
+    let public_key = key.verifying_key().to_bytes();
+
+    for invalid_r in [ED25519_SMALL_ORDER_POINT, ED25519_NON_CANONICAL_IDENTITY] {
+        let mut signature = key.sign(message).to_bytes();
+        signature[..32].copy_from_slice(&invalid_r);
+        let item = Ed25519BatchItem {
+            message,
+            signature,
+            public_key,
+        };
+
+        assert_eq!(verify_ed25519_batch_items(&[item]), vec![false]);
+    }
 }
 
 #[cfg(feature = "cuda")]

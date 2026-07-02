@@ -578,7 +578,8 @@ mod tests {
         let public_key =
             PublicKey::from_hex(Algorithm::Ed25519, public_key_hex).expect("parse public key");
         let signature =
-            Signature::from_bytes(&hex::decode(signature_hex).expect("decode signature"));
+            Signature::try_from_bytes(&hex::decode(signature_hex).expect("decode signature"))
+                .expect("rollout metadata signature is non-empty and nonzero");
 
         signature
             .verify(&public_key, &payload)

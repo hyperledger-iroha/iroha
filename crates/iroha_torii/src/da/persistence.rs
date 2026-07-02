@@ -29,11 +29,16 @@ use sorafs_manifest::pdp::PdpCommitmentV1;
 const CURSOR_FILE_NAME: &str = "replay_cursors.norito.json";
 const RECEIPT_FILE_PREFIX: &str = "da-receipt";
 /// Placeholder signature bytes used before signing DA receipts.
-pub(crate) const RECEIPT_SIGNATURE_PLACEHOLDER: [u8; 64] = [0; 64];
+pub(crate) const RECEIPT_SIGNATURE_PLACEHOLDER: [u8; 64] = [0xA5; 64];
 pub(super) const STORED_RECEIPT_VERSION: u16 = 1;
 const RECEIPT_SIGNING_PAYLOAD_VERSION: u16 = 1;
 const DA_COMMITMENT_SCHEDULE_ENTRY_VERSION: u16 = 1;
 static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn receipt_signature_placeholder() -> Signature {
+    Signature::try_from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER)
+        .expect("DA receipt placeholder signature is non-empty and nonzero")
+}
 
 /// Persistent store tracking the highest sequence observed per `(lane, epoch)`.
 pub struct ReplayCursorStore {
@@ -588,7 +593,7 @@ pub(super) fn unsigned_receipt_bytes(
     sequence: u64,
 ) -> eyre::Result<Vec<u8>> {
     let mut unsigned = receipt.clone();
-    unsigned.operator_signature = Signature::from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER);
+    unsigned.operator_signature = receipt_signature_placeholder();
     to_bytes(&DaReceiptSigningPayload {
         version: RECEIPT_SIGNING_PAYLOAD_VERSION,
         sequence,
@@ -1412,11 +1417,25 @@ mod temp_artifact_tests {
             stripe_layout: DaStripeLayout::default(),
             queued_at_unix: 1234,
             rent_quote: DaRentQuote::default(),
-            operator_signature: Signature::from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER),
+            operator_signature: receipt_signature_placeholder(),
         };
         let unsigned = unsigned_receipt_bytes(&receipt, sequence).expect("test receipt encodes");
         receipt.operator_signature = checked_signature(signer.private_key(), &unsigned);
         receipt
+    }
+
+    #[test]
+    fn unsigned_receipt_bytes_use_checked_nonzero_placeholder_signature() {
+        let signer = checked_random_keypair("receipt placeholder");
+        let receipt = test_receipt(&signer, LaneId::new(7), 3, 11, 0x42);
+        let unsigned = unsigned_receipt_bytes(&receipt, 11).expect("unsigned receipt encodes");
+        let payload: DaReceiptSigningPayload =
+            decode_from_bytes(&unsigned).expect("unsigned receipt payload decodes");
+        let placeholder = payload.receipt.operator_signature.payload();
+
+        assert_eq!(placeholder, RECEIPT_SIGNATURE_PLACEHOLDER);
+        assert!(!placeholder.iter().all(|byte| *byte == 0));
+        assert_eq!(placeholder, receipt_signature_placeholder().payload());
     }
 
     #[test]

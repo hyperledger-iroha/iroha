@@ -64,6 +64,7 @@ const EXPECTED_DATA_MODEL_VERSION = 1;
 const MIN_ISO_POLL_INTERVAL_MS = 10;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
+const MAX_UINT64_BIGINT = (1n << 64n) - 1n;
 const MAX_SIGNED_INT32 = 0x7fffffff;
 const MAX_SIGNED_INT32_BIGINT = BigInt(MAX_SIGNED_INT32);
 const MAX_NUMERIC_SCALE = 28;
@@ -12136,6 +12137,58 @@ export class ToriiClient {
   }
 }
 
+function normalizeUint64DecimalString(value, name, options = {}) {
+  const allowZero = options.allowZero !== false;
+  let integer;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || !Number.isInteger(value) || !Number.isSafeInteger(value)) {
+      const qualifier = allowZero ? "non-negative integer" : "positive integer";
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a ${qualifier}`,
+        name,
+      );
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^[0-9]+$/.test(trimmed)) {
+      const qualifier = allowZero ? "non-negative integer" : "positive integer";
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a ${qualifier}`,
+        name,
+      );
+    }
+    integer = BigInt(trimmed);
+  } else {
+    const qualifier = allowZero ? "non-negative" : "positive";
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a ${qualifier} integer`,
+      name,
+    );
+  }
+  if (integer < 0n || (!allowZero && integer === 0n)) {
+    const qualifier = allowZero ? "non-negative integer" : "positive integer";
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a ${qualifier}`,
+      name,
+    );
+  }
+  if (integer > MAX_UINT64_BIGINT) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be at most ${MAX_UINT64_BIGINT.toString(10)}`,
+      name,
+    );
+  }
+  return integer.toString(10);
+}
+
 function normalizeIsoSubmissionResponse(payload, context, options = {}) {
   const record = ToriiClient._requirePlainObject(payload, context);
   const rawMessageId = record.message_id;
@@ -14876,7 +14929,7 @@ function normalizeSccpPlatformSubmissionPayload(value, context) {
             payload.message_body_boc,
             `${context}.payload.message_body_boc`,
           ),
-          queryId: ToriiClient._normalizeUnsignedInteger(
+          queryId: normalizeUint64DecimalString(
             payload.query_id,
             `${context}.payload.query_id`,
             { allowZero: true },

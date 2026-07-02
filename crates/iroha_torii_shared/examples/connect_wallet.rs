@@ -174,7 +174,7 @@ async fn send_wallet_action(
             let reply = proto::ConnectPayloadV1::SignResultOk {
                 signature: proto::WalletSignatureV1::new(
                     Algorithm::Ed25519,
-                    Signature::from_bytes(&[0xDE; 64]),
+                    Signature::try_from_bytes(&[0xDE; 64])?,
                 ),
             };
             let frame =

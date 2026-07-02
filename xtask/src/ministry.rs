@@ -2570,7 +2570,8 @@ mod tests {
                 )
                 .expect("public key"),
                 signature: SignatureOf::from_signature(
-                    Signature::from_hex(hex::encode([0xAA; 64])).expect("signature"),
+                    Signature::try_from_bytes(&[0xAA; 64])
+                        .expect("ministry fixture signature is non-empty and nonzero"),
                 ),
             }],
         }

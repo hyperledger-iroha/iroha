@@ -11051,7 +11051,7 @@ test("recursive Kagemusha policy negative controls pin non-C# native output guar
   );
   assert.match(
     abi7ArchiveBranch,
-    /107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5[\s\S]*?007b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?is missing shared recursive spend ABI-7 fixture coverage[\s\S]*?expected not in message/u,
+    /e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0[\s\S]*?003ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0[\s\S]*?text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)[\s\S]*?is missing shared recursive spend ABI-7 fixture coverage[\s\S]*?expected not in message/u,
     "ABI-7 archive fixture negative control must mutate the archive and require the exact hash diagnostic",
   );
   const abi7SdkCoverageBranch = guard.slice(

@@ -2999,7 +2999,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       "",
     ),
-    false,
+    true,
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
@@ -3070,9 +3070,6 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     );
   }
   for (const circuitId of [
-    undefined,
-    null,
-    "",
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
   ]) {
     assert.equal(
@@ -3539,7 +3536,21 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ),
     true,
   );
-  assert.equal(canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1), false);
+  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(""), true);
+  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(null), true);
+  assert.equal(
+    canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(undefined, 1),
+    true,
+  );
+  assert.equal(
+    canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+      undefined,
+      1,
+    ),
+    true,
+  );
+  assert.equal(canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1), true);
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -14026,9 +14037,9 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
     finalityPolicyHash: `0x${"88".repeat(32)}`,
     sourceStateVerifierHash: `0x${"77".repeat(32)}`,
     deploymentReceiptHash: `0x${"aa".repeat(32)}`,
-    tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
-    tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
-    tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
+    tonMasterchainConfigVerifierHash: `0x${"26".repeat(32)}`,
+    tonValidatorSetTransitionVerifierHash: `0x${"27".repeat(32)}`,
+    tonShardAccountsDictionaryVerifierHash: `0x${"28".repeat(32)}`,
   };
   assert.deepEqual(
     sccpSourceAdapterDeploymentBindingFromDeployment(auditedTonDeployment),
@@ -14037,40 +14048,21 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
       sourceDomain: SCCP_DOMAIN_TON,
       targetDomain: SCCP_DOMAIN_SORA,
       sourceAdapterDeploymentHash:
-        "0x61e5d710ccbc902be00a38a5a80d05c19de97105605a3f93d4f8067862d81f07",
+        "0x260e2d8bf0d8f68e1888962b7ceff604788ef07cceb78d6b6b008f60039683b3",
       sourceAdapterDeploymentReceiptHash:
         auditedTonDeployment.deploymentReceiptHash,
     },
   );
   assert.equal(
-    sccpTonFullLightClientGateHash({
-      sourceDomain: SCCP_DOMAIN_TON,
-      sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
-      consensusVerifierHash: `0x${"55".repeat(32)}`,
-      messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
-      finalityPolicyHash: `0x${"88".repeat(32)}`,
-      sourceStateVerifierHash: `0x${"77".repeat(32)}`,
-      deploymentReceiptHash: `0x${"aa".repeat(32)}`,
-      tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
-      tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
-      tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
-    }),
-    "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48",
+    sccpTonFullLightClientGateHash(auditedTonDeployment),
+    "0x1518fbca4f8fd96756ef5318530fdcb2f0c131f00e0236bbd0dc885baaf8196b",
   );
   assert.notEqual(
     sccpTonFullLightClientGateHash({
-      sourceDomain: SCCP_DOMAIN_TON,
-      sourceTrustAnchorHash: `0x${"44".repeat(32)}`,
-      consensusVerifierHash: `0x${"55".repeat(32)}`,
-      messageInclusionVerifierHash: `0x${"66".repeat(32)}`,
-      finalityPolicyHash: `0x${"88".repeat(32)}`,
-      sourceStateVerifierHash: `0x${"77".repeat(32)}`,
+      ...auditedTonDeployment,
       deploymentReceiptHash: `0x${"ab".repeat(32)}`,
-      tonMasterchainConfigVerifierHash: `0x${"bb".repeat(32)}`,
-      tonValidatorSetTransitionVerifierHash: `0x${"cc".repeat(32)}`,
-      tonShardAccountsDictionaryVerifierHash: `0x${"dd".repeat(32)}`,
     }),
-    "0x5047e655523aa7ce8db0cc4dfb8f9551b7912c262e0b65177620c494c57faa48",
+    sccpTonFullLightClientGateHash(auditedTonDeployment),
   );
 });
 

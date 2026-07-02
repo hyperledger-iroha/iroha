@@ -79,6 +79,9 @@ pub enum PorChallengePlannerError {
     /// drand signature missing from randomness bundle.
     #[error("drand signature must be provided")]
     MissingDrandSignature,
+    /// drand signature is an inert placeholder.
+    #[error("drand signature must not be all zero")]
+    InvalidDrandSignature,
     /// Sample count exceeded the supported `u16` range.
     #[error("sample count {0} exceeds u16::MAX")]
     SampleCountOverflow(usize),
@@ -399,6 +402,9 @@ pub fn build_por_challenge_for_manifest(
 ) -> Result<PlannedChallenge, PorChallengePlannerError> {
     if randomness.drand_signature.is_empty() {
         return Err(PorChallengePlannerError::MissingDrandSignature);
+    }
+    if randomness.drand_signature.iter().all(|byte| *byte == 0) {
+        return Err(PorChallengePlannerError::InvalidDrandSignature);
     }
 
     let chunk_profile = manifest.chunk_profile_handle();

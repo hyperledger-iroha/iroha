@@ -111,6 +111,25 @@ mod signature_tests {
     }
 
     #[test]
+    fn query_signature_try_deserialize_rejects_all_zero_signature_material() {
+        let query_signature = QuerySignature(iroha_crypto::SignatureOf::from_signature(
+            iroha_crypto::Signature::from_bytes(&[0_u8; 64]),
+        ));
+        let encoded = norito::to_bytes(&query_signature).expect("encode invalid query signature");
+        let archived = norito::from_bytes::<QuerySignature>(&encoded)
+            .expect("archive invalid query signature");
+
+        let err =
+            <QuerySignature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived)
+                .expect_err("all-zero query signature must fail closed");
+        let message = err.to_string();
+        assert!(
+            message.contains("all zero"),
+            "unexpected query signature decode error: {message}"
+        );
+    }
+
+    #[test]
     fn query_request_try_sign_matches_compatibility_sign() {
         let key_pair =
             iroha_crypto::KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
@@ -1625,6 +1644,14 @@ mod model {
             let sig = <SignatureOf<QueryRequestWithAuthority> as norito::core::NoritoDeserialize>::deserialize(as_sig);
             QuerySignature(sig)
         }
+
+        fn try_deserialize(
+            archived: &'de norito::core::Archived<Self>,
+        ) -> Result<Self, norito::core::Error> {
+            let as_sig = archived.cast::<SignatureOf<QueryRequestWithAuthority>>();
+            let sig = <SignatureOf<QueryRequestWithAuthority> as norito::core::NoritoDeserialize>::try_deserialize(as_sig)?;
+            Ok(QuerySignature(sig))
+        }
     }
 
     #[cfg(feature = "json")]
@@ -2408,6 +2435,18 @@ mod candidate {
             );
             candidate.validate().expect("invalid SignedQuery")
         }
+
+        fn try_deserialize(
+            archived: &'de norito::core::Archived<SignedQuery>,
+        ) -> Result<Self, norito::core::Error> {
+            let candidate =
+                <SignedQueryCandidate as norito::core::NoritoDeserialize>::try_deserialize(
+                    archived.cast(),
+                )?;
+            candidate
+                .validate()
+                .map_err(|msg| norito::core::Error::Message(msg.to_owned()))
+        }
     }
 
     // JSON deserialization for SignedQuery is disabled in non-json builds.
@@ -2703,6 +2742,47 @@ mod json_roundtrip_tests {
         assert!(
             !message.contains("panic during decode"),
             "invalid signatures should not surface as decode panics: {message}"
+        );
+    }
+
+    #[test]
+    fn signed_query_decode_rejects_all_zero_signature_without_decode_panic() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+        let invalid = SignedQuery {
+            signature: QuerySignature(SignatureOf::from_signature(Signature::from_bytes(
+                &[0_u8; 64],
+            ))),
+            payload: signed.payload,
+        };
+        let encoded = norito::to_bytes(&invalid).expect("encode invalid signed query fixture");
+        let archived =
+            norito::from_bytes::<SignedQuery>(&encoded).expect("archive invalid signed query");
+
+        let err =
+            match <SignedQuery as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived) {
+                Ok(_) => panic!("all-zero signed query signature must fail closed"),
+                Err(err) => err,
+            };
+        let message = err.to_string();
+        assert!(
+            message.contains("all zero"),
+            "unexpected signed query decode error: {message}"
+        );
+
+        let err = match SignedQuery::decode_all_versioned(&invalid.encode_versioned()) {
+            Ok(_) => panic!("all-zero signed query signature must be rejected"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("all zero"),
+            "unexpected versioned signed query decode error: {message}"
+        );
+        assert!(
+            !message.contains("panic during decode"),
+            "all-zero signatures should not surface as decode panics: {message}"
         );
     }
 

@@ -1618,6 +1618,7 @@ mod tests {
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
+    const ED25519_ALL_ZERO_PUBLIC_KEY: [u8; 32] = [0_u8; 32];
 
     const ED25519_NON_CANONICAL_IDENTITY: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -2472,6 +2473,21 @@ mod tests {
     }
 
     #[test]
+    fn canonical_decode_rejects_all_zero_public_key() {
+        let _guard = guard_default_label();
+        let account = AccountId::new(ed25519_pk());
+        let mut canonical = AccountAddress::from_account_id(&account)
+            .expect("encode")
+            .canonical_bytes()
+            .expect("bytes");
+        let offset = canonical.len() - ED25519_ALL_ZERO_PUBLIC_KEY.len();
+        canonical[offset..].copy_from_slice(&ED25519_ALL_ZERO_PUBLIC_KEY);
+
+        let err = AccountAddress::from_canonical_bytes(&canonical).unwrap_err();
+        assert!(matches!(err, AccountAddressError::InvalidPublicKey));
+    }
+
+    #[test]
     fn canonical_decode_rejects_non_canonical_public_key() {
         let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
@@ -2718,6 +2734,35 @@ mod tests {
         let parsed = AccountAddress::parse_encoded(&i105, Some(42)).expect("parse i105");
         let decoded = parsed.to_account_controller().expect("controller");
         assert_eq!(decoded.multisig_policy().expect("multisig"), &policy);
+    }
+
+    #[test]
+    fn multisig_address_rejects_inert_member_public_key() {
+        let _guard = guard_default_label();
+        let members = vec![
+            MultisigMember::new(ed25519_pk_with(1), 1).expect("member"),
+            MultisigMember::new(ed25519_pk_with(2), 2).expect("member"),
+        ];
+        let policy = MultisigPolicy::new(2, members).expect("policy");
+        let account = AccountId::new_multisig(policy);
+
+        for (label, public_key) in [
+            ("all-zero", ED25519_ALL_ZERO_PUBLIC_KEY),
+            ("small-order", ED25519_SMALL_ORDER_POINT),
+        ] {
+            let mut canonical = AccountAddress::from_account_id(&account)
+                .expect("encode")
+                .canonical_bytes()
+                .expect("bytes");
+            let offset = canonical.len() - public_key.len();
+            canonical[offset..].copy_from_slice(&public_key);
+
+            let err = AccountAddress::from_canonical_bytes(&canonical).unwrap_err();
+            assert!(
+                matches!(err, AccountAddressError::InvalidPublicKey),
+                "{label} multisig member key must fail at public-key admission"
+            );
+        }
     }
 
     #[test]

@@ -1265,6 +1265,29 @@ public sealed class SccpBscMainnetTests
                 }, cancellationToken: TestContext.Current.CancellationToken).AsTask());
         Assert.Contains("removed logs", removedBscSourceError.Message);
 
+        foreach (var removed in new object?[] { null, 1, "secret-token-removed" })
+        {
+            var malformedRemovedBscSourceReceipt = new Dictionary<string, object?>(receipt)
+            {
+                ["logs"] = new object?[]
+                {
+                    SourceEventLog(new KeyValuePair<string, object?>("removed", removed)),
+                },
+            };
+            var malformedRemovedBscSourceError = await Assert.ThrowsAsync<ArgumentException>(
+                () => BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                    new BscMainnetInboundEvidence
+                    {
+                        Receipt = malformedRemovedBscSourceReceipt,
+                        Block = block,
+                        SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                    }, cancellationToken: TestContext.Current.CancellationToken).AsTask());
+            Assert.Contains(
+                "receipt.logs[0].removed must be a boolean",
+                malformedRemovedBscSourceError.Message);
+            Assert.DoesNotContain("secret-token", malformedRemovedBscSourceError.Message);
+        }
+
         var missingBscSourceContextLog = SourceEventLog();
         missingBscSourceContextLog.Remove("transactionHash");
         var missingBscSourceContextReceipt = new Dictionary<string, object?>(receipt)

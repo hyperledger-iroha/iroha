@@ -996,10 +996,10 @@ pub struct AuditorSignatureV1 {
 
 impl AuditorSignatureV1 {
     fn validate(&self) -> Result<(), RepairValidationError> {
-        if self.public_key.is_empty() {
+        if self.public_key.is_empty() || crate::inert_bytes(&self.public_key) {
             return Err(RepairValidationError::InvalidPublicKey);
         }
-        if self.signature.is_empty() {
+        if self.signature.is_empty() || crate::inert_bytes(&self.signature) {
             return Err(RepairValidationError::InvalidSignature);
         }
         Ok(())
@@ -1130,6 +1130,26 @@ impl SignedAuditorRequestV1 {
             });
         }
 
+        let public_key_bytes: [u8; ED25519_PUBLIC_KEY_LENGTH] = self
+            .signature
+            .public_key
+            .as_slice()
+            .try_into()
+            .map_err(|err| AuditorSignatureVerificationError::InvalidPublicKey {
+                reason: format!("invalid public key material: {err}"),
+            })?;
+        crate::checked_ed25519_verifying_key_from_bytes(&public_key_bytes)
+            .map_err(|reason| AuditorSignatureVerificationError::InvalidPublicKey { reason })?;
+        let signature_bytes: [u8; ED25519_SIGNATURE_LENGTH] = self
+            .signature
+            .signature
+            .as_slice()
+            .try_into()
+            .map_err(|err| AuditorSignatureVerificationError::Verification {
+                reason: format!("invalid signature material: {err}"),
+            })?;
+        crate::checked_ed25519_signature_from_bytes(&signature_bytes)
+            .map_err(|reason| AuditorSignatureVerificationError::Verification { reason })?;
         let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &self.signature.public_key)
             .map_err(|err| AuditorSignatureVerificationError::InvalidPublicKey {
                 reason: err.to_string(),
@@ -1336,6 +1356,16 @@ fn ensure_digest(digest: &[u8; 32], field: &'static str) -> Result<(), RepairVal
 mod tests {
     use super::*;
     use norito::codec::{Decode, Encode};
+
+    const SMALL_ORDER_R: [u8; ED25519_PUBLIC_KEY_LENGTH] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; ED25519_PUBLIC_KEY_LENGTH] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
 
     fn provider_id() -> [u8; 32] {
         [0xAA; 32]
@@ -1747,9 +1777,40 @@ mod tests {
             .verify_signature()
             .expect_err("all-zero signature material must fail closed");
         assert!(
-            matches!(err, AuditorSignatureVerificationError::Verification { .. }),
+            matches!(
+                err,
+                AuditorSignatureVerificationError::Validation(
+                    RepairValidationError::InvalidSignature
+                )
+            ),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn signed_auditor_request_signature_rejects_malformed_signature_r() {
+        let key_pair = checked_auditor_keypair();
+
+        for (label, replacement_r, expected_reason) in [
+            ("small-order", SMALL_ORDER_R, "small-order"),
+            ("noncanonical", NONCANONICAL_R, "not a canonical"),
+        ] {
+            let mut envelope = signed_auditor_report(&key_pair, "REP-367");
+            envelope.signature.signature[..ED25519_PUBLIC_KEY_LENGTH]
+                .copy_from_slice(&replacement_r);
+
+            let err = envelope
+                .verify_signature()
+                .expect_err("malformed signature R must fail closed");
+            assert!(
+                matches!(
+                    &err,
+                    AuditorSignatureVerificationError::Verification { reason }
+                        if reason.contains(expected_reason)
+                ),
+                "{label} signature R produced unexpected error: {err:?}"
+            );
+        }
     }
 
     #[test]

@@ -1,12 +1,14 @@
 //! Tests for BN254 field arithmetic backends.
 
 #![cfg(feature = "ivm_zk_tests")]
-use halo2curves::{bn256::Fr, ff::Field};
+use halo2curves::{
+    bn256::Fr,
+    ff::{Field, derive::rand_core::OsRng},
+};
 use ivm::{
     bn254_vec::{FieldElem, MODULUS, add, add_scalar, mul, mul_scalar, sub, sub_scalar},
     field_dispatch::{self, FieldArithmetic},
 };
-use rand_core::OsRng;
 
 fn lt_modulus(a: &FieldElem) -> bool {
     for i in (0..4).rev() {

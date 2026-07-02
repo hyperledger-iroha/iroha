@@ -13,9 +13,7 @@
 use std::collections::BTreeSet;
 
 use blake3::Hasher;
-use ed25519_dalek::{
-    PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey, Verifier, VerifyingKey,
-};
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
@@ -109,7 +107,11 @@ pub struct OrderbookSignatureV1 {
 
 impl OrderbookSignatureV1 {
     fn validate(&self) -> Result<(), OrderbookValidationError> {
-        if self.public_key.is_empty() || self.signature.is_empty() {
+        if self.public_key.is_empty()
+            || crate::inert_bytes(&self.public_key)
+            || self.signature.is_empty()
+            || crate::inert_bytes(&self.signature)
+        {
             return Err(OrderbookValidationError::InvalidSignature);
         }
         if matches!(self.algorithm, SignatureAlgorithm::Ed25519) {
@@ -1180,26 +1182,19 @@ fn verify_ed25519_orderbook_signature(
 ) -> Result<(), OrderbookValidationError> {
     let mut public_key = [0u8; PUBLIC_KEY_LENGTH];
     public_key.copy_from_slice(&signature.public_key);
-    let verifying_key = VerifyingKey::from_bytes(&public_key).map_err(|err| {
-        OrderbookValidationError::InvalidPublicKey {
-            reason: err.to_string(),
-        }
-    })?;
+    let verifying_key = crate::checked_ed25519_verifying_key_from_bytes(&public_key)
+        .map_err(|err| OrderbookValidationError::InvalidPublicKey { reason: err })?;
 
     let mut signature_bytes = [0u8; SIGNATURE_LENGTH];
     signature_bytes.copy_from_slice(&signature.signature);
-    let signature =
-        crate::checked_ed25519_signature_from_bytes(&signature_bytes).ok_or_else(|| {
-            OrderbookValidationError::SignatureVerification {
-                reason: "signature payload must not be all zero".to_owned(),
-            }
-        })?;
+    let signature = crate::checked_ed25519_signature_from_bytes(&signature_bytes)
+        .map_err(|reason| OrderbookValidationError::SignatureVerification { reason })?;
 
-    verifying_key.verify(digest, &signature).map_err(|err| {
-        OrderbookValidationError::SignatureVerification {
+    verifying_key
+        .verify_strict(digest, &signature)
+        .map_err(|err| OrderbookValidationError::SignatureVerification {
             reason: err.to_string(),
-        }
-    })
+        })
 }
 
 fn validate_digest(
@@ -2027,11 +2022,17 @@ mod tests {
 
         let err = verify_order_request_signature_v1(&signed)
             .expect_err("all-zero order signature must be rejected");
-        assert!(matches!(
-            err,
-            OrderbookValidationError::SignatureVerification { reason }
-                if reason.contains("all zero")
-        ));
+        assert!(matches!(err, OrderbookValidationError::InvalidSignature));
+    }
+
+    #[test]
+    fn verify_order_signature_rejects_all_zero_public_key_material() {
+        let mut signed = sign_order(order(), 0x19);
+        signed.signature.public_key = vec![0; PUBLIC_KEY_LENGTH];
+
+        let err = verify_order_request_signature_v1(&signed)
+            .expect_err("all-zero order public key must be rejected");
+        assert!(matches!(err, OrderbookValidationError::InvalidSignature));
     }
 
     #[test]

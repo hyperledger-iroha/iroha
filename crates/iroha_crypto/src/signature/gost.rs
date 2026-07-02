@@ -1518,6 +1518,12 @@ fn parse_public_generic(params: &CurveParams, payload: &[u8]) -> Result<PublicKe
             payload.len()
         )));
     }
+    if payload.iter().all(|&byte| byte == 0) {
+        return Err(ParseError(format!(
+            "public key for {} must not be all zero",
+            params.name
+        )));
+    }
     let (x_bytes, y_bytes) = payload.split_at(params.scalar_len);
     let point = AffinePoint::new(le_bytes_to_biguint(x_bytes), le_bytes_to_biguint(y_bytes));
     if !is_on_curve(params, &point) {
@@ -1543,6 +1549,9 @@ fn scalar_from_private(params: &CurveParams, key: &PrivateKey) -> Result<BigUint
 
 fn point_from_public(params: &CurveParams, key: &PublicKey) -> Result<AffinePoint, Error> {
     if key.as_bytes().len() != params.scalar_len * 2 {
+        return Err(Error::BadSignature);
+    }
+    if key.as_bytes().iter().all(|&byte| byte == 0) {
         return Err(Error::BadSignature);
     }
     let (x_bytes, y_bytes) = key.as_bytes().split_at(params.scalar_len);
@@ -2262,6 +2271,54 @@ mod tests {
         assert!(parse_private_generic(params, &[0x01]).is_err());
         // Public key must be 2 * scalar_len bytes.
         assert!(parse_public_generic(params, &[0x02; 10]).is_err());
+    }
+
+    #[test]
+    fn parse_public_key_rejects_all_zero_payloads() {
+        for algorithm in [
+            Algorithm::Gost3410_2012_256ParamSetA,
+            Algorithm::Gost3410_2012_256ParamSetB,
+            Algorithm::Gost3410_2012_256ParamSetC,
+            Algorithm::Gost3410_2012_512ParamSetA,
+            Algorithm::Gost3410_2012_512ParamSetB,
+        ] {
+            let params = params_for_algorithm(algorithm).unwrap().curve();
+            let payload = vec![0u8; params.scalar_len * 2];
+
+            let err = parse_public_key(algorithm, &payload)
+                .expect_err("all-zero GOST public-key payload must fail");
+
+            assert!(
+                err.to_string().contains("all zero"),
+                "unexpected error for {algorithm:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_rejects_internal_all_zero_public_key() {
+        let (public, private) = seed_pair();
+        let params = match params_for_algorithm(Algorithm::Gost3410_2012_256ParamSetA).unwrap() {
+            Params::Bits256(params) => params,
+            _ => unreachable!(),
+        };
+        let message = b"reject zero GOST verifier key";
+        let signature = sign(Algorithm::Gost3410_2012_256ParamSetA, message, &private)
+            .expect("valid GOST signature");
+        let zero_public = PublicKey {
+            bytes_le: vec![0u8; public.as_bytes().len()],
+        };
+
+        let err = verify(
+            Algorithm::Gost3410_2012_256ParamSetA,
+            message,
+            &signature,
+            &zero_public,
+        )
+        .expect_err("all-zero GOST verifier key must fail");
+
+        assert!(matches!(err, Error::BadSignature));
+        assert_eq!(zero_public.as_bytes().len(), params.scalar_len * 2);
     }
 
     #[test]

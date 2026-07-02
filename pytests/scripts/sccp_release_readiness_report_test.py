@@ -3435,6 +3435,47 @@ def test_release_readiness_report_guards_tron_route_config_canonical_manifest_ga
         assert checked_markers > 0
 
 
+def test_release_readiness_report_guards_ton_route_manifest_cli_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin TON route-manifest CLI guards."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._ton_route_manifest_cli_gate_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.TON_ROUTE_MANIFEST_CLI_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ton-route-manifest-cli-gate-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = report._ton_route_manifest_cli_gate_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP TON route-manifest CLI source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+
 def test_release_readiness_report_guards_tron_runtime_route_manifest_gate_inventory(
     tmp_path: Path,
 ) -> None:
@@ -10153,6 +10194,46 @@ def test_release_readiness_report_blocks_missing_tron_route_config_canonical_man
     }
 
 
+def test_release_readiness_report_blocks_missing_ton_route_manifest_cli_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when TON route-manifest CLI guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP TON route-manifest CLI source inventory "
+        "scripts/sccp_ton_taira_xor_deploy.test.mjs missing marker: "
+        "TON route manifest rejects duplicate CLI options before writing"
+    )
+    monkeypatch.setattr(
+        report,
+        "_ton_route_manifest_cli_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["ton_route_manifest_cli_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["tron_route_config_canonical_manifest_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
 def test_release_readiness_report_blocks_missing_tron_runtime_route_manifest_gate(
     tmp_path: Path,
     monkeypatch,
@@ -13328,6 +13409,8 @@ def test_release_readiness_guards_evm_source_live_production_surface() -> None:
             "source bridge runtime bytecode hash must match bridge_code_hash",
             "deployment receipt block receiptsRoot metadata must be verified",
             "Ethereum source deployment receipt block finality metadata must be verified",
+            "type(value) is not str",
+            'f"{label} must be canonical lowercase 0x hex"',
             "source verifier material hash metadata must match canonical inputs",
             "source adapter engine deployment hash metadata must match canonical inputs",
             "expected source verifier material hash argument must match ",
@@ -13349,6 +13432,9 @@ def test_release_readiness_guards_evm_source_live_production_surface() -> None:
             "test_evm_source_live_rejects_receipt_block_code_hash_drift",
             "test_evm_source_live_toml_revalidates_imported_summary_metadata",
             "test_evm_source_live_toml_requires_independent_pins",
+            "test_evm_source_live_cli_parsers_reject_non_string_values_without_stringification",
+            "HostileSourceLiveParserValue",
+            "secret-token-evm-source-live-parser-value",
             "test_evm_source_json_rpc_redacts_transport_and_error_response_details",
             "duplicate JSON keys",
         ),
@@ -13403,6 +13489,7 @@ def test_release_readiness_guards_evm_live_destination_production_surface() -> N
             "verifier key hash metadata must match verifyingKeyHash",
             "destination binding hash metadata must match canonical live inputs",
             "destination binding key metadata must match canonical inputs",
+            "type(value) is not str",
             "route-canary MessageProofAccepted destinationBindingHash does not",
             "route-canary MessageProofAccepted verifierBackendHash does not",
             "route-canary MessageProofAccepted proofFamilyHash does not match",
@@ -13429,6 +13516,9 @@ def test_release_readiness_guards_evm_live_destination_production_surface() -> N
             "test_live_evm_evidence_rejects_bridge_code_hash_drift",
             "test_live_evm_evidence_rejects_bridge_destination_binding_drift",
             "test_live_evm_full_toml_revalidates_imported_summary_metadata",
+            "test_evm_live_cli_parsers_reject_non_string_values_without_stringification",
+            "HostileEvmLiveParserValue",
+            "secret-token-evm-live-parser-value",
             "test_live_evm_route_canary_rejects_unverified_transaction_metadata",
             "test_live_evm_bsc_default_latest_route_canary_renders_full_toml",
             "finality_policy",
@@ -15109,6 +15199,10 @@ def test_release_readiness_report_required_evidence_items_are_unique(
     assert "repeated public section headings" in required_evidence
     assert "noncanonical required-section order" in required_evidence
     assert "canonical Required Release Evidence bullet spelling" in required_evidence
+    assert (
+        "not-ready nested schema, hash/flag-coherence, and route-canary "
+        "proof-context/hash-role/common/truth-semantic blockers"
+    ) in required_evidence
     assert "must not contain empty path-list segments" in required_evidence
     assert "`--artifacts-path <bridge-target>/dotnet-artifacts`" in required_evidence
     assert "`-p:ProduceReferenceAssembly=false`" in required_evidence
@@ -16394,6 +16488,70 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             "route canary receipt block number must be a positive integer",
         ),
     )
+    route_canary_log_index_exactness_cases = (
+        (
+            "log_index",
+            "0",
+            "route canary log_index must be a u32 integer",
+        ),
+        (
+            "log_index",
+            True,
+            "route canary log_index must be a u32 integer",
+        ),
+        (
+            "log_index",
+            -1,
+            "route canary log_index must be a u32 integer",
+        ),
+        (
+            "log_index",
+            0x1_0000_0000,
+            "route canary log_index must be a u32 integer",
+        ),
+        (
+            "log_index",
+            None,
+            "route canary log_index must be a u32 integer",
+        ),
+    )
+    route_canary_proof_context_exactness_cases = (
+        (
+            "target_domain",
+            report.SCCP_DOMAIN_BSC,
+            "route canary target_domain must be active launch domain",
+        ),
+        (
+            "target_domain",
+            "1",
+            "route canary target_domain must be an integer",
+        ),
+        (
+            "target_domain",
+            True,
+            "route canary target_domain must be an integer",
+        ),
+        (
+            "proof_version",
+            2,
+            "route canary proof_version must be 1",
+        ),
+        (
+            "proof_version",
+            "1",
+            "route canary proof_version must be an integer",
+        ),
+        (
+            "proof_source_domain",
+            report.ACTIVE_LAUNCH_DOMAIN,
+            "route canary proof_source_domain must be SORA domain",
+        ),
+        (
+            "proof_source_domain",
+            "0",
+            "route canary proof_source_domain must be an integer",
+        ),
+    )
     route_canary_evidence_bound_exactness_cases = (
         (
             "evidence_bound",
@@ -16541,6 +16699,48 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             "route canary evidence source must be a non-empty canonical string",
         ),
     )
+    route_canary_binding_hash_cases = (
+        (
+            "route_allowlist_hash",
+            None,
+            "route canary route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist_hash",
+            "0x" + "00" * 32,
+            "route canary route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist_hash",
+            fixed_hex32(0x39).upper(),
+            "route canary route allowlist hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "route_allowlist_hash",
+            fixed_hex32(0xFE),
+            "route canary route allowlist hash must match route_allowlist_hash",
+        ),
+        (
+            "destination_binding_hash",
+            None,
+            "route canary destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding_hash",
+            "0x" + "00" * 32,
+            "route canary destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding_hash",
+            fixed_hex32(0x3A).upper(),
+            "route canary destination binding hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "destination_binding_hash",
+            fixed_hex32(0xFD),
+            "route canary destination binding hash must match destination_binding_hash",
+        ),
+    )
     route_canary_hex32_exactness_cases = (
         (
             "evidence_hash",
@@ -16551,6 +16751,36 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             "evidence_hash",
             fixed_hex32(0x30).upper(),
             "route canary evidence hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "call_data_sha256",
+            None,
+            "route canary call data SHA-256 must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "payload_hash",
+            "0x" + "00" * 32,
+            "route canary payload hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "statement_hash",
+            fixed_hex32(0x33).upper(),
+            "route canary statement hash must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "commitment_root",
+            1,
+            "route canary commitment root must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "finality_height",
+            "0x" + "00" * 32,
+            "route canary finality height must be a canonical non-zero bytes32 hex string",
+        ),
+        (
+            "finality_block_hash",
+            fixed_hex32(0x34).upper(),
+            "route canary finality block hash must be a canonical non-zero bytes32 hex string",
         ),
         (
             "transaction_hash",
@@ -16640,11 +16870,35 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
     )
     route_canary_hash_roles = (
         ("evidence_hash", "evidence hash"),
+        ("call_data_sha256", "call data SHA-256"),
+        ("payload_hash", "payload hash"),
+        ("statement_hash", "statement hash"),
+        ("commitment_root", "commitment root"),
+        ("finality_height", "finality height"),
+        ("finality_block_hash", "finality block hash"),
         ("transaction_hash", "transaction hash"),
         ("receipt_block_hash", "receipt block hash"),
         ("block_receipts_root", "block receipts root"),
         ("message_id", "message id"),
     )
+    all_lanes = report._load_all_lanes_module()
+    active_profile = all_lanes.LANE_PROFILES[report.ACTIVE_LAUNCH_DOMAIN]
+    active_template_hash = "0x" + next(
+        iter(all_lanes._source_material_template_hashes(active_profile).values())
+    ).hex()
+    route_canary_template_hash_cases = tuple(
+        (
+            f"template_hash.{field}",
+            active_template_hash,
+            f"route canary {label} must be live evidence, not built-in template material",
+        )
+        for field, label in route_canary_hash_roles
+    )
+    assert (
+        "template_hash.evidence_hash",
+        active_template_hash,
+        "route canary evidence hash must be live evidence, not built-in template material",
+    ) in route_canary_template_hash_cases
     route_canary_upstream_hash_reuse_cases = tuple(
         (
             f"upstream_hash_reuse.{target_field}.{source_field}",
@@ -16669,58 +16923,30 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
         None,
         "route canary message id must not reuse route allowlist hash",
     ) in route_canary_upstream_hash_reuse_cases
+    route_canary_sibling_hash_reuse_cases = tuple(
+        (
+            f"hash_reuse.{target_field}.{source_field}",
+            None,
+            f"route canary {target_label} must not reuse {source_label}",
+        )
+        for target_index, (target_field, target_label) in enumerate(
+            route_canary_hash_roles
+        )
+        for source_field, source_label in route_canary_hash_roles[:target_index]
+    )
+    assert (
+        "hash_reuse.finality_block_hash.finality_height",
+        None,
+        "route canary finality block hash must not reuse finality height",
+    ) in route_canary_sibling_hash_reuse_cases
+    assert (
+        "hash_reuse.message_id.block_receipts_root",
+        None,
+        "route canary message id must not reuse block receipts root",
+    ) in route_canary_sibling_hash_reuse_cases
     route_canary_hash_role_reuse_cases = (
         *route_canary_upstream_hash_reuse_cases,
-        (
-            "hash_reuse.transaction_hash.evidence_hash",
-            None,
-            "route canary transaction hash must not reuse evidence hash",
-        ),
-        (
-            "hash_reuse.receipt_block_hash.evidence_hash",
-            None,
-            "route canary receipt block hash must not reuse evidence hash",
-        ),
-        (
-            "hash_reuse.receipt_block_hash.transaction_hash",
-            None,
-            "route canary receipt block hash must not reuse transaction hash",
-        ),
-        (
-            "hash_reuse.block_receipts_root.evidence_hash",
-            None,
-            "route canary block receipts root must not reuse evidence hash",
-        ),
-        (
-            "hash_reuse.block_receipts_root.transaction_hash",
-            None,
-            "route canary block receipts root must not reuse transaction hash",
-        ),
-        (
-            "hash_reuse.block_receipts_root.receipt_block_hash",
-            None,
-            "route canary block receipts root must not reuse receipt block hash",
-        ),
-        (
-            "hash_reuse.message_id.evidence_hash",
-            None,
-            "route canary message id must not reuse evidence hash",
-        ),
-        (
-            "hash_reuse.message_id.transaction_hash",
-            None,
-            "route canary message id must not reuse transaction hash",
-        ),
-        (
-            "hash_reuse.message_id.receipt_block_hash",
-            None,
-            "route canary message id must not reuse receipt block hash",
-        ),
-        (
-            "hash_reuse.message_id.block_receipts_root",
-            None,
-            "route canary message id must not reuse block receipts root",
-        ),
+        *route_canary_sibling_hash_reuse_cases,
     )
     cases = (
         (
@@ -16759,11 +16985,15 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
             "route canary receipt block number must be a positive integer",
         ),
         *receipt_block_number_exactness_cases,
+        *route_canary_log_index_exactness_cases,
+        *route_canary_proof_context_exactness_cases,
         *route_canary_evidence_bound_exactness_cases,
         *route_canary_status_exactness_cases,
         *route_canary_evidence_source_exactness_cases,
+        *route_canary_binding_hash_cases,
         *route_canary_hex32_exactness_cases,
         *route_canary_blocker_cases,
+        *route_canary_template_hash_cases,
         *route_canary_hash_role_reuse_cases,
         *route_canary_message_proof_used_exactness_cases,
         *route_canary_receipt_finalized_exactness_cases,
@@ -16798,6 +17028,9 @@ def test_release_readiness_report_blocks_malformed_active_route_canary_metadata(
         elif field.startswith("hash_reuse."):
             _, target_field, source_field = field.split(".", 2)
             canary[target_field] = canary[source_field]
+        elif field.startswith("template_hash."):
+            _, target_field = field.split(".", 1)
+            canary[target_field] = value
         elif field.startswith("blockers."):
             canary["blockers"] = value
         elif field.startswith("present_null."):
@@ -16923,6 +17156,11 @@ def test_release_readiness_report_blocks_malformed_active_route_allowlist_bindin
     report = load_report_module()
     evidence, _ = write_active_launch_evidence(tmp_path)
     native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    all_lanes = report._load_all_lanes_module()
+    active_profile = all_lanes.LANE_PROFILES[report.ACTIVE_LAUNCH_DOMAIN]
+    active_template_hash = "0x" + next(
+        iter(all_lanes._source_material_template_hashes(active_profile).values())
+    ).hex()
     expected_match_flag_exactness_cases = (
         (
             "route_allowlist.expected_route_allowlist_hash_matches",
@@ -17006,6 +17244,16 @@ def test_release_readiness_report_blocks_malformed_active_route_allowlist_bindin
             "route allowlist hash must match the expected canonical source, deployment, and destination binding hash",
         ),
         (
+            "route_allowlist.template_route_hash",
+            active_template_hash,
+            "route allowlist hash must be route binding evidence, not built-in template material",
+        ),
+        (
+            "route_allowlist.template_expected_route_hash",
+            active_template_hash,
+            "expected route allowlist hash must be route binding evidence, not built-in template material",
+        ),
+        (
             "source_record_hashes.source_verifier_material_hash",
             "0x" + "00" * 32,
             "route allowlist source verifier material hash must be a canonical non-zero bytes32 hex string",
@@ -17052,6 +17300,13 @@ def test_release_readiness_report_blocks_malformed_active_route_allowlist_bindin
         assert active_lane is not None
         route_allowlist = active_lane["route_allowlist"]
         if path == "route_allowlist.hash_mismatch":
+            route_allowlist["expected_route_allowlist_hash"] = value
+            route_allowlist["expected_route_allowlist_hash_matches"] = True
+        elif path == "route_allowlist.template_route_hash":
+            route_allowlist["route_allowlist_hash"] = value
+            route_allowlist["expected_route_allowlist_hash"] = value
+            route_allowlist["expected_route_allowlist_hash_matches"] = True
+        elif path == "route_allowlist.template_expected_route_hash":
             route_allowlist["expected_route_allowlist_hash"] = value
             route_allowlist["expected_route_allowlist_hash_matches"] = True
         elif path.startswith("route_allowlist.blockers."):
@@ -17162,6 +17417,26 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
         "{ACTIVE_LAUNCH_DISPLAY}",
         report.ACTIVE_LAUNCH_DISPLAY,
     )
+    active_source_gate_template_hash_blocker = (
+        "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be "
+        "deployed gate evidence, not built-in template material"
+    ).replace(
+        "{ACTIVE_LAUNCH_DISPLAY}",
+        report.ACTIVE_LAUNCH_DISPLAY,
+    )
+    active_source_gate_template_audit_hash_blocker = (
+        "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes "
+        "evm_source_gate_hash must be deployed audit evidence, not built-in "
+        "template material"
+    ).replace(
+        "{ACTIVE_LAUNCH_DISPLAY}",
+        report.ACTIVE_LAUNCH_DISPLAY,
+    )
+    all_lanes = report._load_all_lanes_module()
+    active_profile = all_lanes.LANE_PROFILES[report.ACTIVE_LAUNCH_DOMAIN]
+    active_template_hash = "0x" + next(
+        iter(all_lanes._source_material_template_hashes(active_profile).values())
+    ).hex()
     expected_destination_match_flag_exactness_cases = (
         (
             "destination_binding.expected_destination_binding_hash_matches",
@@ -17196,6 +17471,16 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             "governed deployment source verifier material hash must not reuse source adapter engine deployment hash",
         ),
         (
+            "source_record_hashes.template_source_material_hash",
+            active_template_hash,
+            "governed deployment source verifier material hash must be deployed evidence, not built-in template material",
+        ),
+        (
+            "source_record_hashes.template_source_deployment_hash",
+            active_template_hash,
+            "governed deployment source adapter engine deployment hash must be deployed evidence, not built-in template material",
+        ),
+        (
             "destination_binding.destination_binding_hash",
             "0x" + "00" * 32,
             "governed deployment destination binding hash must be a canonical non-zero bytes32 hex string",
@@ -17209,6 +17494,16 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             "destination_binding.hash_reuse_source_adapter",
             None,
             "governed deployment destination binding hash must not reuse source adapter engine deployment hash",
+        ),
+        (
+            "destination_binding.template_destination_binding_hash",
+            active_template_hash,
+            "governed deployment destination binding hash must be destination binding evidence, not built-in template material",
+        ),
+        (
+            "destination_binding.template_expected_destination_binding_hash",
+            active_template_hash,
+            "governed deployment expected destination binding hash must be destination binding evidence, not built-in template material",
         ),
         (
             "destination_binding.expected_destination_binding_hash",
@@ -17335,6 +17630,16 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             "governed deployment source adapter gate hash must not reuse destination binding hash",
         ),
         (
+            "source_adapter_gate.template_gate_hash",
+            active_template_hash,
+            active_source_gate_template_hash_blocker,
+        ),
+        (
+            "source_adapter_gate.template_audit_hash",
+            active_template_hash,
+            active_source_gate_template_audit_hash_blocker,
+        ),
+        (
             "source_adapter_gate.audit_hashes",
             {"unexpected_gate_hash": fixed_hex32(0x54)},
             active_source_gate_audit_hashes_blocker,
@@ -17354,6 +17659,14 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             source_hashes["source_adapter_engine_deployment_hash"] = source_hashes[
                 "source_verifier_material_hash"
             ]
+        elif path == "source_record_hashes.template_source_material_hash":
+            active_lane["source_record_hashes"][
+                "source_verifier_material_hash"
+            ] = value
+        elif path == "source_record_hashes.template_source_deployment_hash":
+            active_lane["source_record_hashes"][
+                "source_adapter_engine_deployment_hash"
+            ] = value
         elif path == "destination_binding.hash_mismatch":
             active_lane["destination_binding"]["expected_destination_binding_hash"] = (
                 value
@@ -17385,6 +17698,21 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             active_lane["destination_binding"][
                 "expected_destination_binding_hash_matches"
             ] = True
+        elif path == "destination_binding.template_destination_binding_hash":
+            active_lane["destination_binding"]["destination_binding_hash"] = value
+            active_lane["destination_binding"][
+                "expected_destination_binding_hash"
+            ] = value
+            active_lane["destination_binding"][
+                "expected_destination_binding_hash_matches"
+            ] = True
+        elif path == "destination_binding.template_expected_destination_binding_hash":
+            active_lane["destination_binding"][
+                "expected_destination_binding_hash"
+            ] = value
+            active_lane["destination_binding"][
+                "expected_destination_binding_hash_matches"
+            ] = True
         elif path == "source_adapter_gate":
             active_lane.pop("source_adapter_gate", None)
         elif path.startswith("source_adapter_gate.blockers."):
@@ -17412,6 +17740,15 @@ def test_release_readiness_report_blocks_malformed_active_governed_deployment_me
             active_lane["source_adapter_gate"]["gate_hash"] = reused_hash
             active_lane["source_adapter_gate"]["audit_hashes"] = {
                 "evm_source_gate_hash": reused_hash
+            }
+        elif path == "source_adapter_gate.template_gate_hash":
+            active_lane["source_adapter_gate"]["gate_hash"] = value
+            active_lane["source_adapter_gate"]["audit_hashes"] = {
+                "evm_source_gate_hash": value
+            }
+        elif path == "source_adapter_gate.template_audit_hash":
+            active_lane["source_adapter_gate"]["audit_hashes"] = {
+                "evm_source_gate_hash": value
             }
         else:
             section, field = path.split(".", 1)
@@ -35819,6 +36156,9 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             'Assert.Contains("digest must not be zero", zeroDigest.Message)',
             "duplicateReceipt",
             'Assert.Contains("removed logs", removedSourceEventLog.Message)',
+            'Assert.Contains("receipt.logs[0].removed must be a boolean", malformedRemovedError.Message)',
+            'Assert.DoesNotContain("secret-token", malformedRemovedError.Message)',
+            "secret-token-removed",
             'foreach (var missingField in new[] { "transactionHash", "blockHash", "blockNumber" })',
             "Assert.Null(receiptProofHashOnlyEvidence.ReceiptProof)",
             "ReceiptProofHash must not be zero",
@@ -35866,6 +36206,16 @@ def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> No
             "Assert.Throws<ArgumentException>(() => BuildBytes(sourceDomain: 2));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(nodes: Array.Empty<byte[]>()));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(inclusionBranch: Array.Empty<byte[]>()));",
+        ),
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "SccpBscMainnetTests.cs": (
+            'Assert.Contains("removed logs", removedBscSourceError.Message)',
+            "receipt.logs[0].removed must be a boolean",
+            'Assert.DoesNotContain("secret-token", malformedRemovedBscSourceError.Message)',
+            "secret-token-removed",
         ),
     }
     missing: list[str] = []
@@ -36660,8 +37010,10 @@ def test_release_readiness_guards_ethereum_noncanonical_chain_id_tests() -> None
         ),
         ROOT / "pytests" / "scripts" / "sccp_evm_receipt_proof_evidence_test.py": (
             "test_collect_receipt_proof_rejects_noncanonical_chain_id_quantity",
+            "test_receipt_cli_parsers_reject_non_string_values_without_stringification",
             'for chain_id_result in ("0x01", "0X1", " 0x1", "0x1 ", 1):',
             "rpc_response(chain_id_result)",
+            "secret-token-receipt-parser-value",
         ),
     }
     missing = []
