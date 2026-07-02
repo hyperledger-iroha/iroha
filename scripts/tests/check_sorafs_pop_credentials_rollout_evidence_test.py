@@ -267,6 +267,64 @@ def test_response_file_complete_evidence_is_ready(tmp_path: Path, capsys) -> Non
     assert payload["status"] == "ready"
 
 
+def test_enrollment_portal_route_count_must_match_unique_routes(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    portal = complete_payloads()["enrollment_portal"]
+    portal["route_count"] += 1
+    portal["passed_route_count"] = portal["route_count"]
+    write_json(evidence_dir / "enrollment_portal.json", portal)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["enrollment_portal"]["artifacts"][0]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_enrollment_portal_routes_must_not_duplicate(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    portal = complete_payloads()["enrollment_portal"]
+    portal["routes"].append(dict(portal["routes"][0]))
+    portal["route_count"] = len(portal["routes"])
+    portal["passed_route_count"] = len(portal["routes"])
+    write_json(evidence_dir / "enrollment_portal.json", portal)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["enrollment_portal"]["artifacts"][0]
+    assert "routes must not contain duplicate values" in artifact["errors"]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
 def test_deployment_context_is_required(tmp_path: Path) -> None:
     evidence_dir = write_complete_evidence(tmp_path)
     issuer = complete_payloads()["issuer_bundle"]

@@ -65,6 +65,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
 )
 from sorafs_required_kinds import (  # noqa: E402
     parse_required_kinds as parse_required_evidence_kinds,
@@ -345,6 +346,23 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             require_bool_true(record, field, errors, path=f"routes[{index}].{field}")
 
 
+def validate_route_inventory(
+    payload: dict[str, Any],
+    required_routes: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    require_count_equal(payload, "route_count", "passed_route_count", errors)
+    require_string_coverage(payload, "routes", "name", required_routes, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+
+
 def validate_auditor_roster(
     payload: dict[str, Any],
     errors: list[str],
@@ -377,9 +395,8 @@ def validate_auditor_api(
     errors: list[str],
     options: ValidationOptions,
 ) -> None:
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_hex(payload, "roster_digest_hex", HEX64_LEN, errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_AUDITOR_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_AUDITOR_ROUTES, errors)
     require_bool_true(payload, "signed_auditor_envelope_required", errors)
     require_bool_true(payload, "nonce_replay_rejected", errors)
     require_bool_true(payload, "legacy_raw_payload_rejected", errors)
@@ -393,10 +410,9 @@ def validate_worker_lifecycle(
     errors: list[str],
     options: ValidationOptions,
 ) -> None:
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_hex(payload, "roster_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "evidence_bundle_digest_hex", HEX64_LEN, errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_WORKER_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_WORKER_ROUTES, errors)
     require_string_coverage(payload, "statuses_observed", "", REQUIRED_LIFECYCLE_STATUSES, errors)
     require_bool_true(payload, "worker_permission_enforced", errors)
     require_bool_true(payload, "lease_heartbeat_enforced", errors)
@@ -418,10 +434,9 @@ def validate_event_streams(
     errors: list[str],
     options: ValidationOptions,
 ) -> None:
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_hex(payload, "roster_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "evidence_bundle_digest_hex", HEX64_LEN, errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_EVENT_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_EVENT_ROUTES, errors)
     require_bool_true(payload, "backlog_replay_verified", errors)
     require_bool_true(payload, "sse_delivery_verified", errors)
     require_bool_true(payload, "websocket_delivery_verified", errors)

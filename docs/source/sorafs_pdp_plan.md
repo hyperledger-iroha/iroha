@@ -40,7 +40,9 @@ Implemented locally:
   provider-roster digests are published as `valid_policy_digests` and
   `valid_provider_roster_digests`, and governance approval evidence must bind
   its `policy_digest_hex` and `provider_roster_digest_hex` to the matching
-  valid proof-generation digests.
+  valid proof-generation digests. Provider-transport artifacts also bind
+  `route_count` to the unique canonical `routes[].name` inventory and reject
+  duplicate route entries before promotion can report ready.
   Proof-summary mismatches are recorded on the offending artifact in the JSON
   summary before required-kind validity is reported. Policy and provider-roster
   mismatches are recorded on the offending governance approval artifact through

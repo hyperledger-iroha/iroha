@@ -125,6 +125,10 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
 - Apply plans through the Nexus config/lifecycle helpers (`State::apply_lane_lifecycle`,
   `Queue::apply_lane_lifecycle`) to add/retire lanes without restart; routing,
   TEU snapshots, and manifest registries reload automatically after a successful plan.
+  Lifecycle updates also prune lane-relay emergency overrides for reset lanes
+  and for lanes absent from the updated catalog; pre-staged overrides for newly
+  created lane ids are treated as stale prior-incarnation state and must be
+  reinstalled after the lifecycle update.
 - External Nexus config swaps and manual lifecycle plans reject
   autoscale-managed ownership claims, and manual lifecycle plans also reject
   attempts to retire valid autoscale-managed lanes. The consensus autoscaler is
@@ -426,8 +430,12 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   proposal assembly also defers an oversized first candidate when another
   scanned transaction fits the remaining gas and IVM budgets, preventing a
   gas-heavy lane from suppressing fitting cross-lane work during multilane
-  lookahead. The lookahead gate now counts policy-reachable active lanes at the
-  candidate block height, so unrouted same-dataspace sidecars and
+  lookahead. Pending queue reconfiguration uses the same height-aware autoscale
+  range and keeps queued default-route transactions plus local routing-ledger
+  hints on the active default route until an elastic lane's creation height is
+  committed. The lookahead gate now counts policy-reachable active lanes at the
+  candidate block height, so autoscale-owned default anchors, off-default
+  autoscale-owned rule targets, unrouted same-dataspace sidecars, and
   future-created autoscale lanes cannot make an otherwise single-lane proposal
   overfetch and churn deferred transactions before activation.
 - Block validation and block execution also recompute execution-context routing

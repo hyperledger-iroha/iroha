@@ -200,10 +200,13 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["recognized_artifact_count"] == len(MODULE.DEFAULT_REQUIRED_KINDS)
     assert payload["errors"] == []
     assert payload["required"]["transport"]["valid"] is True
-    for row in payload["required"].values():
+    for kind_name, row in payload["required"].items():
+        expected_schema = MODULE.KIND_BY_NAME[kind_name].schema
+        assert row["schema"] == expected_schema
         assert row["present"] is True
         assert row["artifact_count"] == len(row["artifacts"])
         for artifact in row["artifacts"]:
+            assert artifact["schema"] == expected_schema
             assert not artifact["path"].startswith("/")
             assert "\\" not in artifact["path"]
             assert "." not in artifact["path"].split("/")
@@ -232,6 +235,49 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
         ),
     )
     assert aggregate_errors == []
+
+
+def test_schema_less_explicit_evidence_advertises_required_schema(tmp_path: Path) -> None:
+    latest_path = write_json(tmp_path / "latest-cli-output.json", snapshot_summary())
+    provider_path = write_json(tmp_path / "provider-cli-output.json", provider_evidence())
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                f"latest={latest_path}",
+                "--evidence",
+                f"provider={provider_path}",
+                "--require-kind",
+                "latest,provider",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["status"] == "ready"
+    for kind_name, path in (
+        ("latest", latest_path),
+        ("provider", provider_path),
+    ):
+        expected_schema = MODULE.KIND_BY_NAME[kind_name].schema
+        row = payload["required"][kind_name]
+        assert "schema" not in json.loads(path.read_text(encoding="utf-8"))
+        assert row["schema"] == expected_schema
+        assert row["artifacts"][0]["schema"] == expected_schema
+    recognized_schema_by_kind = {
+        artifact["kind"]: artifact["schema"] for artifact in payload["recognized_artifacts"]
+    }
+    assert recognized_schema_by_kind == {
+        "latest": MODULE.KIND_BY_NAME["latest"].schema,
+        "provider": MODULE.KIND_BY_NAME["provider"].schema,
+    }
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -297,6 +343,48 @@ def test_snapshot_status_must_be_allowed_when_present(tmp_path: Path) -> None:
         "latest.status must be accepted/published/ready/ok when present"
         in artifact["errors"]
     )
+
+
+def test_events_must_carry_positive_limit(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = events_evidence()
+    payload.pop("limit")
+    write_json(tmp_path / "events.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["events"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "limit must be a positive integer" in artifact["errors"]
+
+
+def test_events_count_must_not_exceed_limit(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = events_evidence()
+    payload["limit"] = 1
+    payload["events"].append(
+        {
+            "version": 1,
+            "sequence": 2,
+            "snapshot_id_hex": SNAPSHOT_ID,
+            "generated_at_unix": GENERATED_AT,
+            "merkle_root_hex": MERKLE_ROOT,
+            "provider_count": 2,
+        }
+    )
+    payload["count"] = 2
+    payload["next_since"] = 2
+    write_json(tmp_path / "events.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["events"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "count must be <= limit" in artifact["errors"]
 
 
 def test_provider_proof_provider_id_must_match_provider(tmp_path: Path) -> None:

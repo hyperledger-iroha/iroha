@@ -224,6 +224,38 @@ def test_telemetry_requires_gateway_metrics(tmp_path: Path) -> None:
     )
 
 
+def test_local_conformance_scenario_count_must_match_unique_scenarios(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = local_conformance()
+    payload["scenario_count"] = len(MODULE.REQUIRED_SCENARIOS) + 1
+    write_json(tmp_path / "local-conformance.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["local_conformance"]["artifacts"][0]
+    assert "scenario_count must match unique scenarios count" in artifact["errors"]
+
+
+def test_local_conformance_scenarios_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = local_conformance()
+    payload["scenarios"].append(payload["scenarios"][0])
+    payload["scenario_count"] = len(payload["scenarios"])
+    write_json(tmp_path / "local-conformance.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["local_conformance"]["artifacts"][0]
+    assert "scenarios must not contain duplicate values" in artifact["errors"]
+    assert "scenario_count must match unique scenarios count" in artifact["errors"]
+
+
 def test_http3_committed_requires_passed_scenarios(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = transport_scope(http3_committed=True)

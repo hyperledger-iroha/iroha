@@ -165,6 +165,18 @@ def default_gate_metadata(
                 "validator_count": 4,
             }
         ]
+        metadata["valid_evidence_viewer_digest_sets"] = [
+            {
+                "case_digest_hex": SHA256,
+                "roster_hash_hex": SHA256,
+                "session_manifest_digest_hex": SHA256,
+                "watermark_metadata_digest_hex": SHA256,
+                "access_log_digest_hex": SHA256,
+                "legal_hold_receipt_digest_hex": SHA256,
+                "transparency_report_digest_hex": SHA256,
+                "audit_digest_hex": SHA256,
+            }
+        ]
         add_policy()
         metadata["valid_roster_bindings"] = [
             {"case_digest_hex": SHA256, "roster_hash_hex": SHA256}
@@ -177,6 +189,16 @@ def default_gate_metadata(
             }
         ]
         fingerprints.update({"roster_hash_hex": SHA256, "tally_digest_hex": SHA256})
+        fingerprints.update(
+            {
+                "session_manifest_digest_hex": SHA256,
+                "watermark_metadata_digest_hex": SHA256,
+                "access_log_digest_hex": SHA256,
+                "legal_hold_receipt_digest_hex": SHA256,
+                "transparency_report_digest_hex": SHA256,
+                "audit_digest_hex": SHA256,
+            }
+        )
         fingerprints.update({"case_count": 1, "peer_count": 4, "validator_count": 4})
     elif gate_name == "orderbook":
         add_hex_list("valid_contract_digests", "contract_digest_hex")
@@ -184,6 +206,7 @@ def default_gate_metadata(
     elif gate_name == "pdp":
         add_policy()
         add_hex_list("valid_proof_summary_digests", "proof_summary_digest_hex")
+        add_hex_list("valid_provider_roster_digests", "provider_roster_digest_hex")
     elif gate_name == "pop_credentials":
         metadata["valid_juror_sync_bindings"] = [
             {
@@ -213,12 +236,21 @@ def default_gate_metadata(
             "reputation_weight_policy_digest_hex",
         )
     elif gate_name == "reference_sdk_release":
+        add_hex_list("valid_archive_index_digests", "archive_index_digest_hex")
+        add_hex_list("valid_ffi_contract_digests", "ffi_contract_digest_hex")
+        add_hex_list("valid_header_digests", "header_digest_hex")
+        add_hex_list("valid_package_index_digests", "package_index_digest_hex")
         add_policy()
+        add_hex_list(
+            "valid_release_key_fingerprints",
+            "public_key_fingerprint_hex",
+        )
         add_hex_list("valid_release_manifest_digests", "manifest_digest_hex")
         add_hex_list(
             "valid_release_manifest_reference_digests",
             "release_manifest_digest_hex",
         )
+        add_hex_list("valid_smoke_output_digests", "smoke_output_digest_hex")
     elif gate_name == "repair":
         add_hex_list("valid_failure_bundle_digests", "evidence_bundle_digest_hex")
         add_hex_list("valid_handoff_digests", "handoff_digest_hex")
@@ -297,10 +329,12 @@ def gate_summary(
     gate_required_kinds = (
         list(gate.required_kinds) if required_kinds is None else required_kinds
     )
+    required_kind_schemas = MODULE.GATE_REQUIRED_KIND_SCHEMAS.get(gate_name, {})
     required_rows = {}
     for kind_name in gate_required_kinds:
+        kind_schema = required_kind_schemas.get(kind_name, f"{gate.schema}.{kind_name}")
         required_rows[kind_name] = {
-            "schema": f"{gate.schema}.{kind_name}",
+            "schema": kind_schema,
             "present": True,
             "valid": True,
             "artifact_count": 1,
@@ -308,7 +342,7 @@ def gate_summary(
                 {
                     "path": f"artifacts/{gate_name}/{kind_name}.json",
                     "sha256": SHA256,
-                    "schema": f"{gate.schema}.{kind_name}",
+                    "schema": kind_schema,
                     "status": "passed",
                     "fingerprint": {
                         "generated_at_unix": generated_at_unix,
@@ -552,6 +586,17 @@ def test_payload_free_summary_metadata_fields_are_derived_from_gate_contracts() 
     assert set(MODULE.GATE_METADATA_FIELDS) == set(MODULE.GATE_BY_NAME)
 
 
+def test_required_kind_schema_contracts_cover_gate_contracts() -> None:
+    assert set(MODULE.GATE_REQUIRED_KIND_SCHEMAS) == set(MODULE.GATE_BY_NAME)
+
+    for gate in MODULE.GATE_SUMMARY_KINDS:
+        schemas = MODULE.GATE_REQUIRED_KIND_SCHEMAS[gate.name]
+        assert set(schemas) == set(gate.required_kinds)
+        for kind_name, schema in schemas.items():
+            assert MODULE.canonical_string(kind_name) == kind_name
+            assert MODULE.canonical_string(schema) == schema
+
+
 def test_payload_free_summary_metadata_fields_have_validator_coverage() -> None:
     metadata_fields = set(MODULE.PAYLOAD_FREE_SUMMARY_METADATA_FIELDS)
     valid_fields = {field for field in metadata_fields if field.startswith("valid_")}
@@ -601,9 +646,37 @@ def test_payload_free_summary_metadata_fields_have_validator_coverage() -> None:
     assert set(MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_BINDINGS) == (
         scalar_hex_fields
     )
+    assert {
+        field
+        for _gate_name, field in (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS
+        )
+    } == scalar_hex_fields
+    assert {
+        field
+        for _gate_name, field in (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS
+        )
+    } == string_list_fields
+    assert {
+        field
+        for _gate_name, field in (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS
+        )
+    } == positive_int_list_fields
+    assert {
+        field
+        for _gate_name, field in (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS
+        )
+    } == binding_list_fields
     assert set(MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS) == (
         object_list_fields
     )
+    assert {
+        field
+        for _gate_name, field in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS
+    } == object_list_fields
     assert set(MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_FINGERPRINT_HEX_BINDINGS) == (
         object_list_fields
     )
@@ -2377,6 +2450,12 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
             "proof_summary_digest_hex",
         ),
         (
+            "pdp",
+            "valid_provider_roster_digests",
+            ("proof_generation",),
+            "provider_roster_digest_hex",
+        ),
+        (
             "pop_credentials",
             "valid_policy_digests",
             ("verifier_service",),
@@ -2439,6 +2518,36 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
         ),
         (
             "reference_sdk_release",
+            "valid_archive_index_digests",
+            ("release_archive",),
+            "archive_index_digest_hex",
+        ),
+        (
+            "reference_sdk_release",
+            "valid_ffi_contract_digests",
+            ("ffi_header_contract",),
+            "ffi_contract_digest_hex",
+        ),
+        (
+            "reference_sdk_release",
+            "valid_header_digests",
+            ("ffi_header_contract",),
+            "header_digest_hex",
+        ),
+        (
+            "reference_sdk_release",
+            "valid_package_index_digests",
+            ("downstream_bindings",),
+            "package_index_digest_hex",
+        ),
+        (
+            "reference_sdk_release",
+            "valid_release_key_fingerprints",
+            ("signed_manifest",),
+            "public_key_fingerprint_hex",
+        ),
+        (
+            "reference_sdk_release",
             "valid_release_manifest_digests",
             ("signed_manifest",),
             "manifest_digest_hex",
@@ -2454,6 +2563,12 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
                 "governance_approval",
             ),
             "release_manifest_digest_hex",
+        ),
+        (
+            "reference_sdk_release",
+            "valid_smoke_output_digests",
+            ("cookbook_smoke",),
+            "smoke_output_digest_hex",
         ),
         (
             "repair",
@@ -2662,6 +2777,15 @@ def test_pdp_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     assert run_gate(tmp_path, "--require-gate", "pdp") == 0
 
 
+def test_pdp_provider_roster_metadata_for_gate_passes(tmp_path: Path) -> None:
+    payload = gate_summary("pdp")
+    payload["valid_provider_roster_digests"] = [SHA256]
+    add_fingerprint_metadata(payload, provider_roster_digest_hex=SHA256)
+    write_json(tmp_path / "pdp.json", payload)
+
+    assert run_gate(tmp_path, "--require-gate", "pdp") == 0
+
+
 def test_por_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     payload = gate_summary("por")
     payload["valid_policy_digests"] = [SHA256]
@@ -2706,14 +2830,26 @@ def test_reference_sdk_release_policy_metadata_for_gate_passes(
     tmp_path: Path,
 ) -> None:
     payload = gate_summary("reference_sdk_release")
+    payload["valid_archive_index_digests"] = [SHA256]
+    payload["valid_ffi_contract_digests"] = [SHA256]
+    payload["valid_header_digests"] = [SHA256]
+    payload["valid_package_index_digests"] = [SHA256]
     payload["valid_policy_digests"] = [SHA256]
+    payload["valid_release_key_fingerprints"] = [SHA256]
     payload["valid_release_manifest_digests"] = [SHA256]
     payload["valid_release_manifest_reference_digests"] = [SHA256]
+    payload["valid_smoke_output_digests"] = [SHA256]
     add_fingerprint_metadata(
         payload,
+        archive_index_digest_hex=SHA256,
+        ffi_contract_digest_hex=SHA256,
+        header_digest_hex=SHA256,
         manifest_digest_hex=SHA256,
+        package_index_digest_hex=SHA256,
         policy_digest_hex=SHA256,
+        public_key_fingerprint_hex=SHA256,
         release_manifest_digest_hex=SHA256,
+        smoke_output_digest_hex=SHA256,
     )
     write_json(tmp_path / "reference_sdk_release.json", payload)
 
@@ -2776,6 +2912,170 @@ def test_hex_binding_metadata_must_match_recognized_artifact_fingerprints(
         in errors
     )
     assert SHA256 not in errors
+
+
+def test_every_hex_binding_metadata_field_has_owner_kind_tether() -> None:
+    expected = {
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in (
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_FIELDS.keys()
+        )
+    }
+    configured = set(MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS)
+    assert configured == expected
+
+    required_kinds = {
+        gate.name: set(gate.required_kinds) for gate in MODULE.GATE_SUMMARY_KINDS
+    }
+    for gate_name, metadata_field in sorted(configured):
+        source_kinds = MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS[
+            (gate_name, metadata_field)
+        ]
+        assert isinstance(source_kinds, tuple)
+        assert source_kinds
+        assert len(source_kinds) == len(set(source_kinds))
+        assert set(source_kinds) <= required_kinds[gate_name]
+
+
+def test_hex_binding_metadata_without_owner_kind_tether_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = gate_summary("ai_prescreen")
+    monkeypatch.delitem(
+        MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS,
+        ("ai_prescreen", "valid_runner_bindings"),
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "ai_prescreen.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "ai_prescreen",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_runner_bindings source-kind tether is not configured "
+        "for `ai_prescreen`"
+    ) in errors
+
+
+def test_hex_binding_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (
+            "ai_prescreen",
+            "valid_runner_bindings",
+            ("runner",),
+            (
+                "manifest_id_hex",
+                "runner_hash_hex",
+                "subject_digest_hex",
+            ),
+        ),
+        (
+            "hedging_billing",
+            "valid_cycle_bindings",
+            ("billing_cycle",),
+            (
+                "statement_bundle_digest_hex",
+                "reconciliation_digest_hex",
+            ),
+        ),
+        (
+            "moderation_panel",
+            "valid_roster_bindings",
+            ("sortition_roster",),
+            (
+                "case_digest_hex",
+                "roster_hash_hex",
+            ),
+        ),
+        (
+            "moderation_panel",
+            "valid_tally_bindings",
+            ("commit_reveal",),
+            (
+                "case_digest_hex",
+                "roster_hash_hex",
+                "tally_digest_hex",
+            ),
+        ),
+        (
+            "pop_credentials",
+            "valid_juror_sync_bindings",
+            ("juror_client",),
+            (
+                "synced_root_digest_hex",
+                "synced_revocation_list_digest_hex",
+            ),
+        ),
+        (
+            "reputation",
+            "valid_snapshot_bindings",
+            ("publish", "latest"),
+            (
+                "snapshot_id_hex",
+                "merkle_root_hex",
+            ),
+        ),
+        (
+            "reserve_rent",
+            "valid_policy_matrix_bindings",
+            ("quote_matrix",),
+            (
+                "policy_digest_hex",
+                "matrix_digest_hex",
+            ),
+        ),
+        (
+            "reserve_rent",
+            "valid_policy_matrix_ledger_bindings",
+            ("ledger_digest",),
+            (
+                "policy_digest_hex",
+                "matrix_digest_hex",
+                "ledger_digest_hex",
+            ),
+        ),
+    ]
+
+    for gate_name, metadata_field, owner_kinds, fingerprint_fields in cases:
+        root = tmp_path / f"{gate_name}_{metadata_field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        for owner_kind in owner_kinds:
+            remove_fingerprint_metadata(
+                payload,
+                *fingerprint_fields,
+                kind_name=owner_kind,
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must match recognized artifact fingerprints" in errors
 
 
 def test_hex_binding_metadata_entries_are_validated(tmp_path: Path) -> None:
@@ -3047,6 +3347,166 @@ def test_reputation_provider_metadata_must_match_recognized_artifact_fingerprint
     assert "provider_count_values must match recognized artifact fingerprints" in errors
 
 
+def test_every_string_list_metadata_field_has_owner_kind_tether() -> None:
+    expected = {
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in (
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS.keys()
+        )
+    }
+    configured = set(MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS)
+    assert configured == expected
+
+    required_kinds = {
+        gate.name: set(gate.required_kinds) for gate in MODULE.GATE_SUMMARY_KINDS
+    }
+    for gate_name, metadata_field in sorted(configured):
+        source_kinds = MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS[
+            (gate_name, metadata_field)
+        ]
+        assert isinstance(source_kinds, tuple)
+        assert source_kinds
+        assert len(source_kinds) == len(set(source_kinds))
+        assert set(source_kinds) <= required_kinds[gate_name]
+
+
+def test_string_list_metadata_without_owner_kind_tether_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = gate_summary("reputation")
+    monkeypatch.delitem(
+        MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS,
+        ("reputation", "provider_ids"),
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "provider_ids source-kind tether is not configured for `reputation`" in errors
+
+
+def test_string_list_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reputation")
+    remove_fingerprint_metadata(payload, "provider_id", kind_name="provider")
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "provider_ids must match recognized artifact fingerprints" in errors
+    assert "provider_count_values must match recognized artifact fingerprints" not in errors
+
+
+def test_every_positive_int_list_metadata_field_has_owner_kind_tether() -> None:
+    expected = {
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in (
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS.keys()
+        )
+    }
+    configured = set(
+        MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS
+    )
+    assert configured == expected
+
+    required_kinds = {
+        gate.name: set(gate.required_kinds) for gate in MODULE.GATE_SUMMARY_KINDS
+    }
+    for gate_name, metadata_field in sorted(configured):
+        source_kinds = (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS[
+                (gate_name, metadata_field)
+            ]
+        )
+        assert isinstance(source_kinds, tuple)
+        assert source_kinds
+        assert len(source_kinds) == len(set(source_kinds))
+        assert set(source_kinds) <= required_kinds[gate_name]
+
+
+def test_positive_int_list_metadata_without_owner_kind_tether_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = gate_summary("reputation")
+    monkeypatch.delitem(
+        MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS,
+        ("reputation", "provider_count_values"),
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "provider_count_values source-kind tether is not configured for `reputation`"
+        in errors
+    )
+
+
+def test_positive_int_list_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reputation")
+    for kind_name in ("publish", "latest"):
+        remove_fingerprint_metadata(payload, "provider_count", kind_name=kind_name)
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "provider_count_values must match recognized artifact fingerprints" in errors
+    assert "provider_ids must match recognized artifact fingerprints" not in errors
+
+
 def test_object_list_metadata_for_gate_passes(tmp_path: Path) -> None:
     payload = gate_summary("appeal_finance")
     payload["valid_multi_peer_runs"] = [
@@ -3080,11 +3540,16 @@ def test_object_list_metadata_must_match_required_artifact_count(
         ("appeal_finance", "valid_multi_peer_runs", "multi_peer_reconciliation"),
         ("hedging_billing", "valid_billing_cycles", "billing_cycle"),
         ("moderation_panel", "valid_e2e_runs", "e2e_panel"),
+        (
+            "moderation_panel",
+            "valid_evidence_viewer_digest_sets",
+            "evidence_viewer",
+        ),
         ("reserve_rent", "valid_provider_bakes", "provider_bake"),
     ]
 
     for gate_name, metadata_field, required_kind in cases:
-        root = tmp_path / gate_name
+        root = tmp_path / f"{gate_name}_{metadata_field}"
         root.mkdir()
         payload = gate_summary(gate_name)
         payload[metadata_field] = []
@@ -3107,6 +3572,97 @@ def test_object_list_metadata_must_match_required_artifact_count(
             f"{metadata_field} length must match `{required_kind}` required artifact count"
             in errors
         )
+
+
+def test_every_object_list_metadata_field_has_owner_kind_tether() -> None:
+    expected = {
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in (
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS.keys()
+        )
+    }
+    configured = set(MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS)
+    assert configured == expected
+
+    required_kinds = {
+        gate.name: set(gate.required_kinds) for gate in MODULE.GATE_SUMMARY_KINDS
+    }
+    for gate_name, metadata_field in sorted(configured):
+        source_kind = MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS[
+            (gate_name, metadata_field)
+        ]
+        assert isinstance(source_kind, str)
+        assert source_kind
+        assert source_kind in required_kinds[gate_name]
+        assert (
+            source_kind
+            == MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS[
+                metadata_field
+            ]
+        )
+
+
+def test_object_list_metadata_without_owner_kind_tether_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = gate_summary("reserve_rent")
+    monkeypatch.delitem(
+        MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS,
+        ("reserve_rent", "valid_provider_bakes"),
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_provider_bakes source-kind tether is not configured for `reserve_rent`"
+        in errors
+    )
+
+
+def test_object_list_metadata_owner_kind_tether_drift_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = gate_summary("reserve_rent")
+    monkeypatch.setitem(
+        MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS,
+        ("reserve_rent", "valid_provider_bakes"),
+        "policy_config",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_provider_bakes source-kind tether must match required artifact "
+        "count kind for `reserve_rent`"
+    ) in errors
 
 
 def test_object_list_metadata_must_match_recognized_artifact_fingerprints(
@@ -3132,6 +3688,12 @@ def test_object_list_metadata_must_match_recognized_artifact_fingerprints(
             "case_digest_hex",
         ),
         (
+            "moderation_panel",
+            "valid_evidence_viewer_digest_sets",
+            "evidence_viewer",
+            "audit_digest_hex",
+        ),
+        (
             "reserve_rent",
             "valid_provider_bakes",
             "provider_bake",
@@ -3140,7 +3702,7 @@ def test_object_list_metadata_must_match_recognized_artifact_fingerprints(
     ]
 
     for gate_name, metadata_field, required_kind, fingerprint_field in cases:
-        root = tmp_path / gate_name
+        root = tmp_path / f"{gate_name}_{metadata_field}"
         root.mkdir()
         payload = gate_summary(gate_name)
         remove_fingerprint_metadata(
@@ -3256,6 +3818,33 @@ def test_object_list_metadata_entries_are_validated(tmp_path: Path) -> None:
     assert "private_key" not in errors
     assert "runtime-only-key-material" not in errors
     assert "not-a-run" not in errors
+
+
+def test_evidence_viewer_digest_set_metadata_requires_every_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("moderation_panel")
+    del payload["valid_evidence_viewer_digest_sets"][0]["access_log_digest_hex"]
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "valid_evidence_viewer_digest_sets[0].access_log_digest_hex "
+        "must be 64 lowercase hex characters"
+    ) in errors
 
 
 def test_object_list_metadata_entries_must_not_duplicate(tmp_path: Path) -> None:
@@ -3576,6 +4165,88 @@ def test_scalar_metadata_must_match_recognized_artifact_fingerprints(
     assert "merkle_root_hex must match recognized artifact fingerprints" in errors
     assert SNAPSHOT_ID not in errors
     assert SHA256 not in errors
+
+
+def test_every_scalar_metadata_field_has_owner_kind_tether() -> None:
+    expected = {
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in (
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_BINDINGS.keys()
+        )
+    }
+    configured = set(MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS)
+    assert configured == expected
+
+    required_kinds = {
+        gate.name: set(gate.required_kinds) for gate in MODULE.GATE_SUMMARY_KINDS
+    }
+    for gate_name, metadata_field in sorted(configured):
+        source_kinds = MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS[
+            (gate_name, metadata_field)
+        ]
+        assert isinstance(source_kinds, tuple)
+        assert source_kinds
+        assert len(source_kinds) == len(set(source_kinds))
+        assert set(source_kinds) <= required_kinds[gate_name]
+
+
+def test_scalar_metadata_without_owner_kind_tether_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = gate_summary("reputation")
+    monkeypatch.delitem(
+        MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS,
+        ("reputation", "snapshot_id_hex"),
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "snapshot_id_hex source-kind tether is not configured for `reputation`" in errors
+
+
+def test_scalar_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reputation")
+    for kind_name in ("publish", "latest"):
+        remove_fingerprint_metadata(
+            payload,
+            "snapshot_id_hex",
+            "merkle_root_hex",
+            kind_name=kind_name,
+        )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "snapshot_id_hex must match recognized artifact fingerprints" in errors
+    assert "merkle_root_hex must match recognized artifact fingerprints" in errors
 
 
 def test_reputation_top_level_hex_metadata_is_validated(tmp_path: Path) -> None:
@@ -4041,6 +4712,37 @@ def test_invalid_top_level_recognized_artifacts_fail(tmp_path: Path) -> None:
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
 
 
+def test_required_and_recognized_artifact_status_must_be_successful(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    first_kind = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
+    payload["required"][first_kind]["artifacts"][0]["status"] = "failed"
+    payload["recognized_artifacts"][0]["status"] = "failed"
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        f"gateway_load.required.{first_kind}.artifacts[0].status "
+        "must be a successful status"
+        in errors
+    )
+    assert "recognized_artifacts[0].status must be a successful status" in errors
+    assert "failed" not in errors
+
+
 def test_required_artifact_extra_fields_fail(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     first_kind = payload["required_kinds"][0]
@@ -4048,6 +4750,63 @@ def test_required_artifact_extra_fields_fail(tmp_path: Path) -> None:
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_required_row_schema_must_match_required_evidence_schema(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    payload["required"]["local_conformance"]["schema"] = "sorafs.shadow.schema.v1"
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "gateway_load.required.local_conformance.schema must match required evidence schema"
+        in errors
+    )
+    assert "sorafs.shadow.schema.v1" not in errors
+
+
+def test_required_artifact_schema_must_match_required_evidence_schema(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    payload["required"]["local_conformance"]["artifacts"][0]["schema"] = (
+        "sorafs.shadow.schema.v1"
+    )
+    payload["recognized_artifacts"] = recognized_artifacts_from_required(payload)
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "gateway_load.required.local_conformance.artifacts[0].schema "
+        "must match required evidence schema"
+    ) in errors
+    assert "sorafs.shadow.schema.v1" not in errors
 
 
 def test_required_artifact_kind_mismatch_fails(tmp_path: Path) -> None:

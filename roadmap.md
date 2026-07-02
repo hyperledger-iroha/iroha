@@ -680,6 +680,11 @@ networks as remaining launch work for this release.
   emergency-override, verified-record hydration, and merge-candidate work must
   preserve that exact committee binding so stale, reordered, or forged relay
   committee metadata cannot influence cross-lane finality evidence.
+- Nexus lane lifecycle now applies the same emergency-override trust-root
+  cleanup boundary as full config swaps: manual lifecycle updates prune
+  overrides for reset lanes and lanes absent from the updated catalog, and
+  newly created lane ids discard pre-staged overrides as stale prior-incarnation
+  state before the lane can accept fresh emergency authority.
 - Autoscale scale-in cleanup now has same-block adversarial coverage proving
   emergency validator overrides, public-lane economic rows, public validator
   terminalization, and AXT replay ledger rows staged earlier in the block for
@@ -6400,7 +6405,9 @@ networks as remaining launch work for this release.
   snapshot-age/ingest-lag threshold facts before writing. The SFM-3 rollout
   checker also rejects duplicate provider proof sibling hashes in externally
   supplied evidence, so reviewed Merkle proof paths stay schema-closed outside
-  the local canary builder.
+  the local canary builder, and event-watch evidence must carry a positive
+  polling `limit`, exact `count`/`events[]` length agreement, and
+  `count <= limit` before readiness can report ready.
   Remaining SFM-3 rollout work is deploying the ingest/publisher service and
   capturing live run evidence that passes this gate, not the scoring, proof,
   local Torii API, cache validators, SSE/WebSocket push, SDK convenience
@@ -6532,7 +6539,10 @@ networks as remaining launch work for this release.
   bind back to a valid proof-generation `proof_summary_digest_hex` in the same
   evidence bundle, requires governance approval `policy_digest_hex` to match a
   valid proof-generation `policy_digest_hex`, publishes valid PDP policy
-  digests as `valid_policy_digests`, with binding failures marked on the
+  digests as `valid_policy_digests`, requires governance approval
+  `provider_roster_digest_hex` to match a valid proof-generation
+  `provider_roster_digest_hex`, publishes valid governed provider-roster
+  digests as `valid_provider_roster_digests`, with binding failures marked on the
   offending artifact through the shared scalar binding error recorder before
   required-kind summary validity is reported. The PDP collection planner now emits the
   checker-backed `evidence_contract` map for the selected required kinds during
@@ -6542,9 +6552,11 @@ networks as remaining launch work for this release.
   execution.
   `scripts/build_sorafs_pdp_canary.py` now builds payload-free checked-in
   canary artifacts for each SF-13 gate kind, requires complete PDP route and
-  metric coverage where applicable, enforces proof-summary digest bindings plus
-  proof-generation/governance policy-digest input, provider/challenge/proof
-  count, and latency thresholds before writing, validates every generated
+  metric coverage where applicable, binds provider-transport `route_count` to
+  the unique canonical route-name inventory so duplicate route rows cannot
+  inflate readiness, enforces proof-summary digest bindings plus
+  proof-generation/governance policy-digest and provider-roster digest input,
+  provider/challenge/proof count, and latency thresholds before writing, validates every generated
   artifact through the PDP rollout checker, and ships provider-transport and
   proof-generation response-file examples. PDP
   remains fail-closed in embedded Torii proof streaming until
@@ -6644,7 +6656,10 @@ networks as remaining launch work for this release.
   downstream `release_manifest_digest_hex` references as
   `valid_release_manifest_reference_digests`, requires the aggregate
   production-readiness gate to tether those reference digests to recognized
-  artifact fingerprints, and requires
+  artifact fingerprints, now also publishes archive-index, signed release-key
+  fingerprint, package-index, smoke-output, header, and FFI-contract anchors,
+  and requires the aggregate production-readiness gate to tether each one to
+  its owning release evidence kind before reporting ready, and requires
   governance approval `policy_digest_hex` to bind back to that signed-manifest
   policy before SF-11 promotion can report ready; the
   matching collection planner accepts reviewed
@@ -6662,12 +6677,15 @@ networks as remaining launch work for this release.
   downstream bindings, cookbook smoke, FFI/header contract, and governance
   approval artifacts, with signed-manifest and governance policy-digest inputs
   plus response-file examples for release-archive and signed-manifest
-  generation. The SF-11 plan
-  now also publishes the operator,
-  metrics, and binding-generation guides for packaging, telemetry extraction,
-  C FFI header synchronization, selector parity, and downstream package
-  evidence handoff. Remaining SF-11
-  work is per-target published archives, signed release manifests, downstream
+	  generation. The SF-11 plan
+	  now also publishes the operator,
+	  metrics, and binding-generation guides for packaging, telemetry extraction,
+	  C FFI header synchronization, selector parity, and downstream package
+	  evidence handoff. The release evidence gate now also rejects duplicate
+	  release-target or downstream-package entries and requires `target_count` and
+	  `package_count` to match the unique canonical inventory lengths before
+	  publication evidence can pass. Remaining SF-11
+	  work is per-target published archives, signed release manifests, downstream
   SDK package publication, and live operator smoke evidence that passes this
   gate, rather than local admission renewal/revocation, signing, governance
   publisher verification, reference cookbook, manifest/CAR replay coverage, or
@@ -6699,7 +6717,9 @@ networks as remaining launch work for this release.
   scheduler panels plus alert fixtures. The SF-9 rollout evidence gate now
   validates payload-free randomness, scheduler runtime, validator replay,
   reporting/archive handoff, exact SQL/Parquet archive-backend selection,
-  exact manual-trigger retired route-state,
+  exact manual-trigger retired route-state, scheduler-runtime and
+  reporting/archive `route_count` binding to the unique canonical
+  `routes[].name` inventories with duplicate route rejection,
   observability, and
   governance approval evidence, and requires scheduler/replay/reporting/
   observability/governance artifacts to bind back to a valid randomness
@@ -6756,9 +6776,11 @@ networks as remaining launch work for this release.
   multi-provider-probe, receipt-validation, proof-stream,
   reputation-integration, observability, and governance-approval canary
   artifacts through the same checker before rollout review, requiring complete
-  tier, route, and metric coverage plus receipt-summary, PQ key-roster, and
-  reputation-weight policy digest bindings, governance policy-digest metadata,
-  and deadline threshold facts before writing. The SF-14 gate summary now also
+  tier, route, and metric coverage, binding proof-stream `route_count` to the
+  unique canonical route-name inventory so duplicate route rows cannot inflate
+  readiness, plus receipt-summary, PQ key-roster, and reputation-weight policy
+  digest bindings, governance policy-digest metadata, and deadline threshold
+  facts before writing. The SF-14 gate summary now also
   publishes governance approval `policy_digest_hex` values as
   `valid_policy_digests` so aggregate production readiness can tether PoTR
   promotion policy metadata to recognized governance artifacts.
@@ -6804,7 +6826,9 @@ networks as remaining launch work for this release.
   staging evidence back to the signed local conformance digest, requires
   telemetry and governance artifacts to reference the staged load report,
   requires governance approval `policy_digest_hex` to match a valid
-  staging-load `policy_digest_hex`,
+  staging-load `policy_digest_hex`, requires local conformance `scenario_count`
+  to match the unique canonical scenario inventory, rejects duplicate scenario
+  entries before required-kind validity is reported,
   rejects raw reports/response bodies/fixture payloads/runtime secrets, and
   keeps HTTP/3 load evidence explicitly scoped as deferred until a committed
   gateway transport exists. `scripts/run_sorafs_gateway_load_rollout_evidence.py`
@@ -7064,7 +7088,9 @@ networks as remaining launch work for this release.
   recorded through the shared scalar binding error recorder and runner tuple
   binding failures recorded through the shared string-tuple binding error
   recorder so artifact invalidation cannot drift from other rollout gates,
-  and emits `sorafs.moderation.ai_prescreen.rollout_evidence_gate.v1`
+  binds operator-workflow `route_count` and `passed_route_count` to the unique
+  canonical `routes[].name` inventory so duplicate route rows cannot inflate
+  readiness, and emits `sorafs.moderation.ai_prescreen.rollout_evidence_gate.v1`
   summaries. `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` now provides
   the matching collection planner/runner, composing the shipped runner,
   committee, operator workflow, notification transport, executor, and
@@ -7089,7 +7115,14 @@ networks as remaining launch work for this release.
   valid commit/reveal executor artifacts publish their top-level
   `execution_summary_digest_hex` values as `valid_executor_summary_digests`;
   the final SoraFS aggregate gate accepts both metadata fields only when they
-  match recognized artifact fingerprints. The
+  match recognized artifact fingerprints. Commit/reveal executor artifacts also
+  bind `artifact_count` and `passed_artifact_count` to the unique canonical
+  `artifacts[].name` inventory, so duplicate executor bundle artifact rows
+  cannot inflate readiness. Governance DAG artifacts also bind
+  `producer_count` to the unique canonical `producers[].name` inventory, and
+  end-to-end workflow artifacts bind `step_count` and `passed_step_count` to
+  the unique canonical `steps[].name` inventory, so duplicate producer or
+  workflow-step rows cannot inflate readiness. The
   rollout-gate static contract now also keeps
   unshipped moderation portal commands such as `sorafs moderation jury-accept`
   and `sorafs moderation open-case` warning-only in SoraFS docs until the
@@ -7154,6 +7187,9 @@ networks as remaining launch work for this release.
   match a valid feed-promotion `policy_digest_hex`, and bundle/policy
   mismatches mark the offending artifact invalid through the shared scalar
   binding error recorder before required-kind validity is reported. The
+  enforcement-probe artifact also binds `route_count` and `passed_route_count`
+  to the unique canonical `routes[].name` inventory and rejects duplicate route
+  entries before promotion can report ready. The
   matching collection planner accepts
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness,
 	  latency, gateway-count, denylist-entry, and honey-probe thresholds, and emits
@@ -7304,7 +7340,14 @@ networks as remaining launch work for this release.
   missing source-event or publish-due aggregate coverage, missing explorer
   snapshot/UI/proof-token index route coverage, or carrying raw
   payload, request/response body, bearer-token, signed-transaction,
-  proof-token frame, private-key, or private digest-key fields. The gate also
+  proof-token frame, private-key, or private digest-key fields, and binds
+  publication and explorer `route_count` to the unique canonical
+  `routes[].name` inventories so duplicate route rows cannot inflate readiness,
+  while keeping probe-based `probe_count` values equal to the `probes[]`
+  inventory length and requiring source-entry, source-event, publish-due, and
+  proof-token issuance sub-counts to match the corresponding `probes[]` role
+  inventory.
+  The gate also
   requires publication evidence to bind back to a valid source-entry
   `source_batch_digest_hex`, and requires privacy aggregate, proof-token
   issuance, and explorer evidence to bind back to a source-bound publication
@@ -7460,9 +7503,13 @@ networks as remaining launch work for this release.
   contract-surface artifacts to carry `policy_digest_hex`, publishes valid
   contract-surface policies as `valid_policy_digests`, requires governance
   approval `policy_digest_hex` to match one of those valid policy digests, and
-  marks contract-digest and policy-digest mismatches on the offending artifact
-  through the shared scalar binding error recorder before required-kind summary
-  validity is reported. The
+  binds API gateway `route_count` to the unique canonical `routes[].name`
+  inventory plus reconciliation `source_count` to the unique canonical
+  `sources[].name` inventory so duplicate route or source rows cannot inflate
+  readiness, and marks
+  contract-digest and policy-digest mismatches on the offending artifact through
+  the shared scalar binding error recorder before required-kind summary validity
+  is reported. The
   matching collection planner accepts reviewed
   staged evidence paths, supports `@ARGFILE`, forwards
   age, route-latency, stream-lag, matcher-lag, and reconciliation-peer
@@ -7532,7 +7579,9 @@ networks as remaining launch work for this release.
   `pop_snapshot_digest_hex` values as `valid_pop_snapshot_digests`, requires the
   aggregate production-readiness gate to tether both new metadata surfaces to
   recognized artifact fingerprints, requires governance approval
-  `policy_digest_hex` to match one of those valid verifier policies, and blocks promotion when governance still
+  `policy_digest_hex` to match one of those valid verifier policies, binds
+  enrollment-portal `route_count` to the unique canonical `routes[].name`
+  inventory so duplicate route rows cannot inflate readiness, and blocks promotion when governance still
   points at the local
   transcript-digest-only proof foundation instead of a production
   privacy-preserving proof backend; the production
@@ -7634,7 +7683,10 @@ networks as remaining launch work for this release.
   valid pricing-config `policy_digest_hex`, publishes valid staged pricing
   policies as `valid_policy_digests`, records config- and policy-digest
   mismatches on the offending artifact through the shared scalar binding error
-  recorder before required-kind summary validity is reported, and requires at
+  recorder before required-kind summary validity is reported, binds quote-API,
+  deposit-lifecycle, and settlement-execution `route_count` to the unique
+  canonical `routes[].name` inventories so duplicate route rows cannot inflate
+  readiness, and requires at
   least four peers before promotion can report `ready`. The matching collection
   planner accepts
   reviewed staged evidence paths, supports `@ARGFILE`, forwards freshness,
@@ -7693,7 +7745,10 @@ networks as remaining launch work for this release.
   `policy_digest_hex`, valid e2e panel policy digests are published as
   `valid_policy_digests`, and governance approval `policy_digest_hex` must
   match one of those valid panel policy digests before the gate can report
-  ready. The moderation-panel gate also requires reviewed
+  ready. Appeal-intake, operator-workflow, commit/reveal, and
+  decision-publication artifacts also bind `route_count` to the unique
+  canonical `routes[].name` inventory so duplicate route rows cannot inflate
+  readiness. The moderation-panel gate also requires reviewed
   `deployment_id`/`environment` context on every artifact and blocks mixed
   reviewed deployment contexts across the same rollout bundle. The matching
   collection planner now validates the schema-closed collection-plan envelope
@@ -7728,7 +7783,11 @@ networks as remaining launch work for this release.
   requires every positive viewer-control claim explicitly, forces raw
   evidence/session-token/signed-URL/watermark-secret/body flags to `false`, and
   writes the artifact atomically for staged review. The rollout-gate static
-  contract now pins the SFM-4b3 browser viewer,
+  contract now publishes `valid_evidence_viewer_digest_sets` from valid
+  `evidence_viewer` artifacts and makes the final aggregate production
+  readiness gate tether those digest sets to recognized artifact fingerprints
+  before reporting ready. The rollout-gate static contract now pins the
+  SFM-4b3 browser viewer,
   streaming backend, watermark engine, WebAuthn/session flow, access logger,
   and transparency exporter as unshipped service work, and rejects matching
   evidence-viewer routes or operator subcommands until those services exist.
@@ -7765,11 +7824,11 @@ networks as remaining launch work for this release.
   `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 12
   `connect_norito_sorafs_reference_validate_hedging_json`, and Kotlin/JVM,
   Java Android, and Swift SDK wrappers. The SFM-5 rollout evidence gate now
-	  validates feed-collector, reference-price, billing-cycle,
-	  statement-publication, reconciliation, metrics/alert, native-bridge-release,
-	  and governance-approval artifacts, rejects payload-bearing evidence including
-	  common camel-case or hyphenated secret-key spellings, requires reviewed
-	  `deployment_id`/`environment` context on every artifact, requires each staged
+  validates feed-collector, reference-price, billing-cycle,
+  statement-publication, reconciliation, metrics/alert, native-bridge-release,
+  and governance-approval artifacts, rejects payload-bearing evidence including
+  common camel-case or hyphenated secret-key spellings, requires reviewed
+  `deployment_id`/`environment` context on every artifact, requires each staged
   billing cycle to carry payload-free line-item, statement-bundle,
   reconciliation, and per-statement digest roots, requires the per-statement
   digest count to match the signed statement count, requires every staged
@@ -7782,7 +7841,12 @@ networks as remaining launch work for this release.
   `valid_policy_digests`, requires governance approval `policy_digest_hex` to
   match one of those valid cycle policies, marks reference-price, cycle-tuple,
   and policy-digest binding failures on the offending artifact through shared
-  binding error recorders before required-kind summary validity is reported, and
+  binding error recorders before required-kind summary validity is reported,
+  binds statement-publication `route_count` to the unique canonical
+  `routes[].name` inventory plus reconciliation `source_count` to the unique
+  canonical `sources[].name` inventory, and native-bridge release
+  `artifact_count` to the unique canonical `artifacts[].id` inventory, so
+  duplicate route, source, or artifact rows cannot inflate readiness, and
   requires two distinct successful staged billing cycles before
   promotion can report `ready`. The checker and matching rollout
   collection planner now
@@ -7905,7 +7969,10 @@ networks as remaining launch work for this release.
   `policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple, and
   provider-bake artifacts must prove the config-backed scheduler canary ran,
   advanced defaulting providers, synced gateway compliance, and preserved
-  orderbook rejection, and reserve-movement artifacts must prove live chain
+  orderbook rejection, lifecycle and signed-route `route_count` fields must
+  bind to the unique canonical `routes[].name` inventories so duplicate route
+  rows cannot inflate readiness, and reserve-movement artifacts must prove live
+  chain
   submission coverage, submitted transaction-hash readback, automatic finality
   polling, confirmed-status polling, timeout rejection, submitted, confirmed,
   and rejected custody evidence plus confirmed-balance readback and
@@ -7994,8 +8061,11 @@ networks as remaining launch work for this release.
   `scripts/build_sorafs_governance_dag_canary.py` helper builds payload-free
   canaries for all SF-12 evidence kinds from reviewed deployment facts, requires
   explicit proof claims plus complete payload-kind, dashboard-route, and metric
-  coverage where applicable, forces raw block/head/CAR/checkpoint/response flags
-  to `false`, validates each generated artifact through the SF-12 checker, and
+  coverage where applicable, binds ingest `source_count` to the unique canonical
+  payload-kind inventory and dashboard `route_count` to the unique canonical
+  route-name inventory so duplicate payload-kind or route rows cannot inflate
+  readiness, forces raw block/head/CAR/checkpoint/response flags to `false`,
+  validates each generated artifact through the SF-12 checker, and
   writes atomically without following output symlinks. The
 	  rollout-gate static contract pins the SF-12 plan's IPFS/IPNS, live-head,
   public-checkpoint, runtime mirror-service, and runtime/IPFS dashboard work as
@@ -8038,8 +8108,11 @@ networks as remaining launch work for this release.
   `valid_policy_digests`, requires governance approval `policy_digest_hex` to
   match a valid governance handoff policy digest, and records roster,
   failure-bundle, handoff-digest, or policy-digest mismatches on the offending
-  artifact through the shared scalar binding error recorder before
-  required-kind summary validity is reported. The
+  artifact through the shared scalar binding error recorder, binds signed
+  auditor API, worker-lifecycle, and event-stream `route_count` to the unique
+  canonical `routes[].name` inventories so duplicate route rows cannot inflate
+  readiness, and reports those failures before required-kind summary validity is
+  reported. The
   matching collection planner accepts reviewed staged evidence
   paths, supports `@ARGFILE`, forwards age, route-latency, event-lag,
   repair-latency, and auditor-count thresholds, and emits a dry-run-visible
@@ -8085,13 +8158,16 @@ networks as remaining launch work for this release.
 	  canonical strings, non-negative integers, booleans, objects, and lists with
 	  expected non-empty container shapes, bound to the lane-specific contract that
 	  emits them, exact lowercase-hex binding-list metadata shapes validated before
-	  aggregate promotion, exact lowercase-hex and positive-integer scalar list
+	  aggregate promotion and tuple binding-list metadata tethered to explicit
+	  owning required artifact kinds before fingerprint matching, exact
+	  lowercase-hex and positive-integer scalar list
 	  metadata shapes validated before aggregate promotion, governance
 	  public-head identifiers validated as lowercase hex list metadata before
 	  aggregate promotion, exact object-list metadata shapes validated before
 	  aggregate promotion, object-list detail rows including ids, counts, timing
 	  fields, and digests tethered to the owning required-row artifact
-	  fingerprints before aggregate promotion, aggregate artifact totals derived
+	  fingerprints through an explicit per-gate owner-kind map before aggregate
+	  promotion, aggregate artifact totals derived
 	  from observed required-row artifact object rows instead of untrusted
 	  claimed row counters, malformed non-object list entries, or missing/empty
 	  artifact containers before release-review output, recognized-artifact
@@ -8159,11 +8235,14 @@ networks as remaining launch work for this release.
   `--iroha-bin`, and `--sorafs-cli-bin` are also rejected before dry-run plan
   rendering when they contain secret-looking option names, values, paths, URLs,
   or control characters.
-  Required-row artifact entries must carry canonical unique archive-relative
-  paths without absolute, empty, current, parent, or platform-specific path
-  segments, lowercase SHA-256 digests, and canonical artifact schema/status
-  labels when present, reject extra artifact-row fields outside the
-  schema-closed payload-free artifact contract, and the required top-level
+  Required rows and their artifact entries must carry schema labels that match
+  the owning checker evidence schemas. Artifact entries must also carry
+  canonical unique archive-relative paths without absolute, empty, current,
+  parent, or platform-specific path segments and lowercase SHA-256 digests,
+  reject explicit artifact `status` labels outside successful states such as
+  `passed` or `verified`, reject extra artifact-row
+  fields outside the schema-closed payload-free artifact contract, and the
+  required top-level
   `recognized_artifacts` inventory must be fully valid, kind-bound to that
   lane's full required-kind contract, matched per kind to the required-row
   artifact counts and `(kind, path, sha256)` identities plus required artifact
@@ -8177,14 +8256,17 @@ networks as remaining launch work for this release.
   rollout target, and deployment-bearing top-level lane metadata such as
   `deployment_context`, `valid_billing_cycles`, `valid_e2e_runs`,
   `valid_multi_peer_runs`, and `valid_provider_bakes` must now match the
-  artifact-derived deployment context before aggregate promotion. Scalar and
-  tuple `valid_*` metadata such as digest lists, snapshot bindings, runner
-  bindings, policy/matrix/ledger bindings, and roster/tally bindings must also
-  be backed by recognized artifact fingerprints, so a lane summary cannot
+  artifact-derived deployment context before aggregate promotion. Scalar hex,
+  string-list, positive-integer list, digest-list, and tuple binding metadata
+  such as reputation snapshot IDs/roots, provider IDs/counts, snapshot
+  bindings, runner bindings, policy/matrix/ledger bindings, and roster/tally
+  bindings must also be backed by recognized artifact fingerprints from their
+  declared owner artifact kinds, so a lane summary cannot
   claim payload-free release-review anchors that are absent from its artifacts.
   Object-list detail metadata for billing cycles, E2E runs, multi-peer runs,
   and provider bakes must match the corresponding required artifact row
-  cardinality, with provider-bake detail rows also carrying lowercase
+  cardinality and declare the same owner kind used for fingerprint tethering,
+  with provider-bake detail rows also carrying lowercase
   policy/matrix/ledger digests, so release review cannot promote missing,
   extra, or digestless detail rows while the artifact inventory stays ready.
   Aggregate lane rows are also
@@ -19333,6 +19415,13 @@ operator-provided rollout bundles.
 - Lane relay admission now reports missing dataspace catalog entries as
   `unknown_dataspace` instead of folding them into validator-roster failures,
   keeping operator diagnostics and telemetry aligned with routing/catalog drift.
+  Emergency override registration coverage now also pins the current commit
+  topology boundary: registered peers with live consensus keys but absent from
+  the transaction's current commit topology are rejected before any override row
+  is stored, and stale stored overrides cannot fill runtime relay committees
+  with peers that have since fallen out of the current topology or whose
+  consensus keys have expired by the relay height, and removed world peers
+  remain ineligible even if stale keys or topology entries survive.
 - Autoscale-managed elastic lane relay admission now uses the live commit
   topology as the authority source only when no explicit lane manifest binding
   exists. Explicit manifest bindings keep precedence, stale explicit manifests
@@ -19533,20 +19622,33 @@ operator-provided rollout bundles.
   `active_lanes` and `autoscale_capacity_lanes` values must also match current
   default-route autoscale capacity before staging, preventing stale capacity
   evidence from being logged with a valid add/retire plan. The pending
-  transition height, rederived plan shape, and capacity metadata are now
-  revalidated again at block commit before autoscale storage geometry is
-  published, so tampered staged metadata cannot durable-publish a valid catalog
-  delta.
+  transition height, rederived plan shape, capacity metadata, exact
+  previous-catalog lifecycle replay, derived lane config, and scale-out
+  creation height are now revalidated again at block commit before autoscale
+  storage geometry is published, so tampered staged metadata cannot
+  durable-publish a valid catalog delta. Direct queue admission and restart
+  queue-plan journal replay now also pin forged future-created autoscale route
+  plans against the live height-aware route before they can enter the pending
+  queue or local routing ledger. State-backed queue route resolution now also
+  checks every resolved coordinator and Native AMX participant leg against the
+  active-height Nexus predicate, so stale state-free route hints cannot target
+  future-created or otherwise inactive autoscale lanes during admission, gossip
+  routing, proposal refresh, pending reroute, journal replay, or requeue, while
+  preserving the legacy dynamic-dataspace fallback only for the unreserved
+  default public lane.
   Lane relay authority applies the same activation-height boundary before
   accepting manifest-bound or commit-topology-derived validator sets for
   autoscale elastic lanes, so relays for not-yet-created lanes cannot be
   accepted or cached, and corrupted manual lanes inside the reserved autoscale
   elastic id range are denied relay authority as well; record-level relay
   admission now checks lane activity before stale emergency overrides can fill a
-  committee. The active-lane authority boundary now also requires the
-  caller-supplied dataspace to match the lane catalog and remain present in the
-  dataspace catalog, so forged dataspace context or removed dataspace bindings
-  cannot keep a lane authoritative. Manifest validator fallback reads now also
+  committee, and block-local autoscale lifecycle cleanup applies the same
+  reset-or-inactive-lane pruning before automatic scale-out/scale-in commits can
+  preserve stale emergency override rows. The active-lane authority boundary
+  now also requires the caller-supplied dataspace to match the lane catalog and
+  remain present in the dataspace catalog, so forged dataspace context or
+  removed dataspace bindings cannot keep a lane authoritative. Manifest
+  validator fallback reads now also
   hide explicit peer bindings whose consensus keys are pending, future-active,
   disabled, or expired while keeping the raw manifest installed to suppress
   unsafe topology fallback. Manifest, commit-topology, and stake-derived
@@ -19743,9 +19845,13 @@ operator-provided rollout bundles.
   keeps Native AMX participant metadata. Gas-capped proposal assembly now
   defers an oversized first candidate when a later scanned transaction still
   fits the remaining gas and IVM budgets, so one gas-heavy lane cannot suppress
-  fitting cross-lane work under multilane lookahead. Proposal lookahead now
-  gates on policy-reachable active lanes at the candidate block height rather
-  than raw catalog overrides, so unrouted same-dataspace sidecars and
+  fitting cross-lane work under multilane lookahead. Pending queue
+  reconfiguration now keeps queued default-route transactions and local
+  routing-ledger hints on the active default route until an autoscale elastic
+  lane's creation height is committed. Proposal lookahead now gates on
+  policy-reachable active lanes at the candidate block height rather than raw
+  catalog overrides, so autoscale-owned default anchors, off-default
+  autoscale-owned rule targets, unrouted same-dataspace sidecars, and
   future-created autoscale lanes cannot cause scan-budget overfetch while the
   committed routing surface is still effectively single-lane.
 - Commit event production now consumes the full routing plan before any legacy

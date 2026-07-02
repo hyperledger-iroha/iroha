@@ -25821,6 +25821,54 @@ pub mod isi {
         }
 
         #[test]
+        fn set_lane_relay_emergency_validators_rejects_peer_outside_commit_topology() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_universal_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+
+            let topology_peer = seed_live_peer(
+                &mut stx,
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            );
+            let outside_peer = seed_live_peer(
+                &mut stx,
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            );
+            *stx.commit_topology.get_mut() = vec![topology_peer];
+
+            let err = SetLaneRelayEmergencyValidators {
+                lane_id: LaneId::new(0),
+                peers: vec![outside_peer],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("peer outside current commit topology should be rejected");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("is not in the current commit topology"),
+                "unexpected error message: {msg}"
+            );
+            assert!(
+                stx.world
+                    .lane_relay_emergency_validators
+                    .get(&LaneId::new(0))
+                    .is_none(),
+                "topology-mismatched emergency override must not be stored"
+            );
+        }
+
+        #[test]
         fn set_lane_relay_emergency_validators_requires_expiry_for_non_empty_roster() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();

@@ -389,6 +389,36 @@ def test_stale_ingest_service_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_ingest_source_count_must_match_unique_payload_kinds(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ingest_service()
+    payload["source_count"] += 1
+    write_json(tmp_path / "ingest-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["ingest_service"]["artifacts"][0]
+    assert "source_count must match unique payload_kinds count" in artifact["errors"]
+
+
+def test_ingest_payload_kinds_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ingest_service()
+    payload["payload_kinds"].append(payload["payload_kinds"][0])
+    payload["source_count"] = len(payload["payload_kinds"])
+    write_json(tmp_path / "ingest-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["ingest_service"]["artifacts"][0]
+    assert "payload_kinds must not contain duplicate values" in artifact["errors"]
+    assert "source_count must match unique payload_kinds count" in artifact["errors"]
+
+
 def test_raw_payload_leakage_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = publisher_service()
@@ -417,6 +447,38 @@ def test_dashboard_route_latency_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "dashboard-api.json", dashboard_api(latency_ms=10_000))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_dashboard_route_count_must_match_unique_routes(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = dashboard_api()
+    payload["route_count"] += 1
+    payload["passed_route_count"] = payload["route_count"]
+    write_json(tmp_path / "dashboard-api.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["dashboard_api"]["artifacts"][0]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_dashboard_routes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = dashboard_api()
+    payload["routes"].append(dict(payload["routes"][0]))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "dashboard-api.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["dashboard_api"]["artifacts"][0]
+    assert "routes must not contain duplicate values" in artifact["errors"]
+    assert "route_count must match unique routes count" in artifact["errors"]
 
 
 def test_mirror_drift_fails(tmp_path: Path) -> None:

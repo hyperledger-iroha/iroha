@@ -294,7 +294,12 @@ moderation ledger publication service described by the original plan.
   signals, requires both action-labeled aggregate source-event and publish-due
   probes, requires request/response hash binding for probe evidence, requires
   response hash binding for publication and explorer route evidence, checks the
-  explorer snapshot/UI/proof-token index routes, and
+  explorer snapshot/UI/proof-token index routes, binds publication and explorer
+  `route_count` to the unique canonical `routes[].name` inventories with
+  duplicate route rejection, keeps probe-based `probe_count` values equal to
+  the `probes[]` inventory length, requires source-entry, source-event,
+  publish-due, and proof-token issuance sub-counts to match the corresponding
+  `probes[]` role inventory, and
   recursively rejects raw
   payload, request/response body, bearer-token, signed-transaction,
   proof-token frame, private-key, and private digest-key fields. Publication

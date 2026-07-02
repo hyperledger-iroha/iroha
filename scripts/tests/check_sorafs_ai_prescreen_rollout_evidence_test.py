@@ -131,6 +131,7 @@ def operator_workflow(*, omit_route: str | None = None) -> dict:
         "quarantine_id_hex": QUARANTINE_ID,
         "generated_at_unix": 1_800_000_200,
         "route_count": len(routes),
+        "passed_route_count": len(routes),
         "payload_bytes_included": False,
         "private_payloads_included": False,
         "routes": routes,
@@ -475,6 +476,55 @@ def test_operator_canary_must_cover_juror_notifications(tmp_path: Path) -> None:
     assert "routes must include name `juror_notifications`" in artifact["errors"]
 
 
+def test_operator_route_count_must_match_unique_routes(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = operator_workflow()
+    payload["route_count"] += 1
+    payload["passed_route_count"] = payload["route_count"]
+    write_json(tmp_path / "operator-workflow.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["operator_workflow"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_operator_passed_route_count_must_match_route_count(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = operator_workflow()
+    payload["passed_route_count"] -= 1
+    write_json(tmp_path / "operator-workflow.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["operator_workflow"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "passed_route_count must equal route_count" in artifact["errors"]
+
+
+def test_operator_routes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = operator_workflow()
+    payload["routes"].append(dict(payload["routes"][0]))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "operator-workflow.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["operator_workflow"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "routes must not contain duplicate values" in artifact["errors"]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
 def test_operator_route_schema_must_match_expected_route(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = operator_workflow()
@@ -551,6 +601,43 @@ def test_executor_requires_execution_summary(tmp_path: Path) -> None:
     assert "execution_summary must be an object" in artifact["errors"]
 
 
+def test_executor_artifact_count_must_match_unique_artifacts(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = commit_reveal_executor()
+    payload["artifact_count"] += 1
+    payload["passed_artifact_count"] = payload["artifact_count"]
+    write_json(tmp_path / "commit-reveal-executor.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["commit_reveal_executor"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "artifact_count must equal artifacts length" in artifact["errors"]
+    assert "artifact_count must match unique artifacts count" in artifact["errors"]
+
+
+def test_executor_artifacts_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = commit_reveal_executor()
+    payload["artifacts"].append(dict(payload["artifacts"][0]))
+    payload["artifact_count"] = len(payload["artifacts"])
+    payload["passed_artifact_count"] = len(payload["artifacts"])
+    write_json(tmp_path / "commit-reveal-executor.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["commit_reveal_executor"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "artifacts must not contain duplicate values" in artifact["errors"]
+    assert "artifact_count must match unique artifacts count" in artifact["errors"]
+
+
 def test_executor_summary_digest_must_match_summary_body(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = commit_reveal_executor()
@@ -623,6 +710,41 @@ def test_governance_dag_policy_digest_must_match_runner(tmp_path: Path) -> None:
     )
 
 
+def test_governance_producer_count_must_match_unique_producers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_dag()
+    payload["producer_count"] += 1
+    write_json(tmp_path / "governance-dag.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["governance_dag"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "producer_count must equal producers length" in artifact["errors"]
+    assert "producer_count must match unique producers count" in artifact["errors"]
+
+
+def test_governance_producers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_dag()
+    payload["producers"].append(dict(payload["producers"][0]))
+    payload["producer_count"] = len(payload["producers"])
+    write_json(tmp_path / "governance-dag.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["governance_dag"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "producers must not contain duplicate values" in artifact["errors"]
+    assert "producer_count must match unique producers count" in artifact["errors"]
+
+
 def test_e2e_workflow_requires_full_path(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(
@@ -631,6 +753,41 @@ def test_e2e_workflow_requires_full_path(tmp_path: Path) -> None:
     )
 
     assert run_gate(tmp_path) == 1
+
+
+def test_e2e_step_count_must_match_unique_steps(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = end_to_end_workflow()
+    payload["step_count"] += 1
+    payload["passed_step_count"] = payload["step_count"]
+    write_json(tmp_path / "end-to-end-workflow.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["end_to_end_workflow"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "step_count must equal steps length" in artifact["errors"]
+    assert "step_count must match unique steps count" in artifact["errors"]
+
+
+def test_e2e_steps_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = end_to_end_workflow()
+    payload["steps"].append(dict(payload["steps"][0]))
+    payload["step_count"] = len(payload["steps"])
+    payload["passed_step_count"] = len(payload["steps"])
+    write_json(tmp_path / "end-to-end-workflow.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["end_to_end_workflow"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "steps must not contain duplicate values" in artifact["errors"]
+    assert "step_count must match unique steps count" in artifact["errors"]
 
 
 def test_sensitive_payload_field_fails(tmp_path: Path) -> None:

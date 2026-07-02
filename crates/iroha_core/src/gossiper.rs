@@ -5894,7 +5894,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let inactive_lane = LaneId::new(1);
         let mut autoscale_lane = iroha_data_model::nexus::LaneConfig {
             id: inactive_lane,
-            alias: "future-elastic".to_string(),
+            alias: "elastic-lane-1".to_string(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: iroha_data_model::nexus::LaneVisibility::Public,
             ..iroha_data_model::nexus::LaneConfig::default()
         };
         autoscale_lane.metadata.insert(
@@ -5926,6 +5928,19 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             let mut current = gossiper.state.nexus.write();
             *current = nexus;
         }
+        assert_eq!(
+            crate::state::nexus_active_lane_dataspace_at_height(
+                inactive_lane,
+                &gossiper.state.nexus_snapshot(),
+                7,
+            ),
+            Some(DataSpaceId::UNIVERSAL),
+            "future-created autoscale gossip fixture must be a valid elastic lane at its creation height"
+        );
+        assert!(
+            !gossiper.state.is_lane_active_for_authority(inactive_lane),
+            "future-created autoscale gossip fixture must be inactive at the committed lane-authority height"
+        );
 
         let route = GossipRoute {
             lane_id: inactive_lane,

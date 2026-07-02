@@ -229,6 +229,16 @@ pub enum RoutingResolveError {
         /// Dataspace selected by the routing policy.
         dataspace_id: DataSpaceId,
     },
+    /// lane {lane_id} is not active for dataspace {dataspace_id} at the current block height
+    #[error(
+        "lane {lane_id} is not active for dataspace {dataspace_id} at the current block height"
+    )]
+    InactiveLane {
+        /// Lane selected by the routing policy.
+        lane_id: LaneId,
+        /// Dataspace selected by the routing policy.
+        dataspace_id: DataSpaceId,
+    },
     /// no lane is bound to dataspace {dataspace_id}
     #[error("no lane is bound to dataspace {dataspace_id}")]
     NoLaneForDataspace {
@@ -284,6 +294,7 @@ impl RoutingResolveError {
             Self::UnknownLane { .. } => "unknown_lane",
             Self::UnknownDataspace { .. } => "unknown_dataspace",
             Self::LaneDataspaceMismatch { .. } => "lane_dataspace_mismatch",
+            Self::InactiveLane { .. } => "inactive_lane",
             Self::NoLaneForDataspace { .. } => "no_lane_for_dataspace",
             Self::AutoscaleOwnedRuleLane { .. } => "autoscale_owned_rule_lane",
             Self::AutoscaleOwnedDefaultLane { .. } => "autoscale_owned_default_lane",
@@ -6099,6 +6110,65 @@ mod tests {
             routable_lane_ids_for_nexus_at_height(&nexus, 7),
             BTreeSet::from([LaneId::SINGLE, LaneId::new(1)]),
             "autoscale lanes become policy-reachable once their creation height is committed"
+        );
+    }
+
+    #[test]
+    fn routable_lane_ids_for_nexus_at_height_rejects_autoscale_owned_default_anchor() {
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::new(1),
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![autoscale_elastic_lane_config(
+            LaneId::new(1),
+            DataSpaceId::UNIVERSAL,
+            1,
+        )]);
+        let mut nexus = nexus_with_routing(policy, lane_catalog, DataSpaceCatalog::default());
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = nonzero!(1_u32);
+        nexus.autoscale.max_lanes = nonzero!(4_u32);
+
+        assert!(
+            routable_lane_ids_for_nexus_at_height(&nexus, 1).is_empty(),
+            "an autoscale-owned default anchor must not make corrupted no-target routing reachable"
+        );
+    }
+
+    #[test]
+    fn routable_lane_ids_for_nexus_at_height_rejects_off_default_autoscale_owned_rule_lane() {
+        let rule_dataspace = DataSpaceId::new(9);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: Some(rule_dataspace),
+                matcher: LaneRoutingMatcher {
+                    account: Some("alice".to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), rule_dataspace, 1),
+        ]);
+        let mut nexus = nexus_with_routing(
+            policy,
+            lane_catalog,
+            dataspace_catalog(&[(rule_dataspace, "rule-space")]),
+        );
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = nonzero!(1_u32);
+        nexus.autoscale.max_lanes = nonzero!(4_u32);
+
+        assert_eq!(
+            routable_lane_ids_for_nexus_at_height(&nexus, 1),
+            BTreeSet::from([LaneId::SINGLE]),
+            "off-default autoscale-owned explicit rule lanes must not inflate proposal lookahead reachability"
         );
     }
 

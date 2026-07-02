@@ -64,6 +64,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
 )
 from sorafs_required_kinds import (  # noqa: E402
     parse_required_kinds as parse_required_evidence_kinds,
@@ -361,6 +362,14 @@ def validate_scheduler_runtime(
 ) -> None:
     require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_string_coverage(payload, "routes", "name", REQUIRED_RUNTIME_ROUTES, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     require_bool_true(payload, "scheduler_runtime_enabled", errors)
     require_bool_true(payload, "norito_snapshot_persisted", errors)
     require_bool_true(payload, "governance_dag_challenge_published", errors)
@@ -399,6 +408,14 @@ def validate_reporting_archive(
 ) -> None:
     require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_string_coverage(payload, "routes", "name", REQUIRED_REPORTING_ROUTES, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     require_bool_true(payload, "weekly_report_generated", errors)
     require_bool_true(payload, "status_export_verified", errors)
     require_bool_true(payload, "governance_archive_handoff_verified", errors)

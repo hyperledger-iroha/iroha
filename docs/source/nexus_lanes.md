@@ -489,11 +489,15 @@ LaneConfigEntry {
   Native AMX proposal vectors also replace stale participant legs even when the
   coordinator route is unchanged. Proposal size-cap trimming preserves full
   routing plans for removed transactions too, so overflow requeue keeps Native
-  AMX participant metadata. Proposal lookahead is enabled only when the
+  AMX participant metadata. Pending queue reconfiguration uses the same
+  height-aware autoscale range, so queued default-route transactions and local
+  routing-ledger hints stay on the active default route until an elastic lane's
+  creation height is committed. Proposal lookahead is enabled only when the
   committed Nexus snapshot has more than one policy-reachable active lane at the
-  candidate block height. Default-route autoscale candidates, canonical
-  dataspace routes, and explicit rule lanes count; unrouted same-dataspace
-  sidecar lanes and future-created autoscale lanes cannot trigger scan-budget
+  candidate block height. Valid default-route autoscale candidates, canonical
+  dataspace routes, and valid explicit rule lanes count; autoscale-owned default
+  anchors, off-default autoscale-owned rule targets, unrouted same-dataspace
+  sidecar lanes, and future-created autoscale lanes cannot trigger scan-budget
   overfetch before routing policy can select them.
 - Block validation and block execution use that same live Nexus autoscale range
   when recomputing execution-context routing and per-lane transaction
@@ -638,7 +642,11 @@ LaneConfigEntry {
   reward-claim cursors are not audit records; lane reset paths delete
   reset-owned rows (by storage key or embedded lane where present) and clear
   operator staking status for reset lanes while preserving unchanged-lane
-  economic state and status. Failed lane-retirement preflight
+  economic state and status. Lane-relay emergency overrides are pruned for
+  reset lanes and for lanes absent from the updated catalog; an override
+  pre-staged for a newly created lane id is treated as stale prior-incarnation
+  state and must be reinstalled after the lifecycle update. Failed
+  lane-retirement preflight
   keeps those live rows, emergency overrides, AXT replay entries, verified
   relay state, and validator activity in the committed WSV until the storage
   transition can complete.

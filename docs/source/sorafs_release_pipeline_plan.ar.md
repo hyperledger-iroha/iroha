@@ -4,11 +4,10 @@ direction: rtl
 source: docs/source/sorafs_release_pipeline_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 417acf1f40712714b35f7b3eb13acb53a714dd7a35769d543270c985526071d8
-source_last_modified: "2026-06-25T16:58:37+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 226cff418c5c50cfe095d28d310b2d94d11160062e3c53c3edfe971ba284195b
+source_last_modified: "2026-07-01T21:09:57.142415+00:00"
+translation_last_reviewed: 2026-07-02
 ---
-
 # SoraFS CLI/SDK Release & Testing Pipeline
 
 ## Goals
@@ -91,6 +90,91 @@ translation_last_reviewed: 2026-01-30
 - `scripts/sorafs_gateway_self_cert.sh` can be invoked post-deploy with
   `--manifest`/`--manifest-bundle` to ensure staging gateways continue to serve
   the signed manifest expected by clients.
+- `scripts/check_sorafs_production_readiness.py` is the final aggregate
+  SoraFS promotion gate over the per-lane rollout/release evidence summaries.
+  It requires each selected lane summary to be `ready`, have empty summary and
+  artifact/load-error lists, carry fresh reviewed deployment-context
+  fingerprints, cover that lane checker's full default required-kind set with
+  no extra `required` rows, keep top-level evidence/artifact counts consistent
+  with the validated rows, require evidence file counts to match the distinct
+  recognized artifact paths, publish threshold metadata as a non-empty
+  canonical non-negative integer map that the aggregate row preserves for
+  release review, reject extra top-level lane-summary fields outside the
+  schema-closed payload-free lane summary contract, validate allowed top-level
+  lane metadata as payload-free canonical strings, non-negative integers,
+  booleans, objects, and lists with expected container shapes, bind those
+  metadata fields to the lane-specific contract that emits them, validate exact
+  lowercase-hex binding-list metadata shapes before aggregate promotion, require
+  every fingerprint-backed top-level scalar hex, string-list, positive-integer
+  list, and tuple binding-list metadata field to declare its owning required
+  artifact kind or kinds before aggregate fingerprint matching,
+  validate exact lowercase-hex and positive-integer scalar list metadata shapes
+  before aggregate promotion, validate governance public-head identifiers as
+  lowercase hex list metadata before aggregate promotion, validate exact
+  object-list metadata shapes before aggregate promotion, reject exact duplicate
+  object-list metadata entries while preserving artifact order, require every
+  object-list metadata field to declare its owning required artifact kind before
+  its detail rows can be matched to recognized artifact fingerprints, validate exact
+  object metadata shapes before aggregate
+  promotion, require set-derived lane metadata lists to be duplicate-free and
+  sorted in canonical order, sanitize malformed sensitive-field path diagnostics
+  before writing aggregate errors,
+  require required-row and artifact schema labels to match the owning checker
+  evidence schemas, reject extra required-row fields outside the schema-closed
+  payload-free required-row contract, require canonical unique artifact paths
+  and lowercase SHA-256 digests, reject explicit artifact `status` labels
+  outside successful states such as `passed` or `verified`, reject
+  extra artifact-row fields
+  outside the schema-closed payload-free
+  artifact contract, require per-lane rollout/release checkers to normalize
+  artifact row paths through the shared archive-label helper before summary
+  rendering, deriving labels relative to evidence directories or safe explicit
+  basenames, require top-level
+  recognized-artifact inventory and validate it against the per-kind required-row
+  artifact counts and `(kind, path, sha256)` identities plus matching required
+  artifact metadata instead of ignoring it, validate schema-closed aggregate lane
+  rows with canonical path, lowercase SHA-256, count, timestamp, list, and error
+  shapes before release review, validate the schema-closed aggregate summary
+  envelope before writing the final production-readiness report, require
+  aggregate status to match canonical aggregate diagnostics, require ready
+  aggregate summaries to carry complete deployment context for a final
+  `prod`/`production` environment and only present, valid required rows whose
+  deployment context matches the aggregate deployment block, require each
+  aggregate required row deployment_id must match aggregate deployment_id, and
+  require each aggregate required row environment must match aggregate
+  environment,
+  validate final
+  aggregate required rows for exact present and missing row output contracts,
+  validate invalid aggregate required-row metadata before blocked rows are
+  emitted for release review,
+  require aggregate recognized-summary counts to match present required rows,
+  pin deterministic missing-row diagnostics for absent lane summaries, pin
+  deterministic duplicate-summary diagnostics for duplicate lane summaries,
+  count every duplicate lane-summary input while keeping one duplicate row
+  diagnostic per gate, pin aggregate blockers for unknown schemas and explicit
+  unrequired summaries, avoid payload or secret-bearing
+  fields, reject unknown summary schemas discovered in summary directories,
+  require an explicit final `--deployment-id`/`--environment` pair even for
+  direct checker invocations, and share the same reviewed `deployment_id` with
+  no non-reviewed or staging deployment markers plus a final
+  `prod`/`production` `environment`
+  before emitting
+  `sorafs.production_readiness.aggregate_gate.v1`. The companion
+  `scripts/run_sorafs_production_readiness.py` accepts reviewed per-lane
+  summary paths, requires exactly one summary input per required gate, requires
+  an explicit canonical `--deployment-id`/`--environment` pair whose deployment
+  id passes the reviewed deployment-id policy, carries no staging markers, and
+  whose environment is `prod` or `production`, advertises both flags as
+  required final deployment context in `--help`, supports `@ARGFILE`, rejects
+  explicit summaries for lanes
+  outside a narrowed
+  `--require-gate` selection, validates the schema-closed collection plan
+  envelope against the built command plan and independently rechecks final
+  production deployment context before dry-run output or execution,
+  rejects non-object or non-strict-JSON collection-plan renderings before
+  stdout or verifier launch,
+  and emits that dry-run collection plan so release operators can inspect the
+  full production-readiness command before invoking the aggregate gate.
 
 ## Versioning Policy
 

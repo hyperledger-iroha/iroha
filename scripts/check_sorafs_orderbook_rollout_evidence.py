@@ -67,6 +67,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     require_zero_count,
 )
 from sorafs_required_kinds import (  # noqa: E402
@@ -410,6 +411,14 @@ def validate_api_gateway(
     require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
     require_string_coverage(payload, "routes", "name", REQUIRED_API_ROUTES, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     require_bool_true(payload, "canonical_request_auth_enforced", errors)
     require_bool_true(payload, "owner_account_binding_verified", errors)
     require_bool_true(payload, "provider_role_binding_verified", errors)
@@ -485,6 +494,14 @@ def validate_reconciliation(
     require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
     require_positive_int(payload, "source_count", errors)
     require_string_coverage(payload, "sources", "name", REQUIRED_RECONCILIATION_SOURCES, errors)
+    require_string_inventory_count_match(
+        payload,
+        "sources",
+        "source_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     require_bool_true(payload, "contract_mirror_reconciliation_passed", errors)
     require_bool_true(payload, "evidence_dag_published", errors)
     require_false(payload, "contract_mirror_divergence", errors)
