@@ -126710,6 +126710,126 @@ async fn proposal_yields_no_qc_stale_owner_after_fast_recovery_window_before_quo
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn proposal_yields_no_qc_stale_owner_with_competing_quorum_after_fast_recovery_window() {
+    use std::borrow::Cow;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.resilience.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let _ = seed_genesis_block_for_state(&actor.state);
+
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let frontier_height = actor.committed_height_snapshot().saturating_add(1);
+    let owner_view = 0_u64;
+    let fresh_view = owner_view.saturating_add(1);
+    let now = Instant::now();
+    let fast_yield_age =
+        super::reschedule::near_quorum_payload_timeout(actor.rebroadcast_cooldown())
+            .min(actor.quorum_timeout(actor.runtime_da_enabled()))
+            .max(Duration::from_millis(1));
+    let stale_at = now
+        .checked_sub(fast_yield_age.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .start_new_round(frontier_height, stale_at);
+    actor
+        .phase_tracker
+        .on_view_change(frontier_height, fresh_view, now);
+
+    let block = sample_block(
+        frontier_height,
+        owner_view,
+        actor.state.latest_block_hash_fast(),
+    );
+    let owner_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, frontier_height, owner_view);
+    pending.inserted_at = stale_at;
+    pending.touch_progress(stale_at);
+    actor.pending.pending_blocks.insert(owner_hash, pending);
+
+    let required = seed_near_quorum_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        owner_hash,
+        frontier_height,
+        owner_view,
+    );
+    while actor.poll_vote_verify_results() {}
+    let vote_status =
+        actor.commit_vote_quorum_status_for_block_detail(owner_hash, frontier_height, owner_view);
+    assert_eq!(
+        vote_status.vote_count,
+        required.saturating_sub(1),
+        "test setup requires a competing same-height vote lock without a full QC"
+    );
+    assert!(
+        !actor.same_height_block_has_recoverable_qc(owner_hash, frontier_height, owner_view),
+        "near-quorum vote evidence must not be enough to form a recoverable QC"
+    );
+
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        frontier_height,
+        owner_view,
+        owner_hash,
+        stale_at,
+        actor
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1)),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    let slot = actor.frontier_slot.as_ref().expect("frontier slot");
+    assert!(
+        actor.frontier_slot_competing_quorum_locked_for_view(slot, fresh_view),
+        "test setup requires split same-height votes to lock out a fresh branch"
+    );
+    assert!(
+        actor.maybe_yield_stale_frontier_owner_for_fresh_proposal(
+            frontier_height,
+            fresh_view,
+            owner_hash,
+            owner_view,
+            now,
+            actor.queue.queued_len(),
+        ),
+        "competing split-vote evidence without a QC must not pin a stale owner after the fast recovery window"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&owner_hash)
+            .is_some_and(PendingBlock::is_retired_same_height),
+        "vote-backed stale evidence may be retained, but only as retired body-repair state"
+    );
+    assert!(
+        actor
+            .frontier_slot_live_local_owner_for_round(frontier_height, fresh_view)
+            .is_none(),
+        "yielding must clear the active frontier owner that was pinning queued transactions"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposal_yields_local_voted_stale_frontier_owner_without_quorum_lock() {
     use std::borrow::Cow;
 
@@ -177919,6 +178039,15 @@ fn validation_reject_reason_label_covers_error_categories() {
         super::validation_reject_reason_label(&BlockValidationError::DuplicateTransactions);
     assert_eq!(reason_duplicate, super::VALIDATION_REASON_EXECUTION);
 
+    let reason_sccp_duplicate = super::validation_reject_reason_label(
+        &BlockValidationError::SccpDuplicateOutboundMessage {
+            source_domain: 1,
+            target_domain: 2,
+            message_id: [0xA5; 32],
+        },
+    );
+    assert_eq!(reason_sccp_duplicate, super::VALIDATION_REASON_EXECUTION);
+
     let reason_stateless = super::validation_reject_reason_label(
         &BlockValidationError::InvalidGenesis(crate::block::InvalidGenesisError::InvalidSignature),
     );
@@ -207756,6 +207885,41 @@ fn rbc_session_persist_roundtrip() {
     assert_eq!(rebuilt.payload_hash(), Some(payload_hash));
     assert_eq!(rebuilt.expected_chunk_digests.as_ref(), Some(&digests));
     assert!(rebuilt.recovered_from_disk());
+}
+
+#[test]
+fn rbc_session_from_persisted_rejects_all_zero_ready_and_deliver_signatures() {
+    let mut session = RbcSession::test_new(1, None, None, 42);
+    session.test_note_chunk(0, b"bytes".to_vec(), 1);
+    let manifest = SoftwareManifest::current();
+    let key = session_key();
+    let roster = vec![PeerId::new(checked_keypair().public_key().clone())];
+    let baseline = session.to_persisted(key, Hash::new(b"chain"), &manifest, &roster);
+
+    let mut all_zero_ready = baseline.clone();
+    all_zero_ready
+        .ready_signatures
+        .push(super::super::rbc_store::PersistedReady {
+            sender: 0,
+            signature: vec![0u8; 64],
+        });
+    let err = RbcSession::from_persisted_unchecked(&all_zero_ready)
+        .expect_err("all-zero persisted READY signature must fail rebuild");
+    assert_eq!(
+        err,
+        super::PersistedLoadError::InvalidMetadata("all-zero READY signature")
+    );
+
+    let mut all_zero_deliver = baseline;
+    all_zero_deliver.delivered = true;
+    all_zero_deliver.deliver_sender = Some(0);
+    all_zero_deliver.deliver_signature = Some(vec![0u8; 64]);
+    let err = RbcSession::from_persisted_unchecked(&all_zero_deliver)
+        .expect_err("all-zero persisted DELIVER signature must fail rebuild");
+    assert_eq!(
+        err,
+        super::PersistedLoadError::InvalidMetadata("all-zero DELIVER signature")
+    );
 }
 
 #[test]

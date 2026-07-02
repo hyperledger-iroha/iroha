@@ -1487,6 +1487,12 @@ mod tests {
     use super::*;
 
     const FIXTURE_PATH: &str = "../../IrohaSwift/Tests/IrohaSwiftTests/Fixtures/vpn_vectors.json";
+    const HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET: usize =
+        VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32;
+    const SMALL_ORDER_ED25519_POINT: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("test fixture random key generation should succeed")
@@ -1663,6 +1669,29 @@ mod tests {
         bytes[VPN_HELPER_TICKET_MAGIC.len() + 3] ^= 0xFF;
         let err = VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("tamper must fail");
         assert_eq!(VpnHelperTicketError::InvalidMac, err);
+    }
+
+    #[test]
+    fn helper_ticket_parse_rejects_inert_metering_public_key_material() {
+        let secret = [0x42; 32];
+        let ticket = sample_helper_ticket(55_000);
+        for (label, public_key) in [
+            ("all-zero", [0u8; 32]),
+            ("small-order", SMALL_ORDER_ED25519_POINT),
+        ] {
+            let mut bytes = ticket.to_bytes(&secret);
+            bytes[HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET
+                ..HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET + 32]
+                .copy_from_slice(&public_key);
+
+            let err = VpnHelperTicketV1::parse(&bytes, &secret, 1)
+                .expect_err("inert metering key must fail before MAC acceptance");
+            assert_eq!(
+                VpnHelperTicketError::InvalidMeteringPublicKey,
+                err,
+                "{label} metering key should fail at the key-admission boundary"
+            );
+        }
     }
 
     #[test]

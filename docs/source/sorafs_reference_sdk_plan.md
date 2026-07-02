@@ -25,6 +25,10 @@ fail-closed SF-11 release evidence gate for those artifacts, including
 cross-artifact `release_manifest_digest_hex` binding from release archives,
 downstream packages, cookbook smoke, FFI/header contract, and governance
 approval evidence back to a valid signed manifest in the same bundle, and
+payload-free summary anchors for the release archive index, signed release-key
+fingerprint, downstream package index, cookbook smoke output, header digest,
+and FFI contract digest so final production readiness can tether those release
+artifacts to their owning evidence rows. The
 `scripts/run_sorafs_reference_sdk_release_evidence.py` provides the reviewed
 collection planner/runner with dry-run `evidence_contract` output for each
 selected release evidence schema and required payload field. The JavaScript SDK
@@ -454,10 +458,14 @@ release archives, signed manifests, downstream bindings, cookbook smoke,
 FFI/header contract, and governance approval. It fails closed on stale evidence,
 raw archive, binary, manifest, package, smoke-output, transaction, token,
 secret, or private-key material, missing x86_64/aarch64 macOS and Linux release
-targets, missing binary/archive checksums, missing deterministic-archive proof,
-tracked generated `dist/*` artifacts beyond `dist/.gitkeep`, unsigned or
-unverified release manifests, missing governed release-key fingerprints, missing
+targets, duplicate release-target entries, `target_count` values that do not
+match the unique target list, missing binary/archive checksums, missing
+deterministic-archive proof, tracked generated `dist/*` artifacts beyond
+`dist/.gitkeep`, unsigned or unverified release manifests, missing governed
+release-key fingerprints, missing
 JavaScript/Python/Kotlin/JVM/Java Android/Swift package publication evidence,
+duplicate downstream-package entries, `package_count` values that do not match
+the unique package list,
 SDK export or `ValidationOutcomeV1` drift, missing native bridge/header binding,
 failed published-archive cookbook smoke, missing fixture bundle or manifest/CAR
 replay, smoke duration above threshold, FFI header drift, and governance packets
@@ -488,7 +496,8 @@ before the plan is rendered or the verifier starts.
 payload-free SF-11 release evidence builder for reviewed release-archive,
 signed-manifest, downstream-binding, cookbook-smoke, FFI/header-contract, and
 governance-approval artifacts. It requires complete target and downstream
-package coverage where applicable, release-manifest digest bindings,
+package coverage where applicable, duplicate-free target/package inventories
+whose count fields match their unique entries, release-manifest digest bindings,
 threshold-reviewed smoke duration, signed-manifest policy digests,
 governed-release approval markers, and checker-backed validation before
 atomically writing JSON without following output symlinks. The release-archive

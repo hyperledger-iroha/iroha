@@ -4,9 +4,10 @@ direction: rtl
 source: docs/source/sorafs_pop_credentials_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 3398edc13ea114f1c9182e02cd6b216367bb08ebdfd38d0593b6cf8207340ad3
+source_hash: d144cd882adf611e082028f837b5d4108d6583132cf77cca356fbe85bb84e366
 source_last_modified: "2026-06-25T17:19:30+00:00"
 translation_last_reviewed: 2026-06-25
+source_mtime: 2026-07-01T19:55:53.145948+00:00
 ---
 
 # Proof-of-Personhood Credential Pipeline
@@ -41,6 +42,17 @@ credential publication runs. Root or revocation-list disagreements mark the
 offending anchor and downstream artifacts invalid in the emitted summary, not
 only the top-level promotion status. This checker is a rollout gate; it does
 not replace the missing runtime services or privacy proof backend.
+Verifier-service artifacts also publish `policy_digest_hex`; governance
+approval artifacts must bind `policy_digest_hex` to that valid verifier policy
+digest, and the checker emits those valid verifier policy digests as
+`valid_policy_digests`. Valid juror-client artifacts now publish their reviewed
+root/revocation sync tuple as `valid_juror_sync_bindings`, and valid
+moderation-integration artifacts publish `pop_snapshot_digest_hex` values as
+`valid_pop_snapshot_digests`; the aggregate production-readiness gate accepts
+both only as payload-free metadata tethered to recognized artifact
+fingerprints. Enrollment-portal artifacts also bind `route_count` to the unique
+canonical `routes[].name` inventory and reject duplicate route entries before
+promotion can report ready.
 `scripts/run_sorafs_pop_credentials_rollout_evidence.py` provides the matching
 collection planner/runner for reviewed staged evidence. It accepts explicit
 payload-free canary artifacts, supports shell-style `@ARGFILE` inputs, forwards
@@ -49,6 +61,19 @@ the gate thresholds, prints a dry-run command plan with the checker-backed
 checker with a reproducible summary path. The checker exports those required
 top-level payload fields as `EVIDENCE_REQUIRED_FIELDS` for downstream
 automation.
+`scripts/build_sorafs_pop_credentials_canary.py` is a payload-free SFM-4b1 PoP credential canary builder
+for issuer bundle, commitment root, revocation registry, enrollment portal,
+juror client, verifier service, moderation integration, metrics/alerts, and
+governance approval evidence. It takes reviewed deployment facts, requires every
+positive proof claim and required route/metric coverage explicitly, forces raw
+credential, holder-identity, proof, attestation, response-body, and revocation
+nonce payload flags to `false`, validates each generated artifact through the
+PoP rollout gate, requires reviewed policy-digest input for verifier-service
+and governance-approval evidence, and writes atomically without following
+output symlinks. The
+builder is an evidence packaging aid; it does not replace the missing issuer,
+registry, juror client, verifier service, or production privacy-preserving proof
+backend.
 
 ## Existing Foundations
 
@@ -97,6 +122,11 @@ automation.
   moderation integration, dashboard metrics, or governance approval disagree on
   the active root or revocation-list digests, and records those cross-artifact
   binding failures on the offending artifacts in the summary. It supports
+  verifier-service policy digest anchors, emits them as `valid_policy_digests`,
+  and requires governance approval `policy_digest_hex` to match one of those
+  valid verifier policies. Enrollment-portal artifacts also bind `route_count`
+  to the unique canonical `routes[].name` inventory and reject duplicate route
+  entries before promotion can report ready. It supports
   shell-style `@ARGFILE` inputs so reviewed operator evidence paths can be
   replayed without
   storing runtime secrets in the repo.
@@ -104,7 +134,7 @@ automation.
   evidence paths into a single verifier invocation, checks required files before
   running, supports subset gates for staged operator drills, and emits
   `sorafs.pop_credentials.rollout_evidence_collection_plan.v1` dry-run plans
-  for rollout review.
+  with checker-backed `evidence_contract` maps for rollout review.
 
 ## Target Credential Model
 
@@ -159,6 +189,12 @@ reference validator is shipped only for local/CI payload validation.
   then validate already-collected evidence directly with
   `scripts/check_sorafs_pop_credentials_rollout_evidence.py
   @scripts/examples/sorafs_pop_credentials_rollout_evidence.args.example`.
+  For reviewed local canary packaging, generate payload-free artifacts with
+  `scripts/build_sorafs_pop_credentials_canary.py
+  @scripts/examples/sorafs_pop_credentials_issuer_canary.args.example` and
+  `scripts/build_sorafs_pop_credentials_canary.py
+  @scripts/examples/sorafs_pop_credentials_verifier_canary.args.example` before
+  passing the generated evidence files to the rollout gate.
   Production promotion remains blocked unless the summary status is `ready`
   and includes a production privacy-preserving proof backend rather than the
   local transcript-digest policy foundation.
@@ -175,10 +211,11 @@ cargo test -p iroha_data_model policy_jury
 cargo test -p sorafs_manifest pop -- --nocapture
 cargo test -p connect_norito_bridge sorafs_reference_pop -- --nocapture
 python3 -m pytest -q scripts/tests/check_sorafs_pop_credentials_rollout_evidence_test.py \
-  scripts/tests/run_sorafs_pop_credentials_rollout_evidence_test.py
+  scripts/tests/run_sorafs_pop_credentials_rollout_evidence_test.py \
+  scripts/tests/build_sorafs_pop_credentials_canary_test.py
 ```
 
 Add dedicated service, CLI, and deployed verifier tests when the issuer,
 registry, juror client, and privacy-proof backend land.
 
-The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
+The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier. The shared runner plan guard also rejects non-canonical nested required-kind, threshold, external-evidence, evidence-contract, and command-step shapes before dry-run output or verifier execution.

@@ -108,7 +108,8 @@ fn sorafs_gateway_attestation_signature_verifies_and_rejects_wrong_key() {
         .and_then(Value::as_str)
         .expect("attestation signature is present");
     let signature_bytes = hex::decode(signature_hex).expect("attestation signature is hex");
-    let signature = Signature::from_bytes(&signature_bytes);
+    let signature = Signature::try_from_bytes(&signature_bytes)
+        .expect("generated attestation signature is non-empty and nonzero");
 
     signature
         .verify(ALICE_KEYPAIR.public_key(), &bundle.report_json)
@@ -156,6 +157,37 @@ fn sorafs_gateway_attestation_verifier_rejects_report_tamper() {
         .expect_err("tampered embedded report must fail attestation verification");
     assert!(
         err.to_string().contains("payload hash mismatch"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn sorafs_gateway_attestation_verifier_rejects_all_zero_signature() {
+    let report = default_suite_report();
+    let signer = AccountAddress::from_account_id(&ALICE_ID).expect("Alice address encodes");
+    let bundle = generate_attestation(
+        &report,
+        &ALICE_KEYPAIR,
+        &signer,
+        UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+    )
+    .expect("attestation generation succeeds");
+    let mut envelope: Value =
+        norito::json::from_slice(&bundle.envelope_bytes).expect("attestation envelope is JSON");
+    envelope
+        .as_object_mut()
+        .and_then(|root| root.get_mut("attestation"))
+        .and_then(Value::as_object_mut)
+        .expect("attestation object")
+        .insert("signature_hex".into(), Value::from("00".repeat(64)));
+    let tampered =
+        norito::json::to_vec(&envelope).expect("serialize tampered attestation envelope");
+
+    let err = verify_attestation_envelope(&tampered)
+        .expect_err("all-zero attestation signature must fail admission");
+    assert!(
+        err.to_string()
+            .contains("invalid attestation signature material"),
         "unexpected error: {err}"
     );
 }

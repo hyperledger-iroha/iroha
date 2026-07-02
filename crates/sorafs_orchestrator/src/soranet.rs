@@ -607,6 +607,14 @@ pub enum GuardDirectoryError {
         #[source]
         source: ed25519_dalek::SignatureError,
     },
+    /// Issuer Ed25519 key material is structurally invalid.
+    #[error("issuer {fingerprint} contains invalid Ed25519 public key material: {reason}")]
+    InvalidIssuerEd25519KeyMaterial {
+        /// Issuer fingerprint.
+        fingerprint: String,
+        /// Validation failure reason.
+        reason: &'static str,
+    },
     /// Certificate endpoint tags contained an unknown label.
     #[error("relay {relay} referenced unknown endpoint tag `{label}` ({reason})")]
     InvalidEndpointTag {
@@ -622,6 +630,45 @@ pub enum GuardDirectoryError {
 fn parse_validation_phase(value: u8) -> Result<CertificateValidationPhase, GuardDirectoryError> {
     decode_validation_phase(value)
         .ok_or(GuardDirectoryError::UnknownValidationPhase { phase: value })
+}
+
+struct VerifiedGuardDirectoryIssuer {
+    issuer: GuardDirectoryIssuerV1,
+    ed25519_key: Ed25519VerifyingKey,
+}
+
+fn parse_guard_directory_issuer_ed25519_key(
+    fingerprint: String,
+    public_key: &[u8; 32],
+) -> Result<Ed25519VerifyingKey, GuardDirectoryError> {
+    if public_key.iter().all(|byte| *byte == 0) {
+        return Err(GuardDirectoryError::InvalidIssuerEd25519KeyMaterial {
+            fingerprint,
+            reason: "public key material must not be all zero",
+        });
+    }
+
+    let parsed = iroha_crypto::ed25519_parse_public_key(public_key).map_err(|err| {
+        let message = err.to_string();
+        let reason = if message.contains("non-canonical") {
+            "public key is not a canonical Ed25519 point"
+        } else if message.contains("small-order") {
+            "public key is small-order (weak); rejected"
+        } else {
+            "public key is malformed or not a canonical Ed25519 point"
+        };
+        GuardDirectoryError::InvalidIssuerEd25519KeyMaterial {
+            fingerprint: fingerprint.clone(),
+            reason,
+        }
+    })?;
+
+    Ed25519VerifyingKey::from_bytes(parsed.as_bytes()).map_err(|source| {
+        GuardDirectoryError::InvalidIssuerEd25519Key {
+            fingerprint,
+            source,
+        }
+    })
 }
 
 impl RelayDirectory {
@@ -724,18 +771,23 @@ impl RelayDirectory {
 
         let validation_phase = parse_validation_phase(snapshot.validation_phase)?;
 
-        let mut issuers: HashMap<[u8; 32], GuardDirectoryIssuerV1> =
+        let mut issuers: HashMap<[u8; 32], VerifiedGuardDirectoryIssuer> =
             HashMap::with_capacity(snapshot.issuers.len());
         for issuer in snapshot.issuers {
+            let issuer_fingerprint_hex = hex::encode(issuer.fingerprint);
+            let issuer_ed25519 = parse_guard_directory_issuer_ed25519_key(
+                issuer_fingerprint_hex.clone(),
+                &issuer.ed25519_public,
+            )?;
             let computed =
                 compute_issuer_fingerprint(&issuer.ed25519_public, &issuer.mldsa65_public)
                     .map_err(|source| GuardDirectoryError::IssuerFingerprintCompute {
-                        fingerprint: hex::encode(issuer.fingerprint),
+                        fingerprint: issuer_fingerprint_hex.clone(),
                         source,
                     })?;
             if computed != issuer.fingerprint {
                 return Err(GuardDirectoryError::IssuerFingerprintMismatch {
-                    expected: hex::encode(issuer.fingerprint),
+                    expected: issuer_fingerprint_hex,
                     computed: hex::encode(computed),
                 });
             }
@@ -748,7 +800,16 @@ impl RelayDirectory {
                 });
             }
             let fingerprint = issuer.fingerprint;
-            if issuers.insert(fingerprint, issuer).is_some() {
+            if issuers
+                .insert(
+                    fingerprint,
+                    VerifiedGuardDirectoryIssuer {
+                        issuer,
+                        ed25519_key: issuer_ed25519,
+                    },
+                )
+                .is_some()
+            {
                 return Err(GuardDirectoryError::DuplicateIssuer {
                     fingerprint: hex::encode(fingerprint),
                 });
@@ -774,16 +835,12 @@ impl RelayDirectory {
                 }
             })?;
 
-            let ed25519_key =
-                Ed25519VerifyingKey::from_bytes(&issuer.ed25519_public).map_err(|err| {
-                    GuardDirectoryError::InvalidIssuerEd25519Key {
-                        fingerprint: hex::encode(issuer_fingerprint),
-                        source: err,
-                    }
-                })?;
-
             bundle
-                .verify(&ed25519_key, &issuer.mldsa65_public, validation_phase)
+                .verify(
+                    &issuer.ed25519_key,
+                    &issuer.issuer.mldsa65_public,
+                    validation_phase,
+                )
                 .map_err(|source| GuardDirectoryError::CertificateDecode { source })?;
 
             let mut endpoints = Vec::with_capacity(bundle.certificate.endpoints.len());
@@ -2535,6 +2592,17 @@ mod tests {
 
     use super::*;
 
+    const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const ED25519_NONCANONICAL_IDENTITY: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     struct FailingTryRng;
 
     #[derive(Debug)]
@@ -2706,6 +2774,60 @@ mod tests {
                 );
             }
             other => panic!("unexpected guard directory error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guard_directory_rejects_all_zero_issuer_ed25519_key_material() {
+        let (mut snapshot, _) =
+            build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xAA; 32]);
+        snapshot.issuers[0].ed25519_public = [0u8; 32];
+        snapshot.issuers[0].fingerprint = compute_issuer_fingerprint(
+            &snapshot.issuers[0].ed25519_public,
+            &snapshot.issuers[0].mldsa65_public,
+        )
+        .expect("zero-key issuer fingerprint still computes structurally");
+
+        let err = RelayDirectory::from_guard_directory_snapshot(snapshot)
+            .expect_err("all-zero issuer Ed25519 key should fail before certificate verification");
+        match err {
+            GuardDirectoryError::InvalidIssuerEd25519KeyMaterial { reason, .. } => {
+                assert!(
+                    reason.contains("all zero"),
+                    "unexpected invalid key material reason: {reason}"
+                );
+            }
+            other => panic!("unexpected guard directory error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guard_directory_rejects_noncanonical_or_small_order_issuer_ed25519_key_material() {
+        for (public_key, expected_reason) in [
+            (ED25519_SMALL_ORDER_POINT, "small-order"),
+            (ED25519_NONCANONICAL_IDENTITY, "canonical"),
+        ] {
+            let (mut snapshot, _) =
+                build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xAA; 32]);
+            snapshot.issuers[0].ed25519_public = public_key;
+            snapshot.issuers[0].fingerprint = compute_issuer_fingerprint(
+                &snapshot.issuers[0].ed25519_public,
+                &snapshot.issuers[0].mldsa65_public,
+            )
+            .expect("invalid-key issuer fingerprint still computes structurally");
+
+            let err = RelayDirectory::from_guard_directory_snapshot(snapshot).expect_err(
+                "invalid issuer Ed25519 key should fail before certificate verification",
+            );
+            match err {
+                GuardDirectoryError::InvalidIssuerEd25519KeyMaterial { reason, .. } => {
+                    assert!(
+                        reason.contains(expected_reason),
+                        "unexpected invalid key material reason for {expected_reason}: {reason}"
+                    );
+                }
+                other => panic!("unexpected guard directory error: {other:?}"),
+            }
         }
     }
 

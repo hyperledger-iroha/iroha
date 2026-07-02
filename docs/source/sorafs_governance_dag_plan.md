@@ -547,7 +547,12 @@ every recognized artifact is valid, raw DAG blocks, raw heads, CAR payloads,
 node payloads, response bodies, private keys, bearer tokens, signed
 transactions, and ledgers are absent, route latency, IPFS pin lag, and public
 head age stay under configured thresholds, enough public blocks and payload
-kinds are covered, and governance is bound to `iroha_config`. Valid
+kinds are covered, and governance is bound to `iroha_config`. Ingest-service
+artifacts also bind `source_count` to the unique canonical `payload_kinds`
+inventory and reject duplicate payload-kind entries before promotion can report
+ready. Dashboard API artifacts also bind `route_count` to the unique canonical
+`routes[].name` inventory and reject duplicate route entries before promotion
+can report ready. Valid
 operator-recovery artifacts now publish their reviewed `checkpoint_digest_hex`
 values as `valid_checkpoint_digests`, and the aggregate production-readiness
 gate accepts those digests only as payload-free lowercase-hex metadata tethered

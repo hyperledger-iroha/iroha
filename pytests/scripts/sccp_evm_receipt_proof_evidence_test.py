@@ -137,6 +137,64 @@ def test_receipt_hex_parser_redacts_parser_causes():
         raise AssertionError("invalid EVM receipt transaction hash hex was accepted")
 
 
+def test_receipt_cli_parsers_reject_non_string_values_without_stringification():
+    """Receipt CLI parsers must reject hostile non-string values before coercion."""
+
+    module = load_module()
+
+    class HostileParserValue:
+        def __str__(self):
+            raise AssertionError("secret-token-receipt-parser-value was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token-receipt-parser-value was repr'd")
+
+        def strip(self):
+            raise AssertionError("secret-token-receipt-parser-value strip ran")
+
+        def startswith(self, _prefix):
+            raise AssertionError("secret-token-receipt-parser-value startswith ran")
+
+        def lower(self):
+            raise AssertionError("secret-token-receipt-parser-value lower ran")
+
+        def isascii(self):
+            raise AssertionError("secret-token-receipt-parser-value isascii ran")
+
+        def isdecimal(self):
+            raise AssertionError("secret-token-receipt-parser-value isdecimal ran")
+
+    cases = (
+        (
+            lambda value: module.parse_hex_bytes(
+                value,
+                label="transaction hash",
+                byte_length=32,
+            ),
+            "transaction hash must be canonical lowercase 0x hex",
+        ),
+        (
+            module.parse_domain,
+            "domain must be eth, bsc, 1, or 2",
+        ),
+        (
+            module.parse_rpc_chain_id,
+            "--expected-rpc-chain-id must be a canonical decimal integer",
+        ),
+    )
+
+    for parser, expected_message in cases:
+        try:
+            parser(HostileParserValue())
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert "HostileParserValue" not in rendered
+        else:
+            raise AssertionError("hostile receipt parser value was accepted")
+
+
 def test_receipt_hex_nonzero_controls_reject_non_booleans():
     """Receipt fixed-hex nonzero policy must not accept truthy aliases."""
 

@@ -41,6 +41,7 @@ from sorafs_evidence_sensitivity import (  # noqa: E402
     visit_sensitive_fields,
 )
 from sorafs_evidence_validation import (  # noqa: E402
+    evidence_schema_by_kind,
     evidence_gate_status,
     numbered_rollout_marker_token,
     require_rollout_deployment_id,
@@ -57,54 +58,71 @@ from sorafs_response_args import (  # noqa: E402
 )
 from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as AI_PRESCREEN_REQUIRED_KINDS,
+    KIND_BY_NAME as AI_PRESCREEN_KIND_BY_NAME,
 )
 from check_sorafs_appeal_finance_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as APPEAL_FINANCE_REQUIRED_KINDS,
+    KIND_BY_NAME as APPEAL_FINANCE_KIND_BY_NAME,
 )
 from check_sorafs_gateway_compliance_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GATEWAY_COMPLIANCE_REQUIRED_KINDS,
+    KIND_BY_NAME as GATEWAY_COMPLIANCE_KIND_BY_NAME,
 )
 from check_sorafs_gateway_load_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GATEWAY_LOAD_REQUIRED_KINDS,
+    KIND_BY_NAME as GATEWAY_LOAD_KIND_BY_NAME,
 )
 from check_sorafs_governance_dag_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GOVERNANCE_DAG_REQUIRED_KINDS,
+    KIND_BY_NAME as GOVERNANCE_DAG_KIND_BY_NAME,
 )
 from check_sorafs_hedging_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as HEDGING_BILLING_REQUIRED_KINDS,
+    KIND_BY_NAME as HEDGING_BILLING_KIND_BY_NAME,
 )
 from check_sorafs_moderation_panel_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as MODERATION_PANEL_REQUIRED_KINDS,
+    KIND_BY_NAME as MODERATION_PANEL_KIND_BY_NAME,
 )
 from check_sorafs_orderbook_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as ORDERBOOK_REQUIRED_KINDS,
+    KIND_BY_NAME as ORDERBOOK_KIND_BY_NAME,
 )
 from check_sorafs_pdp_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as PDP_REQUIRED_KINDS,
+    KIND_BY_NAME as PDP_KIND_BY_NAME,
 )
 from check_sorafs_pop_credentials_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as POP_CREDENTIALS_REQUIRED_KINDS,
+    KIND_BY_NAME as POP_CREDENTIALS_KIND_BY_NAME,
 )
 from check_sorafs_por_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as POR_REQUIRED_KINDS,
+    KIND_BY_NAME as POR_KIND_BY_NAME,
 )
 from check_sorafs_potr_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as POTR_REQUIRED_KINDS,
+    KIND_BY_NAME as POTR_KIND_BY_NAME,
 )
 from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as REFERENCE_SDK_REQUIRED_KINDS,
+    KIND_BY_NAME as REFERENCE_SDK_KIND_BY_NAME,
 )
 from check_sorafs_repair_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as REPAIR_REQUIRED_KINDS,
+    KIND_BY_NAME as REPAIR_KIND_BY_NAME,
 )
 from check_sorafs_reputation_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as REPUTATION_REQUIRED_KINDS,
+    KIND_BY_NAME as REPUTATION_KIND_BY_NAME,
 )
 from check_sorafs_reserve_rent_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as RESERVE_RENT_REQUIRED_KINDS,
+    KIND_BY_NAME as RESERVE_RENT_KIND_BY_NAME,
 )
 from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as TRANSPARENCY_REQUIRED_KINDS,
+    KIND_BY_NAME as TRANSPARENCY_KIND_BY_NAME,
 )
 
 
@@ -114,6 +132,7 @@ DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS = 14 * 24 * 60 * 60
 LOWER_HEX_DIGITS = set("0123456789abcdef")
 PRODUCTION_READY_ENVIRONMENTS = frozenset({"prod", "production"})
 FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS = frozenset({"stage", "staging"})
+SUCCESS_ARTIFACT_STATUSES = frozenset({"passed", "verified"})
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -183,13 +202,20 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
             "deployment_context",
             "valid_case_digests",
             "valid_e2e_runs",
+            "valid_evidence_viewer_digest_sets",
             "valid_policy_digests",
             "valid_roster_bindings",
             "valid_tally_bindings",
         }
     ),
     "orderbook": frozenset({"valid_contract_digests", "valid_policy_digests"}),
-    "pdp": frozenset({"valid_policy_digests", "valid_proof_summary_digests"}),
+    "pdp": frozenset(
+        {
+            "valid_policy_digests",
+            "valid_proof_summary_digests",
+            "valid_provider_roster_digests",
+        }
+    ),
     "pop_credentials": frozenset(
         {
             "valid_juror_sync_bindings",
@@ -210,9 +236,15 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     ),
     "reference_sdk_release": frozenset(
         {
+            "valid_archive_index_digests",
+            "valid_ffi_contract_digests",
+            "valid_header_digests",
+            "valid_package_index_digests",
             "valid_policy_digests",
+            "valid_release_key_fingerprints",
             "valid_release_manifest_digests",
             "valid_release_manifest_reference_digests",
+            "valid_smoke_output_digests",
         }
     ),
     "repair": frozenset(
@@ -283,12 +315,19 @@ PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS = frozenset(
         "valid_pop_snapshot_digests",
         "valid_pq_key_roster_digests",
         "valid_proof_summary_digests",
+        "valid_provider_roster_digests",
         "valid_public_head_cids",
         "valid_receipt_summary_digests",
         "valid_reputation_weight_policy_digests",
         "valid_reference_decision_ids",
+        "valid_archive_index_digests",
+        "valid_ffi_contract_digests",
+        "valid_header_digests",
+        "valid_package_index_digests",
+        "valid_release_key_fingerprints",
         "valid_release_manifest_digests",
         "valid_release_manifest_reference_digests",
+        "valid_smoke_output_digests",
         "valid_revocation_list_digests",
         "valid_root_digests",
         "valid_roster_digests",
@@ -363,6 +402,20 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
             "tally_digest_hex": 64,
         },
     },
+    "valid_evidence_viewer_digest_sets": {
+        "strings": frozenset(),
+        "positive_ints": frozenset(),
+        "hex": {
+            "case_digest_hex": 64,
+            "roster_hash_hex": 64,
+            "session_manifest_digest_hex": 64,
+            "watermark_metadata_digest_hex": 64,
+            "access_log_digest_hex": 64,
+            "legal_hold_receipt_digest_hex": 64,
+            "transparency_report_digest_hex": 64,
+            "audit_digest_hex": 64,
+        },
+    },
     "valid_multi_peer_runs": {
         "strings": frozenset({"deployment_id", "environment"}),
         "positive_ints": frozenset(
@@ -386,8 +439,16 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
 PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS = {
     "valid_billing_cycles": "billing_cycle",
     "valid_e2e_runs": "e2e_panel",
+    "valid_evidence_viewer_digest_sets": "evidence_viewer",
     "valid_multi_peer_runs": "multi_peer_reconciliation",
     "valid_provider_bakes": "provider_bake",
+}
+PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS = {
+    ("appeal_finance", "valid_multi_peer_runs"): "multi_peer_reconciliation",
+    ("hedging_billing", "valid_billing_cycles"): "billing_cycle",
+    ("moderation_panel", "valid_e2e_runs"): "e2e_panel",
+    ("moderation_panel", "valid_evidence_viewer_digest_sets"): "evidence_viewer",
+    ("reserve_rent", "valid_provider_bakes"): "provider_bake",
 }
 PAYLOAD_FREE_SUMMARY_OBJECT_LIST_FINGERPRINT_HEX_BINDINGS = {
     field: {
@@ -418,12 +479,19 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS = {
     "valid_pop_snapshot_digests": "pop_snapshot_digest_hex",
     "valid_pq_key_roster_digests": "pq_key_roster_digest_hex",
     "valid_proof_summary_digests": "proof_summary_digest_hex",
+    "valid_provider_roster_digests": "provider_roster_digest_hex",
     "valid_public_head_cids": "public_head_cid_hex",
     "valid_receipt_summary_digests": "receipt_summary_digest_hex",
     "valid_reputation_weight_policy_digests": "reputation_weight_policy_digest_hex",
     "valid_reference_decision_ids": "decision_id_hex",
+    "valid_archive_index_digests": "archive_index_digest_hex",
+    "valid_ffi_contract_digests": "ffi_contract_digest_hex",
+    "valid_header_digests": "header_digest_hex",
+    "valid_package_index_digests": "package_index_digest_hex",
+    "valid_release_key_fingerprints": "public_key_fingerprint_hex",
     "valid_release_manifest_digests": "manifest_digest_hex",
     "valid_release_manifest_reference_digests": "release_manifest_digest_hex",
+    "valid_smoke_output_digests": "smoke_output_digest_hex",
     "valid_revocation_list_digests": "revocation_list_digest_hex",
     "valid_root_digests": "root_digest_hex",
     "valid_roster_digests": "roster_digest_hex",
@@ -458,6 +526,7 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS = {
     ("orderbook", "valid_policy_digests"): ("contract_surface",),
     ("pdp", "valid_policy_digests"): ("proof_generation",),
     ("pdp", "valid_proof_summary_digests"): ("proof_generation",),
+    ("pdp", "valid_provider_roster_digests"): ("proof_generation",),
     ("pop_credentials", "valid_policy_digests"): ("verifier_service",),
     ("pop_credentials", "valid_pop_snapshot_digests"): ("moderation_integration",),
     ("pop_credentials", "valid_revocation_list_digests"): (
@@ -472,6 +541,17 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS = {
     ("potr", "valid_receipt_summary_digests"): ("multi_provider_probe",),
     ("potr", "valid_reputation_weight_policy_digests"): ("governance_approval",),
     ("reference_sdk_release", "valid_policy_digests"): ("signed_manifest",),
+    ("reference_sdk_release", "valid_archive_index_digests"): ("release_archive",),
+    ("reference_sdk_release", "valid_ffi_contract_digests"): (
+        "ffi_header_contract",
+    ),
+    ("reference_sdk_release", "valid_header_digests"): ("ffi_header_contract",),
+    ("reference_sdk_release", "valid_package_index_digests"): (
+        "downstream_bindings",
+    ),
+    ("reference_sdk_release", "valid_release_key_fingerprints"): (
+        "signed_manifest",
+    ),
     ("reference_sdk_release", "valid_release_manifest_digests"): (
         "signed_manifest",
     ),
@@ -482,6 +562,7 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS = {
         "ffi_header_contract",
         "governance_approval",
     ),
+    ("reference_sdk_release", "valid_smoke_output_digests"): ("cookbook_smoke",),
     ("repair", "valid_failure_bundle_digests"): ("failure_capture",),
     ("repair", "valid_handoff_digests"): ("governance_handoff",),
     ("repair", "valid_policy_digests"): ("governance_handoff",),
@@ -494,11 +575,21 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_BINDINGS = {
     "merkle_root_hex": "merkle_root_hex",
     "snapshot_id_hex": "snapshot_id_hex",
 }
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS = {
+    ("reputation", "merkle_root_hex"): ("publish", "latest"),
+    ("reputation", "snapshot_id_hex"): ("publish", "latest"),
+}
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS = {
     "provider_ids": "provider_id",
 }
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS = {
+    ("reputation", "provider_ids"): ("provider",),
+}
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS = {
     "provider_count_values": "provider_count",
+}
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS = {
+    ("reputation", "provider_count_values"): ("publish", "latest"),
 }
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_FIELDS = {
     "valid_cycle_bindings": (
@@ -536,6 +627,16 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_FIELDS = {
         "roster_hash_hex",
         "tally_digest_hex",
     ),
+}
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS = {
+    ("ai_prescreen", "valid_runner_bindings"): ("runner",),
+    ("hedging_billing", "valid_cycle_bindings"): ("billing_cycle",),
+    ("moderation_panel", "valid_roster_bindings"): ("sortition_roster",),
+    ("moderation_panel", "valid_tally_bindings"): ("commit_reveal",),
+    ("pop_credentials", "valid_juror_sync_bindings"): ("juror_client",),
+    ("reputation", "valid_snapshot_bindings"): ("publish", "latest"),
+    ("reserve_rent", "valid_policy_matrix_bindings"): ("quote_matrix",),
+    ("reserve_rent", "valid_policy_matrix_ledger_bindings"): ("ledger_digest",),
 }
 PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS = {
     "deployment_context": frozenset({"deployment_id", "environment"}),
@@ -705,6 +806,25 @@ GATE_SUMMARY_KINDS: tuple[GateSummaryKind, ...] = (
 SCHEMA_TO_GATE = {kind.schema: kind for kind in GATE_SUMMARY_KINDS}
 GATE_BY_NAME = {kind.name: kind for kind in GATE_SUMMARY_KINDS}
 DEFAULT_REQUIRED_GATES = tuple(kind.name for kind in GATE_SUMMARY_KINDS)
+GATE_REQUIRED_KIND_SCHEMAS = {
+    "ai_prescreen": evidence_schema_by_kind(AI_PRESCREEN_KIND_BY_NAME),
+    "appeal_finance": evidence_schema_by_kind(APPEAL_FINANCE_KIND_BY_NAME),
+    "gateway_compliance": evidence_schema_by_kind(GATEWAY_COMPLIANCE_KIND_BY_NAME),
+    "gateway_load": evidence_schema_by_kind(GATEWAY_LOAD_KIND_BY_NAME),
+    "governance_dag": evidence_schema_by_kind(GOVERNANCE_DAG_KIND_BY_NAME),
+    "hedging_billing": evidence_schema_by_kind(HEDGING_BILLING_KIND_BY_NAME),
+    "moderation_panel": evidence_schema_by_kind(MODERATION_PANEL_KIND_BY_NAME),
+    "orderbook": evidence_schema_by_kind(ORDERBOOK_KIND_BY_NAME),
+    "pdp": evidence_schema_by_kind(PDP_KIND_BY_NAME),
+    "pop_credentials": evidence_schema_by_kind(POP_CREDENTIALS_KIND_BY_NAME),
+    "por": evidence_schema_by_kind(POR_KIND_BY_NAME),
+    "potr": evidence_schema_by_kind(POTR_KIND_BY_NAME),
+    "reference_sdk_release": evidence_schema_by_kind(REFERENCE_SDK_KIND_BY_NAME),
+    "repair": evidence_schema_by_kind(REPAIR_KIND_BY_NAME),
+    "reputation": evidence_schema_by_kind(REPUTATION_KIND_BY_NAME),
+    "reserve_rent": evidence_schema_by_kind(RESERVE_RENT_KIND_BY_NAME),
+    "transparency": evidence_schema_by_kind(TRANSPARENCY_KIND_BY_NAME),
+}
 
 
 @dataclass(frozen=True)
@@ -1514,7 +1634,6 @@ def validate_payload_free_summary_metadata_fingerprint_tethers(
     """Require top-level valid metadata claims to be backed by artifacts."""
 
     allowed_metadata_fields = GATE_METADATA_FIELDS.get(gate.name, frozenset())
-    fingerprints = payload_free_summary_artifact_fingerprints(payload)
     for field, fingerprint_field in (
         PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS.items()
     ):
@@ -1554,8 +1673,20 @@ def validate_payload_free_summary_metadata_fingerprint_tethers(
         metadata_value = canonical_lower_hex(payload.get(field), expected_hex_length)
         if metadata_value is None:
             continue
+        source_kinds = PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS.get(
+            (gate.name, field),
+        )
+        if source_kinds is None:
+            errors.append(
+                f"{field} source-kind tether is not configured for `{gate.name}`"
+            )
+            continue
+        source_fingerprints = payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_names=source_kinds,
+        )
         fingerprint_values = fingerprint_hex_values(
-            fingerprints,
+            source_fingerprints,
             fingerprint_field,
             expected_hex_length=expected_hex_length,
         )
@@ -1570,7 +1701,22 @@ def validate_payload_free_summary_metadata_fingerprint_tethers(
         metadata_values = payload_free_string_list_metadata_values(payload.get(field))
         if metadata_values is None or not metadata_values:
             continue
-        fingerprint_values = fingerprint_string_values(fingerprints, fingerprint_field)
+        source_kinds = PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS.get(
+            (gate.name, field),
+        )
+        if source_kinds is None:
+            errors.append(
+                f"{field} source-kind tether is not configured for `{gate.name}`"
+            )
+            continue
+        source_fingerprints = payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_names=source_kinds,
+        )
+        fingerprint_values = fingerprint_string_values(
+            source_fingerprints,
+            fingerprint_field,
+        )
         if not metadata_values <= fingerprint_values:
             errors.append(f"{field} must match recognized artifact fingerprints")
 
@@ -1584,8 +1730,22 @@ def validate_payload_free_summary_metadata_fingerprint_tethers(
         )
         if metadata_values is None or not metadata_values:
             continue
+        source_kinds = (
+            PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS.get(
+                (gate.name, field),
+            )
+        )
+        if source_kinds is None:
+            errors.append(
+                f"{field} source-kind tether is not configured for `{gate.name}`"
+            )
+            continue
+        source_fingerprints = payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_names=source_kinds,
+        )
         fingerprint_values = fingerprint_positive_int_values(
-            fingerprints,
+            source_fingerprints,
             fingerprint_field,
         )
         if not metadata_values <= fingerprint_values:
@@ -1602,8 +1762,22 @@ def validate_payload_free_summary_metadata_fingerprint_tethers(
         )
         if metadata_values is None or not metadata_values:
             continue
+        source_kinds = (
+            PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS.get(
+                (gate.name, field),
+            )
+        )
+        if source_kinds is None:
+            errors.append(
+                f"{field} source-kind tether is not configured for `{gate.name}`"
+            )
+            continue
+        source_fingerprints = payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_names=source_kinds,
+        )
         fingerprint_values = fingerprint_hex_binding_values(
-            fingerprints,
+            source_fingerprints,
             field,
             fingerprint_fields,
         )
@@ -1622,9 +1796,23 @@ def validate_payload_free_summary_metadata_fingerprint_tethers(
         if metadata_values_by_field is None:
             continue
         required_kind = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS[field]
+        source_kind = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS.get(
+            (gate.name, field),
+        )
+        if source_kind is None:
+            errors.append(
+                f"{field} source-kind tether is not configured for `{gate.name}`"
+            )
+            continue
+        if source_kind != required_kind:
+            errors.append(
+                f"{field} source-kind tether must match required artifact count "
+                f"kind for `{gate.name}`"
+            )
+            continue
         kind_fingerprints = payload_free_summary_artifact_fingerprints(
             payload,
-            kind_name=required_kind,
+            kind_name=source_kind,
         )
         metadata_identities = payload_free_object_list_metadata_identities(
             field,
@@ -1987,6 +2175,9 @@ def validate_summary_artifact(
     require_artifact_identity_fields(artifact, path, errors)
     require_optional_artifact_label(artifact, "schema", path, errors)
     require_optional_artifact_label(artifact, "status", path, errors)
+    status = canonical_string(artifact.get("status"))
+    if status is not None and status not in SUCCESS_ARTIFACT_STATUSES:
+        errors.append(f"{path}.status must be a successful status")
     if artifact.get("valid") is not True:
         errors.append(f"{path}.valid must be true")
     require_empty_error_list(
@@ -2018,6 +2209,7 @@ def validate_summary_artifact(
 def validate_required_row(
     gate_name: str,
     kind_name: str,
+    expected_schema: str | None,
     row: Any,
     options: ValidationOptions,
     errors: list[str],
@@ -2029,8 +2221,13 @@ def validate_required_row(
         errors.append(f"{path} must be an object")
         return 0, [], set()
     require_payload_free_required_row_fields(row, path, errors)
-    if "schema" in row and canonical_string(row.get("schema")) is None:
-        errors.append(f"{path}.schema must be canonical when present")
+    row_schema = canonical_string(row.get("schema"))
+    if row_schema is None:
+        errors.append(f"{path}.schema must be canonical")
+    elif expected_schema is None:
+        errors.append(f"{path}.schema gate contract is not configured")
+    elif row_schema != expected_schema:
+        errors.append(f"{path}.schema must match required evidence schema")
     if row.get("present") is not True:
         errors.append(f"{path}.present must be true")
     if row.get("valid") is not True:
@@ -2075,6 +2272,13 @@ def validate_required_row(
                 errors.append(f"{artifact_path}.kind must be canonical when present")
             elif artifact_kind != kind_name:
                 errors.append(f"{artifact_path}.kind must match required row kind")
+        artifact_schema = canonical_string(artifact.get("schema"))
+        if artifact_schema is None:
+            errors.append(f"{artifact_path}.schema must be canonical")
+        elif expected_schema is None:
+            errors.append(f"{artifact_path}.schema gate contract is not configured")
+        elif artifact_schema != expected_schema:
+            errors.append(f"{artifact_path}.schema must match required evidence schema")
         identity = artifact_identity(kind_name, artifact)
         if identity is not None:
             artifact_identities[identity] += 1
@@ -2871,10 +3075,15 @@ def validate_gate_summary(
     artifact_total = 0
     generated_times: list[int] = []
     deployment_contexts: set[tuple[str, str]] = set()
+    required_kind_schemas = GATE_REQUIRED_KIND_SCHEMAS.get(gate.name, {})
+    expected_required_kind_set = set(expected_required_kinds)
     for kind_name in required_kinds:
+        if kind_name not in expected_required_kind_set:
+            continue
         artifact_count, row_times, row_contexts = validate_required_row(
             gate.name,
             kind_name,
+            required_kind_schemas.get(kind_name),
             required.get(kind_name),
             options,
             errors,

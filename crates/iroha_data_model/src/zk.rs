@@ -3,7 +3,11 @@
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-use crate::{AssetDefinitionId, ChainId, account::AccountId, proof::VerifyingKeyId};
+use crate::{
+    AssetDefinitionId, ChainId,
+    account::{AccountId, address::ChainDiscriminantGuard},
+    proof::VerifyingKeyId,
+};
 
 /// Canonical ZK-ACE circuit identifier for post-quantum authorization v0.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID: &str = "zk_ace_pq_authorization_v0";
@@ -35,6 +39,9 @@ pub const ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG: &str = "iroha:zk-ace:pq-authori
 
 /// First executable ZK-ACE action class.
 pub const ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER: &str = "transparent_asset_transfer";
+
+const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
+const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 
 /// Maximum source accounts that one ZK-ACE identity commitment may authorize.
 pub const ZK_ACE_MAX_ALLOWED_ACCOUNTS: usize = 16;
@@ -1051,6 +1058,13 @@ pub fn derive_zk_ace_replay_nullifier(
     )
 }
 
+fn zk_ace_chain_discriminant_for_chain_id(chain_id: &ChainId) -> Option<u16> {
+    match chain_id.as_str() {
+        "iroha3-taira" | "taira" | PUBLIC_TAIRA_CHAIN_ID => Some(TAIRA_CHAIN_DISCRIMINANT),
+        _ => None,
+    }
+}
+
 /// Derive the action digest for a ZK-ACE-authorized transparent asset transfer.
 pub fn derive_zk_ace_transfer_digest(
     from: &AccountId,
@@ -1061,13 +1075,20 @@ pub fn derive_zk_ace_transfer_digest(
     action_class: &str,
     policy_hash: &[u8; 32],
 ) -> [u8; 32] {
+    let _chain_guard =
+        zk_ace_chain_discriminant_for_chain_id(chain_id).map(ChainDiscriminantGuard::enter);
+    let from_literal = from.to_string();
+    let to_literal = to.to_string();
+    let asset_literal = asset.to_string();
+    let amount_bytes = amount.to_be_bytes();
+
     zk_ace_poseidon_bytes(
         b"zk-ace.transparent-transfer.v1",
         &[
-            from.to_string().as_bytes(),
-            to.to_string().as_bytes(),
-            asset.to_string().as_bytes(),
-            &amount.to_be_bytes(),
+            from_literal.as_bytes(),
+            to_literal.as_bytes(),
+            asset_literal.as_bytes(),
+            &amount_bytes,
             chain_id.as_str().as_bytes(),
             action_class.as_bytes(),
             policy_hash,
@@ -1138,6 +1159,63 @@ mod tests {
             DomainId::try_new("wonderland", "universal").expect("domain"),
             Name::from_str("xor").expect("asset name"),
         )
+    }
+
+    #[test]
+    fn zk_ace_transfer_digest_uses_taira_discriminant_from_chain_id() {
+        let from = account(0x42);
+        let to = account(0x43);
+        let asset = asset_definition_id();
+        let chain_id: ChainId = PUBLIC_TAIRA_CHAIN_ID.parse().expect("Taira chain id");
+        let policy_hash = [0x44; 32];
+        let amount = 123u128;
+        let action_class = ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER;
+
+        let _ambient_guard = ChainDiscriminantGuard::enter(42);
+        assert!(
+            from.to_string().starts_with("n42"),
+            "fixture must start with a non-Taira ambient discriminant"
+        );
+
+        let digest = derive_zk_ace_transfer_digest(
+            &from,
+            &to,
+            &asset,
+            amount,
+            &chain_id,
+            action_class,
+            &policy_hash,
+        );
+
+        let expected = {
+            let _taira_guard = ChainDiscriminantGuard::enter(TAIRA_CHAIN_DISCRIMINANT);
+            let from_literal = from.to_string();
+            let to_literal = to.to_string();
+            let asset_literal = asset.to_string();
+            let amount_bytes = amount.to_be_bytes();
+            assert!(
+                from_literal.starts_with("test") && to_literal.starts_with("test"),
+                "Taira ZK-ACE digest must bind public testnet account literals"
+            );
+            zk_ace_poseidon_bytes(
+                b"zk-ace.transparent-transfer.v1",
+                &[
+                    from_literal.as_bytes(),
+                    to_literal.as_bytes(),
+                    asset_literal.as_bytes(),
+                    &amount_bytes,
+                    chain_id.as_str().as_bytes(),
+                    action_class.as_bytes(),
+                    &policy_hash,
+                ],
+            )
+        };
+
+        assert_eq!(digest, expected);
+        assert!(
+            from.to_string().starts_with("n42"),
+            "digest derivation must not leak the scoped Taira discriminant"
+        );
     }
 
     fn valid_open_verify_admission_envelope() -> OpenVerifyEnvelope {

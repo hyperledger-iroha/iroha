@@ -63,6 +63,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
 )
 from sorafs_required_kinds import (  # noqa: E402
     parse_required_kinds as parse_required_evidence_kinds,
@@ -274,6 +275,8 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "geofence_verified",
         "proof_token_required",
         "response_bodies_included",
+        "route_count",
+        "passed_route_count",
         "routes",
     ),
     "honey_audit": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -365,7 +368,17 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
 
 
 def validate_routes(payload: dict[str, Any], errors: list[str], options: ValidationOptions) -> None:
+    require_count_equal(payload, "route_count", "passed_route_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     for index, record in require_object_array(payload, "routes", errors):
+        require_string(record, "name", errors)
         require_bool_true(record, "passed", errors, path=f"routes[{index}].passed")
         require_2xx_status(
             record,

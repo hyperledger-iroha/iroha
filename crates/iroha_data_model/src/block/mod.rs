@@ -122,6 +122,13 @@ pub enum SetTransactionResultsError {
         /// Hash supplied by the caller.
         actual: HashOf<TransactionEntrypoint>,
     },
+    /// The provided transaction result list did not align with the entrypoint hash list.
+    ResultCountMismatch {
+        /// Number of results required by the canonical entrypoint list.
+        expected: usize,
+        /// Number of results supplied by the caller.
+        actual: usize,
+    },
     /// The existing consensus Merkle root in the header did not match the external entrypoints.
     ExistingHeaderMerkleRootMismatch {
         /// Merkle root recomputed from the external entrypoints in the block payload.
@@ -145,6 +152,10 @@ impl fmt::Display for SetTransactionResultsError {
             } => write!(
                 f,
                 "external entrypoint hash mismatch at index {index}: expected {expected}, got {actual}",
+            ),
+            Self::ResultCountMismatch { expected, actual } => write!(
+                f,
+                "transaction result count mismatch: expected {expected}, got {actual}",
             ),
             Self::ExistingHeaderMerkleRootMismatch { expected, actual } => write!(
                 f,
@@ -285,6 +296,12 @@ impl SignedBlock {
             return Err(SetTransactionResultsError::TooFewEntrypointHashes {
                 expected: external_count,
                 actual: hashes.len(),
+            });
+        }
+        if !hashes.is_empty() && results.len() != hashes.len() {
+            return Err(SetTransactionResultsError::ResultCountMismatch {
+                expected: hashes.len(),
+                actual: results.len(),
             });
         }
         for (index, (expected, actual)) in external_hashes
@@ -1992,7 +2009,7 @@ mod tests {
     }
 
     #[test]
-    fn sccp_commitment_root_does_not_affect_block_hash() {
+    fn sccp_commitment_root_affects_block_hash() {
         let mut header = BlockHeader {
             height: NonZeroU64::new(123_456).unwrap(),
             prev_block_hash: Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
@@ -2016,7 +2033,7 @@ mod tests {
         let hash0 = header.hash();
         header.sccp_commitment_root = Some([0x42; 32]);
         let hash1 = header.hash();
-        assert_eq!(hash0, hash1);
+        assert_ne!(hash0, hash1);
     }
 
     #[test]
@@ -3111,6 +3128,59 @@ mod tests {
             SetTransactionResultsError::TooFewEntrypointHashes {
                 expected: 1,
                 actual: 0,
+            }
+        );
+    }
+
+    #[cfg(feature = "transparent_api")]
+    #[test]
+    fn set_transaction_results_rejects_result_count_mismatch() {
+        use std::num::NonZeroU64;
+
+        use crate::{
+            ChainId,
+            account::AccountId,
+            transaction::signed::{TransactionBuilder, TransactionResultInner},
+            trigger::DataTriggerSequence,
+        };
+
+        let keypair = checked_random_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let tx = TransactionBuilder::new(ChainId::from("set-results-count"), authority)
+            .sign(keypair.private_key());
+        let entry_hash = tx.hash_as_entrypoint();
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let signature = checked_block_signature(0, &keypair, &header);
+        let mut missing_result_block =
+            SignedBlock::presigned(signature.clone(), header.clone(), vec![tx.clone()]);
+
+        let err = missing_result_block
+            .set_transaction_results(Vec::new(), &[entry_hash], Vec::new())
+            .expect_err("missing external result must be rejected");
+        assert_eq!(
+            err,
+            SetTransactionResultsError::ResultCountMismatch {
+                expected: 1,
+                actual: 0,
+            }
+        );
+
+        let mut extra_result_block = SignedBlock::presigned(signature, header, vec![tx]);
+        let err = extra_result_block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![
+                    TransactionResultInner::Ok(DataTriggerSequence::default()),
+                    TransactionResultInner::Ok(DataTriggerSequence::default()),
+                ],
+            )
+            .expect_err("extra result without an entrypoint must be rejected");
+        assert_eq!(
+            err,
+            SetTransactionResultsError::ResultCountMismatch {
+                expected: 1,
+                actual: 2,
             }
         );
     }

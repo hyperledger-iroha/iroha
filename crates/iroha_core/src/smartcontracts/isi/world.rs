@@ -7,7 +7,7 @@ use super::prelude::*;
 use crate::{
     prelude::*,
     state::{
-        WorldTransaction, nexus_active_lane_dataspace_at_height,
+        WorldTransaction, nexus_active_lane_dataspace, nexus_active_lane_dataspace_at_height,
         nexus_catalog_geometry_lane_dataspace, public_lane_validator_record_matches_key,
     },
 };
@@ -7620,6 +7620,13 @@ pub mod isi {
         .into()
     }
 
+    fn invalid_bridge_receipt(message: impl Into<String>) -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            message.into(),
+        ))
+        .into()
+    }
+
     fn is_reserved_sccp_manifest_hash(hash: &[u8; 32]) -> bool {
         iroha_sccp::sccp_reserved_bridge_manifest_hashes_v1()
             .into_iter()
@@ -8891,6 +8898,18 @@ pub mod isi {
         })
     }
 
+    fn find_bridge_range_overlap_conflict(
+        state_transaction: &StateTransaction<'_, '_>,
+        backend: &str,
+        new_range: &iroha_data_model::bridge::BridgeProofRange,
+        sccp_message_key: Option<SccpMessageKey>,
+    ) -> Option<iroha_data_model::proof::ProofId> {
+        if sccp_message_key.is_some() {
+            return None;
+        }
+        find_overlapping_bridge_range(state_transaction, backend, new_range)
+    }
+
     fn encode_and_validate_bridge_proof(
         proof: &iroha_data_model::bridge::BridgeProof,
         state_transaction: &StateTransaction<'_, '_>,
@@ -9271,11 +9290,12 @@ pub mod isi {
                 proof_hash: commitment,
             };
 
-            // Allow re-submitting the exact same proof artifact so higher-level
-            // bridge flows can register proof evidence independently from a
-            // later message-settlement transaction.
             if state_transaction.world.proofs.get(&pid).is_some() {
-                return Ok(());
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "bridge proof has already been recorded".into(),
+                    ),
+                ));
             }
 
             if let Some(sccp_message_key) = validated.sccp_message_key
@@ -9289,9 +9309,12 @@ pub mod isi {
                 ));
             }
 
-            if let Some(conflict) =
-                find_overlapping_bridge_range(state_transaction, &backend_label, &self.proof.range)
-            {
+            if let Some(conflict) = find_bridge_range_overlap_conflict(
+                state_transaction,
+                &backend_label,
+                &self.proof.range,
+                validated.sccp_message_key,
+            ) {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
                         "bridge proof range overlaps existing proof {conflict}"
@@ -9323,6 +9346,9 @@ pub mod isi {
                 }),
             };
             state_transaction.world.insert_proof_record(record);
+            state_transaction
+                .bridge_receipt_proofs_available_in_tx
+                .insert(commitment);
 
             let cap = state_transaction.zk.proof_history_cap;
             let prune_outcome = enforce_bridge_history_cap(
@@ -9348,6 +9374,167 @@ pub mod isi {
             state_transaction.world.emit_events(events);
             Ok(())
         }
+    }
+
+    fn verified_bridge_proof_record_for_receipt<'a>(
+        receipt: &iroha_data_model::bridge::BridgeReceipt,
+        state_transaction: &'a StateTransaction<'_, '_>,
+    ) -> Option<&'a iroha_data_model::bridge::BridgeProofRecord> {
+        state_transaction
+            .world
+            .proofs
+            .iter()
+            .find_map(|(id, record)| {
+                if record.status != iroha_data_model::proof::ProofStatus::Verified {
+                    return None;
+                }
+                if record.id != *id || id.proof_hash != receipt.proof_hash {
+                    return None;
+                }
+                let Some(bridge_record) = &record.bridge else {
+                    return None;
+                };
+                if bridge_record.commitment == receipt.proof_hash
+                    && bridge_record.proof.backend_label() == id.backend
+                {
+                    Some(bridge_record)
+                } else {
+                    None
+                }
+            })
+    }
+
+    fn sccp_message_artifact_from_bridge_proof(
+        proof: &iroha_data_model::bridge::BridgeProof,
+    ) -> Result<Option<iroha_sccp::NexusSccpMessageTransparentProofV1>, Error> {
+        let iroha_data_model::bridge::BridgeProofPayload::TransparentZk(transparent) =
+            &proof.payload
+        else {
+            return Ok(None);
+        };
+        if !transparent.proof.backend.starts_with("sccp/stark-fri-v1/") {
+            return Ok(None);
+        }
+        let artifact =
+            iroha_sccp::decode_nexus_sccp_message_transparent_proof(&transparent.proof.bytes)
+                .ok_or_else(|| {
+                    invalid_bridge_receipt(
+                        "SCCP bridge receipt proof artifact could not be decoded",
+                    )
+                })?;
+        if artifact.message_backend != transparent.proof.backend {
+            return Err(invalid_bridge_receipt(
+                "SCCP bridge receipt proof backend mismatch",
+            ));
+        }
+        Ok(Some(artifact))
+    }
+
+    fn validate_sccp_bridge_receipt_matches_artifact(
+        receipt: &iroha_data_model::bridge::BridgeReceipt,
+        artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
+    ) -> Result<(), Error> {
+        let iroha_sccp::SccpPayloadV1::Transfer(payload) = &artifact.bundle.payload else {
+            return Err(invalid_bridge_receipt(
+                "SCCP bridge receipt requires a transfer message proof",
+            ));
+        };
+        let expected_direction = if payload.asset_home_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+            b"release".as_slice()
+        } else {
+            b"mint".as_slice()
+        };
+        if receipt.direction.as_slice() != expected_direction {
+            return Err(invalid_bridge_receipt(
+                "SCCP bridge receipt direction does not match transfer payload",
+            ));
+        }
+        if receipt.source_tx != artifact.bundle.commitment.message_id {
+            return Err(invalid_bridge_receipt(
+                "SCCP bridge receipt source_tx does not match message id",
+            ));
+        }
+        if receipt.amount != payload.amount {
+            return Err(invalid_bridge_receipt(
+                "SCCP bridge receipt amount does not match transfer payload",
+            ));
+        }
+        if receipt.asset_id != payload.asset_id {
+            return Err(invalid_bridge_receipt(
+                "SCCP bridge receipt asset_id does not match transfer payload",
+            ));
+        }
+        if receipt.recipient != payload.recipient {
+            return Err(invalid_bridge_receipt(
+                "SCCP bridge receipt recipient does not match transfer payload",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_bridge_receipt_matches_proof(
+        receipt: &iroha_data_model::bridge::BridgeReceipt,
+        proof: &iroha_data_model::bridge::BridgeProof,
+    ) -> Result<(), Error> {
+        let Some(artifact) = sccp_message_artifact_from_bridge_proof(proof)? else {
+            return Ok(());
+        };
+        validate_sccp_bridge_receipt_matches_artifact(receipt, &artifact)
+    }
+
+    fn validate_bridge_receipt_lane_matches_transaction(
+        receipt: &iroha_data_model::bridge::BridgeReceipt,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let Some(current_lane_id) = state_transaction.current_lane_id else {
+            return Err(invalid_bridge_receipt(
+                "bridge receipt requires an active transaction lane",
+            ));
+        };
+        if !state_transaction.nexus.enabled {
+            return Err(invalid_bridge_receipt(
+                "bridge receipt requires nexus.enabled=true",
+            ));
+        }
+        if nexus_active_lane_dataspace(current_lane_id, &state_transaction.nexus).is_none() {
+            return Err(invalid_bridge_receipt(format!(
+                "bridge receipt requires active Nexus lane {current_lane_id}"
+            )));
+        }
+        if receipt.lane != current_lane_id {
+            return Err(invalid_bridge_receipt(format!(
+                "bridge receipt lane {} does not match transaction lane {current_lane_id}",
+                receipt.lane
+            )));
+        }
+        Ok(())
+    }
+
+    fn consume_bridge_receipt_proof(
+        receipt: &iroha_data_model::bridge::BridgeReceipt,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        validate_bridge_receipt_lane_matches_transaction(receipt, state_transaction)?;
+        {
+            let bridge_record =
+                verified_bridge_proof_record_for_receipt(receipt, state_transaction).ok_or_else(
+                    || {
+                        invalid_bridge_receipt(
+                            "bridge receipt proof_hash does not reference a verified bridge proof",
+                        )
+                    },
+                )?;
+            validate_bridge_receipt_matches_proof(receipt, &bridge_record.proof)?;
+        }
+        if !state_transaction
+            .bridge_receipt_proofs_available_in_tx
+            .remove(&receipt.proof_hash)
+        {
+            return Err(invalid_bridge_receipt(
+                "bridge receipt requires a newly recorded bridge proof in the same transaction",
+            ));
+        }
+        Ok(())
     }
 
     const CAN_MANAGE_SCCP_ROUTE_MANIFESTS: &str = "CanManageSccpRouteManifests";
@@ -9607,11 +9794,33 @@ pub mod isi {
         ) -> Result<(), Error> {
             use iroha_data_model::events::data::prelude::BridgeEvent;
 
+            consume_bridge_receipt_proof(&self.receipt, state_transaction)?;
             state_transaction
                 .world
                 .emit_events(Some(BridgeEvent::Emitted(self.receipt)));
             Ok(())
         }
+    }
+
+    fn ensure_sccp_outbound_lane_is_active(
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let Some(lane_id) = state_transaction.current_lane_id else {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP message recording requires an active transaction lane".into(),
+            ));
+        };
+        if !state_transaction.nexus.enabled {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP message recording requires nexus.enabled=true".into(),
+            ));
+        }
+        if nexus_active_lane_dataspace(lane_id, &state_transaction.nexus).is_none() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("SCCP message recording requires active Nexus lane {lane_id}").into(),
+            ));
+        }
+        Ok(())
     }
 
     impl Execute for bridge::RecordSccpMessage {
@@ -9625,6 +9834,7 @@ pub mod isi {
                     "SCCP message recording requires verified IVM proof".into(),
                 ));
             }
+            ensure_sccp_outbound_lane_is_active(state_transaction)?;
             let Some(payload) =
                 crate::bridge::decode_recorded_sccp_payload_bytes(&self.payload_bytes)
             else {
@@ -11911,6 +12121,10 @@ pub mod isi {
                     .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
                 {
                     Some(dataspace)
+                } else if let Some(dataspace) =
+                    asset_definition_declared_home_dataspace_id(state_transaction, &asset_definition)
+                {
+                    Some(dataspace)
                 } else {
                     crate::smartcontracts::isi::asset::isi::unique_account_dataspace_hint(
                         state_transaction,
@@ -11930,6 +12144,46 @@ pub mod isi {
         state_transaction
             .world
             .resolve_asset_id_for_current_scope(&asset_id)
+    }
+
+    fn asset_definition_declared_home_dataspace_id(
+        state_transaction: &StateTransaction<'_, '_>,
+        asset_definition: &iroha_data_model::asset::AssetDefinition,
+    ) -> Option<DataSpaceId> {
+        let dataspace_alias = state_transaction
+            .world
+            .asset_definition_alias_bindings
+            .get(asset_definition.id())
+            .map(|binding| binding.alias.dataspace_segment().to_owned())
+            .or_else(|| {
+                asset_definition
+                    .alias()
+                    .as_ref()
+                    .map(|alias| alias.dataspace_segment().to_owned())
+            })
+            .or_else(|| {
+                asset_definition
+                    .id()
+                    .try_domain()
+                    .map(|domain| domain.dataspace().as_ref().to_owned())
+            })?;
+
+        if dataspace_alias.eq_ignore_ascii_case("universal") {
+            return None;
+        }
+
+        state_transaction
+            .nexus
+            .dataspace_catalog
+            .by_alias(&dataspace_alias)
+            .or_else(|| {
+                state_transaction
+                    .world
+                    .dataspace_catalog
+                    .by_alias(&dataspace_alias)
+            })
+            .map(|entry| entry.id)
+            .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
     }
 
     impl Execute for zk::Shield {
@@ -16362,7 +16616,10 @@ pub mod isi {
         use iroha_data_model::{
             IntoKeyValue,
             account::{AccountAddress, AccountId, MultisigMember, MultisigPolicy},
-            bridge::BridgeReceipt,
+            bridge::{
+                BridgeProof, BridgeProofPayload, BridgeProofRange, BridgeReceipt,
+                BridgeTransparentProof,
+            },
             confidential::ConfidentialStatus,
             consensus::{
                 ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
@@ -16401,7 +16658,10 @@ pub mod isi {
             nft::{Nft, NftId},
         };
         use iroha_data_model::{
-            isi::{SetParameter, bridge::RecordBridgeReceipt},
+            isi::{
+                SetParameter,
+                bridge::{RecordBridgeReceipt, SubmitBridgeProof},
+            },
             parameter::system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
             prelude::Parameter,
             zk::{OpenVerifyEnvelope, ZkAceWitnessV1},
@@ -16418,6 +16678,237 @@ pub mod isi {
         fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
             KeyPair::try_random_with_algorithm(algorithm)
                 .expect("world ISI fixture key generation for requested algorithm should succeed")
+        }
+
+        fn bridge_proof_fixture(seed: u8) -> BridgeProof {
+            BridgeProof {
+                range: BridgeProofRange {
+                    start_height: 7 + u64::from(seed),
+                    end_height: 7 + u64::from(seed),
+                },
+                manifest_hash: [0xA0 | (seed & 0x0F); 32],
+                payload: BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+                    proof: ProofBox::new(
+                        format!("halo2/mock/{seed}").into(),
+                        vec![0xDE, 0xAD, 0xBE, seed],
+                    ),
+                    recursion_depth: Some(2),
+                }),
+                pinned: true,
+            }
+        }
+
+        fn bridge_proof_hash_for_test(proof: &BridgeProof) -> [u8; 32] {
+            let encoded = norito::to_bytes(proof).expect("bridge proof fixture must encode");
+            hash_bridge_proof(&proof.backend_label(), &encoded)
+        }
+
+        fn submit_bridge_proof_for_test(
+            stx: &mut StateTransaction<'_, '_>,
+            seed: u8,
+        ) -> (BridgeProof, [u8; 32]) {
+            let proof = bridge_proof_fixture(seed);
+            let proof_hash = bridge_proof_hash_for_test(&proof);
+            SubmitBridgeProof::new(proof.clone())
+                .execute(&ALICE_ID, stx)
+                .expect("bridge proof fixture should submit");
+            assert!(
+                stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&proof_hash)
+            );
+            (proof, proof_hash)
+        }
+
+        fn bridge_receipt_for_test(proof_hash: [u8; 32]) -> BridgeReceipt {
+            BridgeReceipt {
+                lane: LaneId::SINGLE,
+                direction: b"mint".to_vec(),
+                source_tx: [0x11; 32],
+                dest_tx: None,
+                proof_hash,
+                amount: 1,
+                asset_id: b"wBTC#btc".to_vec(),
+                recipient: b"alice@main".to_vec(),
+            }
+        }
+
+        fn set_current_lane_for_test(stx: &mut StateTransaction<'_, '_>, lane_id: LaneId) {
+            stx.nexus.enabled = true;
+            stx.current_lane_id = Some(lane_id);
+        }
+
+        fn sccp_transfer_payload_for_receipt_test(nonce: u64) -> iroha_sccp::SccpPayloadV1 {
+            iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+                version: 1,
+                source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                nonce,
+                asset_home_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                asset_id: b"weth#eth".to_vec(),
+                amount: 13,
+                sender_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+                sender: b"0x1111111111111111111111111111111111111111".to_vec(),
+                recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                recipient: b"alice@universal".to_vec(),
+                route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                route_id: b"eth:sora:weth".to_vec(),
+            })
+        }
+
+        fn sccp_message_artifact_for_receipt_test(
+            payload: iroha_sccp::SccpPayloadV1,
+            proof_seed: u8,
+        ) -> iroha_sccp::NexusSccpMessageTransparentProofV1 {
+            let commitment = iroha_sccp::hub_commitment_from_sccp_payload(&payload);
+            let merkle_proof = iroha_sccp::SccpMerkleProofV1 { steps: Vec::new() };
+            let commitment_root =
+                iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+            let bundle = iroha_sccp::NexusSccpMessageProofV1 {
+                version: 1,
+                commitment_root,
+                commitment: commitment.clone(),
+                merkle_proof,
+                payload,
+                finality_proof: vec![0xFA, proof_seed],
+            };
+            let verifier_backend = iroha_sccp::SccpVerifierBackendV1 {
+                version: 1,
+                family: iroha_sccp::SccpVerifierBackendFamilyV1::Unknown,
+                key: "receipt-test".to_owned(),
+            };
+            let proof_family = "stark-fri-v1".to_owned();
+            let message_backend = format!("sccp/stark-fri-v1/receipt-test/{proof_seed}");
+            let public_inputs = iroha_sccp::SccpMessageTransparentPublicInputsV1 {
+                version: 1,
+                message_id: commitment.message_id,
+                payload_hash: commitment.payload_hash,
+                target_domain: commitment.target_domain,
+                commitment_root,
+                finality_height: 7 + u64::from(proof_seed),
+                finality_block_hash: [proof_seed; 32],
+            };
+            let bundle_bytes = norito::to_bytes(&bundle).expect("bundle fixture should encode");
+
+            iroha_sccp::NexusSccpMessageTransparentProofV1 {
+                version: 1,
+                local_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                counterparty_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                security_model: iroha_sccp::SccpProofSecurityModelV1::RecursiveZk,
+                anchor_governance: iroha_sccp::SccpAnchorGovernanceV1::CryptographicProof,
+                destination_binding: iroha_sccp::SccpDestinationBindingV1 {
+                    version: 1,
+                    key: "receipt-test".to_owned(),
+                    binding_hash: [0x77; 32],
+                },
+                proof_family: proof_family.clone(),
+                verifier_backend: verifier_backend.clone(),
+                message_backend,
+                registry_backend: "sccp/registry/receipt-test".to_owned(),
+                manifest_seed: "receipt-test".to_owned(),
+                finality_model: iroha_sccp::SccpProofFinalityModelV1::EthereumBeaconExecution,
+                verifier_target: iroha_sccp::SccpProofVerifierTargetV1::EvmContract,
+                public_inputs,
+                proof_bytes: vec![0xA5, proof_seed],
+                submission_package: iroha_sccp::SccpCounterpartySubmissionPackageV1 {
+                    version: 1,
+                    proof_family,
+                    verifier_backend,
+                    envelope_encoding: "norito".to_owned(),
+                    submission_kind: "local_admission".to_owned(),
+                    verifier_entrypoint: "verify".to_owned(),
+                    platform_payload: iroha_sccp::SccpPlatformSubmissionPayloadV1::LocalAdmission(
+                        iroha_sccp::SccpLocalAdmissionSubmissionPayloadV1 {
+                            version: 1,
+                            proof_bytes: vec![0xA5, proof_seed],
+                            public_inputs_bytes: vec![0xB6, proof_seed],
+                            bundle_bytes,
+                            statement_hash: [0x88; 32],
+                            source_verifier_material_hash: [0x89; 32],
+                            source_adapter_engine_deployment_hash: [0x8A; 32],
+                        },
+                    ),
+                    arguments: Vec::new(),
+                    envelope_bytes: vec![0xE0, proof_seed],
+                },
+                bundle,
+            }
+        }
+
+        fn sccp_bridge_proof_for_receipt_test(
+            artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
+        ) -> BridgeProof {
+            BridgeProof {
+                range: BridgeProofRange {
+                    start_height: artifact.public_inputs.finality_height,
+                    end_height: artifact.public_inputs.finality_height,
+                },
+                manifest_hash: iroha_sccp::sccp_bridge_manifest_hash_for_seed(
+                    &artifact.manifest_seed,
+                ),
+                payload: BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+                    proof: ProofBox::new(
+                        artifact.message_backend.clone().into(),
+                        norito::to_bytes(artifact).expect("SCCP artifact fixture should encode"),
+                    ),
+                    recursion_depth: Some(1),
+                }),
+                pinned: true,
+            }
+        }
+
+        fn insert_bridge_proof_record_for_receipt_test(
+            stx: &mut StateTransaction<'_, '_>,
+            proof: BridgeProof,
+        ) -> [u8; 32] {
+            let proof_hash = bridge_proof_hash_for_test(&proof);
+            let backend = proof.backend_label();
+            let size_bytes = norito::to_bytes(&proof)
+                .expect("bridge proof fixture should encode")
+                .len();
+            let id = iroha_data_model::proof::ProofId {
+                backend: backend.clone().into(),
+                proof_hash,
+            };
+            let record = iroha_data_model::proof::ProofRecord {
+                id: id.clone(),
+                vk_ref: None,
+                vk_commitment: None,
+                status: iroha_data_model::proof::ProofStatus::Verified,
+                verified_at_height: Some(stx._curr_block.height.get()),
+                bridge: Some(iroha_data_model::bridge::BridgeProofRecord {
+                    proof,
+                    commitment: proof_hash,
+                    size_bytes: u32::try_from(size_bytes).unwrap_or(u32::MAX),
+                }),
+            };
+            stx.world.insert_proof_record(record);
+            stx.bridge_receipt_proofs_available_in_tx.insert(proof_hash);
+            proof_hash
+        }
+
+        fn sccp_bridge_receipt_for_receipt_test(
+            proof_hash: [u8; 32],
+            artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
+        ) -> BridgeReceipt {
+            let iroha_sccp::SccpPayloadV1::Transfer(payload) = &artifact.bundle.payload else {
+                panic!("receipt fixture requires transfer payload");
+            };
+            let direction = if payload.asset_home_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+                b"release".to_vec()
+            } else {
+                b"mint".to_vec()
+            };
+            BridgeReceipt {
+                lane: LaneId::SINGLE,
+                direction,
+                source_tx: artifact.bundle.commitment.message_id,
+                dest_tx: None,
+                proof_hash,
+                amount: payload.amount,
+                asset_id: payload.asset_id.clone(),
+                recipient: payload.recipient.clone(),
+            }
         }
 
         #[test]
@@ -17766,7 +18257,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            stx.sccp_recording_proof_verified = true;
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
 
             let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
                 version: 1,
@@ -17817,7 +18308,75 @@ pub mod isi {
         }
 
         #[test]
-        fn record_sccp_message_records_outbound_key() {
+        fn record_sccp_message_rejects_without_verified_ivm_proof() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
+            set_current_lane_for_test(&mut stx, LaneId::SINGLE);
+
+            let payload = sora_outbound_sccp_payload(49);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("SCCP outbox recording without a verified IVM proof must reject");
+            assert!(
+                format!("{err:?}").contains("requires verified IVM proof"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_when_nexus_disabled() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            stx.nexus.enabled = false;
+
+            let payload = sora_outbound_sccp_payload(50);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("SCCP outbox recording must reject when Nexus is disabled");
+            assert!(
+                format!("{err:?}").contains("requires nexus.enabled=true"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_missing_lane_context() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -17832,6 +18391,88 @@ pub mod isi {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             stx.sccp_recording_proof_verified = true;
+            let payload = sora_outbound_sccp_payload(47);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("SCCP outbox recording without a lane context must reject");
+            assert!(
+                format!("{err:?}").contains("active transaction lane"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_stale_geometry_lane_context() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            let stale_lane = LaneId::new(1);
+            let stale_geometry_catalog = LaneCatalog::new(
+                NonZeroU32::new(2).expect("nonzero lane count"),
+                vec![
+                    LaneConfig {
+                        id: LaneId::SINGLE,
+                        alias: "lane-0".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                    LaneConfig {
+                        id: stale_lane,
+                        alias: "stale-sccp".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("stale SCCP geometry");
+            stx.nexus.lane_config = RuntimeLaneConfig::from_catalog(&stale_geometry_catalog);
+            enable_sccp_recording_for_test(&mut stx, stale_lane);
+            let payload = sora_outbound_sccp_payload(48);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("stale lane geometry must not authorize SCCP outbox recording");
+            assert!(
+                format!("{err:?}").contains("active Nexus lane 1"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_records_outbound_key() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
 
             let payload = sora_outbound_sccp_payload(43);
             let key = crate::bridge::sccp_outbound_message_key(&payload);
@@ -17871,7 +18512,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            stx.sccp_recording_proof_verified = true;
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
 
             let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
                 iroha_sccp::canonical_sccp_payload_bytes(&sora_outbound_sccp_payload(44)),
@@ -17912,7 +18553,7 @@ pub mod isi {
             {
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
-                stx.sccp_recording_proof_verified = true;
+                enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
                 instruction
                     .clone()
                     .execute(&ALICE_ID, &mut stx)
@@ -17963,8 +18604,7 @@ pub mod isi {
             {
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
-                stx.sccp_recording_proof_verified = true;
-                stx.current_lane_id = Some(iroha_data_model::nexus::LaneId::new(0));
+                enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
                 instruction
                     .clone()
                     .execute(&ALICE_ID, &mut stx)
@@ -17995,8 +18635,8 @@ pub mod isi {
             );
             let mut replay_block = state.block(replay_header);
             let mut replay_stx = replay_block.transaction();
-            replay_stx.sccp_recording_proof_verified = true;
-            replay_stx.current_lane_id = Some(iroha_data_model::nexus::LaneId::new(7));
+            configure_active_test_lanes(&mut replay_stx, &[LaneId::SINGLE, LaneId::new(7)]);
+            enable_sccp_recording_for_test(&mut replay_stx, LaneId::new(7));
 
             let err = instruction
                 .execute(&ALICE_ID, &mut replay_stx)
@@ -18004,6 +18644,74 @@ pub mod isi {
             assert!(
                 format!("{err:?}").contains("already been recorded"),
                 "unexpected error: {err:?}"
+            );
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_hex_alias_replay_after_commit_on_different_lane() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let payload = sora_outbound_sccp_payload(51);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload);
+            let binary_instruction =
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(payload_bytes.clone());
+            let hex_alias_instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                format!("0x{}", hex::encode(&payload_bytes)).into_bytes(),
+            );
+
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            {
+                let mut block = state.block(header);
+                let mut stx = block.transaction();
+                enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+                binary_instruction
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("binary SCCP outbox record should execute");
+                stx.apply();
+                block
+                    .commit()
+                    .expect("binary SCCP outbox record should commit");
+            }
+
+            let replay_header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(2).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut replay_block = state.block(replay_header);
+            let mut replay_stx = replay_block.transaction();
+            configure_active_test_lanes(&mut replay_stx, &[LaneId::SINGLE, LaneId::new(7)]);
+            enable_sccp_recording_for_test(&mut replay_stx, LaneId::new(7));
+
+            let err = hex_alias_instruction
+                .execute(&ALICE_ID, &mut replay_stx)
+                .expect_err("hex alias replay on another lane must be rejected");
+            assert!(
+                format!("{err:?}").contains("already been recorded"),
+                "unexpected error: {err:?}"
+            );
+            let record = state
+                .world
+                .sccp_outbound_messages
+                .view()
+                .get(&key)
+                .copied()
+                .expect("binary record remains durable");
+            assert_eq!(
+                record.payload_hash,
+                iroha_sccp::payload_hash(&payload_bytes)
             );
         }
 
@@ -19497,6 +20205,35 @@ pub mod isi {
             stx.world.dataspace_catalog = dataspace_catalog;
         }
 
+        fn configure_active_test_lanes(stx: &mut StateTransaction<'_, '_>, lane_ids: &[LaneId]) {
+            assert!(!lane_ids.is_empty(), "test lane catalog cannot be empty");
+            stx.nexus.enabled = true;
+            configure_universal_dataspace(stx);
+            let lanes = lane_ids
+                .iter()
+                .map(|lane_id| LaneConfig {
+                    id: *lane_id,
+                    alias: format!("lane-{}", lane_id.as_u32()),
+                    ..LaneConfig::default()
+                })
+                .collect::<Vec<_>>();
+            let lane_count = lane_ids
+                .iter()
+                .map(|lane_id| lane_id.as_u32())
+                .max()
+                .and_then(|max_lane_id| NonZeroU32::new(max_lane_id.saturating_add(1)))
+                .expect("nonempty lane id set produces nonzero lane count");
+            let catalog = LaneCatalog::new(lane_count, lanes).expect("active test lane catalog");
+            stx.nexus.lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+            stx.nexus.lane_catalog = catalog;
+        }
+
+        fn enable_sccp_recording_for_test(stx: &mut StateTransaction<'_, '_>, lane_id: LaneId) {
+            stx.nexus.enabled = true;
+            stx.sccp_recording_proof_verified = true;
+            stx.current_lane_id = Some(lane_id);
+        }
+
         fn register_wonderland_account(stx: &mut StateTransaction<'_, '_>, account_id: &AccountId) {
             Register::account(new_account_in_domain(account_id))
                 .execute(&ALICE_ID, stx)
@@ -20041,6 +20778,127 @@ pub mod isi {
             assert!(
                 msg.contains("replay nullifier already consumed"),
                 "unexpected replay error: {msg}"
+            );
+        }
+
+        #[cfg(feature = "zk-stark")]
+        #[test]
+        fn zk_ace_authorized_transfer_uses_definition_home_dataspace_on_universal_route() {
+            let fixture = zk_ace_transfer_fixture();
+            let home_dataspace = DataSpaceId::new(8);
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: home_dataspace,
+                    alias: "paynet".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+            stx.world.dataspace_catalog = dataspace_catalog;
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            {
+                let definition = stx
+                    .world
+                    .asset_definition_mut(&fixture.asset_def_id)
+                    .expect("asset definition exists");
+                definition.balance_scope_policy = AssetBalancePolicy::DataspaceRestricted;
+            }
+            stx.world
+                .bind_asset_definition_alias(
+                    &fixture.asset_def_id,
+                    "zkace#paynet".parse().expect("asset alias"),
+                    None,
+                    None,
+                    0,
+                )
+                .expect("bind asset definition alias");
+            let home_source_asset = AssetId::with_scope(
+                fixture.asset_def_id.clone(),
+                ALICE_ID.clone(),
+                AssetBalanceScope::Dataspace(home_dataspace),
+            );
+            let (home_source_asset_id, home_source_asset_value) =
+                Asset::new(home_source_asset.clone(), Numeric::new(100, 0)).into_key_value();
+            stx.world
+                .assets
+                .insert(home_source_asset_id.clone(), home_source_asset_value);
+            stx.world.track_asset_holder(&home_source_asset_id);
+
+            let vk_commitment = install_zk_ace_verifier(
+                &mut stx,
+                &fixture.vk_id,
+                ConfidentialStatus::Active,
+                ZK_ACE_TEST_MAX_PROOF_BYTES,
+            );
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register ZK-ACE identity commitment");
+
+            let amount = 7;
+            let (proof, tx_digest, replay_nullifier) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                &fixture.witness,
+                fixture.policy_hash,
+                fixture.vk_id.clone(),
+                vk_commitment,
+            );
+            let transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                tx_digest,
+                stx.chain_id.clone(),
+                replay_nullifier,
+                fixture.policy_hash,
+                proof,
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x72);
+            transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect("ZK-ACE transfer should debit the definition home dataspace");
+
+            assert_eq!(
+                numeric_balance(&stx, &home_source_asset),
+                Numeric::new(93, 0)
+            );
+            let receiver_asset = AssetId::with_scope(
+                fixture.asset_def_id.clone(),
+                fixture.receiver.clone(),
+                AssetBalanceScope::Dataspace(home_dataspace),
+            );
+            assert_eq!(numeric_balance(&stx, &receiver_asset), Numeric::new(7, 0));
+            let global_source_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
+            assert_eq!(
+                numeric_balance(&stx, &global_source_asset),
+                Numeric::new(100, 0)
+            );
+            let global_receiver_asset =
+                AssetId::new(fixture.asset_def_id.clone(), fixture.receiver.clone());
+            assert!(
+                stx.world.assets.get(&global_receiver_asset).is_none(),
+                "definition-home transfer must not create a global receiver bucket"
             );
         }
 
@@ -21250,6 +22108,58 @@ pub mod isi {
             assert!(
                 stx.world.assets.get(&universal_asset_id).is_none(),
                 "universal route must not debit a universal bucket when the account has one private dataspace binding"
+            );
+            assert_eq!(commitment_count(&stx, &asset_def_id), 1);
+        }
+
+        #[test]
+        fn shield_restricted_asset_uses_definition_home_dataspace_on_universal_route() {
+            let home_dataspace = DataSpaceId::new(8);
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                None,
+                &[],
+                &[(AssetBalanceScope::Dataspace(home_dataspace), 10)],
+            );
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: home_dataspace,
+                    alias: "paynet".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+            stx.world.dataspace_catalog = dataspace_catalog;
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world
+                .bind_asset_definition_alias(
+                    &asset_def_id,
+                    "ticket#paynet".parse().expect("asset alias"),
+                    None,
+                    None,
+                    0,
+                )
+                .expect("bind asset definition alias");
+
+            shield_amount(&mut stx, &asset_def_id, 3)
+                .expect("universal route should use the asset definition home dataspace");
+
+            assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(7, 0));
+            let universal_asset_id = AssetId::with_scope(
+                asset_def_id.clone(),
+                ALICE_ID.clone(),
+                AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
+            );
+            assert!(
+                stx.world.assets.get(&universal_asset_id).is_none(),
+                "definition-home routing must not fall back to a universal bucket"
             );
             assert_eq!(commitment_count(&stx, &asset_def_id), 1);
         }
@@ -23918,20 +24828,18 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let receipt = BridgeReceipt {
-                lane: LaneId::new(1),
-                direction: b"mint".to_vec(),
-                source_tx: [0x11; 32],
-                dest_tx: None,
-                proof_hash: [0x22; 32],
-                amount: 1,
-                asset_id: b"wBTC#btc".to_vec(),
-                recipient: b"alice@main".to_vec(),
-            };
+            let (_, proof_hash) = submit_bridge_proof_for_test(&mut stx, 1);
+            set_current_lane_for_test(&mut stx, LaneId::SINGLE);
+            stx.world.internal_event_buf.clear();
+            let receipt = bridge_receipt_for_test(proof_hash);
 
             RecordBridgeReceipt::new(receipt.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("record bridge receipt");
+            assert!(
+                !stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&proof_hash)
+            );
 
             let events = &stx.world.internal_event_buf;
             assert_eq!(events.len(), 1, "expected one emitted event");
@@ -23941,6 +24849,604 @@ pub mod isi {
                 }
                 other => panic!("unexpected event: {other:?}"),
             }
+        }
+
+        #[test]
+        fn submit_bridge_proof_rejects_exact_duplicate() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let (proof, proof_hash) = submit_bridge_proof_for_test(&mut stx, 2);
+            let err = SubmitBridgeProof::new(proof)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("exact duplicate bridge proof must reject");
+            assert!(format!("{err:?}").contains("already been recorded"));
+            assert!(
+                stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&proof_hash)
+            );
+        }
+
+        #[test]
+        fn record_bridge_receipt_requires_same_transaction_proof() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let proof;
+            let proof_hash;
+            {
+                let mut seed_stx = state_block.transaction();
+                (proof, proof_hash) = submit_bridge_proof_for_test(&mut seed_stx, 3);
+                seed_stx.apply();
+            }
+
+            let mut replay_stx = state_block.transaction();
+            let duplicate_err = SubmitBridgeProof::new(proof)
+                .execute(&ALICE_ID, &mut replay_stx)
+                .expect_err("duplicate proof replay must reject before receipt");
+            assert!(format!("{duplicate_err:?}").contains("already been recorded"));
+            set_current_lane_for_test(&mut replay_stx, LaneId::SINGLE);
+
+            let receipt = bridge_receipt_for_test(proof_hash);
+            let receipt_err = RecordBridgeReceipt::new(receipt)
+                .execute(&ALICE_ID, &mut replay_stx)
+                .expect_err("receipt must not be valid after prior-transaction proof");
+            assert!(format!("{receipt_err:?}").contains("same transaction"));
+            assert!(replay_stx.world.internal_event_buf.iter().all(|event| {
+                !matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
+            }));
+        }
+
+        #[test]
+        fn record_bridge_receipt_rejects_unknown_proof_hash() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            set_current_lane_for_test(&mut stx, LaneId::SINGLE);
+
+            let receipt = bridge_receipt_for_test([0x44; 32]);
+            let err = RecordBridgeReceipt::new(receipt)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("receipt without verified proof must reject");
+            assert!(format!("{err:?}").contains("does not reference a verified bridge proof"));
+            assert!(stx.world.internal_event_buf.is_empty());
+        }
+
+        #[test]
+        fn record_bridge_receipt_consumes_proof_hash_once() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let (_, proof_hash) = submit_bridge_proof_for_test(&mut stx, 4);
+            set_current_lane_for_test(&mut stx, LaneId::SINGLE);
+            stx.world.internal_event_buf.clear();
+            let receipt = bridge_receipt_for_test(proof_hash);
+            RecordBridgeReceipt::new(receipt.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("first receipt should consume the fresh proof");
+            let err = RecordBridgeReceipt::new(receipt)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("second receipt for the same proof must reject");
+            assert!(format!("{err:?}").contains("same transaction"));
+            let emitted = stx
+                .world
+                .internal_event_buf
+                .iter()
+                .filter(|event| {
+                    matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
+                })
+                .count();
+            assert_eq!(emitted, 1);
+        }
+
+        #[test]
+        fn record_bridge_receipt_rejects_missing_lane_context() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let (_, proof_hash) = submit_bridge_proof_for_test(&mut stx, 5);
+            stx.world.internal_event_buf.clear();
+            let receipt = bridge_receipt_for_test(proof_hash);
+
+            let err = RecordBridgeReceipt::new(receipt)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("bridge receipt without transaction lane must reject");
+            assert!(
+                format!("{err:?}").contains("active transaction lane"),
+                "unexpected error: {err:?}"
+            );
+            assert!(
+                stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&proof_hash),
+                "failed lane validation must not consume proof marker"
+            );
+            assert!(stx.world.internal_event_buf.iter().all(|event| {
+                !matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
+            }));
+        }
+
+        #[test]
+        fn record_bridge_receipt_rejects_when_nexus_disabled() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let (_, proof_hash) = submit_bridge_proof_for_test(&mut stx, 12);
+            set_current_lane_for_test(&mut stx, LaneId::SINGLE);
+            stx.nexus.enabled = false;
+            stx.world.internal_event_buf.clear();
+            let receipt = bridge_receipt_for_test(proof_hash);
+
+            let err = RecordBridgeReceipt::new(receipt)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("bridge receipt must reject when Nexus is disabled");
+            assert!(
+                format!("{err:?}").contains("requires nexus.enabled=true"),
+                "unexpected error: {err:?}"
+            );
+            assert!(
+                stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&proof_hash),
+                "disabled Nexus validation must not consume proof marker"
+            );
+            assert!(stx.world.internal_event_buf.iter().all(|event| {
+                !matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
+            }));
+        }
+
+        #[test]
+        fn record_bridge_receipt_rejects_mismatched_transaction_lane() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            configure_active_test_lanes(&mut stx, &[LaneId::SINGLE, LaneId::new(7)]);
+
+            let (_, proof_hash) = submit_bridge_proof_for_test(&mut stx, 6);
+            set_current_lane_for_test(&mut stx, LaneId::new(7));
+            stx.world.internal_event_buf.clear();
+            let receipt = bridge_receipt_for_test(proof_hash);
+
+            let err = RecordBridgeReceipt::new(receipt)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("receipt lane must match transaction lane");
+            assert!(
+                format!("{err:?}").contains("does not match transaction lane 7"),
+                "unexpected error: {err:?}"
+            );
+            assert!(
+                stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&proof_hash),
+                "failed lane validation must not consume proof marker"
+            );
+            assert!(stx.world.internal_event_buf.iter().all(|event| {
+                !matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
+            }));
+        }
+
+        #[test]
+        fn record_bridge_receipt_rejects_stale_geometry_lane_context() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let stale_lane = LaneId::new(1);
+            let stale_geometry_catalog = LaneCatalog::new(
+                NonZeroU32::new(2).expect("nonzero lane count"),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: stale_lane,
+                        alias: "stale-receipt".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("stale receipt lane geometry");
+            stx.nexus.lane_config = RuntimeLaneConfig::from_catalog(&stale_geometry_catalog);
+
+            let (_, proof_hash) = submit_bridge_proof_for_test(&mut stx, 7);
+            set_current_lane_for_test(&mut stx, stale_lane);
+            stx.world.internal_event_buf.clear();
+            let mut receipt = bridge_receipt_for_test(proof_hash);
+            receipt.lane = stale_lane;
+
+            let err = RecordBridgeReceipt::new(receipt)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("stale lane geometry must not authorize bridge receipt emission");
+            assert!(
+                format!("{err:?}").contains("active Nexus lane 1"),
+                "unexpected error: {err:?}"
+            );
+            assert!(
+                stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&proof_hash),
+                "failed lane validation must not consume proof marker"
+            );
+            assert!(stx.world.internal_event_buf.iter().all(|event| {
+                !matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
+            }));
+        }
+
+        #[test]
+        fn record_bridge_receipt_accepts_sccp_transfer_receipt_matching_proof() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let artifact = sccp_message_artifact_for_receipt_test(
+                sccp_transfer_payload_for_receipt_test(51),
+                5,
+            );
+            let proof = sccp_bridge_proof_for_receipt_test(&artifact);
+            let proof_hash = insert_bridge_proof_record_for_receipt_test(&mut stx, proof);
+            set_current_lane_for_test(&mut stx, LaneId::SINGLE);
+            let receipt = sccp_bridge_receipt_for_receipt_test(proof_hash, &artifact);
+
+            RecordBridgeReceipt::new(receipt.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("matching SCCP transfer receipt should execute");
+            assert!(
+                !stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&proof_hash)
+            );
+
+            let events = &stx.world.internal_event_buf;
+            assert_eq!(events.len(), 1, "expected one emitted receipt event");
+            match events[0].as_ref() {
+                DataEvent::Bridge(BridgeEvent::Emitted(emitted)) => {
+                    assert_eq!(emitted, &receipt);
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn record_bridge_receipt_rejects_sccp_transfer_receipt_payload_mismatches() {
+            #[derive(Clone, Copy)]
+            enum ReceiptMismatch {
+                Direction,
+                SourceTx,
+                Amount,
+                AssetId,
+                Recipient,
+            }
+
+            for (index, mismatch) in [
+                ReceiptMismatch::Direction,
+                ReceiptMismatch::SourceTx,
+                ReceiptMismatch::Amount,
+                ReceiptMismatch::AssetId,
+                ReceiptMismatch::Recipient,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let state = State::new(World::default(), kura, query_handle);
+
+                let block = new_dummy_block();
+                let mut state_block = state.block(block.as_ref().header());
+                let mut stx = state_block.transaction();
+
+                let artifact = sccp_message_artifact_for_receipt_test(
+                    sccp_transfer_payload_for_receipt_test(60 + index as u64),
+                    10 + index as u8,
+                );
+                let proof = sccp_bridge_proof_for_receipt_test(&artifact);
+                let proof_hash = insert_bridge_proof_record_for_receipt_test(&mut stx, proof);
+                set_current_lane_for_test(&mut stx, LaneId::SINGLE);
+                let mut receipt = sccp_bridge_receipt_for_receipt_test(proof_hash, &artifact);
+                let expected_error = match mismatch {
+                    ReceiptMismatch::Direction => {
+                        receipt.direction = b"release".to_vec();
+                        "direction does not match transfer payload"
+                    }
+                    ReceiptMismatch::SourceTx => {
+                        receipt.source_tx[0] ^= 0xFF;
+                        "source_tx does not match message id"
+                    }
+                    ReceiptMismatch::Amount => {
+                        receipt.amount += 1;
+                        "amount does not match transfer payload"
+                    }
+                    ReceiptMismatch::AssetId => {
+                        receipt.asset_id.push(b'!');
+                        "asset_id does not match transfer payload"
+                    }
+                    ReceiptMismatch::Recipient => {
+                        receipt.recipient.push(b'!');
+                        "recipient does not match transfer payload"
+                    }
+                };
+
+                let err = RecordBridgeReceipt::new(receipt)
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("forged SCCP receipt field must reject");
+                assert!(
+                    format!("{err:?}").contains(expected_error),
+                    "unexpected error for mismatch {index}: {err:?}"
+                );
+                assert!(
+                    stx.bridge_receipt_proofs_available_in_tx
+                        .contains(&proof_hash),
+                    "failed SCCP receipt validation must not consume proof marker"
+                );
+                assert!(stx.world.internal_event_buf.iter().all(|event| {
+                    !matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
+                }));
+            }
+        }
+
+        #[test]
+        fn record_bridge_receipt_allows_corrected_sccp_receipt_after_failed_validation() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let artifact = sccp_message_artifact_for_receipt_test(
+                sccp_transfer_payload_for_receipt_test(68),
+                18,
+            );
+            let proof = sccp_bridge_proof_for_receipt_test(&artifact);
+            let proof_hash = insert_bridge_proof_record_for_receipt_test(&mut stx, proof);
+            set_current_lane_for_test(&mut stx, LaneId::SINGLE);
+            let receipt = sccp_bridge_receipt_for_receipt_test(proof_hash, &artifact);
+            let mut forged_receipt = receipt.clone();
+            forged_receipt.amount += 1;
+
+            let err = RecordBridgeReceipt::new(forged_receipt)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("forged SCCP receipt must reject");
+            assert!(
+                format!("{err:?}").contains("amount does not match transfer payload"),
+                "unexpected error: {err:?}"
+            );
+            assert!(
+                stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&proof_hash),
+                "failed validation must leave the fresh proof available"
+            );
+            assert!(stx.world.internal_event_buf.iter().all(|event| {
+                !matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
+            }));
+
+            RecordBridgeReceipt::new(receipt.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("corrected SCCP receipt should consume the proof");
+            assert!(
+                !stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&proof_hash),
+                "corrected receipt must consume the fresh proof exactly once"
+            );
+
+            let emitted: Vec<_> = stx
+                .world
+                .internal_event_buf
+                .iter()
+                .filter_map(|event| match event.as_ref() {
+                    DataEvent::Bridge(BridgeEvent::Emitted(emitted)) => Some(emitted),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(emitted, vec![&receipt]);
+        }
+
+        #[test]
+        fn record_bridge_receipt_rejects_sccp_non_transfer_message_proof() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let payload =
+                iroha_sccp::SccpPayloadV1::TokenPause(iroha_sccp::TokenControlPayloadV1 {
+                    version: 1,
+                    target_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                    nonce: 77,
+                    sora_asset_id: [0x33; 32],
+                });
+            let artifact = sccp_message_artifact_for_receipt_test(payload, 30);
+            let proof = sccp_bridge_proof_for_receipt_test(&artifact);
+            let proof_hash = insert_bridge_proof_record_for_receipt_test(&mut stx, proof);
+            set_current_lane_for_test(&mut stx, LaneId::SINGLE);
+            let receipt = BridgeReceipt {
+                lane: LaneId::SINGLE,
+                direction: b"mint".to_vec(),
+                source_tx: artifact.bundle.commitment.message_id,
+                dest_tx: None,
+                proof_hash,
+                amount: 1,
+                asset_id: b"xor#universal".to_vec(),
+                recipient: b"alice@universal".to_vec(),
+            };
+
+            let err = RecordBridgeReceipt::new(receipt)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("non-transfer SCCP message proof must not back a bridge receipt");
+            assert!(format!("{err:?}").contains("requires a transfer message proof"));
+            assert!(
+                stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&proof_hash)
+            );
+            assert!(stx.world.internal_event_buf.iter().all(|event| {
+                !matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
+            }));
+        }
+
+        #[test]
+        fn sccp_message_proof_replay_index_detects_distinct_artifact_same_message() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let original_artifact = sccp_message_artifact_for_receipt_test(
+                sccp_transfer_payload_for_receipt_test(91),
+                41,
+            );
+            let original_proof = sccp_bridge_proof_for_receipt_test(&original_artifact);
+            let original_hash =
+                insert_bridge_proof_record_for_receipt_test(&mut stx, original_proof.clone());
+            let original_pid = iroha_data_model::proof::ProofId {
+                backend: original_proof.backend_label(),
+                proof_hash: original_hash,
+            };
+
+            let replay_artifact = sccp_message_artifact_for_receipt_test(
+                sccp_transfer_payload_for_receipt_test(91),
+                42,
+            );
+            let replay_proof = sccp_bridge_proof_for_receipt_test(&replay_artifact);
+            let replay_hash = bridge_proof_hash_for_test(&replay_proof);
+            let replay_pid = iroha_data_model::proof::ProofId {
+                backend: replay_proof.backend_label(),
+                proof_hash: replay_hash,
+            };
+            let replay_key = sccp_message_key_from_artifact(&replay_artifact);
+            assert_ne!(
+                original_hash, replay_hash,
+                "fixture must model a distinct proof artifact"
+            );
+            assert_eq!(
+                sccp_message_key_from_artifact(&original_artifact),
+                replay_key,
+                "fixture must preserve the replayed SCCP message identity"
+            );
+            assert_eq!(
+                find_existing_sccp_message_proof(&stx, &replay_pid, replay_key),
+                Some(original_pid),
+                "distinct SCCP artifacts for the same message id must conflict"
+            );
+
+            let distinct_artifact = sccp_message_artifact_for_receipt_test(
+                sccp_transfer_payload_for_receipt_test(92),
+                43,
+            );
+            let distinct_proof = sccp_bridge_proof_for_receipt_test(&distinct_artifact);
+            let distinct_pid = iroha_data_model::proof::ProofId {
+                backend: distinct_proof.backend_label(),
+                proof_hash: bridge_proof_hash_for_test(&distinct_proof),
+            };
+            assert!(
+                find_existing_sccp_message_proof(
+                    &stx,
+                    &distinct_pid,
+                    sccp_message_key_from_artifact(&distinct_artifact),
+                )
+                .is_none(),
+                "distinct SCCP message ids must not conflict"
+            );
+        }
+
+        #[test]
+        fn sccp_message_proof_range_overlap_allows_distinct_message_ids() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            let first_artifact = sccp_message_artifact_for_receipt_test(
+                sccp_transfer_payload_for_receipt_test(101),
+                50,
+            );
+            let first_proof = sccp_bridge_proof_for_receipt_test(&first_artifact);
+            insert_bridge_proof_record_for_receipt_test(&mut stx, first_proof);
+
+            let second_artifact = sccp_message_artifact_for_receipt_test(
+                sccp_transfer_payload_for_receipt_test(102),
+                50,
+            );
+            let second_proof = sccp_bridge_proof_for_receipt_test(&second_artifact);
+            let second_key = sccp_message_key_from_artifact(&second_artifact);
+            let second_pid = iroha_data_model::proof::ProofId {
+                backend: second_proof.backend_label(),
+                proof_hash: bridge_proof_hash_for_test(&second_proof),
+            };
+
+            assert!(
+                find_existing_sccp_message_proof(&stx, &second_pid, second_key).is_none(),
+                "distinct SCCP message ids must not trip the replay index"
+            );
+            assert!(
+                find_overlapping_bridge_range(
+                    &stx,
+                    &second_proof.backend_label(),
+                    &second_proof.range,
+                )
+                .is_some(),
+                "fixture must share the same backend and finality range"
+            );
+            assert!(
+                find_bridge_range_overlap_conflict(
+                    &stx,
+                    &second_proof.backend_label(),
+                    &second_proof.range,
+                    Some(second_key),
+                )
+                .is_none(),
+                "SCCP message proofs use message-id replay indexing, not range exclusion"
+            );
+            assert!(
+                find_bridge_range_overlap_conflict(
+                    &stx,
+                    &second_proof.backend_label(),
+                    &second_proof.range,
+                    None,
+                )
+                .is_some(),
+                "generic bridge proofs must still reject overlapping backend ranges"
+            );
         }
 
         #[test]
@@ -24316,6 +25822,54 @@ pub mod isi {
             assert!(
                 msg.contains("does not have a live consensus key"),
                 "unexpected error message: {msg}"
+            );
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_rejects_peer_outside_commit_topology() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_universal_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+
+            let topology_peer = seed_live_peer(
+                &mut stx,
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            );
+            let outside_peer = seed_live_peer(
+                &mut stx,
+                &checked_keypair_with_algorithm(Algorithm::BlsNormal),
+            );
+            *stx.commit_topology.get_mut() = vec![topology_peer];
+
+            let err = SetLaneRelayEmergencyValidators {
+                lane_id: LaneId::new(0),
+                peers: vec![outside_peer],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("peer outside current commit topology should be rejected");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("is not in the current commit topology"),
+                "unexpected error message: {msg}"
+            );
+            assert!(
+                stx.world
+                    .lane_relay_emergency_validators
+                    .get(&LaneId::new(0))
+                    .is_none(),
+                "topology-mismatched emergency override must not be stored"
             );
         }
 

@@ -37,6 +37,7 @@ const PATH_KEYS_REFILL: &str = "/v1/offline/v2/keys/refill";
 const PATH_NOTES_ISSUE: &str = "/v1/offline/v2/notes/issue";
 const PATH_NOTES_REDEEM: &str = "/v1/offline/v2/notes/redeem";
 const OFFLINE_V2_P256_UNCOMPRESSED_PUBLIC_KEY_LEN: usize = 65;
+const OFFLINE_V2_KEY_CERTIFICATE_SIGNATURE_PLACEHOLDER: [u8; 64] = [0xA6; 64];
 const ATTESTATION_RECEIPT_FIELDS: &[&str] = &[
     "version",
     "platform",
@@ -85,6 +86,11 @@ const REDEMPTION_FIELDS: &[&str] = &[
     "amount",
     "recursive_proof",
 ];
+
+fn offline_v2_key_certificate_signature_placeholder() -> Signature {
+    Signature::try_from_bytes(&OFFLINE_V2_KEY_CERTIFICATE_SIGNATURE_PLACEHOLDER)
+        .expect("Offline Notes V2 key-certificate placeholder signature is non-empty and nonzero")
+}
 const RECURSIVE_PROOF_FIELDS: &[&str] = &[
     "backend",
     "verifier_key_id",
@@ -1076,6 +1082,12 @@ fn validate_p256_assertion_public_key(public_key: &[u8]) -> Result<(), Error> {
             "Offline Notes V2 assertion public key must be an uncompressed P-256 SEC1 key.",
         ));
     }
+    if p256_public_key_has_zero_coordinate_material(public_key) {
+        return Err(validation(
+            "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY",
+            "Offline Notes V2 assertion public key must be a valid uncompressed P-256 SEC1 point.",
+        ));
+    }
     P256PublicKey::from_sec1_bytes(public_key)
         .map(|_| ())
         .map_err(|_| {
@@ -1084,6 +1096,12 @@ fn validate_p256_assertion_public_key(public_key: &[u8]) -> Result<(), Error> {
                 "Offline Notes V2 assertion public key must be a valid uncompressed P-256 SEC1 point.",
             )
         })
+}
+
+fn p256_public_key_has_zero_coordinate_material(public_key: &[u8]) -> bool {
+    public_key.len() == OFFLINE_V2_P256_UNCOMPRESSED_PUBLIC_KEY_LEN
+        && public_key.first() == Some(&0x04)
+        && public_key[1..].iter().all(|byte| *byte == 0)
 }
 
 fn verify_lineage_state(
@@ -1636,7 +1654,7 @@ fn build_chain_certificate(
         assertion_public_key: attestation.assertion_public_key.clone(),
         assertion_usage_count_limit: attestation.assertion_usage_count_limit,
         one_use: true,
-        issuer_signature: Signature::from_bytes(&[0_u8; 64]),
+        issuer_signature: offline_v2_key_certificate_signature_placeholder(),
     };
     let signing_bytes =
         certificate
@@ -2309,7 +2327,50 @@ fn decode_signature_base64(
     if bytes.len() != 64 {
         return Err(validation(code, message));
     }
-    Signature::try_from_bytes(&bytes).map_err(|_| validation(code, message))
+    checked_ed25519_signature_from_bytes(&bytes).map_err(|_| validation(code, message))
+}
+
+fn checked_ed25519_signature_from_bytes(signature: &[u8]) -> Result<Signature, ()> {
+    validate_ed25519_signature_r(signature)?;
+    Signature::try_from_bytes(signature).map_err(|_| ())
+}
+
+fn validate_ed25519_signature_r(signature: &[u8]) -> Result<(), ()> {
+    if signature.len() != ed25519_dalek::SIGNATURE_LENGTH {
+        return Err(());
+    }
+    let r_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = signature
+        .get(..ed25519_dalek::PUBLIC_KEY_LENGTH)
+        .ok_or(())?
+        .try_into()
+        .map_err(|_| ())?;
+    if !ed25519_compressed_y_is_canonical(&r_bytes) {
+        return Err(());
+    }
+    let r_point = ed25519_dalek::VerifyingKey::from_bytes(&r_bytes).map_err(|_| ())?;
+    if r_point.is_weak() {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn ed25519_compressed_y_is_canonical(bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]) -> bool {
+    const ED25519_FIELD_MODULUS_LE: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    let mut y = *bytes;
+    y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
+    for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
+        match y[idx].cmp(&ED25519_FIELD_MODULUS_LE[idx]) {
+            std::cmp::Ordering::Less => return true,
+            std::cmp::Ordering::Greater => return false,
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+    false
 }
 
 fn build_settlement(
@@ -3443,6 +3504,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn signature_base64_decoder_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        for (label, r_bytes) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut signature = [0xA5; 64];
+            signature[..32].copy_from_slice(&r_bytes);
+
+            assert_eq!(
+                validation_code(decode_signature_base64(
+                    &BASE64_STANDARD.encode(signature),
+                    "OFFLINE_V2_SIGNATURE_INVALID",
+                    "Offline Notes V2 signature_base64 is invalid.",
+                )),
+                "OFFLINE_V2_SIGNATURE_INVALID",
+                "{label} Ed25519 signature R must fail at base64 admission"
+            );
+        }
+    }
+
     fn app_error_code(result: Result<impl Sized, Error>) -> &'static str {
         match result {
             Err(Error::AppQueryValidation { code, .. } | Error::AppForbidden { code, .. }) => code,
@@ -4555,6 +4647,15 @@ mod tests {
     }
 
     #[test]
+    fn key_certificate_placeholder_signature_is_checked_nonzero() {
+        let signature = offline_v2_key_certificate_signature_placeholder();
+        let payload = signature.payload();
+
+        assert_eq!(payload, OFFLINE_V2_KEY_CERTIFICATE_SIGNATURE_PLACEHOLDER);
+        assert!(!payload.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
     fn build_key_certificate_rejects_padded_ios_metadata() {
         for field in ["ios_team_id", "ios_bundle_id", "ios_environment"] {
             let (issuer, verifier) = sample_issuer();
@@ -4920,6 +5021,16 @@ mod tests {
 
         assert_eq!(
             validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+            "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY"
+        );
+    }
+
+    #[test]
+    fn validate_p256_assertion_public_key_rejects_all_zero_coordinate_material() {
+        assert_eq!(
+            validation_code(validate_p256_assertion_public_key(
+                &off_curve_p256_assertion_key(),
+            )),
             "OFFLINE_V2_INVALID_ASSERTION_PUBLIC_KEY"
         );
     }

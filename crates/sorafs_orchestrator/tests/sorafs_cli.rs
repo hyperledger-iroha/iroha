@@ -47,6 +47,15 @@ use sorafs_manifest::{
 };
 use tempfile::TempDir;
 
+const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+const ED25519_NONCANONICAL_IDENTITY: [u8; 32] = [
+    0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+];
+
 fn sorafs_cli_cmd() -> AssertCommand {
     cargo_bin_cmd!("sorafs_cli")
 }
@@ -900,6 +909,85 @@ fn manifest_sign_emits_bundle_and_signature() {
         zero_signature_stderr.contains("signature material must not be all zero"),
         "all-zero signature must fail before backend verification: {zero_signature_stderr}"
     );
+
+    for (label, invalid_r, expected_error) in [
+        (
+            "small-order",
+            ED25519_SMALL_ORDER_POINT,
+            "signature R is small-order",
+        ),
+        (
+            "noncanonical",
+            ED25519_NONCANONICAL_IDENTITY,
+            "signature R is not a canonical Ed25519 point",
+        ),
+    ] {
+        let invalid_signature_path = tempdir.path().join(format!("manifest.{label}-r.sig"));
+        let mut invalid_signature = hex_decode(signature_contents.trim())
+            .expect("valid signature hex should decode for invalid-R regression");
+        invalid_signature[..32].copy_from_slice(&invalid_r);
+        fs::write(&invalid_signature_path, hex_encode(&invalid_signature))
+            .expect("write invalid-R signature");
+        let invalid_signature_assert = sorafs_cli_cmd()
+            .arg("manifest")
+            .arg("verify-signature")
+            .arg(format!("--manifest={}", manifest_path.display()))
+            .arg(format!("--signature={}", invalid_signature_path.display()))
+            .arg(format!("--public-key-hex={public_key_hex}"))
+            .assert()
+            .failure();
+        let invalid_signature_stderr =
+            String::from_utf8(invalid_signature_assert.get_output().stderr.clone())
+                .expect("invalid-R signature stderr");
+        assert!(
+            invalid_signature_stderr.contains(expected_error),
+            "{label} Ed25519 signature R must fail before backend verification: {invalid_signature_stderr}"
+        );
+    }
+
+    let zero_public_key_assert = sorafs_cli_cmd()
+        .arg("manifest")
+        .arg("verify-signature")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--signature={}", signature_path.display()))
+        .arg(format!("--public-key-hex={}", "00".repeat(32)))
+        .assert()
+        .failure();
+    let zero_public_key_stderr =
+        String::from_utf8(zero_public_key_assert.get_output().stderr.clone())
+            .expect("zero public key stderr");
+    assert!(
+        zero_public_key_stderr.contains("public key material must not be all zero"),
+        "all-zero public key must fail before backend verification: {zero_public_key_stderr}"
+    );
+
+    for (label, public_key, expected_error) in [
+        (
+            "small-order-public-key",
+            ED25519_SMALL_ORDER_POINT,
+            "public key is small-order",
+        ),
+        (
+            "noncanonical-public-key",
+            ED25519_NONCANONICAL_IDENTITY,
+            "public key is not a canonical Ed25519 point",
+        ),
+    ] {
+        let public_key_assert = sorafs_cli_cmd()
+            .arg("manifest")
+            .arg("verify-signature")
+            .arg(format!("--manifest={}", manifest_path.display()))
+            .arg(format!("--signature={}", signature_path.display()))
+            .arg(format!("--public-key-hex={}", hex_encode(public_key)))
+            .assert()
+            .failure();
+        let public_key_stderr = String::from_utf8(public_key_assert.get_output().stderr.clone())
+            .expect("invalid public key stderr");
+        assert!(
+            public_key_stderr.contains(expected_error),
+            "{label} must fail before backend verification: {public_key_stderr}"
+        );
+    }
 }
 
 #[test]

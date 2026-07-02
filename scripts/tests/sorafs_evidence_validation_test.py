@@ -104,6 +104,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string_value_equal,
     require_string_value_in,
     require_string_coverage,
+    require_string_inventory_count_match,
     require_sum_equal,
     require_zero_count,
     required_evidence_kind_names,
@@ -8833,6 +8834,74 @@ def test_require_string_coverage_rejects_malformed_scalar_rows() -> None:
         "validation value must be a non-empty canonical string",
         "validation value must be a non-empty canonical string",
     ]
+
+
+def test_require_string_inventory_count_match_rejects_duplicate_scalars() -> None:
+    errors: list[str] = []
+
+    require_string_inventory_count_match(
+        {"items": ["alpha", "beta", "alpha"], "item_count": 3},
+        "items",
+        "item_count",
+        errors,
+    )
+
+    assert errors == [
+        "items must not contain duplicate values",
+        "item_count must match unique items count",
+    ]
+    assert all("alpha" not in error and "beta" not in error for error in errors)
+
+
+def test_require_string_inventory_count_match_rejects_count_mismatch() -> None:
+    errors: list[str] = []
+
+    require_string_inventory_count_match(
+        {"items": ["alpha", "beta"], "item_count": 3},
+        "items",
+        "item_count",
+        errors,
+    )
+
+    assert errors == ["item_count must match unique items count"]
+
+
+def test_require_string_inventory_count_match_supports_object_rows() -> None:
+    errors: list[str] = []
+
+    require_string_inventory_count_match(
+        {
+            "routes": [
+                {"name": "healthz"},
+                {"name": "status"},
+                {"name": "healthz"},
+            ],
+            "route_count": 3,
+        },
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+
+    assert errors == [
+        "routes must not contain duplicate values",
+        "route_count must match unique routes count",
+    ]
+
+
+def test_require_string_inventory_count_match_leaves_malformed_rows_to_coverage() -> None:
+    errors: list[str] = []
+
+    require_string_inventory_count_match(
+        {"items": ["alpha", {}, "beta"], "item_count": 3},
+        "items",
+        "item_count",
+        errors,
+    )
+
+    assert errors == []
 
 
 def test_require_string_coverage_rejects_malformed_required_values() -> None:

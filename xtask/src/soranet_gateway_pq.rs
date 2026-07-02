@@ -161,8 +161,7 @@ fn load_srcv2_status(
         .wrap_err_with(|| format!("failed to parse SRCv2 bundle from `{}`", path.display()))?;
     let certificate = bundle.certificate.clone();
 
-    let ed_pub = VerifyingKey::from_bytes(&certificate.identity_ed25519)
-        .map_err(|err| eyre!("invalid Ed25519 identity key in SRCv2: {err}"))?;
+    let ed_pub = parse_srcv2_identity_ed25519_key(&certificate.identity_ed25519)?;
     let mldsa_key = certificate.identity_mldsa65.clone();
 
     let mut state = ComponentState::Ok;
@@ -248,6 +247,13 @@ fn load_srcv2_status(
     details.insert("state".into(), Value::String(state.as_str().to_string()));
 
     Ok((state, Value::Object(details)))
+}
+
+fn parse_srcv2_identity_ed25519_key(public_key: &[u8; 32]) -> Result<VerifyingKey> {
+    let parsed = iroha_crypto::ed25519_parse_public_key(public_key)
+        .map_err(|err| eyre!("invalid Ed25519 identity key in SRCv2: {err}"))?;
+    VerifyingKey::from_bytes(parsed.as_bytes())
+        .map_err(|err| eyre!("invalid Ed25519 identity key in SRCv2: {err}"))
 }
 
 fn load_tls_status(dir: &Path) -> Result<(ComponentState, Value)> {
@@ -421,6 +427,12 @@ mod tests {
 
     use super::*;
 
+    const NONCANONICAL_ED25519_IDENTITY: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn sample_certificate() -> RelayCertificateV2 {
         RelayCertificateV2 {
             relay_id: [0x11; 32],
@@ -449,7 +461,7 @@ mod tests {
             kem_policy: iroha_crypto::soranet::certificate::KemRotationPolicyV1 {
                 mode: iroha_crypto::soranet::certificate::KemRotationModeV1::Static,
                 preferred_suite: 1,
-                fallback_suite: Some(0),
+                fallback_suite: None,
                 rotation_interval_hours: 0,
                 grace_period_hours: 0,
             },
@@ -571,5 +583,17 @@ emit_metrics = true
             .and_then(Value::as_array)
             .expect("canaries");
         assert!(!canaries.is_empty());
+    }
+
+    #[test]
+    fn rejects_noncanonical_srcv2_identity_key() {
+        let err = parse_srcv2_identity_ed25519_key(&NONCANONICAL_ED25519_IDENTITY)
+            .expect_err("noncanonical SRCv2 identity key must fail readiness");
+        let message = format!("{err:?}");
+        assert!(
+            message.contains("invalid Ed25519 identity key in SRCv2")
+                && message.contains("non-canonical"),
+            "unexpected error: {message}"
+        );
     }
 }

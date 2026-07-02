@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { normalizeAccountId } from "../javascript/iroha_js/src/normalizers.js";
 
 const ROUTE_ID = "taira_ton_xor";
 const ASSET_KEY = "xor";
@@ -70,32 +71,103 @@ function parseArgs(argv) {
     return { command: "help", options: {} };
   }
   const options = {};
+  const setOption = (key, value) => {
+    if (Object.hasOwn(options, key)) {
+      throw new Error("Option must be specified at most once.");
+    }
+    options[key] = value;
+  };
   for (let index = 0; index < rest.length; index += 1) {
     const token = rest[index];
     if (token === "--help" || token === "-h") {
-      options.help = true;
+      setOption("help", true);
       continue;
     }
     if (!token.startsWith("--")) {
-      throw new Error(`Unexpected argument: ${token}`);
+      throw new Error("Unexpected positional argument.");
     }
     const equalsIndex = token.indexOf("=");
     if (equalsIndex !== -1) {
       const key = token.slice(2, equalsIndex);
       const value = token.slice(equalsIndex + 1);
-      options[key] = value;
+      if (key === "help") {
+        throw new Error("Help option must not have a value.");
+      }
+      setOption(key, value);
       continue;
     }
     const key = token.slice(2);
     const next = rest[index + 1];
     if (next === undefined || next.startsWith("--")) {
-      options[key] = "true";
-      continue;
+      throw new Error("Option requires a value.");
     }
-    options[key] = next;
+    setOption(key, next);
     index += 1;
   }
   return { command, options };
+}
+
+const COMMAND_OPTION_ALLOWLISTS = Object.freeze({
+  "route-manifest": new Set([
+    "token",
+    "bridge",
+    "source-bridge",
+    "verifier",
+    "verifier-code-hash",
+    "verifier-key-hash",
+    "proof-artifact-hash",
+    "proving-key-hash",
+    "deployment-evidence",
+    "source-verifier-material",
+    "source-adapter-engine-deployment",
+    "destination-browser-prover-manifest",
+    "source-browser-prover-manifest",
+    "taira-contract",
+    "post-deploy-source-bridge-config-hash",
+    "post-deploy-source-event-transaction-id",
+    "post-deploy-source-event-explorer-url",
+    "post-deploy-route-canary-evidence-hash",
+    "post-deploy-route-canary-transaction-id",
+    "post-deploy-route-canary-explorer-url",
+    "offline-full-toml-evidence",
+    "offline-full-toml-sha256",
+    "vk-name",
+    "ton-finalize-message-value-nano",
+    "out",
+    "help",
+  ]),
+  "publish-route-manifest": new Set([
+    "manifest",
+    "out",
+    "submit",
+    "authority",
+    "private-key-env",
+    "torii-url",
+    "chain-id",
+    "gas-asset-id",
+    "gas-limit",
+    "wait-for-commit",
+    "commit-timeout-ms",
+    "help",
+  ]),
+});
+
+function assertKnownCommand(command) {
+  if (!Object.hasOwn(COMMAND_OPTION_ALLOWLISTS, command)) {
+    throw new Error("Unknown command.");
+  }
+}
+
+function assertKnownOptions(command, options) {
+  const allowlist = COMMAND_OPTION_ALLOWLISTS[command];
+  if (!allowlist) {
+    return;
+  }
+  for (const key of Object.keys(options)) {
+    if (!allowlist.has(key)) {
+      throw new Error(`Unknown option for ${command}.`);
+    }
+  }
 }
 
 function requireOption(options, key) {
@@ -106,18 +178,47 @@ function requireOption(options, key) {
   return value;
 }
 
+function normalizeCliPathOption(value, label, fallback) {
+  const candidate = value ?? fallback;
+  if (
+    typeof candidate !== "string" ||
+    candidate.trim() !== candidate ||
+    candidate === "" ||
+    /[\u0000-\u001f\u007f]/u.test(candidate)
+  ) {
+    throw new Error(`${label} must be a non-empty path.`);
+  }
+  return candidate;
+}
+
 function optionEnabled(options, key, fallback = false) {
-  const value = options[key];
-  if (value === undefined || value === null || value === "") {
+  if (!Object.hasOwn(options, key)) {
     return fallback;
   }
-  if (value === true || value === "true" || value === "1" || value === "yes") {
-    return true;
+  const value = options[key];
+  if (value === undefined) {
+    return fallback;
   }
-  if (value === false || value === "false" || value === "0" || value === "no") {
-    return false;
-  }
+  if (value === "true") return true;
+  if (value === "false") return false;
   throw new Error(`--${key} must be true or false.`);
+}
+
+const SUBMIT_ONLY_OPTIONS = Object.freeze([
+  "authority",
+  "private-key-env",
+  "torii-url",
+  "chain-id",
+  "wait-for-commit",
+  "commit-timeout-ms",
+]);
+
+function assertSubmitOnlyOptionsAbsentWhenNotSubmitting(options) {
+  for (const key of SUBMIT_ONLY_OPTIONS) {
+    if (Object.hasOwn(options, key)) {
+      throw new Error(`--${key} requires --submit true.`);
+    }
+  }
 }
 
 function normalizePositiveInteger(value, label, fallback = null) {
@@ -135,7 +236,10 @@ function normalizePositiveInteger(value, label, fallback = null) {
 
 function normalizePositiveDecimalString(value, label, fallback = null) {
   const candidate = value ?? fallback;
-  const text = String(candidate ?? "").trim();
+  if (typeof candidate !== "string") {
+    throw new Error(`${label} must be a positive integer decimal string.`);
+  }
+  const text = candidate.trim();
   if (!/^[1-9][0-9]*$/u.test(text)) {
     throw new Error(`${label} must be a positive integer decimal string.`);
   }
@@ -301,6 +405,20 @@ async function writeJsonNoSecrets(path, value) {
     mode: 0o644,
   });
   return out;
+}
+
+function assertDistinctResolvedPaths(outputPath, outputLabel, inputPaths) {
+  const outputResolved = resolve(outputPath);
+  for (const [inputPath, inputLabel] of inputPaths) {
+    if (typeof inputPath !== "string" || inputPath.trim() === "") {
+      continue;
+    }
+    if (outputResolved === resolve(inputPath)) {
+      throw new Error(
+        `${outputLabel} must not be the same path as ${inputLabel}.`,
+      );
+    }
+  }
 }
 
 function normalizeModuleUrl(value, label) {
@@ -736,35 +854,71 @@ function bridgeRouteManifestForInstruction(manifest) {
 }
 
 async function commandRouteManifest(options) {
+  const outPath = normalizeCliPathOption(
+    options.out,
+    "--out",
+    DEFAULT_ROUTE_MANIFEST_OUT,
+  );
+  const tairaContractPath = requireOption(options, "taira-contract");
+  const sourceVerifierMaterialPath = requireOption(
+    options,
+    "source-verifier-material",
+  );
+  const sourceAdapterEngineDeploymentPath = requireOption(
+    options,
+    "source-adapter-engine-deployment",
+  );
+  const destinationBrowserProverManifestPath = requireOption(
+    options,
+    "destination-browser-prover-manifest",
+  );
+  const sourceBrowserProverManifestPath = requireOption(
+    options,
+    "source-browser-prover-manifest",
+  );
+  const deploymentEvidencePath = requireOption(options, "deployment-evidence");
+  const offlineFullTomlEvidencePath = options["offline-full-toml-evidence"];
+  assertDistinctResolvedPaths(outPath, "--out", [
+    [tairaContractPath, "--taira-contract"],
+    [sourceVerifierMaterialPath, "--source-verifier-material"],
+    [
+      sourceAdapterEngineDeploymentPath,
+      "--source-adapter-engine-deployment",
+    ],
+    [
+      destinationBrowserProverManifestPath,
+      "--destination-browser-prover-manifest",
+    ],
+    [sourceBrowserProverManifestPath, "--source-browser-prover-manifest"],
+    [deploymentEvidencePath, "--deployment-evidence"],
+    [offlineFullTomlEvidencePath, "--offline-full-toml-evidence"],
+  ]);
   const proofArtifactHash = normalizeHex32(
     requireOption(options, "proof-artifact-hash"),
     "--proof-artifact-hash",
   );
   const vkName = normalizeTairaBurnRecordVkName(options["vk-name"]);
   const tairaContract = normalizeTairaContractMaterial(
-    await readJson(
-      requireOption(options, "taira-contract"),
-      "TAIRA burn-record contract",
-    ),
+    await readJson(tairaContractPath, "TAIRA burn-record contract"),
     { vkName },
   );
   const sourceVerifierMaterial = normalizePublicJsonRecord(
     await readJson(
-      requireOption(options, "source-verifier-material"),
+      sourceVerifierMaterialPath,
       "TON source verifier material",
     ),
     "TON source verifier material",
   );
   const sourceAdapterEngineDeployment = normalizePublicJsonRecord(
     await readJson(
-      requireOption(options, "source-adapter-engine-deployment"),
+      sourceAdapterEngineDeploymentPath,
       "TON source adapter engine deployment",
     ),
     "TON source adapter engine deployment",
   );
   const destinationBrowserProver = normalizeBrowserProverRef(
     await readJson(
-      requireOption(options, "destination-browser-prover-manifest"),
+      destinationBrowserProverManifestPath,
       "TON destination browser prover manifest",
     ),
     "destination_browser_prover",
@@ -772,7 +926,7 @@ async function commandRouteManifest(options) {
   );
   const sourceBrowserProver = normalizeBrowserProverRef(
     await readJson(
-      requireOption(options, "source-browser-prover-manifest"),
+      sourceBrowserProverManifestPath,
       "TON source browser prover manifest",
     ),
     "source_browser_prover",
@@ -862,7 +1016,7 @@ async function commandRouteManifest(options) {
     destination_browser_prover: destinationBrowserProver,
     source_browser_prover: sourceBrowserProver,
     deployment_evidence_sha256: await sha256HexFileOrJson(
-      requireOption(options, "deployment-evidence"),
+      deploymentEvidencePath,
       "TON deployment evidence",
     ),
     destination_binding_key: TON_DESTINATION_BINDING_KEY,
@@ -906,14 +1060,11 @@ async function commandRouteManifest(options) {
           "TON offline full TOML evidence",
         ),
   });
-  const out = await writeJsonNoSecrets(
-    options.out ?? DEFAULT_ROUTE_MANIFEST_OUT,
-    {
-      schema: ROUTE_MANIFEST_SCHEMA,
-      generated_at_ms: Date.now(),
-      manifest,
-    },
-  );
+  const out = await writeJsonNoSecrets(outPath, {
+    schema: ROUTE_MANIFEST_SCHEMA,
+    generated_at_ms: Date.now(),
+    manifest,
+  });
   return {
     ok: true,
     wrote: out,
@@ -929,10 +1080,24 @@ async function commandRouteManifest(options) {
 }
 
 async function commandPublishRouteManifest(options) {
-  const manifestPath = options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT;
-  const manifestEnvelope = await readJson(manifestPath, "TON route manifest");
-  const manifest = normalizeTonRouteManifestForPublication(manifestEnvelope);
-  const instructionManifest = bridgeRouteManifestForInstruction(manifest);
+  const manifestPath = normalizeCliPathOption(
+    options.manifest,
+    "--manifest",
+    DEFAULT_ROUTE_MANIFEST_OUT,
+  );
+  const outPath = normalizeCliPathOption(
+    options.out,
+    "--out",
+    DEFAULT_ROUTE_MANIFEST_ISI_OUT,
+  );
+  assertDistinctResolvedPaths(outPath, "--out", [[manifestPath, "--manifest"]]);
+  const submit = optionEnabled(options, "submit", false);
+  if (!submit) {
+    assertSubmitOnlyOptionsAbsentWhenNotSubmitting(options);
+  }
+  const waitForCommit = submit
+    ? optionEnabled(options, "wait-for-commit", true)
+    : true;
   const gasAssetId =
     options["gas-asset-id"] === undefined || options["gas-asset-id"] === null
       ? TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID
@@ -945,6 +1110,9 @@ async function commandPublishRouteManifest(options) {
     "--gas-limit",
     DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT,
   );
+  const manifestEnvelope = await readJson(manifestPath, "TON route manifest");
+  const manifest = normalizeTonRouteManifestForPublication(manifestEnvelope);
+  const instructionManifest = bridgeRouteManifestForInstruction(manifest);
   const instruction = {
     UpsertSccpRouteManifest: {
       manifest: instructionManifest,
@@ -973,8 +1141,7 @@ async function commandPublishRouteManifest(options) {
     gasAssetId,
     gasLimit,
   };
-  const outPath = options.out ?? DEFAULT_ROUTE_MANIFEST_ISI_OUT;
-  if (!optionEnabled(options, "submit", false)) {
+  if (!submit) {
     const out = await writeJsonNoSecrets(outPath, artifact);
     return {
       ok: true,
@@ -988,9 +1155,22 @@ async function commandPublishRouteManifest(options) {
     };
   }
 
-  const authority = requireOption(options, "authority");
-  const privateKeyEnv =
-    options["private-key-env"] ?? DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV;
+  const authority = normalizeAuthority(requireOption(options, "authority"));
+  const privateKeyEnv = normalizePrivateKeyEnvName(
+    options["private-key-env"] ?? DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV,
+  );
+  const chainId = options["chain-id"] ?? TAIRA_CHAIN_ID;
+  if (chainId !== TAIRA_CHAIN_ID) {
+    throw new Error(`--chain-id must be ${TAIRA_CHAIN_ID} for TAIRA.`);
+  }
+  const toriiUrl = normalizeToriiUrl(
+    options["torii-url"] ?? DEFAULT_TAIRA_TORII_URL,
+  );
+  const timeoutMs = normalizePositiveInteger(
+    options["commit-timeout-ms"],
+    "--commit-timeout-ms",
+    DEFAULT_COMMIT_TIMEOUT_MS,
+  );
   const privateKeyHex = process.env[privateKeyEnv];
   if (typeof privateKeyHex !== "string" || privateKeyHex.trim() === "") {
     throw new Error(
@@ -1000,19 +1180,6 @@ async function commandPublishRouteManifest(options) {
   const privateKey = Buffer.from(
     normalizePrivateKeyHex(privateKeyHex, privateKeyEnv).slice(2),
     "hex",
-  );
-  const chainId = options["chain-id"] ?? TAIRA_CHAIN_ID;
-  if (chainId !== TAIRA_CHAIN_ID) {
-    throw new Error(`--chain-id must be ${TAIRA_CHAIN_ID} for TAIRA.`);
-  }
-  const toriiUrl = normalizeToriiUrl(
-    options["torii-url"] ?? DEFAULT_TAIRA_TORII_URL,
-  );
-  const waitForCommit = optionEnabled(options, "wait-for-commit", true);
-  const timeoutMs = normalizePositiveInteger(
-    options["commit-timeout-ms"],
-    "--commit-timeout-ms",
-    DEFAULT_COMMIT_TIMEOUT_MS,
   );
   const { buildUpsertSccpRouteManifestTransaction } = await import(
     "../javascript/iroha_js/src/transaction.js"
@@ -1084,10 +1251,53 @@ function normalizePrivateKeyHex(value, label) {
   return `0x${prefixed.slice(2).toLowerCase()}`;
 }
 
+function normalizePrivateKeyEnvName(
+  value = DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV,
+) {
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    !/^[A-Z_][A-Z0-9_]{0,127}$/u.test(value)
+  ) {
+    throw new Error(
+      "--private-key-env must be an uppercase environment variable name containing only letters, digits, and underscores.",
+    );
+  }
+  return value;
+}
+
+function normalizeAuthority(value) {
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new Error("--authority must be a canonical I105 account id.");
+  }
+  try {
+    return normalizeAccountId(value, "--authority");
+  } catch (_error) {
+    throw new Error("--authority must be a canonical I105 account id.");
+  }
+}
+
 function normalizeToriiUrl(value) {
-  const url = new URL(value);
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error("--torii-url must be an HTTP(S) URL.");
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new Error("--torii-url must be a valid HTTP(S) URL.");
+  }
+  let url;
+  try {
+    url = new URL(value);
+  } catch (_error) {
+    throw new Error("--torii-url must be a valid HTTP(S) URL.");
+  }
+  const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(loopback && url.protocol === "http:")) {
+    throw new Error("--torii-url must use HTTPS unless it is loopback HTTP.");
   }
   if (url.username || url.password || url.search || url.hash) {
     throw new Error(
@@ -1099,7 +1309,13 @@ function normalizeToriiUrl(value) {
 
 async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv);
-  if (command === "help" || options.help) {
+  if (command === "help") {
+    process.stdout.write(usage(command));
+    return 0;
+  }
+  assertKnownCommand(command);
+  assertKnownOptions(command, options);
+  if (options.help) {
     process.stdout.write(usage(command));
     return 0;
   }
@@ -1109,7 +1325,7 @@ async function main(argv = process.argv.slice(2)) {
   } else if (command === "publish-route-manifest") {
     result = await commandPublishRouteManifest(options);
   } else {
-    throw new Error(`Unknown command: ${command}`);
+    throw new Error("Unknown command.");
   }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return 0;

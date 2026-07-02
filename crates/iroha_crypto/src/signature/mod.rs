@@ -305,14 +305,7 @@ impl Signature {
     ///
     /// Returns [`ParseError`] if `payload` is empty or contains only zero bytes.
     pub fn try_from_bytes(payload: &[u8]) -> Result<Self, ParseError> {
-        if payload.is_empty() {
-            return Err(ParseError("signature payload must not be empty".to_owned()));
-        }
-        if signature_payload_is_all_zero(payload) {
-            return Err(ParseError(
-                "signature payload must not be all zero".to_owned(),
-            ));
-        }
+        validate_signature_payload_for_admission(payload)?;
         Ok(Self::from_bytes(payload))
     }
 
@@ -323,6 +316,20 @@ impl Signature {
     pub fn from_hex(payload: impl AsRef<str>) -> Result<Self, ParseError> {
         let payload: Vec<u8> = hex_decode(payload.as_ref())?;
         Ok(Self::from_bytes(&payload))
+    }
+
+    /// Fallibly create a signature from hex received from an external boundary.
+    ///
+    /// This preserves [`Signature::from_hex`] for tests and compatibility code
+    /// that intentionally reproduce opaque bytes, while rejecting empty or
+    /// all-zero payloads for admission paths.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the string is not valid hex, or when the
+    /// decoded payload is empty or all zero.
+    pub fn try_from_hex(payload: impl AsRef<str>) -> Result<Self, ParseError> {
+        let payload: Vec<u8> = hex_decode(payload.as_ref())?;
+        Self::try_from_bytes(&payload)
     }
 
     /// Verify `payload` using signed data and [`crate::KeyPair::public_key`].
@@ -395,6 +402,18 @@ fn signature_payload_is_all_zero(payload: &[u8]) -> bool {
     !payload.is_empty() && payload.iter().all(|&byte| byte == 0)
 }
 
+fn validate_signature_payload_for_admission(payload: &[u8]) -> Result<(), ParseError> {
+    if payload.is_empty() {
+        return Err(ParseError("signature payload must not be empty".to_owned()));
+    }
+    if signature_payload_is_all_zero(payload) {
+        return Err(ParseError(
+            "signature payload must not be all zero".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn decode_signature_payload_unpacked(bytes: &[u8]) -> Result<ConstVec<u8>, ncore::Error> {
     if bytes.len() < 8 {
         return Err(ncore::Error::LengthMismatch);
@@ -442,6 +461,11 @@ fn decode_signature_payload_from_slice(
         .or_else(|_| decode_signature_payload_unpacked(bytes).map(|payload| (payload, bytes.len())))
 }
 
+fn validate_signature_payload_for_decode(payload: &[u8]) -> Result<(), ncore::Error> {
+    validate_signature_payload_for_admission(payload)
+        .map_err(|err| ncore::Error::Message(err.to_string()))
+}
+
 #[cfg(all(feature = "json", not(feature = "ffi_import")))]
 impl FastJsonWrite for Signature {
     fn write_json(&self, out: &mut String) {
@@ -454,7 +478,7 @@ impl FastJsonWrite for Signature {
 impl JsonDeserialize for Signature {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let encoded = parser.parse_string()?;
-        Signature::from_hex(&encoded).map_err(|err| json::Error::Message(err.to_string()))
+        Signature::try_from_hex(&encoded).map_err(|err| json::Error::Message(err.to_string()))
     }
 }
 
@@ -562,8 +586,7 @@ impl ncore::NoritoSerialize for Signature {
 #[cfg(not(feature = "ffi_import"))]
 impl<'de> ncore::NoritoDeserialize<'de> for Signature {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
-        let payload = ConstVec::<u8>::deserialize(archived.cast::<ConstVec<u8>>());
-        Signature { payload }
+        Self::try_deserialize(archived).expect("Signature decode")
     }
 
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
@@ -576,6 +599,7 @@ impl<'de> ncore::NoritoDeserialize<'de> for Signature {
                 ncore::note_payload_access(bytes, bytes.len());
                 Ok::<_, ncore::Error>(payload)
             })?;
+        validate_signature_payload_for_decode(&payload)?;
         Ok(Signature { payload })
     }
 }
@@ -584,6 +608,7 @@ impl<'de> ncore::NoritoDeserialize<'de> for Signature {
 impl<'a> norito::core::DecodeFromSlice<'a> for Signature {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (payload, used) = decode_signature_payload_from_slice(bytes)?;
+        validate_signature_payload_for_decode(&payload)?;
         Ok((Signature { payload }, used))
     }
 }
@@ -907,6 +932,38 @@ mod tests {
     }
 
     #[test]
+    fn signature_norito_try_deserialize_rejects_all_zero_payload() {
+        let signature = Signature::from_bytes(&[0u8; 64]);
+        let framed = norito::core::to_bytes(&signature).expect("frame all-zero signature");
+        let archived =
+            norito::from_bytes::<Signature>(&framed).expect("archive all-zero signature fixture");
+
+        let err = <Signature as norito::core::NoritoDeserialize>::try_deserialize(archived)
+            .expect_err("all-zero Norito signature must fail closed");
+
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected all-zero Norito signature error: {err}"
+        );
+    }
+
+    #[test]
+    fn signature_decode_from_slice_rejects_all_zero_payload() {
+        use norito::codec::Encode as _;
+
+        let signature = Signature::from_bytes(&[0u8; 64]);
+        let bytes = signature.encode();
+
+        let err = <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+            .expect_err("all-zero bare signature must fail closed");
+
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected all-zero bare signature error: {err}"
+        );
+    }
+
+    #[test]
     fn signature_try_from_bytes_accepts_nonzero_payload() {
         let signature =
             Signature::try_from_bytes(&[0x11u8; 64]).expect("nonzero signature payload");
@@ -947,6 +1004,28 @@ mod tests {
 
         let value = Signature::from_hex(payload).unwrap();
         assert_eq!(value.payload.as_ref(), &hex::decode(payload).unwrap());
+    }
+
+    #[test]
+    fn signature_json_rejects_all_zero_payload() {
+        let input = norito::json!("00".repeat(64));
+        let err = norito::json::from_value::<Signature>(input)
+            .expect_err("JSON signature decoding must reject all-zero payloads");
+
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected JSON signature error: {err}"
+        );
+    }
+
+    #[test]
+    fn signature_try_from_hex_rejects_empty_payload() {
+        let err = Signature::try_from_hex("").expect_err("empty hex signature must fail closed");
+
+        assert!(
+            err.to_string().contains("empty"),
+            "unexpected empty signature error: {err}"
+        );
     }
 
     #[test]

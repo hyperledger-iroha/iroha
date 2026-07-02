@@ -104,6 +104,10 @@ def _selector(signature: str) -> str:
 
 
 def _parse_hex_bytes(value: str, *, label: str, byte_length: int) -> bytes:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        )
     return evidence.parse_hex_bytes(value, label=label, byte_length=byte_length)
 
 
@@ -167,10 +171,18 @@ def _summary_runtime_bytes(record: dict[str, Any], field: str, *, label: str) ->
 
 
 def _parse_address_text(value: str, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        )
     return _hex(evidence.parse_evm_address(value, label=label))
 
 
 def _parse_rpc_chain_id(value: str) -> int:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            "--expected-rpc-chain-id must be a canonical decimal integer"
+        )
     if value != value.strip():
         raise argparse.ArgumentTypeError(
             "--expected-rpc-chain-id must be a canonical decimal integer"
@@ -195,6 +207,11 @@ def _parse_rpc_chain_id(value: str) -> int:
 def parse_block_tag(value: str) -> str:
     """Parse a stable/canonical JSON-RPC block tag for read-only evidence."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            "--block-tag must be latest, safe, finalized, or a positive canonical "
+            "lowercase 0x block number"
+        )
     if value != value.strip():
         raise argparse.ArgumentTypeError(
             "--block-tag must not contain surrounding whitespace"

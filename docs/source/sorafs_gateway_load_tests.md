@@ -27,7 +27,9 @@ The SF-5a rollout evidence gate also requires staging-load artifacts to carry a
 `policy_digest_hex`, and governance approval artifacts must match that staged
 policy digest before promotion. Suite, staging, and policy digest mismatches
 mark the offending artifact invalid in the emitted summary before the gate can
-report ready.
+report ready. Local conformance artifacts must also keep `scenario_count` equal
+to the unique canonical `scenarios` inventory, and duplicate scenario entries
+fail the artifact before promotion can report ready.
 
 ## Objectives
 

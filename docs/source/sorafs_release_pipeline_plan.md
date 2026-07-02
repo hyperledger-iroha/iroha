@@ -99,20 +99,26 @@ summary: Current SF-6 release automation and QA surfaces.
   lane metadata as payload-free canonical strings, non-negative integers,
   booleans, objects, and lists with expected container shapes, bind those
   metadata fields to the lane-specific contract that emits them, validate exact
-  lowercase-hex binding-list metadata shapes before aggregate promotion,
+  lowercase-hex binding-list metadata shapes before aggregate promotion, require
+  every fingerprint-backed top-level scalar hex, string-list, positive-integer
+  list, and tuple binding-list metadata field to declare its owning required
+  artifact kind or kinds before aggregate fingerprint matching,
   validate exact lowercase-hex and positive-integer scalar list metadata shapes
   before aggregate promotion, validate governance public-head identifiers as
   lowercase hex list metadata before aggregate promotion, validate exact
   object-list metadata shapes before aggregate promotion, reject exact duplicate
-  object-list metadata entries while preserving artifact order, validate exact
+  object-list metadata entries while preserving artifact order, require every
+  object-list metadata field to declare its owning required artifact kind before
+  its detail rows can be matched to recognized artifact fingerprints, validate exact
   object metadata shapes before aggregate
   promotion, require set-derived lane metadata lists to be duplicate-free and
   sorted in canonical order, sanitize malformed sensitive-field path diagnostics
   before writing aggregate errors,
-  require canonical required-row schema labels when present, reject extra
-  required-row fields outside the schema-closed payload-free required-row
-  contract, require canonical unique artifact paths and lowercase SHA-256
-  digests plus canonical artifact schema/status labels when present, reject
+  require required-row and artifact schema labels to match the owning checker
+  evidence schemas, reject extra required-row fields outside the schema-closed
+  payload-free required-row contract, require canonical unique artifact paths
+  and lowercase SHA-256 digests, reject explicit artifact `status` labels
+  outside successful states such as `passed` or `verified`, reject
   extra artifact-row fields
   outside the schema-closed payload-free
   artifact contract, require per-lane rollout/release checkers to normalize

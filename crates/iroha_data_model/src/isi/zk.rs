@@ -774,9 +774,25 @@ macro_rules! impl_zk_decode_from_slice {
     };
 }
 
-impl_zk_decode_from_slice!(VerifyProof {
-    attachment: crate::proof::ProofAttachment,
-});
+impl<'a> norito::core::DecodeFromSlice<'a> for VerifyProof {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = zk_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let attachment = super::decode_aos_slice_field::<crate::proof::ProofAttachment>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((Self { attachment }, offset))
+    }
+}
 
 impl_zk_decode_from_slice!(PruneProofs {
     backend: Option<String>,

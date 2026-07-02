@@ -4981,7 +4981,7 @@ fn test_receipt(
         stripe_layout: DaStripeLayout::default(),
         queued_at_unix: 1234,
         rent_quote: DaRentQuote::default(),
-        operator_signature: Signature::from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER),
+        operator_signature: persistence::receipt_signature_placeholder(),
     };
     let unsigned =
         persistence::unsigned_receipt_bytes(&receipt, sequence).expect("test receipt encodes");

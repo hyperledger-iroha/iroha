@@ -1554,6 +1554,60 @@ mod tests {
     }
 
     #[test]
+    fn verify_advert_signature_rejects_malformed_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let opts = EmitOptions {
+            profile_handle: Some("sorafs.sf1@1.0.0".into()),
+            provider_id: Some([0x11; 32]),
+            stake_pool_id: Some([0x22; 32]),
+            stake_amount: Some(1_000_000),
+            availability: Some(AvailabilityTier::Hot),
+            max_latency_ms: Some(500),
+            max_streams: Some(5),
+            capabilities: vec![CapabilityTlv {
+                cap_type: CapabilityType::ToriiGateway,
+                payload: Vec::new(),
+            }],
+            endpoints: vec![AdvertEndpoint {
+                kind: EndpointKind::Torii,
+                host_pattern: "localhost".into(),
+                metadata: Vec::new(),
+            }],
+            topics: vec![RendezvousTopic {
+                topic: "sorafs.invalid-r.primary".into(),
+                region: "global".into(),
+            }],
+            issued_at: Some(1_700_000_000),
+            signing_key_hex: Some(vec![0xAB; 32]),
+            ..EmitOptions::default()
+        };
+
+        for (label, replacement_r, expected) in [
+            ("small-order", SMALL_ORDER_R, "small-order"),
+            ("noncanonical", NONCANONICAL_R, "not a canonical"),
+        ] {
+            let mut advert = build_advert(&opts).expect("advert builds");
+            advert.signature.signature[..32].copy_from_slice(&replacement_r);
+
+            let err = verify_advert_signature(&advert)
+                .expect_err("malformed signature R must be rejected");
+
+            assert!(
+                err.contains(expected),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn resolves_canonical_handle() {
         let handle = resolve_profile_handle("sorafs.sf1@1.0.0").expect("handle resolves");
         assert_eq!(handle, "sorafs.sf1@1.0.0");

@@ -22,6 +22,10 @@ session manifest, watermark metadata, access log, legal-hold receipt, and
 transparency report. It also rejects raw evidence, signed URLs, session tokens,
 response bodies, raw access logs, legal-hold receipt payloads, transparency
 report payloads, or watermark secrets.
+The moderation-panel rollout summary publishes the payload-free
+`valid_evidence_viewer_digest_sets` metadata set for SFM-4b3, and the final
+SoraFS aggregate production-readiness gate requires that set to match recognized
+`evidence_viewer` artifact fingerprints before reporting ready.
 That gate is a promotion blocker for deployed evidence; it does not replace the
 missing viewer service.
 

@@ -18,6 +18,18 @@ const DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO = "100000000";
 const TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const DEFAULT_TAIRA_BURN_RECORD_VK_NAME = "taira_bsc_xor_burn_record_v1";
 const DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT = 2_000_000;
+const malformedBooleanOptionValues = Object.freeze([
+  " TRUE",
+  "true ",
+  "false ",
+  "TRUE",
+  "False",
+  "1",
+  "0",
+  "yes",
+  "on",
+  "",
+]);
 const TAIRA_ROUTE_MANIFEST_AUTHORITY = AccountAddress.fromAccount({
   publicKey: Buffer.from(
     "CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
@@ -200,7 +212,7 @@ function routeManifestArgs(paths, proofArtifactHash, extra = {}) {
     paths.offlineFullTomlEvidence,
     ...(extra.vkName === undefined ? [] : ["--vk-name", extra.vkName]),
     "--out",
-    paths.out,
+    extra.out ?? paths.out,
   ];
 }
 
@@ -345,6 +357,59 @@ test("TON publish-route-manifest writes a reviewable ISI artifact without submit
   );
 });
 
+test("TON publish-route-manifest rejects submit-only options without submit", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const render = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+  assert.equal(render.status, 0, render.stderr);
+  const cases = [
+    {
+      args: ["--authority", TAIRA_ROUTE_MANIFEST_AUTHORITY],
+      expected: /--authority requires --submit true/u,
+    },
+    {
+      args: ["--private-key-env", "SCCP_TON_TEST_PRIVATE_KEY"],
+      expected: /--private-key-env requires --submit true/u,
+    },
+    {
+      args: ["--torii-url", "https://taira.sora.org"],
+      expected: /--torii-url requires --submit true/u,
+    },
+    {
+      args: ["--chain-id", "809574f5-fee7-5e69-bfcf-52451e42d50f"],
+      expected: /--chain-id requires --submit true/u,
+    },
+    {
+      args: ["--wait-for-commit", "false"],
+      expected: /--wait-for-commit requires --submit true/u,
+    },
+    {
+      args: ["--commit-timeout-ms", "120000"],
+      expected: /--commit-timeout-ms requires --submit true/u,
+    },
+  ];
+
+  for (const [index, testCase] of cases.entries()) {
+    const outPath = join(root, `submit-only-${index}.json`);
+    const sentinel = `sentinel:submit-only:${index}\n`;
+    const submitArgs = index % 2 === 0 ? [] : ["--submit", "false"];
+    await writeFile(outPath, sentinel, "utf8");
+    const publish = runTonCli([
+      "publish-route-manifest",
+      "--manifest",
+      paths.out,
+      "--out",
+      outPath,
+      ...submitArgs,
+      ...testCase.args,
+    ]);
+
+    assert.notEqual(publish.status, 0);
+    assert.match(publish.stderr, testCase.expected);
+    assert.equal(await readFile(outPath, "utf8"), sentinel);
+  }
+});
+
 test("TON route manifest accepts an explicit TAIRA burn-record VK name", async () => {
   const root = await fixtureRoot();
   const vkName = "taira_ton_xor_burn_record_v2";
@@ -417,6 +482,43 @@ test("TON publish-route-manifest rejects invalid gas before writing artifacts", 
   assert.notEqual(publish.status, 0);
   assert.match(publish.stderr, /--gas-limit must be a positive integer/u);
   await assert.rejects(readFile(paths.publishOut, "utf8"), /ENOENT/u);
+});
+
+test("TON publish-route-manifest rejects gas metadata before manifest read", async () => {
+  const root = await fixtureRoot();
+  const missingManifest = join(root, "missing-route.manifest.json");
+  const cases = [
+    {
+      args: ["--gas-limit", "0"],
+      expected: /--gas-limit must be a positive integer/u,
+      submitArgs: [],
+    },
+    {
+      args: ["--gas-asset-id", ` ${TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID}`],
+      expected: /--gas-asset-id must be canonical text/u,
+      submitArgs: ["--submit", "true"],
+    },
+  ];
+
+  for (const [index, testCase] of cases.entries()) {
+    const outPath = join(root, `gas-before-manifest-${index}.json`);
+    const sentinel = `sentinel:gas-before-manifest:${index}\n`;
+    await writeFile(outPath, sentinel, "utf8");
+    const publish = runTonCli([
+      "publish-route-manifest",
+      "--manifest",
+      missingManifest,
+      "--out",
+      outPath,
+      ...testCase.submitArgs,
+      ...testCase.args,
+    ]);
+
+    assert.notEqual(publish.status, 0);
+    assert.match(publish.stderr, testCase.expected);
+    assert.doesNotMatch(publish.stderr, /missing-route\.manifest\.json/u);
+    assert.equal(await readFile(outPath, "utf8"), sentinel);
+  }
 });
 
 test("TON publish-route-manifest submits gas metadata to transaction builder", async () => {
@@ -578,6 +680,594 @@ test("TON route manifest rejects missing finalize message value", async () => {
   await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
 });
 
+test("TON route manifest rejects duplicate CLI options before writing", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const result = runTonCli([
+    ...routeManifestArgs(paths, proofArtifactHash),
+    "--token",
+    tonRaw(0x55),
+  ]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Option must be specified at most once/u);
+  await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+});
+
+test("TON route manifest redacts unexpected positional arguments", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const secretArgument = "secret-token-ton-route-cli-private-key";
+  const result = runTonCli([
+    ...routeManifestArgs(paths, proofArtifactHash),
+    secretArgument,
+  ]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Unexpected positional argument/u);
+  assert.doesNotMatch(result.stderr, new RegExp(secretArgument, "u"));
+  await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+});
+
+test("TON route manifest redacts duplicate unknown option names", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const secretOptionName = "secret-token-ton-route-duplicate-option";
+  const result = runTonCli([
+    ...routeManifestArgs(paths, proofArtifactHash),
+    `--${secretOptionName}`,
+    "first",
+    `--${secretOptionName}`,
+    "second",
+  ]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Option must be specified at most once/u);
+  assert.doesNotMatch(result.stderr, new RegExp(secretOptionName, "u"));
+  await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+});
+
+test("TON route manifest rejects missing option values before writing", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const result = runTonCli([
+    ...routeManifestArgs(paths, proofArtifactHash),
+    "--vk-name",
+  ]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Option requires a value/u);
+  await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+});
+
+test("TON route manifest rejects empty output paths before writing", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const result = runTonCli(
+    routeManifestArgs(paths, proofArtifactHash, {
+      out: "",
+    }),
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--out must be a non-empty path/u);
+  await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+});
+
+test("TON route manifest rejects unknown options without echoing names", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const secretOptionName = "secret-token-ton-route-unknown-option";
+  const result = runTonCli([
+    ...routeManifestArgs(paths, proofArtifactHash),
+    `--${secretOptionName}`,
+    "ignored",
+  ]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Unknown option for route-manifest/u);
+  assert.doesNotMatch(result.stderr, new RegExp(secretOptionName, "u"));
+  await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+});
+
+test("TON CLI rejects unknown commands without echoing names", async () => {
+  const secretCommandName = "secret-token-ton-route-unknown-command";
+  const result = runTonCli([secretCommandName]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Unknown command/u);
+  assert.doesNotMatch(result.stderr, new RegExp(secretCommandName, "u"));
+});
+
+test("TON route manifest rejects unknown options even with help", async () => {
+  const secretOptionName = "secret-token-ton-route-help-option";
+  const result = runTonCli([
+    "route-manifest",
+    "--help",
+    `--${secretOptionName}`,
+    "ignored",
+  ]);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Unknown option for route-manifest/u);
+  assert.doesNotMatch(result.stderr, /Usage:/u);
+  assert.doesNotMatch(result.stderr, new RegExp(secretOptionName, "u"));
+});
+
+test("TON CLI rejects valued help options without echoing values", async () => {
+  const root = await fixtureRoot();
+  const missingManifest = join(root, "missing-route.manifest.json");
+  const outPath = join(root, "valued-help-publish.json");
+  const sentinel = "sentinel:valued-help-publish\n";
+  const secretHelpValue = "secret-token-ton-help-value";
+  await writeFile(outPath, sentinel, "utf8");
+
+  const route = runTonCli([
+    "route-manifest",
+    `--help=${secretHelpValue}`,
+  ]);
+  assert.notEqual(route.status, 0);
+  assert.match(route.stderr, /Help option must not have a value/u);
+  assert.doesNotMatch(route.stderr, /Usage:/u);
+  assert.doesNotMatch(route.stderr, new RegExp(secretHelpValue, "u"));
+
+  const publish = runTonCli([
+    "publish-route-manifest",
+    "--manifest",
+    missingManifest,
+    "--out",
+    outPath,
+    `--help=${secretHelpValue}`,
+  ]);
+  assert.notEqual(publish.status, 0);
+  assert.match(publish.stderr, /Help option must not have a value/u);
+  assert.doesNotMatch(publish.stderr, /Usage:/u);
+  assert.doesNotMatch(publish.stderr, new RegExp(secretHelpValue, "u"));
+  assert.doesNotMatch(publish.stderr, /missing-route\.manifest\.json/u);
+  assert.equal(await readFile(outPath, "utf8"), sentinel);
+});
+
+test("TON publish-route-manifest rejects unknown options before manifest read", async () => {
+  const root = await fixtureRoot();
+  const missingManifest = join(root, "missing-route.manifest.json");
+  const outPath = join(root, "publish-unknown-option.json");
+  const sentinel = "sentinel:publish-unknown-option\n";
+  const secretOptionName = "secret-token-ton-publish-unknown-option";
+  await writeFile(outPath, sentinel, "utf8");
+  const publish = runTonCli([
+    "publish-route-manifest",
+    "--manifest",
+    missingManifest,
+    "--out",
+    outPath,
+    "--submit",
+    "true",
+    `--${secretOptionName}`,
+    "ignored",
+  ]);
+
+  assert.notEqual(publish.status, 0);
+  assert.match(publish.stderr, /Unknown option for publish-route-manifest/u);
+  assert.doesNotMatch(publish.stderr, new RegExp(secretOptionName, "u"));
+  assert.doesNotMatch(publish.stderr, /missing-route\.manifest\.json/u);
+  assert.equal(await readFile(outPath, "utf8"), sentinel);
+});
+
+test("TON publish-route-manifest rejects missing option values before manifest read", async () => {
+  const root = await fixtureRoot();
+  const missingManifest = join(root, "missing-route.manifest.json");
+  const outPath = join(root, "publish-missing-option-value.json");
+  const sentinel = "sentinel:publish-missing-option-value\n";
+  await writeFile(outPath, sentinel, "utf8");
+  const publish = runTonCli([
+    "publish-route-manifest",
+    "--manifest",
+    missingManifest,
+    "--out",
+    outPath,
+    "--submit",
+  ]);
+
+  assert.notEqual(publish.status, 0);
+  assert.match(publish.stderr, /Option requires a value/u);
+  assert.doesNotMatch(publish.stderr, /missing-route\.manifest\.json/u);
+  assert.equal(await readFile(outPath, "utf8"), sentinel);
+});
+
+test("TON publish-route-manifest rejects empty path options before manifest read", async () => {
+  const root = await fixtureRoot();
+  const outPath = join(root, "publish-empty-path.json");
+  const sentinel = "sentinel:publish-empty-path\n";
+  await writeFile(outPath, sentinel, "utf8");
+
+  const emptyManifest = runTonCli([
+    "publish-route-manifest",
+    "--manifest=",
+    "--out",
+    outPath,
+  ]);
+  assert.notEqual(emptyManifest.status, 0);
+  assert.match(emptyManifest.stderr, /--manifest must be a non-empty path/u);
+  assert.equal(await readFile(outPath, "utf8"), sentinel);
+
+  const paddedOut = runTonCli([
+    "publish-route-manifest",
+    "--manifest",
+    join(root, "missing-route.manifest.json"),
+    "--out",
+    ` ${outPath}`,
+  ]);
+  assert.notEqual(paddedOut.status, 0);
+  assert.match(paddedOut.stderr, /--out must be a non-empty path/u);
+  assert.doesNotMatch(paddedOut.stderr, /missing-route\.manifest\.json/u);
+  assert.equal(await readFile(outPath, "utf8"), sentinel);
+});
+
+test("TON route manifest rejects output path collisions with inputs", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const originalEvidence = await readFile(paths.deploymentEvidence, "utf8");
+  const result = runTonCli(
+    routeManifestArgs(paths, proofArtifactHash, {
+      out: paths.deploymentEvidence,
+    }),
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /--out must not be the same path as --deployment-evidence/u,
+  );
+  assert.equal(
+    await readFile(paths.deploymentEvidence, "utf8"),
+    originalEvidence,
+  );
+});
+
+test("TON publish-route-manifest rejects output path collisions with manifest", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const render = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+  assert.equal(render.status, 0, render.stderr);
+  const originalManifest = await readFile(paths.out, "utf8");
+
+  const publish = runTonCli([
+    "publish-route-manifest",
+    "--manifest",
+    paths.out,
+    "--out",
+    paths.out,
+  ]);
+
+  assert.notEqual(publish.status, 0);
+  assert.match(publish.stderr, /--out must not be the same path as --manifest/u);
+  assert.equal(await readFile(paths.out, "utf8"), originalManifest);
+});
+
+test("TON publish-route-manifest rejects malformed submit booleans before writing", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const render = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+  assert.equal(render.status, 0, render.stderr);
+
+  for (const [index, value] of malformedBooleanOptionValues.entries()) {
+    const outPath = join(root, `submit-boolean-${index}.json`);
+    const sentinel = `sentinel:submit:${index}\n`;
+    await writeFile(outPath, sentinel, "utf8");
+    const publish = runTonCli([
+      "publish-route-manifest",
+      "--manifest",
+      paths.out,
+      "--out",
+      outPath,
+      "--submit",
+      value,
+    ]);
+
+    assert.notEqual(publish.status, 0);
+    assert.match(publish.stderr, /--submit must be true or false/u);
+    assert.equal(await readFile(outPath, "utf8"), sentinel);
+  }
+});
+
+test("TON publish-route-manifest rejects malformed wait booleans before writing", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const render = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+  assert.equal(render.status, 0, render.stderr);
+
+  for (const [index, value] of malformedBooleanOptionValues.entries()) {
+    const outPath = join(root, `wait-boolean-${index}.json`);
+    const sentinel = `sentinel:wait:${index}\n`;
+    await writeFile(outPath, sentinel, "utf8");
+    const publish = runTonCli(
+      [
+        "publish-route-manifest",
+        "--manifest",
+        paths.out,
+        "--out",
+        outPath,
+        "--submit",
+        "true",
+        "--authority",
+        TAIRA_ROUTE_MANIFEST_AUTHORITY,
+        "--private-key-env",
+        "SCCP_TON_TEST_PRIVATE_KEY",
+        "--wait-for-commit",
+        value,
+      ],
+      {
+        env: {
+          SCCP_TON_TEST_PRIVATE_KEY: "11".repeat(32),
+        },
+      },
+    );
+
+    assert.notEqual(publish.status, 0);
+    assert.match(publish.stderr, /--wait-for-commit must be true or false/u);
+    assert.equal(await readFile(outPath, "utf8"), sentinel);
+  }
+});
+
+test("TON publish-route-manifest rejects unsafe private-key env names before writing", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const render = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+  assert.equal(render.status, 0, render.stderr);
+  const secretLikeEnvName = "SCCP_TON_TEST_PRIVATE_KEY=secret-token-ton-route";
+  const badEnvNames = [
+    " SCCP_TON_TEST_PRIVATE_KEY",
+    "SCCP_TON_TEST_PRIVATE_KEY ",
+    "sccp_ton_test_private_key",
+    "SCCP-TON-TEST-PRIVATE-KEY",
+    secretLikeEnvName,
+    "SCCP_TON_TEST\nPRIVATE_KEY",
+    "1SCCP_TON_TEST_PRIVATE_KEY",
+    "",
+  ];
+
+  for (const [index, badEnvName] of badEnvNames.entries()) {
+    const outPath = join(root, `private-key-env-${index}.json`);
+    const sentinel = `sentinel:private-key-env:${index}\n`;
+    await writeFile(outPath, sentinel, "utf8");
+    const publish = runTonCli([
+      "publish-route-manifest",
+      "--manifest",
+      paths.out,
+      "--out",
+      outPath,
+      "--submit",
+      "true",
+      "--authority",
+      TAIRA_ROUTE_MANIFEST_AUTHORITY,
+      "--private-key-env",
+      badEnvName,
+      "--wait-for-commit",
+      "false",
+    ]);
+
+    assert.notEqual(publish.status, 0);
+    assert.match(
+      publish.stderr,
+      /--private-key-env must be an uppercase environment variable name/u,
+    );
+    assert.doesNotMatch(publish.stderr, new RegExp(secretLikeEnvName, "u"));
+    assert.equal(await readFile(outPath, "utf8"), sentinel);
+  }
+});
+
+test("TON publish-route-manifest rejects unsafe Torii URLs before writing", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const render = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+  assert.equal(render.status, 0, render.stderr);
+  const credentialedUrl =
+    "https://operator:secret-token-ton-torii-url@taira.sora.org";
+  const cases = [
+    {
+      value: "http://taira.sora.org",
+      expected: /--torii-url must use HTTPS unless it is loopback HTTP/u,
+    },
+    {
+      value: credentialedUrl,
+      expected: /--torii-url must not include credentials, query, or fragment/u,
+    },
+    {
+      value: "https://taira.sora.org?private_key=secret-token-ton-torii-url",
+      expected: /--torii-url must not include credentials, query, or fragment/u,
+    },
+    {
+      value: "https://taira.sora.org#secret-token-ton-torii-url",
+      expected: /--torii-url must not include credentials, query, or fragment/u,
+    },
+    {
+      value: "ftp://taira.sora.org",
+      expected: /--torii-url must use HTTPS unless it is loopback HTTP/u,
+    },
+    {
+      value: " https://taira.sora.org",
+      expected: /--torii-url must be a valid HTTP\(S\) URL/u,
+    },
+    {
+      value: "https://taira.sora.org\n",
+      expected: /--torii-url must be a valid HTTP\(S\) URL/u,
+    },
+    {
+      value: "not a url",
+      expected: /--torii-url must be a valid HTTP\(S\) URL/u,
+    },
+  ];
+
+  for (const [index, testCase] of cases.entries()) {
+    const outPath = join(root, `torii-url-${index}.json`);
+    const sentinel = `sentinel:torii-url:${index}\n`;
+    await writeFile(outPath, sentinel, "utf8");
+    const publish = runTonCli(
+      [
+        "publish-route-manifest",
+        "--manifest",
+        paths.out,
+        "--out",
+        outPath,
+        "--submit",
+        "true",
+        "--authority",
+        TAIRA_ROUTE_MANIFEST_AUTHORITY,
+        "--private-key-env",
+        "SCCP_TON_TEST_PRIVATE_KEY",
+        "--wait-for-commit",
+        "false",
+        "--torii-url",
+        testCase.value,
+      ],
+      {
+        env: {
+          SCCP_TON_TEST_PRIVATE_KEY: "11".repeat(32),
+        },
+      },
+    );
+
+    assert.notEqual(publish.status, 0);
+    assert.match(publish.stderr, testCase.expected);
+    assert.doesNotMatch(publish.stderr, new RegExp(credentialedUrl, "u"));
+    assert.equal(await readFile(outPath, "utf8"), sentinel);
+  }
+});
+
+test("TON publish-route-manifest rejects unsafe authorities before secret lookup", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const render = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+  assert.equal(render.status, 0, render.stderr);
+  const secretLikeAuthority = "secret-token-ton-authority";
+  const badAuthorities = [
+    ` ${TAIRA_ROUTE_MANIFEST_AUTHORITY}`,
+    `${TAIRA_ROUTE_MANIFEST_AUTHORITY} `,
+    "route-manifest-manager@taira",
+    "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "uaid:1111111111111111111111111111111111111111111111111111111111111111",
+    "not-an-i105-authority",
+    `bad\n${TAIRA_ROUTE_MANIFEST_AUTHORITY}`,
+    secretLikeAuthority,
+  ];
+
+  for (const [index, authority] of badAuthorities.entries()) {
+    const outPath = join(root, `authority-${index}.json`);
+    const sentinel = `sentinel:authority:${index}\n`;
+    await writeFile(outPath, sentinel, "utf8");
+    const publish = runTonCli(
+      [
+        "publish-route-manifest",
+        "--manifest",
+        paths.out,
+        "--out",
+        outPath,
+        "--submit",
+        "true",
+        "--authority",
+        authority,
+        "--private-key-env",
+        "SCCP_TON_TEST_PRIVATE_KEY",
+        "--wait-for-commit",
+        "false",
+      ],
+      {
+        env: {
+          SCCP_TON_TEST_PRIVATE_KEY: "11".repeat(32),
+        },
+      },
+    );
+
+    assert.notEqual(publish.status, 0);
+    assert.match(publish.stderr, /--authority must be a canonical I105 account id/u);
+    assert.doesNotMatch(publish.stderr, new RegExp(secretLikeAuthority, "u"));
+    assert.equal(await readFile(outPath, "utf8"), sentinel);
+  }
+});
+
+test("TON publish-route-manifest rejects submit metadata before private key lookup", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const render = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+  assert.equal(render.status, 0, render.stderr);
+  const cases = [
+    {
+      args: ["--chain-id", "809574F5-fee7-5e69-bfcf-52451e42d50f"],
+      expected: /--chain-id must be 809574f5-fee7-5e69-bfcf-52451e42d50f for TAIRA/u,
+    },
+    {
+      args: ["--torii-url", "http://taira.sora.org"],
+      expected: /--torii-url must use HTTPS unless it is loopback HTTP/u,
+    },
+    {
+      args: ["--commit-timeout-ms", "0"],
+      expected: /--commit-timeout-ms must be a positive integer/u,
+    },
+  ];
+
+  for (const [index, testCase] of cases.entries()) {
+    const outPath = join(root, `submit-metadata-before-secret-${index}.json`);
+    const sentinel = `sentinel:submit-metadata-before-secret:${index}\n`;
+    await writeFile(outPath, sentinel, "utf8");
+    const publish = runTonCli(
+      [
+        "publish-route-manifest",
+        "--manifest",
+        paths.out,
+        "--out",
+        outPath,
+        "--submit",
+        "true",
+        "--authority",
+        TAIRA_ROUTE_MANIFEST_AUTHORITY,
+        "--private-key-env",
+        "SCCP_TON_TEST_MISSING_PRIVATE_KEY",
+        "--wait-for-commit",
+        "false",
+        ...testCase.args,
+      ],
+      {
+        env: {
+          SCCP_TON_TEST_MISSING_PRIVATE_KEY: "",
+        },
+      },
+    );
+
+    assert.notEqual(publish.status, 0);
+    assert.match(publish.stderr, testCase.expected);
+    assert.doesNotMatch(publish.stderr, /SCCP_TON_TEST_MISSING_PRIVATE_KEY/u);
+    assert.equal(await readFile(outPath, "utf8"), sentinel);
+  }
+});
+
+test("TON publish-route-manifest rejects numeric nanoTON manifest scalars", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const render = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+  assert.equal(render.status, 0, render.stderr);
+
+  const envelope = JSON.parse(await readFile(paths.out, "utf8"));
+  envelope.manifest.ton_finalize_message_value_nano = Number(
+    DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO,
+  );
+  await writeJson(paths.out, envelope);
+
+  const publish = runTonCli([
+    "publish-route-manifest",
+    "--manifest",
+    paths.out,
+    "--out",
+    paths.publishOut,
+  ]);
+
+  assert.notEqual(publish.status, 0);
+  assert.match(
+    publish.stderr,
+    /TON finalize message value in nanoTON must be a positive integer decimal string/u,
+  );
+  await assert.rejects(readFile(paths.publishOut, "utf8"), /ENOENT/u);
+});
+
 test("TON route manifest rejects secret-like public evidence", async () => {
   const root = await fixtureRoot();
   const { paths, proofArtifactHash } = await writeFixtureFiles(root, {
@@ -679,7 +1369,7 @@ test("TON publish-route-manifest refuses submit without runtime private key", as
       "--submit",
       "true",
       "--authority",
-      "route-manifest-manager@taira",
+      TAIRA_ROUTE_MANIFEST_AUTHORITY,
       "--private-key-env",
       "SCCP_TON_TEST_MISSING_PRIVATE_KEY",
     ],

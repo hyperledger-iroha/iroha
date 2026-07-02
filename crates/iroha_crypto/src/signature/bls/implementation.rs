@@ -188,6 +188,11 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
+        if !bytes.is_empty() && bytes.iter().all(|&byte| byte == 0) {
+            return Err(ParseError(
+                "BLS secret key material must not be all zero".to_string(),
+            ));
+        }
         let secret = W3fSecretKey::<C::Engine>::from_bytes(bytes)
             .map_err(|err| ParseError(err.to_string()))?;
         Ok(Self::new(&secret))
@@ -275,6 +280,38 @@ fn ensure_bls_seed_material_not_all_zero(context: &str, seed: &[u8]) -> Result<(
         return Err(bls_seed_material_all_zero_error(context));
     }
     Ok(())
+}
+
+fn bls_signature_material_is_all_zero(signature: &[u8]) -> bool {
+    !signature.is_empty() && signature.iter().all(|&byte| byte == 0)
+}
+
+fn bls_public_key_material_is_all_zero(public_key: &[u8]) -> bool {
+    !public_key.is_empty() && public_key.iter().all(|&byte| byte == 0)
+}
+
+fn ensure_bls_signature_material_not_all_zero(signature: &[u8]) -> Result<(), Error> {
+    if bls_signature_material_is_all_zero(signature) {
+        return Err(ParseError("BLS signature material must not be all zero".to_string()).into());
+    }
+    Ok(())
+}
+
+fn parse_canonical_bls_signature<E: EngineBLS>(
+    signature_bytes: &[u8],
+) -> Result<BlsSignature<E>, Error> {
+    ensure_bls_signature_material_not_all_zero(signature_bytes)?;
+    let signature = BlsSignature::<E>::from_bytes(signature_bytes)
+        .map_err(|_| ParseError("Failed to parse signature.".to_owned()))?;
+    let canonical = signature.to_bytes();
+    if canonical.as_slice() != signature_bytes {
+        return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
+    }
+    let identity_sig = BlsSignature::<E>(Default::default()).to_bytes();
+    if canonical == identity_sig {
+        return Err(ParseError("BLS signature is identity".to_string()).into());
+    }
+    Ok(signature)
 }
 
 fn ensure_distinct_messages(messages: &[&[u8]]) -> Result<(), Error> {
@@ -381,6 +418,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     where
         C: PreparedPublicKeyCacheAccess,
     {
+        ensure_bls_signature_material_not_all_zero(signature_bytes)?;
         let pk_bytes = pk.to_bytes();
         let cache_key = verify_ok_cache_key(&pk_bytes, message, signature_bytes);
         if C::with_verify_ok_cache(|cache| cache.contains(&cache_key)) {
@@ -391,16 +429,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             return Err(ParseError("BLS public key is identity".to_string()).into());
         }
 
-        let signature = w3f_bls::Signature::<C::Engine>::from_bytes(signature_bytes)
-            .map_err(|_| ParseError("Failed to parse signature.".to_owned()))?;
-        let canonical = signature.to_bytes();
-        if canonical.as_slice() != signature_bytes {
-            return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
-        }
-        let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
-        if canonical == identity_sig {
-            return Err(ParseError("BLS signature is identity".to_string()).into());
-        }
+        let signature = parse_canonical_bls_signature::<C::Engine>(signature_bytes)?;
 
         let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         let prepared_pk = C::with_cache(|cache| cache.get_or_insert(pk, &pk_bytes));
@@ -434,20 +463,11 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         if signatures.is_empty() || signatures.len() != public_keys.len() {
             return Err(Error::BadSignature);
         }
-        let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
         let identity_pk = PublicKey::<C::Engine>(Default::default()).to_bytes();
         let parse_signature = |bytes: &[u8]| -> Result<BlsSignature<C::Engine>, Error> {
-            let sig = BlsSignature::<C::Engine>::from_bytes(bytes)
-                .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
-            let canonical = sig.to_bytes();
-            if canonical.as_slice() != bytes {
-                return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
-            }
-            if canonical == identity_sig {
-                return Err(ParseError("BLS signature is identity".to_string()).into());
-            }
-            Ok(sig)
+            parse_canonical_bls_signature::<C::Engine>(bytes)
         };
+        let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
 
         // Parse and aggregate signatures
         let mut sig_it = signatures.iter();
@@ -501,16 +521,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
         let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
         let parse_signature = |bytes: &[u8]| -> Result<BlsSignature<C::Engine>, Error> {
-            let sig = BlsSignature::<C::Engine>::from_bytes(bytes)
-                .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
-            let canonical = sig.to_bytes();
-            if canonical.as_slice() != bytes {
-                return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
-            }
-            if canonical == identity_sig {
-                return Err(ParseError("BLS signature is identity".to_string()).into());
-            }
-            Ok(sig)
+            parse_canonical_bls_signature::<C::Engine>(bytes)
         };
         let mut sig_it = signatures.iter();
         let first_sig_bytes = sig_it.next().ok_or(Error::BadSignature)?;
@@ -540,16 +551,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         if public_keys.is_empty() {
             return Err(Error::BadSignature);
         }
-        let sig = BlsSignature::<C::Engine>::from_bytes(aggregated_signature)
-            .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
-        let canonical = sig.to_bytes();
-        if canonical.as_slice() != aggregated_signature {
-            return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
-        }
-        let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
-        if canonical == identity_sig {
-            return Err(ParseError("BLS signature is identity".to_string()).into());
-        }
+        let sig = parse_canonical_bls_signature::<C::Engine>(aggregated_signature)?;
         let identity_pk = PublicKey::<C::Engine>(Default::default()).to_bytes();
         // Aggregate public keys; enforce unique signers.
         let mut seen_pks = BTreeSet::new();
@@ -579,6 +581,11 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     }
 
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey<C::Engine>, ParseError> {
+        if bls_public_key_material_is_all_zero(payload) {
+            return Err(ParseError(
+                "BLS public key material must not be all zero".to_string(),
+            ));
+        }
         let key = PublicKey::from_bytes(payload).map_err(|err| ParseError(err.to_string()))?;
         let canonical = key.to_bytes();
         if canonical.as_slice() != payload {
@@ -618,19 +625,10 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
         ensure_distinct_messages(messages)?;
 
-        let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
         let parse_signature = |bytes: &[u8]| -> Result<BlsSignature<C::Engine>, Error> {
-            let sig = BlsSignature::<C::Engine>::from_bytes(bytes)
-                .map_err(|_| ParseError("Failed to parse signature.".to_owned()))?;
-            let canonical = sig.to_bytes();
-            if canonical.as_slice() != bytes {
-                return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
-            }
-            if canonical == identity_sig {
-                return Err(ParseError("BLS signature is identity".to_string()).into());
-            }
-            Ok(sig)
+            parse_canonical_bls_signature::<C::Engine>(bytes)
         };
+        let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
         let mut aggregated_group = <C::Engine as EngineBLS>::SignatureGroup::default();
         let mut decoded_messages = Vec::with_capacity(messages.len());
         let mut decoded_public_keys = Vec::with_capacity(messages.len());
@@ -779,6 +777,18 @@ mod tests {
         );
     }
 
+    fn assert_managed_secret_from_bytes_rejects_all_zero_material<C: BlsConfiguration>() {
+        let err = match ManagedSecretKey::<C>::from_bytes(&[0u8; 32]) {
+            Ok(_) => panic!("all-zero BLS managed secret material must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected all-zero BLS managed secret error: {err:?}"
+        );
+    }
+
     #[test]
     fn seeded_keygen_hkdf_extract_streaming_matches_legacy_ikm() {
         assert_seeded_keypair_matches_legacy_ikm::<NormalConfiguration>();
@@ -789,6 +799,12 @@ mod tests {
     fn managed_secret_clone_preserves_bytes() {
         assert_managed_secret_clone_preserves_bytes::<NormalConfiguration>();
         assert_managed_secret_clone_preserves_bytes::<SmallConfiguration>();
+    }
+
+    #[test]
+    fn managed_secret_from_bytes_rejects_all_zero_material() {
+        assert_managed_secret_from_bytes_rejects_all_zero_material::<NormalConfiguration>();
+        assert_managed_secret_from_bytes_rejects_all_zero_material::<SmallConfiguration>();
     }
 
     #[cfg(feature = "rand")]

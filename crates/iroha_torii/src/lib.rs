@@ -53080,6 +53080,31 @@ pub(crate) mod tests_runtime_handlers {
         (app, message_id)
     }
 
+    fn invalid_non_sora_sccp_message_bundle_value_for_test(
+        payload: iroha_sccp::SccpPayloadV1,
+    ) -> norito::json::Value {
+        assert_ne!(
+            iroha_sccp::sccp_message_source_domain(&payload),
+            iroha_sccp::SCCP_DOMAIN_SORA,
+            "fixture is for inbound non-SORA source messages"
+        );
+        let commitment = iroha_sccp::hub_commitment_from_sccp_payload(&payload);
+        let bundle = iroha_sccp::NexusSccpMessageProofV1 {
+            version: 1,
+            commitment_root: iroha_sccp::commitment_leaf_hash(&commitment),
+            commitment,
+            merkle_proof: iroha_sccp::SccpMerkleProofV1 { steps: Vec::new() },
+            payload,
+            finality_proof: b"invalid-source-chain-proof-envelope".to_vec(),
+        };
+        norito::json::to_value(&bundle).expect("invalid inbound SCCP bundle JSON")
+    }
+
+    fn eth_mainnet_to_sora_sccp_message_bundle_value_for_test(nonce: u64) -> norito::json::Value {
+        let bundle = iroha_sccp::test_fixtures::sample_eth_to_sora_transfer_bundle(nonce);
+        norito::json::to_value(&bundle).expect("valid inbound SCCP bundle JSON")
+    }
+
     fn install_evm_da_receipt_signer_for_test(app: &mut SharedAppState) {
         let app_mut = Arc::get_mut(app).expect("unique app state");
         app_mut.da_receipt_signer = checked_torii_test_keypair(
@@ -53120,6 +53145,7 @@ pub(crate) mod tests_runtime_handlers {
             taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
             sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
             tron_verifier_address: "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ".to_owned(),
+            ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", "11".repeat(32)),
             verifier_key_hash: format!("0x{}", "22".repeat(32)),
             proof_artifact_hash: None,
@@ -54208,34 +54234,10 @@ pub(crate) mod tests_runtime_handlers {
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: b"eth:sora:weth".to_vec(),
         });
-        let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let mut app = mk_app_state_for_tests();
         install_evm_da_receipt_signer_for_test(&mut app);
         enable_unready_sccp_transparent_proofs_for_test(&mut app);
-        let bundle_response = match routing::handle_v1_sccp_message_bundle(
-            app.state.as_ref(),
-            hex::encode(message_id),
-            None,
-        )
-        .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                assert!(
-                    query_conversion_message(&err)
-                        .is_some_and(|message| message.contains("source-chain proof envelope")),
-                    "unexpected error: {err:?}"
-                );
-                routing::clear_sccp_bundles_for_tests();
-                return;
-            }
-        };
-        let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
-            .await
-            .expect("bundle body");
-        let bundle_value = norito::json::from_str::<norito::json::Value>(
-            std::str::from_utf8(&bundle_bytes).expect("bundle utf8"),
-        )
-        .expect("bundle value");
+        let bundle_value = invalid_non_sora_sccp_message_bundle_value_for_test(payload);
 
         let authority = checked_torii_test_account_id(
             0x35,
@@ -54274,7 +54276,9 @@ pub(crate) mod tests_runtime_handlers {
             ),
         };
         assert!(query_conversion_message(&err).is_some_and(|message| {
-            message.contains("source-chain proof envelope") || message.contains("proof_bytes_hex")
+            message.contains("source-chain proof envelope")
+                || message.contains("proof_bytes_hex")
+                || message.contains("failed structural verification")
         }));
 
         routing::clear_sccp_bundles_for_tests();
@@ -54384,50 +54388,10 @@ pub(crate) mod tests_runtime_handlers {
             0x37,
             "derive Torii bridge-message disabled-settlement fixture authority",
         );
-        let route_name: Name = "eth:sora:weth".parse().expect("route name");
-        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            nonce: 10,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"weth#eth".to_vec(),
-            amount: 55,
-            sender_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-            sender: b"0x1111111111111111111111111111111111111111".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            recipient: authority.to_string().into_bytes(),
-            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"eth:sora:weth".to_vec(),
-        });
-        let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let route_name: Name = "eth:sora:asset".parse().expect("route name");
+        let mut app = mk_app_state_for_tests();
         install_evm_da_receipt_signer_for_test(&mut app);
-        let bundle_response = match routing::handle_v1_sccp_message_bundle(
-            app.state.as_ref(),
-            hex::encode(message_id),
-            None,
-        )
-        .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                assert!(
-                    query_conversion_message(&err)
-                        .is_some_and(|message| message.contains("source-chain proof envelope")),
-                    "unexpected error: {err:?}"
-                );
-                routing::clear_sccp_bundles_for_tests();
-                return;
-            }
-        };
-        let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
-            .await
-            .expect("bundle body");
-        let bundle_value = norito::json::from_str::<norito::json::Value>(
-            std::str::from_utf8(&bundle_bytes).expect("bundle utf8"),
-        )
-        .expect("bundle value");
+        let bundle_value = eth_mainnet_to_sora_sccp_message_bundle_value_for_test(10);
 
         let err = match routing::handle_post_bridge_message_submit(
             app.chain_id.clone(),
@@ -54468,9 +54432,12 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err,
             Ok(_) => panic!("disabled SCCP lane must reject settlement submit"),
         };
+        let Some(message) = query_conversion_message(&err) else {
+            panic!("unexpected non-conversion bridge submit error: {err}");
+        };
         assert!(
-            query_conversion_message(&err)
-                .is_some_and(|message| message.contains("transparent proof consumption"))
+            message.contains("transparent proof consumption"),
+            "unexpected error: {message}"
         );
 
         routing::clear_sccp_bundles_for_tests();
@@ -54485,50 +54452,9 @@ pub(crate) mod tests_runtime_handlers {
             0x38,
             "derive Torii bridge-message derived-route fixture authority",
         );
-        let route_name: Name = "eth:sora:weth".parse().expect("route name");
-        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
-            version: 1,
-            source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            nonce: 10,
-            asset_home_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"weth#eth".to_vec(),
-            amount: 55,
-            sender_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
-            sender: b"0x1111111111111111111111111111111111111111".to_vec(),
-            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            recipient: authority.to_string().into_bytes(),
-            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: route_name.as_ref().as_bytes().to_vec(),
-        });
-        let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let mut app = mk_app_state_for_tests();
         install_evm_da_receipt_signer_for_test(&mut app);
-        let bundle_response = match routing::handle_v1_sccp_message_bundle(
-            app.state.as_ref(),
-            hex::encode(message_id),
-            None,
-        )
-        .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                assert!(
-                    query_conversion_message(&err)
-                        .is_some_and(|message| message.contains("source-chain proof envelope")),
-                    "unexpected error: {err:?}"
-                );
-                routing::clear_sccp_bundles_for_tests();
-                return;
-            }
-        };
-        let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
-            .await
-            .expect("bundle body");
-        let bundle_value = norito::json::from_str::<norito::json::Value>(
-            std::str::from_utf8(&bundle_bytes).expect("bundle utf8"),
-        )
-        .expect("bundle value");
+        let bundle_value = eth_mainnet_to_sora_sccp_message_bundle_value_for_test(10);
 
         let err = match routing::handle_post_bridge_message_submit(
             app.chain_id.clone(),
@@ -54569,9 +54495,12 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err,
             Ok(_) => panic!("disabled SCCP lane must reject derived settlement submit"),
         };
+        let Some(message) = query_conversion_message(&err) else {
+            panic!("unexpected non-conversion bridge submit error: {err}");
+        };
         assert!(
-            query_conversion_message(&err)
-                .is_some_and(|message| message.contains("transparent proof consumption"))
+            message.contains("transparent proof consumption"),
+            "unexpected error: {message}"
         );
 
         routing::clear_sccp_bundles_for_tests();

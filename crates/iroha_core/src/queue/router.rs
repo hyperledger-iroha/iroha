@@ -30,7 +30,11 @@ use iroha_data_model::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode,
         },
-        zk::{AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, Shield, Unshield, ZkTransfer},
+        zk::{
+            AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, RegisterZkAceIdentityCommitment,
+            RevokeZkAceIdentityCommitment, RotateZkAceIdentityCommitment, Shield,
+            SubmitZkAceAuthorizedTransfer, Unshield, ZkTransfer,
+        },
     },
     musubi::{MusubiNamespace, MusubiPackageId},
     nexus::{
@@ -225,6 +229,16 @@ pub enum RoutingResolveError {
         /// Dataspace selected by the routing policy.
         dataspace_id: DataSpaceId,
     },
+    /// lane {lane_id} is not active for dataspace {dataspace_id} at the current block height
+    #[error(
+        "lane {lane_id} is not active for dataspace {dataspace_id} at the current block height"
+    )]
+    InactiveLane {
+        /// Lane selected by the routing policy.
+        lane_id: LaneId,
+        /// Dataspace selected by the routing policy.
+        dataspace_id: DataSpaceId,
+    },
     /// no lane is bound to dataspace {dataspace_id}
     #[error("no lane is bound to dataspace {dataspace_id}")]
     NoLaneForDataspace {
@@ -280,6 +294,7 @@ impl RoutingResolveError {
             Self::UnknownLane { .. } => "unknown_lane",
             Self::UnknownDataspace { .. } => "unknown_dataspace",
             Self::LaneDataspaceMismatch { .. } => "lane_dataspace_mismatch",
+            Self::InactiveLane { .. } => "inactive_lane",
             Self::NoLaneForDataspace { .. } => "no_lane_for_dataspace",
             Self::AutoscaleOwnedRuleLane { .. } => "autoscale_owned_rule_lane",
             Self::AutoscaleOwnedDefaultLane { .. } => "autoscale_owned_default_lane",
@@ -2283,6 +2298,18 @@ fn offline_note_asset_definition_target(any: &dyn std::any::Any) -> Option<&Asse
     }
     if let Some(register_pool) = any.downcast_ref::<RegisterAssetHiddenZkPool>() {
         return Some(&register_pool.storage_asset);
+    }
+    if let Some(register) = any.downcast_ref::<RegisterZkAceIdentityCommitment>() {
+        return Some(&register.asset);
+    }
+    if let Some(rotate) = any.downcast_ref::<RotateZkAceIdentityCommitment>() {
+        return Some(&rotate.asset);
+    }
+    if let Some(revoke) = any.downcast_ref::<RevokeZkAceIdentityCommitment>() {
+        return Some(&revoke.asset);
+    }
+    if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
+        return Some(&transfer.asset);
     }
     None
 }
@@ -6087,6 +6114,65 @@ mod tests {
     }
 
     #[test]
+    fn routable_lane_ids_for_nexus_at_height_rejects_autoscale_owned_default_anchor() {
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::new(1),
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![autoscale_elastic_lane_config(
+            LaneId::new(1),
+            DataSpaceId::UNIVERSAL,
+            1,
+        )]);
+        let mut nexus = nexus_with_routing(policy, lane_catalog, DataSpaceCatalog::default());
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = nonzero!(1_u32);
+        nexus.autoscale.max_lanes = nonzero!(4_u32);
+
+        assert!(
+            routable_lane_ids_for_nexus_at_height(&nexus, 1).is_empty(),
+            "an autoscale-owned default anchor must not make corrupted no-target routing reachable"
+        );
+    }
+
+    #[test]
+    fn routable_lane_ids_for_nexus_at_height_rejects_off_default_autoscale_owned_rule_lane() {
+        let rule_dataspace = DataSpaceId::new(9);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: Some(rule_dataspace),
+                matcher: LaneRoutingMatcher {
+                    account: Some("alice".to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+        let lane_catalog = lane_catalog_from_configs(vec![
+            default_lane_config(),
+            autoscale_elastic_lane_config(LaneId::new(1), rule_dataspace, 1),
+        ]);
+        let mut nexus = nexus_with_routing(
+            policy,
+            lane_catalog,
+            dataspace_catalog(&[(rule_dataspace, "rule-space")]),
+        );
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = nonzero!(1_u32);
+        nexus.autoscale.max_lanes = nonzero!(4_u32);
+
+        assert_eq!(
+            routable_lane_ids_for_nexus_at_height(&nexus, 1),
+            BTreeSet::from([LaneId::SINGLE]),
+            "off-default autoscale-owned explicit rule lanes must not inflate proposal lookahead reachability"
+        );
+    }
+
+    #[test]
     fn canonical_dataspace_route_ignores_autoscale_owned_lanes() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
@@ -8194,6 +8280,7 @@ mod tests {
     #[test]
     fn native_zk_asset_instruction_routes_to_asset_definition_dataspace_without_explicit_rule() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("builderland");
         let lane_id = LaneId::new(2);
         let dataspace_id = DataSpaceId::new(10);
         let asset_definition = AssetDefinitionId::new(
@@ -8212,24 +8299,128 @@ mod tests {
                 (lane_id, dataspace_id),
             ]),
         );
-        let tx = sample_transaction(
-            &alice_id,
-            alice_keypair.private_key(),
-            vec![InstructionBox::from(Shield::new(
-                asset_definition,
-                alice_id.clone(),
-                10,
-                [0x44; 32],
-                ConfidentialEncryptedPayload::new([0x11; 32], [0x22; 24], vec![0x33; 16]),
-            ))],
-        );
 
-        assert_eq!(
-            router
-                .try_route(&tx)
-                .expect("Shield should route from its asset definition dataspace"),
-            RoutingDecision::new(lane_id, dataspace_id)
-        );
+        let proof = || {
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+                VerifyingKeyId::new("halo2/ipa", "zk-route-test"),
+            )
+        };
+        let encrypted_payload =
+            || ConfidentialEncryptedPayload::new([0x11; 32], [0x22; 24], vec![0x33; 16]);
+        let cases: Vec<(&str, InstructionBox)> = vec![
+            (
+                "shield",
+                Shield::new(
+                    asset_definition.clone(),
+                    alice_id.clone(),
+                    10,
+                    [0x44; 32],
+                    encrypted_payload(),
+                )
+                .into(),
+            ),
+            (
+                "zk_transfer",
+                ZkTransfer::new(
+                    asset_definition.clone(),
+                    vec![[0x55; 32]],
+                    vec![[0x66; 32]],
+                    proof(),
+                    Some([0x77; 32]),
+                )
+                .into(),
+            ),
+            (
+                "unshield",
+                Unshield::new(
+                    asset_definition.clone(),
+                    alice_id.clone(),
+                    5,
+                    vec![[0x88; 32]],
+                    proof(),
+                    Some([0x99; 32]),
+                )
+                .into(),
+            ),
+            (
+                "register_asset_hidden_zk_pool",
+                RegisterAssetHiddenZkPool::new(
+                    "pool-a".to_owned(),
+                    asset_definition.clone(),
+                    [0xAA; 32],
+                    VerifyingKeyId::new("halo2/ipa", "asset-hidden-vk"),
+                )
+                .into(),
+            ),
+            (
+                "register_zk_ace_identity_commitment",
+                RegisterZkAceIdentityCommitment::new(
+                    asset_definition.clone(),
+                    [0x11; 32],
+                    [0x22; 32],
+                    vec![alice_id.clone()],
+                    "transfer".to_owned(),
+                    "zk-ace-route-test".to_owned(),
+                    VerifyingKeyId::new("stark/fri", "zk-ace-vk"),
+                )
+                .into(),
+            ),
+            (
+                "rotate_zk_ace_identity_commitment",
+                RotateZkAceIdentityCommitment::new(
+                    asset_definition.clone(),
+                    [0x11; 32],
+                    [0x12; 32],
+                    [0x22; 32],
+                    vec![alice_id.clone()],
+                    "transfer".to_owned(),
+                    "zk-ace-route-test".to_owned(),
+                    VerifyingKeyId::new("stark/fri", "zk-ace-vk"),
+                )
+                .into(),
+            ),
+            (
+                "revoke_zk_ace_identity_commitment",
+                RevokeZkAceIdentityCommitment::new(
+                    asset_definition.clone(),
+                    [0x11; 32],
+                    Some([0x33; 32]),
+                )
+                .into(),
+            ),
+            (
+                "submit_zk_ace_authorized_transfer",
+                SubmitZkAceAuthorizedTransfer::new(
+                    alice_id.clone(),
+                    bob_id,
+                    asset_definition,
+                    7,
+                    [0x11; 32],
+                    [0x33; 32],
+                    ChainId::from("chain"),
+                    "zk-ace-route-test".to_owned(),
+                    "transfer".to_owned(),
+                    [0x44; 32],
+                    [0x22; 32],
+                    proof(),
+                )
+                .into(),
+            ),
+        ];
+
+        for (label, instruction) in cases {
+            let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
+
+            assert_eq!(
+                router
+                    .try_route(&tx)
+                    .unwrap_or_else(|err| panic!("{label} should route: {err:?}")),
+                RoutingDecision::new(lane_id, dataspace_id),
+                "{label} should route from its asset definition dataspace"
+            );
+        }
     }
 
     #[test]

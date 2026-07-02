@@ -1078,7 +1078,8 @@ mod tests {
                 )
                 .expect("public key"),
                 signature: iroha_crypto::SignatureOf::from_signature(
-                    iroha_crypto::Signature::from_hex(hex_encode([0xAA; 64])).expect("signature"),
+                    iroha_crypto::Signature::try_from_bytes(&[0xAA; 64])
+                        .expect("ministry panel fixture signature is non-empty and nonzero"),
                 ),
             }],
         }

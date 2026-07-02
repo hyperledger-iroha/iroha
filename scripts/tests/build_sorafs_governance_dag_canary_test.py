@@ -75,7 +75,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     for claim in MODULE.TRUE_CLAIMS[kind]:
         args.extend(["--verified-claim", claim])
     if kind == "ingest_service":
-        args.extend(["--source-count", "3"])
+        args.extend(["--source-count", str(len(MODULE.REQUIRED_PAYLOAD_KINDS))])
         for payload_kind in MODULE.REQUIRED_PAYLOAD_KINDS:
             args.extend(["--payload-kind", payload_kind])
     elif kind == "publisher_service":
@@ -159,6 +159,22 @@ def test_response_file_can_build_dashboard_canary(tmp_path: Path) -> None:
     assert [route["name"] for route in payload["routes"]] == list(
         MODULE.REQUIRED_DASHBOARD_ROUTES
     )
+
+
+def test_ingest_source_count_must_match_payload_kinds_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("ingest_service", tmp_path)
+    args[args.index("--source-count") + 1] = str(
+        len(MODULE.REQUIRED_PAYLOAD_KINDS) + 1
+    )
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--source-count must match unique --payload-kind count" in captured.err
+    assert not canary_path(tmp_path, "ingest_service").exists()
 
 
 def test_missing_verified_claim_fails_closed(tmp_path: Path, capsys) -> None:

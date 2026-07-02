@@ -1894,7 +1894,7 @@ fn platform_no_follow_flag() -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::SigningKey;
+    use ed25519_dalek::{Signer as _, SigningKey};
     use tempfile::{NamedTempFile, TempDir, tempdir};
 
     use super::*;
@@ -1971,6 +1971,85 @@ mod tests {
         .expect_err("all-zero signature material must be rejected");
 
         assert!(err.contains("all zero"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn manifest_signatures_file_rejects_malformed_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let descriptor = chunker_registry::default_descriptor();
+        let profile = format!(
+            "{}.{}@{}",
+            descriptor.namespace, descriptor.name, descriptor.semver
+        );
+        let manifest_digest = Hash::from_bytes([0x33; 32]);
+        let chunk_digest_sha3 = [0x44; 32];
+        let signing_key = SigningKey::from_bytes(&[0xAB; 32]);
+        let signer_bytes = signing_key.verifying_key().to_bytes();
+        let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &signer_bytes)
+            .expect("test signer public key should parse");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut signature = signing_key.sign(manifest_digest.as_bytes()).to_bytes();
+            signature[..32].copy_from_slice(&replacement_r);
+
+            let mut entry = Map::new();
+            entry.insert("algorithm".to_owned(), Value::from("ed25519"));
+            entry.insert("signer".to_owned(), Value::from(to_hex(&signer_bytes)));
+            entry.insert("signature".to_owned(), Value::from(to_hex(&signature)));
+            entry.insert(
+                "signer_multihash".to_owned(),
+                Value::from(public_key.to_string()),
+            );
+
+            let mut root = Map::new();
+            root.insert("profile".to_owned(), Value::from(profile.clone()));
+            root.insert(
+                "profile_aliases".to_owned(),
+                Value::Array(vec![Value::from(profile.clone())]),
+            );
+            root.insert("manifest".to_owned(), Value::from("manifest.norito"));
+            root.insert(
+                "manifest_blake3".to_owned(),
+                Value::from(to_hex(manifest_digest.as_bytes())),
+            );
+            root.insert(
+                "chunk_digest_sha3_256".to_owned(),
+                Value::from(to_hex(&chunk_digest_sha3)),
+            );
+            root.insert(
+                "signatures".to_owned(),
+                Value::Array(vec![Value::Object(entry)]),
+            );
+
+            let file = NamedTempFile::new().expect("temp file");
+            let json = to_string_pretty(&Value::Object(root)).expect("signature json");
+            fs::write(file.path(), json).expect("write signature json");
+
+            let err = verify_manifest_signatures_file(
+                file.path(),
+                descriptor,
+                &manifest_digest,
+                chunk_digest_sha3,
+                Some("manifest.norito"),
+            )
+            .expect_err("malformed signature R must fail verification");
+
+            assert!(
+                err.contains("failed to verify council signature"),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

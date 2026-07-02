@@ -63,6 +63,15 @@ artifacts surface their execution-summary digests as
 `valid_executor_summary_digests`, so the final aggregate production gate can
 bind deployed transport and executor proof facts back to recognized artifact
 fingerprints instead of trusting summary-only metadata.
+Commit/reveal executor artifacts also bind `artifact_count` and
+`passed_artifact_count` to the unique canonical `artifacts[].name` inventory and
+reject duplicate artifact entries before promotion can report ready.
+Governance DAG artifacts also bind `producer_count` to the unique canonical
+`producers[].name` inventory and reject duplicate producer entries before
+promotion can report ready. End-to-end workflow artifacts also bind
+`step_count` and `passed_step_count` to the unique canonical `steps[].name`
+inventory and reject duplicate workflow-step entries before promotion can
+report ready.
 
 Implemented locally:
 
@@ -831,8 +840,11 @@ Completed local foundations:
   workflow, juror notification transport, commit/reveal executor, moderation
   transparency source-entry, Governance DAG, and end-to-end workflow evidence;
   cross-artifact runner/workflow binding failures are reflected on the
-  offending artifacts in the emitted summary. The checker exports its required
-  top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`.
+  offending artifacts in the emitted summary. Operator workflow artifacts also
+  bind `route_count` and `passed_route_count` to the unique canonical
+  `routes[].name` inventory and reject duplicate route entries before promotion
+  can report ready. The checker exports its required top-level payload fields
+  as `EVIDENCE_REQUIRED_FIELDS`.
 - Provide `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` as the
   collection planner/runner that composes existing runner, committee, operator,
   notification, executor, and transparency canaries before invoking the gate;

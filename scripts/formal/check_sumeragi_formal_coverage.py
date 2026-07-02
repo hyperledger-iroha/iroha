@@ -17,6 +17,7 @@ APALACHE_RUNNER = ROOT_DIR / "scripts" / "formal" / "sumeragi_apalache.sh"
 TLC_RUNNER = ROOT_DIR / "scripts" / "formal" / "sumeragi_tlc.sh"
 SUMERAGI_DEEP_CFG = SPEC_DIR / "Sumeragi_deep.cfg"
 SUMERAGI_TLC_FAST_CFG = SPEC_DIR / "Sumeragi_tlc_fast.cfg"
+SUMERAGI_ROOT_PROPERTY = "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope"
 FAST_CI = ROOT_DIR / "ci" / "check_sumeragi_formal.sh"
 EXPECTED_FAILURE_CI = ROOT_DIR / "ci" / "check_sumeragi_formal_expected_failures.sh"
 PR_WORKFLOW = ROOT_DIR / ".github" / "workflows" / "pr.yml"
@@ -152,23 +153,30 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Transitive exactness predicate chains must not hide undefined helpers",
     "Quantified exactness helper formulas must not hide undefined helpers",
     "Undefined helper scans preserve quantified binding scope",
+    "Undefined helper scans preserve unbounded quantified binding scope",
+    "Undefined helper scans reject relation-bearing quantified binding prefixes",
     "Undefined helper scans preserve tuple-pattern quantifier domains",
     "Undefined helper scans preserve LET binding scope",
     "Undefined helper scans preserve parameterized LET operator scope",
     "Undefined helper scans preserve CHOOSE binding scope",
     "Undefined helper scans preserve LAMBDA binding scope",
+    "Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes",
     "Undefined helper scans preserve standard TLA set/operator identifiers",
     "Undefined helper scans preserve ENABLED/UNCHANGED operand scope",
     "Undefined helper scans preserve CASE branch scope",
     "Undefined helper scans preserve relation operand scope",
     "Undefined helper scans preserve operator-call argument scope",
     "Undefined helper scans preserve arithmetic/set infix operand scope",
+    "Undefined helper scans preserve sequence/function infix operand scope",
     "Undefined helper scans preserve explicit set literal element scope",
     "Undefined helper scans preserve unary set-operator operand scope",
     "Undefined helper scans preserve set-comprehension binding scope",
     "Undefined helper scans preserve set-comprehension outer enclosure scope",
     "Undefined helper scans preserve function-constructor binding scope",
     "Undefined helper scans preserve function-set domain and range scope",
+    "Function-set scans preserve CASE domain branch arrows",
+    "Function-set scans preserve record maplet CASE values",
+    "Function-set scans preserve record set/update CASE values",
     "Undefined helper scans preserve record field label scope",
     "Undefined helper scans preserve record set field label scope",
     "Undefined helper scans preserve record update field label scope",
@@ -181,15 +189,19 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Quantified helper restatement checks reject identity-literal gates",
     "Quantified helper restatement checks propagate known truth values",
     "Quantified formula prefix scans preserve escaped string literal colons",
+    "Quantified formula prefix scans preserve tuple literal maplet colons",
+    "Quantified helper formula scans require scoped binding prefixes",
     "Quantified bound identifier scans preserve escaped string literal domains",
     "Quantified helper bound-domain checks preserve escaped string literal domains",
     "Quantified helper bound-domain checks include comma-shared bindings",
     "Quantified helper bound-domain checks skip tuple-pattern component domains",
     "Quantified helper singleton-domain checks preserve tuple literal elements",
+    "Quantified helper vacuity checks include unbounded static bodies",
     "Line comment scans preserve escaped string literal comment markers",
     "Static outer wrapper scans preserve escaped string literal parentheses",
     "Semantic identifier scans ignore escaped string literal contents",
     "Top-level relation and boolean scans preserve tuple literal operators",
+    "Top-level relation scans reject whole-body control/action wrappers",
     "Top-level boolean scans preserve escaped string literal operators",
     "Top-level boolean/equality detector helpers preserve tuple literal operators",
     "Top-level keyword scans preserve tuple literal keywords",
@@ -197,7 +209,9 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Top-level keyword and CASE branch scans preserve escaped string literal delimiters",
     "Top-level CASE branch scans distinguish unary temporal boxes from arm separators",
     "Quantified exactness helper formulas must use their bound identifiers",
+    "Quantified exactness helper formulas must not duplicate bound identifiers",
     "Quantified unused-bound checks include later binding groups",
+    "Quantified unused-bound checks include unbounded bindings",
     "Quantified bound identifier scans include later tuple-pattern binding groups",
     "Quantified exactness helper formulas must not select predicates with control flow",
     "Quantified exactness helper formulas must not appear below top-level negation operands",
@@ -234,6 +248,10 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Literal-gated quantified-predicate exactness boolean-composition helper operands are checked through identity literals",
     "Exactness boolean-composition checks unwrap one-line `LET` helper aliases",
     "Unary-temporal exactness helper wrappers must not hide quantified formulas",
+    "Static action/set/choice exactness helper wrappers must not hide quantified formulas",
+    "Static action/set/choice exactness helper wrappers traverse structured operands",
+    "Structured exactness helper operands must not hide quantified formulas",
+    "Structured exactness helper operands must not hide control-flow predicate selection",
     "Unary-temporal quantified, parameterized-call, and control-flow checks split top-level boolean operands before peeling temporal wrappers",
     "Unary-temporal quantified checks unwrap one-line `LET` helper aliases",
     "Unary-temporal parameterized-call checks unwrap one-line `LET` helper aliases",
@@ -252,6 +270,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Compound boolean-only temporal helper wrappers count as literal helpers",
     "Compound exactness helper traversal includes disjunction, implication, equivalence, and negation operands",
     "Helper reference traversal unwraps one-line `LET` helper aliases",
+    "Exactness vacuous-helper checks inspect static and structured operands",
     "LET helper alias unwrapping preserves static unary result wrappers",
     "LET binding scans preserve tuple literal definition bodies",
     "LET binding scans preserve escaped string literal definition bodies",
@@ -274,23 +293,30 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Transitive allowlisted temporal helper chains must not hide undefined helpers",
     "Quantified temporal helper formulas must not hide undefined helpers",
     "Undefined helper scans preserve quantified binding scope",
+    "Undefined helper scans preserve unbounded quantified binding scope",
+    "Undefined helper scans reject relation-bearing quantified binding prefixes",
     "Undefined helper scans preserve tuple-pattern quantifier domains",
     "Undefined helper scans preserve LET binding scope",
     "Undefined helper scans preserve parameterized LET operator scope",
     "Undefined helper scans preserve CHOOSE binding scope",
     "Undefined helper scans preserve LAMBDA binding scope",
+    "Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes",
     "Undefined helper scans preserve standard TLA set/operator identifiers",
     "Undefined helper scans preserve ENABLED/UNCHANGED operand scope",
     "Undefined helper scans preserve CASE branch scope",
     "Undefined helper scans preserve relation operand scope",
     "Undefined helper scans preserve operator-call argument scope",
     "Undefined helper scans preserve arithmetic/set infix operand scope",
+    "Undefined helper scans preserve sequence/function infix operand scope",
     "Undefined helper scans preserve explicit set literal element scope",
     "Undefined helper scans preserve unary set-operator operand scope",
     "Undefined helper scans preserve set-comprehension binding scope",
     "Undefined helper scans preserve set-comprehension outer enclosure scope",
     "Undefined helper scans preserve function-constructor binding scope",
     "Undefined helper scans preserve function-set domain and range scope",
+    "Function-set scans preserve CASE domain branch arrows",
+    "Function-set scans preserve record maplet CASE values",
+    "Function-set scans preserve record set/update CASE values",
     "Undefined helper scans preserve record field label scope",
     "Undefined helper scans preserve record set field label scope",
     "Undefined helper scans preserve record update field label scope",
@@ -303,21 +329,27 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Quantified helper restatement checks reject identity-literal gates",
     "Quantified helper restatement checks propagate known truth values",
     "Quantified formula prefix scans preserve escaped string literal colons",
+    "Quantified formula prefix scans preserve tuple literal maplet colons",
+    "Quantified helper formula scans require scoped binding prefixes",
     "Quantified bound identifier scans preserve escaped string literal domains",
     "Quantified helper bound-domain checks preserve escaped string literal domains",
     "Quantified helper bound-domain checks include comma-shared bindings",
     "Quantified helper bound-domain checks skip tuple-pattern component domains",
     "Quantified helper singleton-domain checks preserve tuple literal elements",
+    "Quantified helper vacuity checks include unbounded static bodies",
     "Line comment scans preserve escaped string literal comment markers",
     "Static outer wrapper scans preserve escaped string literal parentheses",
     "Semantic identifier scans ignore escaped string literal contents",
     "Top-level relation and boolean scans preserve tuple literal operators",
+    "Top-level relation scans reject whole-body control/action wrappers",
     "Top-level boolean/equality detector helpers preserve tuple literal operators",
     "Top-level keyword scans preserve tuple literal keywords",
     "Top-level CASE branch scans preserve tuple literal arms and conditions",
     "Top-level CASE branch scans distinguish unary temporal boxes from arm separators",
     "Quantified temporal helper formulas must use their bound identifiers",
+    "Quantified temporal helper formulas must not duplicate bound identifiers",
     "Quantified unused-bound checks include later binding groups",
+    "Quantified unused-bound checks include unbounded bindings",
     "Quantified bound identifier scans include later tuple-pattern binding groups",
     "Quantified temporal helper formulas must not select predicates with control flow",
     "Quantified temporal helper formulas must not appear below top-level negation operands",
@@ -339,6 +371,10 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Transitive allowlisted temporal helper chains must not hide whole-body control-flow predicate-selection helpers",
     "Transitive allowlisted temporal helper chains must not hide nested control-flow predicate-selection helpers",
     "Unary-temporal temporal helper wrappers must not hide control-flow predicate selection",
+    "Static action/set/choice temporal helper wrappers must not hide quantified formulas",
+    "Static action/set/choice temporal helper wrappers traverse structured operands",
+    "Structured temporal helper operands must not hide quantified formulas",
+    "Structured temporal helper operands must not hide control-flow predicate selection",
     "Unary-temporal temporal LET-alias helper wrappers must name concrete temporal predicates",
     "Transitive allowlisted temporal helper chains must not hide whole-body temporal-helper boolean-composition helpers",
     "Temporal-helper boolean-composition checks traverse boolean operands",
@@ -354,8 +390,12 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Compound temporal helper traversal includes implication operands",
     "Compound temporal helper traversal includes equivalence operands",
     "Compound temporal helper traversal includes negation operands",
+    "Temporal vacuous-helper checks inspect static and structured operands",
     "Exactness and correctness-envelope conjunct references must resolve to zero-arity",
     "Transitive exactness predicate chains must also resolve through zero-arity",
+    "Every top-level Sumeragi property checked by the deep/TLC-fast configs must be reachable",
+    "from `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope` through zero-arity",
+    "operator references",
 )
 # Historical escape hatch for fast envelopes without direct *Exactness coverage.
 # Keep empty; new entries should be justified by an explicit formal debt note.
@@ -483,16 +523,24 @@ TLA_QUANTIFIED_BODY_PREDICATE_SELECTION_RE = re.compile(
 TLA_QUANTIFIER_IDENTIFIER_TOKENS = {"A", "E"}
 TLA_UNARY_SET_OPERATOR_IDENTIFIERS = {"DOMAIN", "SUBSET", "UNION"}
 TLA_STATIC_INFIX_OPERATORS = (
+    "\\setminus",
+    "\\intersect",
+    "\\union",
+    "\\cdot",
     "\\div",
     "\\cup",
     "\\cap",
     "\\X",
+    "\\o",
+    "@@",
+    ":>",
     "..",
     "\\",
     "+",
     "-",
     "*",
     "%",
+    "^",
 )
 TLA_STANDARD_OPERATOR_IDENTIFIERS = {
     "Any",
@@ -717,6 +765,7 @@ CFG_ALLOWED_DIRECTIVE_PREFIXES = tuple(
 CFG_NON_PROOF_OPERATOR_REFERENCES = {"vars"}
 TLC_SPECIFIC_MUTATION_CFG_PREFIXES = ("commit-roots-bug-",)
 FORMAL_FILE_SUFFIXES = {".cfg", ".tla"}
+TLA_MODULE_VALIDATION_MODE_MARKER = "__SUMERAGI_FORMAL_MODE__"
 
 
 @dataclass(frozen=True)
@@ -743,6 +792,24 @@ class TlaLetBinding:
     name: str
     params: frozenset[str]
     operand: str
+
+
+_RUNNER_CASE_WILDCARD_LOOKUPS: dict[
+    int, tuple[dict[str, RunnerCase], dict[str, RunnerCase]]
+] = {}
+_EXACTNESS_PARAMETERIZED_CALL_BOOLEAN_KIND_DIRECT_CACHE: dict[
+    tuple[str, int, int], str | None
+] = {}
+_EXACTNESS_QUANTIFIED_BOOLEAN_KIND_DIRECT_CACHE: dict[
+    tuple[str, int, int], str | None
+] = {}
+_EXACTNESS_DEFINITION_SHAPE_ERROR_TEMPLATES: dict[
+    tuple[Path, str, int], tuple[str, ...]
+] = {}
+EXACTNESS_SHAPE_TEMPLATE_CFG = Path("__SUMERAGI_FORMAL_CFG__")
+EXACTNESS_SHAPE_TEMPLATE_LINE = -1
+EXACTNESS_SHAPE_TEMPLATE_RUNNER = "__SUMERAGI_FORMAL_RUNNER__"
+EXACTNESS_SHAPE_TEMPLATE_REFERENCE = "__SUMERAGI_FORMAL_REFERENCE__"
 
 
 @cache
@@ -1139,14 +1206,29 @@ def matching_case(mode: str, cases: dict[str, RunnerCase]) -> RunnerCase | None:
     if exact is not None:
         return exact
 
-    wildcards = [
-        case
-        for case in cases.values()
-        if case.is_wildcard and mode.startswith(case.wildcard_prefix)
-    ]
-    if not wildcards:
-        return None
-    return max(wildcards, key=lambda case: len(case.wildcard_prefix))
+    wildcard_by_prefix = runner_case_wildcard_lookup(cases)
+    for length in range(len(mode), -1, -1):
+        case = wildcard_by_prefix.get(mode[:length])
+        if case is not None:
+            return case
+    return None
+
+
+def runner_case_wildcard_lookup(
+    cases: dict[str, RunnerCase],
+) -> dict[str, RunnerCase]:
+    """Return wildcard runner cases keyed by their mode prefix."""
+
+    cache_key = id(cases)
+    cached = _RUNNER_CASE_WILDCARD_LOOKUPS.get(cache_key)
+    if cached is not None and cached[0] is cases:
+        return cached[1]
+
+    wildcard_by_prefix = {
+        case.wildcard_prefix: case for case in cases.values() if case.is_wildcard
+    }
+    _RUNNER_CASE_WILDCARD_LOOKUPS[cache_key] = (cases, wildcard_by_prefix)
+    return wildcard_by_prefix
 
 
 def resolve_spec_path(mode: str, case: RunnerCase, value: str) -> str:
@@ -3375,6 +3457,25 @@ def tla_variable_surface_errors(mode: str, path: Path) -> list[str]:
 
 
 def tla_module_validation_errors(mode: str, path: Path) -> list[str]:
+    marker_prefix = f"{TLA_MODULE_VALIDATION_MODE_MARKER}:"
+    mode_prefix = f"{mode}:"
+    return [
+        error.replace(marker_prefix, mode_prefix, 1)
+        for error in tla_module_validation_error_templates(path)
+    ]
+
+
+@cache
+def tla_module_validation_error_templates(path: Path) -> tuple[str, ...]:
+    return tuple(
+        tla_module_validation_errors_uncached(
+            TLA_MODULE_VALIDATION_MODE_MARKER,
+            path,
+        )
+    )
+
+
+def tla_module_validation_errors_uncached(mode: str, path: Path) -> list[str]:
     errors: list[str] = []
     module_files = list(tla_reachable_module_files(path))
     errors.extend(tla_module_header_errors(mode, module_files))
@@ -3898,25 +3999,42 @@ def tla_free_static_identifiers(
     choose_split = tla_choose_prefix_and_body(normalized)
     if choose_split is not None:
         prefix, body = choose_split
-        identifiers: set[str] = set()
-        for domain in tla_choose_bound_domains(prefix):
-            identifiers.update(tla_free_static_identifiers(domain, bound))
         local_bound = tla_choose_binding_identifiers(prefix)
-        identifiers.update(
-            tla_free_static_identifiers(body, bound | frozenset(local_bound))
-        )
+        identifiers: set[str] = set()
+        if local_bound is not None:
+            for domain in tla_choose_bound_domains(prefix):
+                identifiers.update(tla_free_static_identifiers(domain, bound))
+            identifiers.update(
+                tla_free_static_identifiers(body, bound | frozenset(local_bound))
+            )
+            return identifiers
+        prefix_expression = re.sub(
+            r"^CHOOSE\s+", "", prefix.strip(), count=1
+        ).strip()
+        for binding in tla_top_level_argument_parts(prefix_expression):
+            identifiers.update(tla_free_static_identifiers(binding, bound))
+        identifiers.update(tla_free_static_identifiers(body, bound))
         return identifiers
 
     split = quantified_formula_prefix_and_body(normalized)
     if split is not None:
-        prefix, body = split
+        quantifier_scope = tla_quantifier_scope(normalized)
         identifiers: set[str] = set()
-        for domain in quantified_formula_domain_expressions(normalized):
-            identifiers.update(tla_free_static_identifiers(domain, bound))
-        local_bound = tla_quantifier_binding_identifiers(prefix)
-        identifiers.update(
-            tla_free_static_identifiers(body, bound | frozenset(local_bound))
-        )
+        if quantifier_scope is not None:
+            domains, body, local_bound = quantifier_scope
+            for domain in domains:
+                identifiers.update(tla_free_static_identifiers(domain, bound))
+            identifiers.update(
+                tla_free_static_identifiers(body, bound | frozenset(local_bound))
+            )
+            return identifiers
+        prefix, body = split
+        prefix_expression = re.sub(
+            r"^\\[AE]\s+", "", prefix.strip(), count=1
+        ).strip()
+        for binding in tla_top_level_argument_parts(prefix_expression):
+            identifiers.update(tla_free_static_identifiers(binding, bound))
+        identifiers.update(tla_free_static_identifiers(body, bound))
         return identifiers
 
     if re.match(r"^LET\b", normalized):
@@ -4145,22 +4263,51 @@ def tla_quantifier_binding_identifiers(prefix: str) -> set[str]:
         prefix.strip(),
         count=1,
     ).strip()
+    if not text:
+        return set()
+
+    _, bound = tla_binding_domains_from_prefix(text)
+    if bound:
+        return bound
+    if tla_binding_prefix_has_relation(text):
+        return set()
+
     bound: set[str] = set()
-    pending_names: list[str] = []
     for binding in tla_top_level_argument_parts(text):
-        match = re.match(r"^(.+?)\s+\\in\s+(.+)$", binding)
-        if match is None:
-            pending_names.append(binding)
-            continue
-        names, _ = match.groups()
-        for name_part in [*pending_names, names]:
-            for identifier in TLA_IDENTIFIER_SCAN_RE.findall(
-                tla_without_string_literals(name_part)
-            ):
-                if is_tla_user_identifier(identifier):
-                    bound.add(identifier)
-        pending_names = []
+        bound.update(tla_binding_identifiers_from_names(binding))
     return bound
+
+
+def tla_quantifier_scope(
+    expression: str,
+) -> tuple[list[str], str, set[str]] | None:
+    """Return domains, body, and local binders for a whole quantified formula."""
+
+    split = quantified_formula_prefix_and_body(expression)
+    if split is None:
+        return None
+    prefix, body = split
+    text = re.sub(r"^\\[AE]\s+", "", prefix.strip(), count=1).strip()
+    if not text:
+        return None
+
+    domains, bound = tla_binding_domains_from_prefix(text)
+    if domains and bound:
+        return domains, body, bound
+    if tla_binding_prefix_has_relation(text):
+        return None
+
+    local_bound: set[str] = set()
+    for binding in tla_top_level_argument_parts(text):
+        if not binding:
+            return None
+        binding_bound = tla_binding_identifiers_from_names(binding)
+        if not binding_bound:
+            return None
+        local_bound.update(binding_bound)
+    if not local_bound:
+        return None
+    return [], body, local_bound
 
 
 def tla_choose_prefix_and_body(expression: str) -> tuple[str, str] | None:
@@ -4214,22 +4361,29 @@ def tla_choose_prefix_and_body(expression: str) -> tuple[str, str] | None:
     return None
 
 
-def tla_choose_binding_identifiers(prefix: str) -> set[str]:
+def tla_choose_binding_identifiers(prefix: str) -> set[str] | None:
     """Return identifiers bound by a simple CHOOSE prefix."""
 
     text = re.sub(r"^CHOOSE\s+", "", prefix.strip(), count=1).strip()
     if not text:
-        return set()
+        return None
     bound: set[str] = set()
     for binding in tla_top_level_argument_parts(text):
         membership = tla_top_level_membership_parts(binding)
-        names = membership[0] if membership is not None else binding
+        if membership is not None:
+            if membership[1] != "\\in":
+                return None
+            names = membership[0]
+        elif tla_top_level_relation_parts(binding) is not None:
+            return None
+        else:
+            names = binding
         for identifier in TLA_IDENTIFIER_SCAN_RE.findall(
             tla_without_string_literals(names)
         ):
             if is_tla_user_identifier(identifier):
                 bound.add(identifier)
-    return bound
+    return bound or None
 
 
 def tla_choose_bound_domains(prefix: str) -> list[str]:
@@ -4262,7 +4416,7 @@ def tla_lambda_scope(expression: str) -> tuple[list[str], str, set[str]] | None:
     if domains and bound:
         return domains, strip_static_outer_parentheses(body), bound
 
-    if "\\in" in prefix or "\\notin" in prefix:
+    if tla_binding_prefix_has_relation(prefix):
         return None
 
     local_bound: set[str] = set()
@@ -4276,6 +4430,15 @@ def tla_lambda_scope(expression: str) -> tuple[list[str], str, set[str]] | None:
     if not local_bound:
         return None
     return [], strip_static_outer_parentheses(body), local_bound
+
+
+def tla_binding_prefix_has_relation(prefix: str) -> bool:
+    """Return whether a would-be plain binding prefix contains a relation."""
+
+    return any(
+        tla_top_level_relation_parts(part) is not None
+        for part in tla_top_level_argument_parts(prefix)
+    )
 
 
 def tla_top_level_symbol_index(text: str, symbol: str, start: int = 0) -> int | None:
@@ -4325,15 +4488,81 @@ def tla_top_level_symbol_index(text: str, symbol: str, start: int = 0) -> int | 
 def tla_top_level_function_set_arrow_index(text: str) -> int | None:
     """Return a top-level function-set arrow, excluding record/function constructors."""
 
+    case_branch_arrows = tla_top_level_case_branch_arrow_indices(text)
     start = 0
     while True:
         index = tla_top_level_symbol_index(text, "->", start=start)
         if index is None:
             return None
         previous = text[index - 1] if index > 0 else ""
-        if previous != "|":
+        if previous != "|" and index not in case_branch_arrows:
             return index
         start = index + len("->")
+
+
+def tla_top_level_case_branch_arrow_indices(text: str) -> set[int]:
+    """Return absolute indexes of top-level CASE arm arrows."""
+
+    if not re.match(r"^CASE\b", text):
+        return set()
+
+    arrows: set[int] = set()
+    current: list[str] = []
+    depth = 0
+    in_string = False
+    escaped = False
+    arm_arrow_seen = False
+    index = len("CASE")
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            current.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            current.append(char)
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            current.append("<<")
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            current.append(">>")
+            index += 2
+            continue
+        if depth == 0 and text.startswith("[]", index) and (
+            tla_case_arm_has_result("".join(current))
+        ):
+            current = []
+            arm_arrow_seen = False
+            index += 2
+            continue
+        if depth == 0 and text.startswith("->", index):
+            previous = text[index - 1] if index > 0 else ""
+            if previous != "|" and not arm_arrow_seen:
+                arrows.add(index)
+                arm_arrow_seen = True
+            current.append("->")
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}" and depth > 0:
+            depth -= 1
+        current.append(char)
+        index += 1
+
+    return arrows
 
 
 def tla_delimited_expression_end(
@@ -4480,15 +4709,67 @@ def tla_outer_tuple_brackets_enclose_expression(text: str) -> bool:
 
 
 def tla_binding_identifiers_from_names(names: str) -> set[str]:
-    """Return identifiers bound by a static binding-name expression."""
+    """Return identifiers bound by a static binding-name pattern."""
 
-    return {
-        identifier
-        for identifier in TLA_IDENTIFIER_SCAN_RE.findall(
-            tla_without_string_literals(names)
-        )
-        if is_tla_user_identifier(identifier)
-    }
+    return set(tla_binding_identifier_sequence_from_names(names))
+
+
+def tla_binding_identifier_sequence_from_names(names: str) -> list[str]:
+    """Return bound identifiers from a static binding-name pattern in order."""
+
+    text = strip_static_outer_parentheses(" ".join(names.split()))
+    if not text:
+        return []
+    if TLA_IDENTIFIER_RE.fullmatch(text) and is_tla_user_identifier(text):
+        return [text]
+    if not tla_outer_tuple_brackets_enclose_expression(text):
+        return []
+
+    identifiers: list[str] = []
+    for part in tla_top_level_argument_parts(text[2:-2]):
+        nested = tla_binding_identifier_sequence_from_names(part)
+        if not nested:
+            return []
+        identifiers.extend(nested)
+    return identifiers
+
+
+def tla_binding_identifier_sequence_from_prefix(prefix: str) -> list[str]:
+    """Return bound identifiers from a whole quantifier binding prefix."""
+
+    text = prefix.strip()
+    if not text:
+        return []
+
+    identifiers: list[str] = []
+    pending_names: list[str] = []
+    saw_domain = False
+    for binding in tla_top_level_argument_parts(text):
+        membership = tla_top_level_membership_parts(binding)
+        if membership is None:
+            pending_names.append(binding)
+            continue
+        if membership[1] != "\\in":
+            return []
+        saw_domain = True
+        names, _, _ = membership
+        for name_part in [*pending_names, names]:
+            name_identifiers = tla_binding_identifier_sequence_from_names(name_part)
+            if not name_identifiers:
+                return []
+            identifiers.extend(name_identifiers)
+        pending_names = []
+
+    if pending_names and saw_domain:
+        return []
+    if not saw_domain and tla_binding_prefix_has_relation(text):
+        return []
+    for name_part in pending_names:
+        name_identifiers = tla_binding_identifier_sequence_from_names(name_part)
+        if not name_identifiers:
+            return []
+        identifiers.extend(name_identifiers)
+    return identifiers
 
 
 def tla_binding_domains_from_prefix(prefix: str) -> tuple[list[str], set[str]]:
@@ -4507,7 +4788,10 @@ def tla_binding_domains_from_prefix(prefix: str) -> tuple[list[str], set[str]]:
         names, _, domain = membership
         local_bound: set[str] = set()
         for name_part in [*pending_names, names]:
-            local_bound.update(tla_binding_identifiers_from_names(name_part))
+            name_bound = tla_binding_identifiers_from_names(name_part)
+            if not name_bound:
+                return [], set()
+            local_bound.update(name_bound)
         if not local_bound:
             return [], set()
         bound.update(local_bound)
@@ -4581,8 +4865,16 @@ def tla_function_set_scope(expression: str) -> tuple[str, str] | None:
     inner = text[1:-1].strip()
     if not inner:
         return None
+    if tla_top_level_symbol_index(inner, "|->") is not None:
+        return None
     arrow_index = tla_top_level_function_set_arrow_index(inner)
     if arrow_index is None:
+        return None
+    colon_index = tla_top_level_symbol_index(inner, ":")
+    if colon_index is not None and colon_index < arrow_index:
+        return None
+    except_index = tla_top_level_keyword_index(inner, "EXCEPT")
+    if except_index is not None and except_index < arrow_index:
         return None
     domain = inner[:arrow_index].strip()
     range_expression = inner[arrow_index + len("->") :].strip()
@@ -5217,6 +5509,7 @@ def tla_identity_literal_gated_operand(
     return None
 
 
+@cache
 def tla_zero_arity_conjunct_references(expression: str) -> list[str]:
     """Return zero-arity operator references used as direct conjunction parts."""
 
@@ -5230,6 +5523,7 @@ def tla_zero_arity_conjunct_references(expression: str) -> list[str]:
     return references
 
 
+@cache
 def tla_zero_arity_boolean_references(expression: str) -> list[str]:
     """Return zero-arity references used as direct boolean operands."""
 
@@ -5269,6 +5563,7 @@ def tla_zero_arity_boolean_references(expression: str) -> list[str]:
     return sorted(references)
 
 
+@cache
 def exactness_helper_references(expression: str) -> list[str]:
     """Return helper references reachable from exactness predicate bodies."""
 
@@ -5282,6 +5577,193 @@ def exactness_helper_references(expression: str) -> list[str]:
             continue
         seen.add(reference)
         references.append(reference)
+    return references
+
+
+@cache
+def hidden_static_structured_helper_references(expression: str) -> list[str]:
+    """Return helper references hidden below static wrappers or data operands."""
+
+    references: list[str] = []
+    seen_refs: set[str] = set()
+    seen_bodies: set[tuple[str, bool, frozenset[str]]] = set()
+
+    def record(reference: str, hidden: bool, bound: frozenset[str]) -> None:
+        if (
+            hidden
+            and reference not in bound
+            and reference not in seen_refs
+            and is_tla_user_identifier(reference)
+        ):
+            seen_refs.add(reference)
+            references.append(reference)
+
+    def collect(
+        current: str,
+        hidden: bool = False,
+        bound: frozenset[str] = frozenset(),
+    ) -> None:
+        normalized = strip_static_outer_parentheses(" ".join(current.split()))
+        key = (normalized, hidden, bound)
+        if not normalized or key in seen_bodies:
+            return
+        seen_bodies.add(key)
+
+        if TLA_IDENTIFIER_RE.fullmatch(normalized):
+            record(normalized, hidden, bound)
+            return
+
+        let_operand = tla_static_let_alias_operand(normalized)
+        if let_operand is not None:
+            collect(let_operand, hidden, bound)
+            return
+
+        temporal_operand = tla_unary_temporal_operand(normalized)
+        if temporal_operand is not None:
+            collect(temporal_operand, hidden, bound)
+            return
+
+        negated_operand = tla_static_negation_operand(normalized)
+        if negated_operand is not None:
+            collect(negated_operand, hidden, bound)
+            return
+
+        choose_split = tla_choose_prefix_and_body(normalized)
+        if choose_split is not None:
+            prefix, choose_body = choose_split
+            local_bound = tla_choose_binding_identifiers(prefix)
+            if local_bound is not None:
+                for domain in tla_choose_bound_domains(prefix):
+                    collect(domain, True, bound)
+                collect(choose_body, True, bound | frozenset(local_bound))
+                return
+            prefix_expression = re.sub(
+                r"^CHOOSE\s+", "", prefix.strip(), count=1
+            ).strip()
+            for binding in tla_top_level_argument_parts(prefix_expression):
+                collect(binding, True, bound)
+            collect(choose_body, True, bound)
+            return
+
+        lambda_scope = tla_lambda_scope(normalized)
+        if lambda_scope is not None:
+            domains, lambda_body, local_bound = lambda_scope
+            for domain in domains:
+                collect(domain, True, bound)
+            collect(lambda_body, True, bound | frozenset(local_bound))
+            return
+
+        boolean_parts = tla_top_level_boolean_parts(normalized)
+        if len(boolean_parts) > 1:
+            for part in boolean_parts:
+                collect(part, hidden, bound)
+            return
+
+        for marker in ("/\\", "\\/"):
+            if normalized.startswith(marker):
+                operand = normalized[len(marker) :].strip()
+                if operand:
+                    collect(operand, hidden, bound)
+                return
+
+        action_operand = tla_unary_action_operand(normalized)
+        if action_operand is not None:
+            collect(action_operand, True, bound)
+            return
+
+        unary_set_operand = tla_unary_set_operator_operand(normalized)
+        if unary_set_operand is not None:
+            collect(unary_set_operand, True, bound)
+            return
+
+        tuple_values = tla_tuple_literal_values(normalized)
+        if tuple_values is not None:
+            for value in tuple_values:
+                collect(value, True, bound)
+            return
+
+        set_scope = tla_set_comprehension_scope(normalized)
+        if set_scope is not None:
+            domains, set_body, local_bound = set_scope
+            for domain in domains:
+                collect(domain, True, bound)
+            collect(set_body, True, bound | frozenset(local_bound))
+            return
+
+        set_elements = tla_explicit_set_elements(normalized)
+        if set_elements is not None:
+            for element in set_elements:
+                collect(element, True, bound)
+            return
+
+        function_scope = tla_function_constructor_scope(normalized)
+        if function_scope is not None:
+            domains, function_body, local_bound = function_scope
+            for domain in domains:
+                collect(domain, True, bound)
+            collect(function_body, True, bound | frozenset(local_bound))
+            return
+
+        function_set_scope = tla_function_set_scope(normalized)
+        if function_set_scope is not None:
+            domain, range_expression = function_set_scope
+            collect(domain, True, bound)
+            collect(range_expression, True, bound)
+            return
+
+        record_values = tla_record_literal_values(normalized)
+        if record_values is not None:
+            for value in record_values:
+                collect(value, True, bound)
+            return
+
+        record_domains = tla_record_set_field_domains(normalized)
+        if record_domains is not None:
+            for domain in record_domains:
+                collect(domain, True, bound)
+            return
+
+        record_update = tla_record_update_scope(normalized)
+        if record_update is not None:
+            base, selectors, replacements = record_update
+            collect(base, True, bound)
+            for selector in selectors:
+                collect(selector, True, bound)
+            for replacement in replacements:
+                collect(replacement, True, bound)
+            return
+
+        relation_parts = tla_top_level_relation_parts(normalized)
+        if relation_parts is not None:
+            if hidden:
+                left, _, right = relation_parts
+                collect(left, True, bound)
+                collect(right, True, bound)
+            return
+
+        infix_operands = tla_top_level_static_infix_operands(normalized)
+        if infix_operands is not None:
+            if hidden:
+                for operand in infix_operands:
+                    collect(operand, True, bound)
+            return
+
+        call_arguments = tla_direct_operator_call_arguments(normalized)
+        if call_arguments is not None:
+            for argument in tla_top_level_argument_parts(call_arguments):
+                if argument:
+                    collect(argument, True, bound)
+            return
+
+        selector_scope = tla_selector_scope(normalized)
+        if selector_scope is not None:
+            base, selectors = selector_scope
+            collect(base, True, bound)
+            for selector in selectors:
+                collect(selector, True, bound)
+            return
+
+    collect(expression)
     return references
 
 
@@ -5933,10 +6415,22 @@ def tla_has_top_level_equality(expression: str) -> bool:
     return relation is not None and relation[1] == "="
 
 
+def tla_relation_scan_starts_with_wrapper(expression: str) -> bool:
+    """Return whether relation scanning should defer to a whole-body wrapper."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    return (
+        TLA_WHOLE_BODY_CONTROL_RE.match(text) is not None
+        or text.startswith(("[]", "<>", "~"))
+    )
+
+
 def tla_top_level_relation_operator(expression: str) -> str | None:
     """Return a top-level scalar relation operator, if present."""
 
     text = strip_static_outer_parentheses(" ".join(expression.split()))
+    if tla_relation_scan_starts_with_wrapper(text):
+        return None
     depth = 0
     in_string = False
     escaped = False
@@ -6343,10 +6837,76 @@ def exactness_definition_shape_errors(
     definitions: dict[str, tuple[int, str]],
     reference_context: str,
 ) -> list[str]:
-    exactness_definition = definitions.get(exactness_operator)
-    prefix = (
+    prefix = exactness_definition_shape_prefix(
+        mode,
+        cfg_file,
+        cfg_line_number,
+        runner_name,
+        reference_context,
+        exactness_operator,
+    )
+    template_prefix = exactness_definition_shape_prefix(
+        TLA_MODULE_VALIDATION_MODE_MARKER,
+        EXACTNESS_SHAPE_TEMPLATE_CFG,
+        EXACTNESS_SHAPE_TEMPLATE_LINE,
+        EXACTNESS_SHAPE_TEMPLATE_RUNNER,
+        EXACTNESS_SHAPE_TEMPLATE_REFERENCE,
+        exactness_operator,
+    )
+    cache_key = (module_path, exactness_operator, id(definitions))
+    templates = _EXACTNESS_DEFINITION_SHAPE_ERROR_TEMPLATES.get(cache_key)
+    if templates is None:
+        templates = tuple(
+            exactness_definition_shape_errors_uncached(
+                TLA_MODULE_VALIDATION_MODE_MARKER,
+                module_path,
+                EXACTNESS_SHAPE_TEMPLATE_CFG,
+                EXACTNESS_SHAPE_TEMPLATE_LINE,
+                EXACTNESS_SHAPE_TEMPLATE_RUNNER,
+                exactness_operator,
+                definitions,
+                EXACTNESS_SHAPE_TEMPLATE_REFERENCE,
+            )
+        )
+        _EXACTNESS_DEFINITION_SHAPE_ERROR_TEMPLATES[cache_key] = templates
+
+    return [error.replace(template_prefix, prefix, 1) for error in templates]
+
+
+def exactness_definition_shape_prefix(
+    mode: str,
+    cfg_file: Path,
+    cfg_line_number: int,
+    runner_name: str,
+    reference_context: str,
+    exactness_operator: str,
+) -> str:
+    """Return the diagnostic prefix for an exactness-shape check."""
+
+    return (
         f"{mode}: {runner_name} cfg {display_path(cfg_file)}:"
         f"{cfg_line_number} {reference_context} {exactness_operator}"
+    )
+
+
+def exactness_definition_shape_errors_uncached(
+    mode: str,
+    module_path: Path,
+    cfg_file: Path,
+    cfg_line_number: int,
+    runner_name: str,
+    exactness_operator: str,
+    definitions: dict[str, tuple[int, str]],
+    reference_context: str,
+) -> list[str]:
+    exactness_definition = definitions.get(exactness_operator)
+    prefix = exactness_definition_shape_prefix(
+        mode,
+        cfg_file,
+        cfg_line_number,
+        runner_name,
+        reference_context,
+        exactness_operator,
     )
     if exactness_definition is None:
         return [
@@ -6901,6 +7461,23 @@ def exactness_definition_shape_errors(
             f"{', '.join(temporal_control_flow_conjuncts)}; name concrete "
             "model predicates before composing exactness predicate chains"
         ]
+    structured_control_flow_conjuncts = (
+        structured_operand_control_flow_exactness_helpers(
+            exactness_operator,
+            exactness_body,
+            definitions,
+            module_path,
+        )
+    )
+    if structured_control_flow_conjuncts:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} contains transitive "
+            "exactness predicate chain with structured control-flow "
+            "predicate-selection helper "
+            f"{', '.join(structured_control_flow_conjuncts)}; name concrete "
+            "model predicates before placing them in structured helper operands"
+        ]
     transitive_boolean_composition_conjuncts = (
         transitive_boolean_composition_exactness_conjuncts(
             exactness_operator,
@@ -6971,6 +7548,34 @@ def exactness_definition_shape_errors(
             f"{', '.join(quantified_wrappers)}; name quantified model "
             "predicates before composing exactness predicate chains"
         ]
+    static_wrapped_quantified = static_wrapped_quantified_exactness_helpers(
+        exactness_operator,
+        exactness_body,
+        definitions,
+        module_path,
+    )
+    if static_wrapped_quantified:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} contains transitive "
+            "exactness predicate chain with static-wrapper quantified formula "
+            f"{', '.join(static_wrapped_quantified)}; name quantified model "
+            "predicates before composing exactness predicate chains"
+        ]
+    structured_quantified = structured_operand_quantified_exactness_helpers(
+        exactness_operator,
+        exactness_body,
+        definitions,
+        module_path,
+    )
+    if structured_quantified:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} contains transitive "
+            "exactness predicate chain with structured quantified formula "
+            f"{', '.join(structured_quantified)}; name quantified model "
+            "predicates before placing them in structured helper operands"
+        ]
     undefined_quantified_helpers = (
         transitive_undefined_quantified_exactness_conjuncts(
             exactness_operator,
@@ -7002,6 +7607,23 @@ def exactness_definition_shape_errors(
             f"{', '.join(vacuous_quantified_helpers)}; keep literal and "
             "self-equality, self-inequality, empty-domain, singleton-domain, self-membership, or empty-set membership quantified helper bodies out "
             "of exactness predicate chains"
+        ]
+    duplicate_bound_quantified_helpers = (
+        transitive_duplicate_bound_quantified_exactness_conjuncts(
+            exactness_operator,
+            exactness_body,
+            definitions,
+            module_path,
+        )
+    )
+    if duplicate_bound_quantified_helpers:
+        return [
+            f"{prefix} at "
+            f"{display_path(module_path)}:{exactness_line} contains transitive "
+            "exactness predicate chain with duplicate quantified helper binding "
+            f"{', '.join(duplicate_bound_quantified_helpers)}; bind each "
+            "quantified identifier once before composing exactness predicate "
+            "chains"
         ]
     unused_bound_quantified_helpers = (
         transitive_unused_bound_quantified_exactness_conjuncts(
@@ -7147,6 +7769,105 @@ def exactness_definition_shape_errors(
     return []
 
 
+def vacuous_helper_leaf_messages(
+    root: str,
+    current: str,
+    chain: list[str],
+    line: int,
+    body: str,
+    definitions: dict[str, tuple[int, str]],
+    module_path: Path,
+    *,
+    exactness: bool,
+) -> list[str]:
+    """Return vacuity messages for a helper leaf body."""
+
+    messages: list[str] = []
+    stripped_body = strip_static_outer_parentheses(body)
+    compact_body = " ".join(stripped_body.split())
+    literal_body = tla_static_temporal_boolean_literal(stripped_body)
+    if (not exactness or len(chain) > 1) and literal_body is not None:
+        messages.append(
+            f"{root} reaches {current} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line} is literal {literal_body}"
+        )
+    static_if_literal = tla_static_if_boolean_literal(stripped_body)
+    if (not exactness or len(chain) > 1) and static_if_literal is not None:
+        messages.append(
+            f"{root} reaches {current} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line} is static IF literal "
+            f"{static_if_literal}"
+        )
+    constant_relation = tla_static_constant_relation(stripped_body)
+    if constant_relation is not None:
+        messages.append(
+            f"{root} reaches {current} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line} is constant relation "
+            f"{constant_relation}"
+        )
+    self_equality_body = tla_static_self_equality(stripped_body)
+    if self_equality_body is not None:
+        messages.append(
+            f"{root} reaches {current} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line} is self-equality "
+            f"{self_equality_body}"
+        )
+    else:
+        self_equality_parts = temporal_self_equality_parts(stripped_body)
+        if self_equality_parts:
+            messages.append(
+                f"{root} reaches {current} through {' -> '.join(chain)} "
+                f"at {display_path(module_path)}:{line} contains "
+                f"self-equality {', '.join(self_equality_parts)}"
+            )
+    self_inequality_body = tla_static_self_inequality(stripped_body)
+    if self_inequality_body is not None:
+        messages.append(
+            f"{root} reaches {current} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line} is self-inequality "
+            f"{self_inequality_body}"
+        )
+    else:
+        self_inequality_parts = temporal_self_inequality_parts(stripped_body)
+        if self_inequality_parts:
+            messages.append(
+                f"{root} reaches {current} through {' -> '.join(chain)} "
+                f"at {display_path(module_path)}:{line} contains "
+                f"self-inequality {', '.join(self_inequality_parts)}"
+            )
+    body_identifiers = tla_static_non_string_identifiers(compact_body)
+    if (
+        (not exactness or len(chain) > 1)
+        and len(body_identifiers) == 1
+        and compact_body in body_identifiers
+    ):
+        messages.append(
+            f"{root} reaches {current} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line} aliases {compact_body}"
+        )
+    literal_gated_alias = literal_gated_zero_arity_helper_alias(
+        stripped_body,
+        definitions,
+    )
+    if literal_gated_alias is not None:
+        messages.append(
+            f"{root} reaches {current} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line} aliases "
+            f"{literal_gated_alias} through a literal-gated helper operand"
+        )
+    single_conjunct_alias = single_zero_arity_conjunct_alias(
+        stripped_body,
+        definitions,
+    )
+    if single_conjunct_alias is not None:
+        messages.append(
+            f"{root} reaches {current} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line} aliases "
+            f"{single_conjunct_alias} through a single helper conjunct"
+        )
+    return messages
+
+
 def transitive_vacuous_exactness_conjuncts(
     exactness_operator: str,
     exactness_body: str,
@@ -7164,6 +7885,31 @@ def transitive_vacuous_exactness_conjuncts(
         seen_messages.add(message)
         vacuous.append(message)
 
+    def inspect_hidden_references(
+        root: str,
+        chain: list[str],
+        body: str,
+    ) -> None:
+        for reference in hidden_static_structured_helper_references(body):
+            if reference == chain[-1] or reference == exactness_operator:
+                continue
+            definition = definitions.get(reference)
+            if definition is None:
+                continue
+            reference_line, reference_body = definition
+            hidden_chain = chain + [reference]
+            for message in vacuous_helper_leaf_messages(
+                root,
+                reference,
+                hidden_chain,
+                reference_line,
+                reference_body,
+                definitions,
+                module_path,
+                exactness=True,
+            ):
+                record(message)
+
     def walk(root: str, current: str, chain: list[str], seen: set[str]) -> None:
         if current in seen:
             return
@@ -7174,6 +7920,7 @@ def transitive_vacuous_exactness_conjuncts(
         line, body = definition
         stripped_body = strip_static_outer_parentheses(body)
         compact_body = " ".join(stripped_body.split())
+        inspect_hidden_references(root, chain, stripped_body)
         literal_body = tla_static_temporal_boolean_literal(stripped_body)
         if len(chain) > 1 and literal_body is not None:
             record(
@@ -7722,6 +8469,61 @@ def control_flow_named_helper_branch_operands(
     return operands
 
 
+def helper_definition_is_predicate_like(
+    helper: str,
+    definitions: dict[str, tuple[int, str]],
+    seen: set[str] | None = None,
+) -> bool:
+    """Return whether a zero-arity helper definition looks predicate-shaped."""
+
+    if seen is None:
+        seen = set()
+    if helper in seen:
+        return False
+    seen.add(helper)
+    definition = definitions.get(helper)
+    if definition is None:
+        return False
+    _, body = definition
+    stripped_body = strip_static_outer_parentheses(body)
+    compact_body = " ".join(stripped_body.split())
+    if tla_static_temporal_boolean_literal(stripped_body) is not None:
+        return True
+    if tla_static_if_boolean_literal(stripped_body) is not None:
+        return True
+    if tla_unary_temporal_operand(stripped_body) is not None:
+        return True
+    if TLA_WHOLE_BODY_QUANTIFIER_RE.match(compact_body):
+        return True
+    if tla_top_level_relation_parts(stripped_body) is not None:
+        return True
+    if len(tla_top_level_boolean_parts(stripped_body)) > 1:
+        return True
+    if TLA_IDENTIFIER_RE.fullmatch(compact_body) and compact_body in definitions:
+        return helper_definition_is_predicate_like(
+            compact_body,
+            definitions,
+            seen.copy(),
+        )
+    return False
+
+
+def control_flow_named_predicate_branch_operands(
+    expression: str,
+    definitions: dict[str, tuple[int, str]],
+) -> list[str]:
+    """Return named helper branch operands whose definitions are predicates."""
+
+    return [
+        operand
+        for operand in control_flow_named_helper_branch_operands(
+            expression,
+            definitions,
+        )
+        if helper_definition_is_predicate_like(operand, definitions)
+    ]
+
+
 def tla_top_level_case_result_branches(expression: str) -> list[str]:
     """Return top-level CASE result branches from a static CASE expression."""
 
@@ -7958,6 +8760,54 @@ def unary_temporal_control_flow_exactness_helpers(
         line, body = definition
         for operator, control_body in unary_temporal_control_flow_formulas(body):
             record(root, current, chain, line, operator, control_body)
+        for reference in exactness_helper_references(body):
+            if reference == current or reference == exactness_operator:
+                continue
+            if reference not in definitions:
+                continue
+            walk(root, reference, chain + [reference], seen.copy())
+
+    for conjunct_operator in tla_zero_arity_conjunct_references(exactness_body):
+        if conjunct_operator not in definitions:
+            continue
+        walk(conjunct_operator, conjunct_operator, [conjunct_operator], set())
+    return control_flow
+
+
+def structured_operand_control_flow_exactness_helpers(
+    exactness_operator: str,
+    exactness_body: str,
+    definitions: dict[str, tuple[int, str]],
+    module_path: Path,
+) -> list[str]:
+    """Return control-flow formulas below structured exactness operands."""
+
+    control_flow: list[str] = []
+    seen_messages: set[str] = set()
+
+    def record(root: str, chain: list[str], line: int, formula: str) -> None:
+        message = (
+            f"{root} reaches {formula} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line}"
+        )
+        if message in seen_messages:
+            return
+        seen_messages.add(message)
+        control_flow.append(message)
+
+    def inspect_body(root: str, chain: list[str], line: int, body: str) -> None:
+        for formula in structured_operand_control_flow_formulas(body, definitions):
+            record(root, chain, line, formula)
+
+    def walk(root: str, current: str, chain: list[str], seen: set[str]) -> None:
+        if current in seen:
+            return
+        seen.add(current)
+        definition = definitions.get(current)
+        if definition is None:
+            return
+        line, body = definition
+        inspect_body(root, chain, line, body)
         for reference in exactness_helper_references(body):
             if reference == current or reference == exactness_operator:
                 continue
@@ -8636,6 +9486,26 @@ def exactness_parameterized_call_boolean_composition_kind_direct(
     """Return direct boolean-composition kind over parameterized-call leaves."""
 
     compact_body = " ".join(strip_static_outer_parentheses(body).split())
+    cache_key = (compact_body, id(definitions), id(signatures))
+    if cache_key in _EXACTNESS_PARAMETERIZED_CALL_BOOLEAN_KIND_DIRECT_CACHE:
+        return _EXACTNESS_PARAMETERIZED_CALL_BOOLEAN_KIND_DIRECT_CACHE[cache_key]
+
+    kind = exactness_parameterized_call_boolean_composition_kind_direct_uncached(
+        compact_body,
+        definitions,
+        signatures,
+    )
+    _EXACTNESS_PARAMETERIZED_CALL_BOOLEAN_KIND_DIRECT_CACHE[cache_key] = kind
+    return kind
+
+
+def exactness_parameterized_call_boolean_composition_kind_direct_uncached(
+    compact_body: str,
+    definitions: dict[str, tuple[int, str]],
+    signatures: dict[str, tuple[int, int]],
+) -> str | None:
+    """Return direct parameterized-call composition kind without memoization."""
+
     negated_operand = tla_static_negation_operand(compact_body)
     if negated_operand is not None and is_parameterized_call_helper_operand(
         negated_operand,
@@ -8815,6 +9685,26 @@ def exactness_quantified_boolean_composition_kind_direct(
     """Return direct boolean-composition kind over quantified helper leaves."""
 
     compact_body = " ".join(strip_static_outer_parentheses(body).split())
+    cache_key = (compact_body, id(definitions), id(signatures))
+    if cache_key in _EXACTNESS_QUANTIFIED_BOOLEAN_KIND_DIRECT_CACHE:
+        return _EXACTNESS_QUANTIFIED_BOOLEAN_KIND_DIRECT_CACHE[cache_key]
+
+    kind = exactness_quantified_boolean_composition_kind_direct_uncached(
+        compact_body,
+        definitions,
+        signatures,
+    )
+    _EXACTNESS_QUANTIFIED_BOOLEAN_KIND_DIRECT_CACHE[cache_key] = kind
+    return kind
+
+
+def exactness_quantified_boolean_composition_kind_direct_uncached(
+    compact_body: str,
+    definitions: dict[str, tuple[int, str]],
+    signatures: dict[str, tuple[int, int]],
+) -> str | None:
+    """Return direct quantified composition kind without memoization."""
+
     negated_operand = tla_static_negation_operand(compact_body)
     if negated_operand is not None and is_quantified_helper_operand(
         negated_operand,
@@ -8882,7 +9772,17 @@ def is_quantified_helper_operand(
         return False
     _, body = definition
     compact_body = " ".join(strip_static_outer_parentheses(body).split())
-    return TLA_WHOLE_BODY_QUANTIFIER_RE.match(compact_body) is not None
+    return is_scoped_quantified_formula(compact_body)
+
+
+def is_scoped_quantified_formula(formula: str) -> bool:
+    """Return whether a whole-body quantified formula has scoped binders."""
+
+    normalized = strip_static_outer_parentheses(" ".join(formula.split()))
+    return (
+        TLA_WHOLE_BODY_QUANTIFIER_RE.match(normalized) is not None
+        and tla_quantifier_scope(normalized) is not None
+    )
 
 
 def unary_temporal_quantified_exactness_helpers(
@@ -8933,6 +9833,102 @@ def unary_temporal_quantified_exactness_helpers(
     return quantified
 
 
+def static_wrapped_quantified_exactness_helpers(
+    exactness_operator: str,
+    exactness_body: str,
+    definitions: dict[str, tuple[int, str]],
+    module_path: Path,
+) -> list[str]:
+    """Return quantified formulas below static wrappers in exactness chains."""
+
+    quantified: list[str] = []
+    seen_messages: set[str] = set()
+
+    def record(root: str, chain: list[str], line: int, formula: str) -> None:
+        message = (
+            f"{root} reaches {formula} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line}"
+        )
+        if message in seen_messages:
+            return
+        seen_messages.add(message)
+        quantified.append(message)
+
+    def inspect_body(root: str, chain: list[str], line: int, body: str) -> None:
+        for formula in static_wrapped_quantified_formulas(body):
+            record(root, chain, line, formula)
+
+    def walk(root: str, current: str, chain: list[str], seen: set[str]) -> None:
+        if current in seen:
+            return
+        seen.add(current)
+        definition = definitions.get(current)
+        if definition is None:
+            return
+        line, body = definition
+        inspect_body(root, chain, line, body)
+        for reference in exactness_helper_references(body):
+            if reference == current or reference == exactness_operator:
+                continue
+            if reference not in definitions:
+                continue
+            walk(root, reference, chain + [reference], seen.copy())
+
+    for conjunct_operator in tla_zero_arity_conjunct_references(exactness_body):
+        if conjunct_operator not in definitions:
+            continue
+        walk(conjunct_operator, conjunct_operator, [conjunct_operator], set())
+    return quantified
+
+
+def structured_operand_quantified_exactness_helpers(
+    exactness_operator: str,
+    exactness_body: str,
+    definitions: dict[str, tuple[int, str]],
+    module_path: Path,
+) -> list[str]:
+    """Return quantified formulas below structured operands in exactness chains."""
+
+    quantified: list[str] = []
+    seen_messages: set[str] = set()
+
+    def record(root: str, chain: list[str], line: int, formula: str) -> None:
+        message = (
+            f"{root} reaches {formula} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line}"
+        )
+        if message in seen_messages:
+            return
+        seen_messages.add(message)
+        quantified.append(message)
+
+    def inspect_body(root: str, chain: list[str], line: int, body: str) -> None:
+        for formula in structured_operand_quantified_formulas(body):
+            record(root, chain, line, formula)
+
+    def walk(root: str, current: str, chain: list[str], seen: set[str]) -> None:
+        if current in seen:
+            return
+        seen.add(current)
+        definition = definitions.get(current)
+        if definition is None:
+            return
+        line, body = definition
+        inspect_body(root, chain, line, body)
+        for reference in exactness_helper_references(body):
+            if reference == current or reference == exactness_operator:
+                continue
+            if reference not in definitions:
+                continue
+            walk(root, reference, chain + [reference], seen.copy())
+
+    for conjunct_operator in tla_zero_arity_conjunct_references(exactness_body):
+        if conjunct_operator not in definitions:
+            continue
+        walk(conjunct_operator, conjunct_operator, [conjunct_operator], set())
+    return quantified
+
+
 def unary_temporal_quantified_formulas(body: str) -> list[str]:
     """Return whole-body quantified formulas below unary temporal wrappers."""
 
@@ -8946,7 +9942,7 @@ def unary_temporal_quantified_formulas(body: str) -> list[str]:
         if not normalized or key in seen_bodies:
             return
         seen_bodies.add(key)
-        if in_temporal and TLA_WHOLE_BODY_QUANTIFIER_RE.match(normalized):
+        if in_temporal and is_scoped_quantified_formula(normalized):
             if normalized not in seen_formulas:
                 seen_formulas.add(normalized)
                 formulas.append(normalized)
@@ -8977,6 +9973,547 @@ def unary_temporal_quantified_formulas(body: str) -> list[str]:
     return formulas
 
 
+def static_wrapped_quantified_formulas(body: str) -> list[str]:
+    """Return quantified formulas below static action/set/choice wrappers."""
+
+    wrapped: list[str] = []
+    seen_bodies: set[tuple[str, str | None]] = set()
+    seen_wrapped: set[str] = set()
+
+    def record(wrapper: str, formula: str) -> None:
+        message = f"{wrapper} wraps {formula}"
+        if message in seen_wrapped:
+            return
+        seen_wrapped.add(message)
+        wrapped.append(message)
+
+    def collect(current: str, wrapper: str | None) -> None:
+        normalized = strip_static_outer_parentheses(" ".join(current.split()))
+        key = (normalized, wrapper)
+        if not normalized or key in seen_bodies:
+            return
+        seen_bodies.add(key)
+        if wrapper is not None and is_scoped_quantified_formula(normalized):
+            record(wrapper, normalized)
+            return
+
+        let_operand = tla_static_let_alias_operand(normalized)
+        if let_operand is not None:
+            collect(let_operand, wrapper)
+            return
+
+        boolean_parts = tla_top_level_boolean_parts(normalized)
+        if len(boolean_parts) > 1:
+            for part in boolean_parts:
+                collect(part, wrapper)
+            return
+
+        negated_operand = tla_static_negation_operand(normalized)
+        if negated_operand is not None:
+            collect(negated_operand, wrapper)
+            return
+
+        temporal_operand = tla_unary_temporal_operand(normalized)
+        if temporal_operand is not None:
+            collect(temporal_operand, wrapper)
+            return
+
+        tuple_values = tla_tuple_literal_values(normalized)
+        if tuple_values is not None:
+            for value in tuple_values:
+                collect(value, wrapper)
+            return
+
+        set_scope = tla_set_comprehension_scope(normalized)
+        if set_scope is not None:
+            domains, set_body, _ = set_scope
+            for domain in domains:
+                collect(domain, wrapper)
+            collect(set_body, wrapper)
+            return
+
+        set_elements = tla_explicit_set_elements(normalized)
+        if set_elements is not None:
+            for element in set_elements:
+                collect(element, wrapper)
+            return
+
+        function_scope = tla_function_constructor_scope(normalized)
+        if function_scope is not None:
+            domains, function_body, _ = function_scope
+            for domain in domains:
+                collect(domain, wrapper)
+            collect(function_body, wrapper)
+            return
+
+        function_set_scope = tla_function_set_scope(normalized)
+        if function_set_scope is not None:
+            domain, range_expression = function_set_scope
+            collect(domain, wrapper)
+            collect(range_expression, wrapper)
+            return
+
+        record_values = tla_record_literal_values(normalized)
+        if record_values is not None:
+            for value in record_values:
+                collect(value, wrapper)
+            return
+
+        record_domains = tla_record_set_field_domains(normalized)
+        if record_domains is not None:
+            for domain in record_domains:
+                collect(domain, wrapper)
+            return
+
+        record_update = tla_record_update_scope(normalized)
+        if record_update is not None:
+            base, selectors, replacements = record_update
+            collect(base, wrapper)
+            for selector in selectors:
+                collect(selector, wrapper)
+            for replacement in replacements:
+                collect(replacement, wrapper)
+            return
+
+        action = tla_unary_action_operator_operand(normalized)
+        if action is not None:
+            operator, operand = action
+            collect(operand, operator)
+            return
+
+        unary_set = tla_unary_set_operator_expression_operand(normalized)
+        if unary_set is not None:
+            operator, operand = unary_set
+            collect(operand, operator)
+            return
+
+        choose_split = tla_choose_prefix_and_body(normalized)
+        if choose_split is not None:
+            prefix, choose_body = choose_split
+            for domain in tla_choose_bound_domains(prefix):
+                collect(domain, "CHOOSE")
+            collect(choose_body, "CHOOSE")
+            return
+
+        lambda_scope = tla_lambda_scope(normalized)
+        if lambda_scope is not None:
+            domains, lambda_body, _ = lambda_scope
+            for domain in domains:
+                collect(domain, "LAMBDA")
+            collect(lambda_body, "LAMBDA")
+            return
+
+        case_branches = tla_top_level_case_condition_result_branches(normalized)
+        if case_branches:
+            for condition, result in case_branches:
+                collect(condition, wrapper)
+                collect(result, wrapper)
+            return
+
+        if_parts = tla_top_level_if_parts(normalized)
+        if if_parts is not None:
+            for part in if_parts:
+                collect(part, wrapper)
+            return
+
+        relation_parts = tla_top_level_relation_parts(normalized)
+        if relation_parts is not None:
+            left, _, right = relation_parts
+            collect(left, wrapper)
+            collect(right, wrapper)
+            return
+
+        infix_operands = tla_top_level_static_infix_operands(normalized)
+        if infix_operands is not None:
+            for operand in infix_operands:
+                collect(operand, wrapper)
+            return
+
+        call_arguments = tla_direct_operator_call_arguments(normalized)
+        if call_arguments is not None:
+            for argument in tla_top_level_argument_parts(call_arguments):
+                if argument:
+                    collect(argument, wrapper)
+            return
+
+        selector_scope = tla_selector_scope(normalized)
+        if selector_scope is not None:
+            base, selectors = selector_scope
+            collect(base, wrapper)
+            for selector in selectors:
+                collect(selector, wrapper)
+            return
+
+    collect(body, None)
+    return wrapped
+
+
+def structured_operand_quantified_formulas(body: str) -> list[str]:
+    """Return quantified formulas hidden inside structured helper operands."""
+
+    structured: list[str] = []
+    seen_bodies: set[tuple[str, str | None]] = set()
+    seen_structured: set[str] = set()
+
+    def record(container: str, formula: str) -> None:
+        message = f"{container} contains {formula}"
+        if message in seen_structured:
+            return
+        seen_structured.add(message)
+        structured.append(message)
+
+    def collect(current: str, container: str | None) -> None:
+        normalized = strip_static_outer_parentheses(" ".join(current.split()))
+        key = (normalized, container)
+        if not normalized or key in seen_bodies:
+            return
+        seen_bodies.add(key)
+        if is_scoped_quantified_formula(normalized):
+            if container is not None:
+                record(container, normalized)
+            return
+
+        let_operand = tla_static_let_alias_operand(normalized)
+        if let_operand is not None:
+            collect(let_operand, container)
+            return
+
+        boolean_parts = tla_top_level_boolean_parts(normalized)
+        if len(boolean_parts) > 1:
+            for part in boolean_parts:
+                collect(part, container)
+            return
+
+        negated_operand = tla_static_negation_operand(normalized)
+        if negated_operand is not None:
+            collect(negated_operand, container)
+            return
+
+        temporal_operand = tla_unary_temporal_operand(normalized)
+        if temporal_operand is not None:
+            collect(temporal_operand, container)
+            return
+
+        tuple_values = tla_tuple_literal_values(normalized)
+        if tuple_values is not None:
+            nested = container or "tuple literal"
+            for value in tuple_values:
+                collect(value, nested)
+            return
+
+        set_scope = tla_set_comprehension_scope(normalized)
+        if set_scope is not None:
+            domains, set_body, _ = set_scope
+            nested = container or "set comprehension"
+            for domain in domains:
+                collect(domain, nested)
+            collect(set_body, nested)
+            return
+
+        set_elements = tla_explicit_set_elements(normalized)
+        if set_elements is not None:
+            nested = container or "explicit set literal"
+            for element in set_elements:
+                collect(element, nested)
+            return
+
+        function_scope = tla_function_constructor_scope(normalized)
+        if function_scope is not None:
+            domains, function_body, _ = function_scope
+            nested = container or "function constructor"
+            for domain in domains:
+                collect(domain, nested)
+            collect(function_body, nested)
+            return
+
+        function_set_scope = tla_function_set_scope(normalized)
+        if function_set_scope is not None:
+            domain, range_expression = function_set_scope
+            nested = container or "function set"
+            collect(domain, nested)
+            collect(range_expression, nested)
+            return
+
+        record_values = tla_record_literal_values(normalized)
+        if record_values is not None:
+            nested = container or "record literal"
+            for value in record_values:
+                collect(value, nested)
+            return
+
+        record_domains = tla_record_set_field_domains(normalized)
+        if record_domains is not None:
+            nested = container or "record set"
+            for domain in record_domains:
+                collect(domain, nested)
+            return
+
+        record_update = tla_record_update_scope(normalized)
+        if record_update is not None:
+            base, selectors, replacements = record_update
+            nested = container or "record update"
+            collect(base, nested)
+            for selector in selectors:
+                collect(selector, nested)
+            for replacement in replacements:
+                collect(replacement, nested)
+            return
+
+        case_branches = tla_top_level_case_condition_result_branches(normalized)
+        if case_branches:
+            nested = container or "CASE expression"
+            for condition, result in case_branches:
+                collect(condition, nested)
+                collect(result, nested)
+            return
+
+        if_parts = tla_top_level_if_parts(normalized)
+        if if_parts is not None:
+            nested = container or "IF expression"
+            for part in if_parts:
+                collect(part, nested)
+            return
+
+        relation_parts = tla_top_level_relation_parts(normalized)
+        if relation_parts is not None:
+            left, _, right = relation_parts
+            nested = container or "relation expression"
+            collect(left, nested)
+            collect(right, nested)
+            return
+
+        infix_operands = tla_top_level_static_infix_operands(normalized)
+        if infix_operands is not None:
+            nested = container or "infix expression"
+            for operand in infix_operands:
+                collect(operand, nested)
+            return
+
+        call_arguments = tla_direct_operator_call_arguments(normalized)
+        if call_arguments is not None:
+            nested = container or "operator call"
+            for argument in tla_top_level_argument_parts(call_arguments):
+                if argument:
+                    collect(argument, nested)
+            return
+
+        selector_scope = tla_selector_scope(normalized)
+        if selector_scope is not None:
+            base, selectors = selector_scope
+            nested = container or "selector expression"
+            collect(base, nested)
+            for selector in selectors:
+                collect(selector, nested)
+            return
+
+    collect(body, None)
+    return structured
+
+
+def structured_operand_control_flow_formulas(
+    body: str,
+    definitions: dict[str, tuple[int, str]],
+) -> list[str]:
+    """Return control-flow formulas hidden inside structured helper operands."""
+
+    structured: list[str] = []
+    seen_bodies: set[tuple[str, str | None]] = set()
+    seen_structured: set[str] = set()
+
+    def record(container: str, operator: str, formula: str) -> None:
+        message = f"{container} contains {operator} expression {formula}"
+        if message in seen_structured:
+            return
+        seen_structured.add(message)
+        structured.append(message)
+
+    def inspect_control(normalized: str, container: str | None) -> bool:
+        whole_body_control = TLA_WHOLE_BODY_CONTROL_RE.match(normalized)
+        if whole_body_control is None:
+            return False
+        operator = whole_body_control.group(1)
+        if (
+            container is not None
+            and control_flow_named_predicate_branch_operands(normalized, definitions)
+        ):
+            record(container, operator, normalized)
+        return True
+
+    def collect(current: str, container: str | None) -> None:
+        normalized = strip_static_outer_parentheses(" ".join(current.split()))
+        key = (normalized, container)
+        if not normalized or key in seen_bodies:
+            return
+        seen_bodies.add(key)
+
+        let_operand = tla_static_let_alias_operand(normalized)
+        if let_operand is not None:
+            collect(let_operand, container)
+            return
+
+        if inspect_control(normalized, container):
+            control_container = container or "control-flow expression"
+            case_branches = tla_top_level_case_condition_result_branches(normalized)
+            if case_branches:
+                for condition, result in case_branches:
+                    collect(condition, control_container)
+                    collect(result, control_container)
+                return
+            if_parts = tla_top_level_if_parts(normalized)
+            if if_parts is not None:
+                for part in if_parts:
+                    collect(part, control_container)
+                return
+
+        boolean_parts = tla_top_level_boolean_parts(normalized)
+        if len(boolean_parts) > 1:
+            for part in boolean_parts:
+                collect(part, container)
+            return
+
+        negated_operand = tla_static_negation_operand(normalized)
+        if negated_operand is not None:
+            collect(negated_operand, container)
+            return
+
+        temporal_operand = tla_unary_temporal_operand(normalized)
+        if temporal_operand is not None:
+            collect(temporal_operand, container)
+            return
+
+        tuple_values = tla_tuple_literal_values(normalized)
+        if tuple_values is not None:
+            nested = container or "tuple literal"
+            for value in tuple_values:
+                collect(value, nested)
+            return
+
+        set_scope = tla_set_comprehension_scope(normalized)
+        if set_scope is not None:
+            domains, set_body, _ = set_scope
+            nested = container or "set comprehension"
+            for domain in domains:
+                collect(domain, nested)
+            collect(set_body, nested)
+            return
+
+        set_elements = tla_explicit_set_elements(normalized)
+        if set_elements is not None:
+            nested = container or "explicit set literal"
+            for element in set_elements:
+                collect(element, nested)
+            return
+
+        function_scope = tla_function_constructor_scope(normalized)
+        if function_scope is not None:
+            domains, function_body, _ = function_scope
+            nested = container or "function constructor"
+            for domain in domains:
+                collect(domain, nested)
+            collect(function_body, nested)
+            return
+
+        function_set_scope = tla_function_set_scope(normalized)
+        if function_set_scope is not None:
+            domain, range_expression = function_set_scope
+            nested = container or "function set"
+            collect(domain, nested)
+            collect(range_expression, nested)
+            return
+
+        record_values = tla_record_literal_values(normalized)
+        if record_values is not None:
+            nested = container or "record literal"
+            for value in record_values:
+                collect(value, nested)
+            return
+
+        record_domains = tla_record_set_field_domains(normalized)
+        if record_domains is not None:
+            nested = container or "record set"
+            for domain in record_domains:
+                collect(domain, nested)
+            return
+
+        record_update = tla_record_update_scope(normalized)
+        if record_update is not None:
+            base, selectors, replacements = record_update
+            nested = container or "record update"
+            collect(base, nested)
+            for selector in selectors:
+                collect(selector, nested)
+            for replacement in replacements:
+                collect(replacement, nested)
+            return
+
+        action = tla_unary_action_operator_operand(normalized)
+        if action is not None:
+            _, operand = action
+            nested = container or "action wrapper"
+            collect(operand, nested)
+            return
+
+        unary_set = tla_unary_set_operator_expression_operand(normalized)
+        if unary_set is not None:
+            _, operand = unary_set
+            nested = container or "unary set wrapper"
+            collect(operand, nested)
+            return
+
+        choose_split = tla_choose_prefix_and_body(normalized)
+        if choose_split is not None:
+            prefix, choose_body = choose_split
+            nested = container or "CHOOSE expression"
+            for domain in tla_choose_bound_domains(prefix):
+                collect(domain, nested)
+            collect(choose_body, nested)
+            return
+
+        lambda_scope = tla_lambda_scope(normalized)
+        if lambda_scope is not None:
+            domains, lambda_body, _ = lambda_scope
+            nested = container or "LAMBDA expression"
+            for domain in domains:
+                collect(domain, nested)
+            collect(lambda_body, nested)
+            return
+
+        relation_parts = tla_top_level_relation_parts(normalized)
+        if relation_parts is not None:
+            left, _, right = relation_parts
+            nested = container or "relation expression"
+            collect(left, nested)
+            collect(right, nested)
+            return
+
+        infix_operands = tla_top_level_static_infix_operands(normalized)
+        if infix_operands is not None:
+            nested = container or "infix expression"
+            for operand in infix_operands:
+                collect(operand, nested)
+            return
+
+        call_arguments = tla_direct_operator_call_arguments(normalized)
+        if call_arguments is not None:
+            nested = container or "operator call"
+            for argument in tla_top_level_argument_parts(call_arguments):
+                if argument:
+                    collect(argument, nested)
+            return
+
+        selector_scope = tla_selector_scope(normalized)
+        if selector_scope is not None:
+            base, selectors = selector_scope
+            nested = container or "selector expression"
+            collect(base, nested)
+            for selector in selectors:
+                collect(selector, nested)
+            return
+
+    collect(body, None)
+    return structured
+
+
 def quantified_helper_formulas(body: str) -> list[str]:
     """Return quantified formulas that helper wrappers should inspect."""
 
@@ -8996,10 +10533,7 @@ def quantified_helper_formulas(body: str) -> list[str]:
         if not normalized or normalized in seen_bodies:
             return
         seen_bodies.add(normalized)
-        if (
-            TLA_WHOLE_BODY_QUANTIFIER_RE.match(normalized)
-            and quantified_formula_prefix_and_body(normalized) is not None
-        ):
+        if is_scoped_quantified_formula(normalized):
             add(normalized)
             return
 
@@ -9038,41 +10572,14 @@ def quantified_formula_prefix_and_body(formula: str) -> tuple[str, str] | None:
     normalized = strip_static_outer_parentheses(" ".join(formula.split()))
     if TLA_WHOLE_BODY_QUANTIFIER_RE.match(normalized) is None:
         return None
-    depth = 0
-    in_string = False
-    escaped = False
-    index = 0
-    while index < len(normalized):
-        char = normalized[index]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-            index += 1
-            continue
-        if char == '"':
-            in_string = True
-            index += 1
-            continue
-        if char in "([{":
-            depth += 1
-            index += 1
-            continue
-        if char in ")]}" and depth > 0:
-            depth -= 1
-            index += 1
-            continue
-        if depth == 0 and char == ":":
-            prefix = normalized[:index].strip()
-            body = normalized[index + 1 :].strip()
-            if not prefix or not body:
-                return None
-            return prefix, strip_static_outer_parentheses(body)
-        index += 1
-    return None
+    colon_index = tla_top_level_symbol_index(normalized, ":")
+    if colon_index is None:
+        return None
+    prefix = normalized[:colon_index].strip()
+    body = normalized[colon_index + 1 :].strip()
+    if not prefix or not body:
+        return None
+    return prefix, strip_static_outer_parentheses(body)
 
 
 def quantified_formula_bound_identifiers(formula: str) -> set[str]:
@@ -9083,6 +10590,41 @@ def quantified_formula_bound_identifiers(formula: str) -> set[str]:
         return set()
     prefix, _ = split
     return tla_quantifier_binding_identifiers(prefix)
+
+
+def quantified_formula_bound_identifier_sequence(formula: str) -> list[str]:
+    """Return quantified bound identifiers in binding-prefix order."""
+
+    if tla_quantifier_scope(formula) is None:
+        return []
+    split = quantified_formula_prefix_and_body(formula)
+    if split is None:
+        return []
+    prefix, _ = split
+    prefix = re.sub(r"^\\[AE]\s+", "", prefix.strip(), count=1).strip()
+    return tla_binding_identifier_sequence_from_prefix(prefix)
+
+
+def duplicate_identifiers_in_order(identifiers: list[str]) -> list[str]:
+    """Return duplicate identifiers once, preserving first duplicate order."""
+
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    duplicate_seen: set[str] = set()
+    for identifier in identifiers:
+        if identifier in seen and identifier not in duplicate_seen:
+            duplicates.append(identifier)
+            duplicate_seen.add(identifier)
+        seen.add(identifier)
+    return duplicates
+
+
+def quantified_formula_duplicate_bound_identifiers(formula: str) -> list[str]:
+    """Return duplicated bound identifiers in a quantified formula."""
+
+    return duplicate_identifiers_in_order(
+        quantified_formula_bound_identifier_sequence(formula)
+    )
 
 
 def quantified_formula_bound_domains(formula: str) -> dict[str, str]:
@@ -9145,6 +10687,8 @@ def tla_top_level_membership_parts(
     """Return top-level membership operands from a static expression."""
 
     text = strip_static_outer_parentheses(" ".join(expression.split()))
+    if tla_relation_scan_starts_with_wrapper(text):
+        return None
     depth = 0
     in_string = False
     escaped = False
@@ -9206,11 +10750,78 @@ def tla_top_level_relation_parts(expression: str) -> tuple[str, str, str] | None
 
     for relation in (
         tla_top_level_membership_parts(expression),
+        tla_top_level_subset_relation_parts(expression),
         tla_top_level_equality_relation_parts(expression),
         tla_top_level_order_relation_parts(expression),
     ):
         if relation is not None:
             return relation
+    return None
+
+
+def tla_top_level_subset_relation_parts(
+    expression: str,
+) -> tuple[str, str, str] | None:
+    """Return top-level subset-relation operands from a static expression."""
+
+    text = strip_static_outer_parentheses(" ".join(expression.split()))
+    if tla_relation_scan_starts_with_wrapper(text):
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if text.startswith("<<", index):
+            depth += 1
+            index += 2
+            continue
+        if text.startswith(">>", index) and depth > 0:
+            depth -= 1
+            index += 2
+            continue
+        if char in "([{":
+            depth += 1
+            index += 1
+            continue
+        if char in ")]}" and depth > 0:
+            depth -= 1
+            index += 1
+            continue
+        if depth != 0:
+            index += 1
+            continue
+        operator = "\\subseteq"
+        if not text.startswith(operator, index):
+            index += 1
+            continue
+        before = text[index - 1] if index > 0 else ""
+        after_index = index + len(operator)
+        after = text[after_index] if after_index < len(text) else ""
+        if (before.isalnum() or before == "_") or (
+            after.isalnum() or after == "_"
+        ):
+            index += 1
+            continue
+        left = text[:index].strip()
+        right = text[after_index:].strip()
+        if left and right:
+            return left, operator, right
+        index += 1
     return None
 
 
@@ -9220,6 +10831,8 @@ def tla_top_level_equality_relation_parts(
     """Return top-level equality or inequality operands from a static expression."""
 
     text = strip_static_outer_parentheses(" ".join(expression.split()))
+    if tla_relation_scan_starts_with_wrapper(text):
+        return None
     depth = 0
     in_string = False
     escaped = False
@@ -9282,6 +10895,8 @@ def tla_top_level_order_relation_parts(
     """Return top-level ordering relation operands from a static expression."""
 
     text = strip_static_outer_parentheses(" ".join(expression.split()))
+    if tla_relation_scan_starts_with_wrapper(text):
+        return None
     depth = 0
     in_string = False
     escaped = False
@@ -9333,7 +10948,7 @@ def tla_top_level_order_relation_parts(
                     continue
             if operator == ">":
                 previous_char = text[index - 1] if index > 0 else ""
-                if previous_char in "<>=":
+                if previous_char in "<>=" or previous_char == ":":
                     continue
             left = text[:index].strip()
             right = text[index + len(operator) :].strip()
@@ -9789,7 +11404,7 @@ def negated_quantified_helper_formulas(body: str) -> list[str]:
                 " ".join(negated_operand.split())
             )
 
-        if negations and TLA_WHOLE_BODY_QUANTIFIER_RE.match(operand):
+        if negations and is_scoped_quantified_formula(operand):
             record(operand, negations)
             return
 
@@ -9873,6 +11488,19 @@ def existential_quantified_helper_formulas(body: str) -> list[str]:
         for formula in quantified_helper_formulas(body)
         if formula.startswith("\\E ")
     ]
+
+
+def duplicate_bound_quantified_helper_formulas(body: str) -> list[str]:
+    """Return quantified formulas that duplicate bound identifiers."""
+
+    duplicated: list[str] = []
+    for formula in quantified_helper_formulas(body):
+        duplicate_bound = quantified_formula_duplicate_bound_identifiers(formula)
+        if duplicate_bound:
+            duplicated.append(
+                f"{formula} duplicates bound {', '.join(duplicate_bound)}"
+            )
+    return duplicated
 
 
 def transitive_undefined_quantified_exactness_conjuncts(
@@ -9981,6 +11609,54 @@ def transitive_vacuous_quantified_exactness_conjuncts(
             continue
         walk(conjunct_operator, conjunct_operator, [conjunct_operator], set())
     return vacuous
+
+
+def transitive_duplicate_bound_quantified_exactness_conjuncts(
+    exactness_operator: str,
+    exactness_body: str,
+    definitions: dict[str, tuple[int, str]],
+    module_path: Path,
+) -> list[str]:
+    """Return quantified helpers with duplicate bindings below exactness chains."""
+
+    duplicated: list[str] = []
+    seen_messages: set[str] = set()
+
+    def record(root: str, chain: list[str], line: int, formula: str) -> None:
+        message = (
+            f"{root} reaches {formula} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line}"
+        )
+        if message in seen_messages:
+            return
+        seen_messages.add(message)
+        duplicated.append(message)
+
+    def inspect_body(root: str, chain: list[str], line: int, body: str) -> None:
+        for formula in duplicate_bound_quantified_helper_formulas(body):
+            record(root, chain, line, formula)
+
+    def walk(root: str, current: str, chain: list[str], seen: set[str]) -> None:
+        if current in seen:
+            return
+        seen.add(current)
+        definition = definitions.get(current)
+        if definition is None:
+            return
+        line, body = definition
+        inspect_body(root, chain, line, body)
+        for reference in exactness_helper_references(body):
+            if reference == current or reference == exactness_operator:
+                continue
+            if reference not in definitions:
+                continue
+            walk(root, reference, chain + [reference], seen.copy())
+
+    for conjunct_operator in tla_zero_arity_conjunct_references(exactness_body):
+        if conjunct_operator not in definitions:
+            continue
+        walk(conjunct_operator, conjunct_operator, [conjunct_operator], set())
+    return duplicated
 
 
 def transitive_unused_bound_quantified_exactness_conjuncts(
@@ -10651,6 +12327,36 @@ def temporal_extra_definition_shape_errors(
             "concrete temporal predicates before composing allowlisted "
             "temporal side-conjunct chains"
         ]
+    static_wrapped_quantified = static_wrapped_quantified_temporal_extra_conjuncts(
+        temporal_operator,
+        body,
+        definitions,
+        module_path,
+        line,
+    )
+    if static_wrapped_quantified:
+        return [
+            f"{prefix} at {display_path(module_path)}:{line} contains "
+            "transitive temporal side-conjunct chain with static-wrapper "
+            f"quantified formula {', '.join(static_wrapped_quantified)}; "
+            "name quantified temporal predicates before composing allowlisted "
+            "temporal side-conjunct chains"
+        ]
+    structured_quantified = structured_operand_quantified_temporal_extra_conjuncts(
+        temporal_operator,
+        body,
+        definitions,
+        module_path,
+        line,
+    )
+    if structured_quantified:
+        return [
+            f"{prefix} at {display_path(module_path)}:{line} contains "
+            "transitive temporal side-conjunct chain with structured "
+            f"quantified formula {', '.join(structured_quantified)}; "
+            "name quantified temporal predicates before placing them in "
+            "structured helper operands"
+        ]
     vacuous_quantified_helpers = (
         transitive_vacuous_quantified_temporal_extra_conjuncts(
             temporal_operator,
@@ -10667,6 +12373,23 @@ def temporal_extra_definition_shape_errors(
             f"helper {', '.join(vacuous_quantified_helpers)}; keep literal "
             "and self-equality, self-inequality, empty-domain, singleton-domain, self-membership, or empty-set membership quantified helper bodies "
             "out of allowlisted temporal side-conjunct chains"
+        ]
+    duplicate_bound_quantified_helpers = (
+        transitive_duplicate_bound_quantified_temporal_extra_conjuncts(
+            temporal_operator,
+            body,
+            definitions,
+            module_path,
+            line,
+        )
+    )
+    if duplicate_bound_quantified_helpers:
+        return [
+            f"{prefix} at {display_path(module_path)}:{line} contains "
+            "transitive temporal side-conjunct chain with duplicate quantified "
+            f"helper binding {', '.join(duplicate_bound_quantified_helpers)}; "
+            "bind each quantified identifier once before composing allowlisted "
+            "temporal side-conjunct chains"
         ]
     unused_bound_quantified_helpers = (
         transitive_unused_bound_quantified_temporal_extra_conjuncts(
@@ -10877,6 +12600,24 @@ def temporal_extra_definition_shape_errors(
             f"{', '.join(temporal_control_flow_helpers)}; "
             "name concrete temporal predicates before composing allowlisted "
             "temporal side-conjunct chains"
+        ]
+    structured_control_flow_helpers = (
+        structured_operand_control_flow_temporal_extra_conjuncts(
+            temporal_operator,
+            body,
+            definitions,
+            module_path,
+            line,
+        )
+    )
+    if structured_control_flow_helpers:
+        return [
+            f"{prefix} at {display_path(module_path)}:{line} contains "
+            "transitive temporal side-conjunct chain with structured "
+            "control-flow predicate-selection helper "
+            f"{', '.join(structured_control_flow_helpers)}; "
+            "name concrete temporal predicates before placing them in "
+            "structured helper operands"
         ]
     transitive_boolean_composition_helpers = (
         transitive_boolean_composition_temporal_extra_conjuncts(
@@ -11109,6 +12850,15 @@ def tla_unary_temporal_operand(expression: str) -> str | None:
 def tla_unary_action_operand(expression: str) -> str | None:
     """Return the operand of an ENABLED/UNCHANGED action wrapper, if present."""
 
+    operator_operand = tla_unary_action_operator_operand(expression)
+    if operator_operand is None:
+        return None
+    return operator_operand[1]
+
+
+def tla_unary_action_operator_operand(expression: str) -> tuple[str, str] | None:
+    """Return the operator and operand of an ENABLED/UNCHANGED wrapper."""
+
     stripped = strip_static_outer_parentheses(expression).strip()
     match = re.match(r"^(ENABLED|UNCHANGED)\b", stripped)
     if match is None:
@@ -11116,11 +12866,22 @@ def tla_unary_action_operand(expression: str) -> str | None:
     operand = stripped[match.end() :].strip()
     if not operand:
         return None
-    return strip_static_outer_parentheses(operand)
+    return match.group(1), strip_static_outer_parentheses(operand)
 
 
 def tla_unary_set_operator_operand(expression: str) -> str | None:
     """Return the operand of a static unary set operator, if present."""
+
+    operator_operand = tla_unary_set_operator_expression_operand(expression)
+    if operator_operand is None:
+        return None
+    return operator_operand[1]
+
+
+def tla_unary_set_operator_expression_operand(
+    expression: str,
+) -> tuple[str, str] | None:
+    """Return the operator and operand of a static unary set operator."""
 
     stripped = strip_static_outer_parentheses(expression).strip()
     for operator in sorted(TLA_UNARY_SET_OPERATOR_IDENTIFIERS):
@@ -11130,7 +12891,7 @@ def tla_unary_set_operator_operand(expression: str) -> str | None:
         operand = stripped[match.end() :].strip()
         if not operand:
             return None
-        return strip_static_outer_parentheses(operand)
+        return operator, strip_static_outer_parentheses(operand)
     return None
 
 
@@ -11393,6 +13154,156 @@ def transitive_undefined_quantified_temporal_extra_conjuncts(
     return undefined
 
 
+def static_wrapped_quantified_temporal_extra_conjuncts(
+    temporal_operator: str,
+    temporal_body: str,
+    definitions: dict[str, tuple[int, str]],
+    module_path: Path,
+    temporal_line: int,
+) -> list[str]:
+    """Return quantified formulas below static wrappers in temporal chains."""
+
+    quantified: list[str] = []
+    seen_messages: set[str] = set()
+
+    def record(root: str, chain: list[str], line: int, formula: str) -> None:
+        message = (
+            f"{root} reaches {formula} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line}"
+        )
+        if message in seen_messages:
+            return
+        seen_messages.add(message)
+        quantified.append(message)
+
+    def inspect_body(root: str, chain: list[str], line: int, body: str) -> None:
+        for formula in static_wrapped_quantified_formulas(body):
+            record(root, chain, line, formula)
+
+    def walk(root: str, current: str, chain: list[str], seen: set[str]) -> None:
+        if current in seen:
+            return
+        seen.add(current)
+        definition = definitions.get(current)
+        if definition is None:
+            return
+        line, body = definition
+        inspect_body(root, chain, line, body)
+        for reference in temporal_helper_references(body):
+            if reference == current or reference == temporal_operator:
+                continue
+            if reference not in definitions:
+                continue
+            walk(root, reference, chain + [reference], seen.copy())
+
+    inspect_body(temporal_operator, [temporal_operator], temporal_line, temporal_body)
+    for helper in temporal_helper_references(temporal_body):
+        if helper not in definitions:
+            continue
+        walk(helper, helper, [helper], set())
+    return quantified
+
+
+def structured_operand_quantified_temporal_extra_conjuncts(
+    temporal_operator: str,
+    temporal_body: str,
+    definitions: dict[str, tuple[int, str]],
+    module_path: Path,
+    temporal_line: int,
+) -> list[str]:
+    """Return quantified formulas below structured operands in temporal chains."""
+
+    quantified: list[str] = []
+    seen_messages: set[str] = set()
+
+    def record(root: str, chain: list[str], line: int, formula: str) -> None:
+        message = (
+            f"{root} reaches {formula} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line}"
+        )
+        if message in seen_messages:
+            return
+        seen_messages.add(message)
+        quantified.append(message)
+
+    def inspect_body(root: str, chain: list[str], line: int, body: str) -> None:
+        for formula in structured_operand_quantified_formulas(body):
+            record(root, chain, line, formula)
+
+    def walk(root: str, current: str, chain: list[str], seen: set[str]) -> None:
+        if current in seen:
+            return
+        seen.add(current)
+        definition = definitions.get(current)
+        if definition is None:
+            return
+        line, body = definition
+        inspect_body(root, chain, line, body)
+        for reference in temporal_helper_references(body):
+            if reference == current or reference == temporal_operator:
+                continue
+            if reference not in definitions:
+                continue
+            walk(root, reference, chain + [reference], seen.copy())
+
+    inspect_body(temporal_operator, [temporal_operator], temporal_line, temporal_body)
+    for helper in temporal_helper_references(temporal_body):
+        if helper not in definitions:
+            continue
+        walk(helper, helper, [helper], set())
+    return quantified
+
+
+def structured_operand_control_flow_temporal_extra_conjuncts(
+    temporal_operator: str,
+    temporal_body: str,
+    definitions: dict[str, tuple[int, str]],
+    module_path: Path,
+    temporal_line: int,
+) -> list[str]:
+    """Return control-flow formulas below structured temporal operands."""
+
+    control_flow: list[str] = []
+    seen_messages: set[str] = set()
+
+    def record(root: str, chain: list[str], line: int, formula: str) -> None:
+        message = (
+            f"{root} reaches {formula} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line}"
+        )
+        if message in seen_messages:
+            return
+        seen_messages.add(message)
+        control_flow.append(message)
+
+    def inspect_body(root: str, chain: list[str], line: int, body: str) -> None:
+        for formula in structured_operand_control_flow_formulas(body, definitions):
+            record(root, chain, line, formula)
+
+    def walk(root: str, current: str, chain: list[str], seen: set[str]) -> None:
+        if current in seen:
+            return
+        seen.add(current)
+        definition = definitions.get(current)
+        if definition is None:
+            return
+        line, body = definition
+        inspect_body(root, chain, line, body)
+        for reference in temporal_helper_references(body):
+            if reference == current or reference == temporal_operator:
+                continue
+            if reference not in definitions:
+                continue
+            walk(root, reference, chain + [reference], seen.copy())
+
+    inspect_body(temporal_operator, [temporal_operator], temporal_line, temporal_body)
+    for helper in temporal_helper_references(temporal_body):
+        if helper not in definitions:
+            continue
+        walk(helper, helper, [helper], set())
+    return control_flow
+
+
 def transitive_vacuous_quantified_temporal_extra_conjuncts(
     temporal_operator: str,
     temporal_body: str,
@@ -11441,6 +13352,56 @@ def transitive_vacuous_quantified_temporal_extra_conjuncts(
             continue
         walk(helper, helper, [helper], set())
     return vacuous
+
+
+def transitive_duplicate_bound_quantified_temporal_extra_conjuncts(
+    temporal_operator: str,
+    temporal_body: str,
+    definitions: dict[str, tuple[int, str]],
+    module_path: Path,
+    temporal_line: int,
+) -> list[str]:
+    """Return quantified temporal helpers with duplicate bindings."""
+
+    duplicated: list[str] = []
+    seen_messages: set[str] = set()
+
+    def record(root: str, chain: list[str], line: int, formula: str) -> None:
+        message = (
+            f"{root} reaches {formula} through {' -> '.join(chain)} "
+            f"at {display_path(module_path)}:{line}"
+        )
+        if message in seen_messages:
+            return
+        seen_messages.add(message)
+        duplicated.append(message)
+
+    def inspect_body(root: str, chain: list[str], line: int, body: str) -> None:
+        for formula in duplicate_bound_quantified_helper_formulas(body):
+            record(root, chain, line, formula)
+
+    def walk(root: str, current: str, chain: list[str], seen: set[str]) -> None:
+        if current in seen:
+            return
+        seen.add(current)
+        definition = definitions.get(current)
+        if definition is None:
+            return
+        line, body = definition
+        inspect_body(root, chain, line, body)
+        for reference in temporal_helper_references(body):
+            if reference == current or reference == temporal_operator:
+                continue
+            if reference not in definitions:
+                continue
+            walk(root, reference, chain + [reference], seen.copy())
+
+    inspect_body(temporal_operator, [temporal_operator], temporal_line, temporal_body)
+    for helper in temporal_helper_references(temporal_body):
+        if helper not in definitions:
+            continue
+        walk(helper, helper, [helper], set())
+    return duplicated
 
 
 def transitive_unused_bound_quantified_temporal_extra_conjuncts(
@@ -12367,6 +14328,31 @@ def transitive_vacuous_temporal_extra_conjuncts(
         seen_messages.add(message)
         vacuous.append(message)
 
+    def inspect_hidden_references(
+        root: str,
+        chain: list[str],
+        body: str,
+    ) -> None:
+        for reference in hidden_static_structured_helper_references(body):
+            if reference == chain[-1] or reference == temporal_operator:
+                continue
+            definition = definitions.get(reference)
+            if definition is None:
+                continue
+            reference_line, reference_body = definition
+            hidden_chain = chain + [reference]
+            for message in vacuous_helper_leaf_messages(
+                root,
+                reference,
+                hidden_chain,
+                reference_line,
+                reference_body,
+                definitions,
+                module_path,
+                exactness=False,
+            ):
+                record(message)
+
     def walk(root: str, current: str, chain: list[str], seen: set[str]) -> None:
         if current in seen:
             return
@@ -12377,6 +14363,7 @@ def transitive_vacuous_temporal_extra_conjuncts(
         line, body = definition
         stripped_body = strip_static_outer_parentheses(body)
         compact_body = " ".join(stripped_body.split())
+        inspect_hidden_references(root, chain, stripped_body)
         literal_body = tla_static_temporal_boolean_literal(stripped_body)
         if literal_body is not None:
             record(

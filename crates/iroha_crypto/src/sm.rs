@@ -245,6 +245,16 @@ impl Sm2PublicKey {
     pub fn from_sec1_bytes(distid: impl AsRef<str>, bytes: &[u8]) -> Result<Self, ParseError> {
         let distid = distid.as_ref();
         validate_distid(distid)?;
+        if !bytes.is_empty() && bytes.iter().all(|byte| *byte == 0) {
+            return Err(ParseError(
+                "invalid SM2 public key: all-zero SEC1 payload".to_owned(),
+            ));
+        }
+        if sec1_uncompressed_public_key_has_zero_coordinate_material(bytes) {
+            return Err(ParseError(
+                "invalid SM2 public key: all-zero SEC1 coordinate payload".to_owned(),
+            ));
+        }
         VerifyingKey::from_sec1_bytes(distid, bytes)
             .map(Self)
             .map_err(|_| ParseError("invalid SM2 public key".to_owned()))
@@ -406,6 +416,12 @@ impl Sm2PublicKey {
     }
 }
 
+fn sec1_uncompressed_public_key_has_zero_coordinate_material(bytes: &[u8]) -> bool {
+    bytes.len() == SM2_PUBLIC_KEY_UNCOMPRESSED_LEN
+        && bytes.first() == Some(&0x04)
+        && bytes[1..].iter().all(|byte| *byte == 0)
+}
+
 impl PartialEq for Sm2PublicKey {
     fn eq(&self, other: &Self) -> bool {
         self.distid() == other.distid() && self.to_sec1_bytes(false) == other.to_sec1_bytes(false)
@@ -432,6 +448,11 @@ impl Sm2PrivateKey {
     pub fn from_bytes(distid: impl Into<String>, secret: &[u8]) -> Result<Self, ParseError> {
         if secret.len() != 32 {
             return Err(ParseError("SM2 private key must be 32 bytes".into()));
+        }
+        if secret.iter().all(|&byte| byte == 0) {
+            return Err(ParseError(
+                "SM2 private key material must not be all zero".into(),
+            ));
         }
         let distid = distid.into();
         validate_distid(&distid)?;
@@ -3664,6 +3685,31 @@ mod tests {
     }
 
     #[test]
+    fn sm2_public_key_from_sec1_bytes_rejects_all_zero_material_before_backend() {
+        let all_zero = [0u8; 65];
+        let err = Sm2PublicKey::from_sec1_bytes(Sm2PublicKey::DEFAULT_DISTID, &all_zero)
+            .expect_err("all-zero SM2 SEC1 public key must fail before backend parsing");
+
+        assert!(
+            err.to_string().contains("all-zero"),
+            "unexpected all-zero public key error: {err}"
+        );
+    }
+
+    #[test]
+    fn sm2_public_key_from_sec1_bytes_rejects_zero_coordinate_material_before_backend() {
+        let mut zero_coordinates = [0u8; SM2_PUBLIC_KEY_UNCOMPRESSED_LEN];
+        zero_coordinates[0] = 0x04;
+        let err = Sm2PublicKey::from_sec1_bytes(Sm2PublicKey::DEFAULT_DISTID, &zero_coordinates)
+            .expect_err("zero-coordinate SM2 SEC1 public key must fail before backend parsing");
+
+        assert!(
+            err.to_string().contains("all-zero SEC1 coordinate"),
+            "unexpected zero-coordinate public key error: {err}"
+        );
+    }
+
+    #[test]
     fn sm2_public_key_verify_maps_malformed_signature_to_bad_signature() {
         let private =
             Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, [0x13; 32]).expect("secret key");
@@ -3781,6 +3827,19 @@ mod tests {
             ),
             Ok(_) => panic!("all-zero SM2 seed material must fail"),
         }
+    }
+
+    #[test]
+    fn sm2_private_key_from_bytes_rejects_all_zero_material() {
+        let err = match Sm2PrivateKey::from_bytes(Sm2PublicKey::DEFAULT_DISTID, &[0u8; 32]) {
+            Ok(_) => panic!("all-zero SM2 private-key material must fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected all-zero private-key error: {err}"
+        );
     }
 
     #[test]

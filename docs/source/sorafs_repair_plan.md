@@ -48,7 +48,9 @@ artifact in the JSON summary before required-kind validity is reported.
 Governance handoff artifacts also publish `policy_digest_hex`; governance
 approval artifacts must bind `policy_digest_hex` to that valid handoff policy
 digest, and the checker emits those valid handoff policies as
-`valid_policy_digests`.
+`valid_policy_digests`. Signed auditor API, worker lifecycle, and event stream
+artifacts also bind `route_count` to the unique canonical `routes[].name`
+inventory and reject duplicate route entries before promotion can report ready.
 `scripts/build_sorafs_repair_canary.py` builds individual payload-free SF-8b
 canary artifacts for auditor roster, failure capture, signed auditor API,
 worker lifecycle, event streams, governance handoff, observability, and
@@ -411,7 +413,9 @@ governance approval artifacts carry a `handoff_digest_hex` that matches a valid
 governance handoff artifact.
 Governance handoff artifacts also carry `policy_digest_hex`; the checker emits
 those values as `valid_policy_digests`, and governance approval artifacts must
-carry a matching `policy_digest_hex`.
+carry a matching `policy_digest_hex`. Signed auditor API, worker lifecycle, and
+event stream artifacts must also keep `route_count` equal to the unique
+canonical `routes[].name` inventory and reject duplicate route entries.
 Its collection planner exposes those exact required payload fields through
 `--dry-run` and validates the schema-closed collection plan, required kinds,
 thresholds, external evidence map, evidence contract, and command steps before

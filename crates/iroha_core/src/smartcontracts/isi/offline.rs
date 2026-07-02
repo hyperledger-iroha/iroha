@@ -1419,6 +1419,12 @@ pub mod isi {
                 "offline note certificate assertion_public_key must be an uncompressed P-256 SEC1 key",
             ));
         }
+        if p256_public_key_has_zero_coordinate_material(&certificate.assertion_public_key) {
+            return Err(labeled_invariant(
+                "invalid_issuer_cert",
+                "offline note certificate assertion_public_key must be a valid uncompressed P-256 SEC1 point",
+            ));
+        }
         P256PublicKey::from_sec1_bytes(&certificate.assertion_public_key)
             .map(|_| ())
             .map_err(|_| {
@@ -2945,6 +2951,12 @@ pub mod isi {
         Ok(())
     }
 
+    fn p256_public_key_has_zero_coordinate_material(public_key: &[u8]) -> bool {
+        public_key.len() == OFFLINE_ATTESTATION_P256_UNCOMPRESSED_PUBLIC_KEY_LEN
+            && public_key.first() == Some(&0x04)
+            && public_key[1..].iter().all(|byte| *byte == 0)
+    }
+
     fn validate_p256_uncompressed_public_key(public_key: &[u8]) -> Result<(), Error> {
         if public_key.len() != OFFLINE_ATTESTATION_P256_UNCOMPRESSED_PUBLIC_KEY_LEN
             || public_key.first() != Some(&0x04)
@@ -2952,6 +2964,13 @@ pub mod isi {
             return Err(labeled_invariant(
                 "invalid_attestation",
                 "offline device attestation assertion public key must be an uncompressed P-256 SEC1 key",
+            )
+            .into());
+        }
+        if p256_public_key_has_zero_coordinate_material(public_key) {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "offline device attestation assertion public key must be a valid uncompressed P-256 SEC1 point",
             )
             .into());
         }

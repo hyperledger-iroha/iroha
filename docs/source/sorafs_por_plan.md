@@ -329,6 +329,9 @@ to `iroha_config`. Governance approval evidence must also carry a
 `policy_digest_hex` matching a valid randomness artifact. Seed-replay binding
 failures are attached to the offending artifact in the emitted summary, and
 policy binding failures are attached to the governance approval artifact.
+Scheduler-runtime and reporting/archive artifacts also bind `route_count` to
+the unique canonical `routes[].name` inventory and reject duplicate route
+entries before promotion can report ready.
 
 ## Rollout Status
 Implemented locally:

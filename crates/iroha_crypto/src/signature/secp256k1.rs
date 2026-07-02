@@ -377,6 +377,11 @@ mod ecdsa_secp256k1 {
         }
 
         pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey, ParseError> {
+            if !payload.is_empty() && payload.iter().all(|&byte| byte == 0) {
+                return Err(ParseError(
+                    "secp256k1 public key material must not be all zero".to_string(),
+                ));
+            }
             let key =
                 PublicKey::from_sec1_bytes(payload).map_err(|err| ParseError(err.to_string()))?;
             let canonical = key.to_sec1_bytes();
@@ -389,6 +394,11 @@ mod ecdsa_secp256k1 {
         }
 
         pub fn parse_private_key(payload: &[u8]) -> Result<PrivateKey, ParseError> {
+            if !payload.is_empty() && payload.iter().all(|&byte| byte == 0) {
+                return Err(ParseError(
+                    "secp256k1 private key material must not be all zero".to_string(),
+                ));
+            }
             let bytes = Zeroizing::new(payload.to_vec());
             PrivateKey::from_slice(bytes.as_ref()).map_err(|err| ParseError(err.to_string()))
         }
@@ -487,6 +497,17 @@ mod test {
     }
 
     #[test]
+    fn parse_private_key_rejects_all_zero_scalar_material() {
+        let err = EcdsaSecp256k1Sha256::parse_private_key(&[0u8; 32])
+            .expect_err("all-zero secp256k1 private key material must fail");
+
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected all-zero private-key error: {err:?}"
+        );
+    }
+
+    #[test]
     fn secp256k1_try_keypair_rejects_all_zero_seed_material() {
         for len in [1, 31, 32, 33] {
             let err = EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::UseSeed(vec![0u8; len]))
@@ -548,6 +569,21 @@ mod test {
 
         let err = EcdsaSecp256k1Sha256::parse_public_key(non_canonical).unwrap_err();
         assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
+    }
+
+    #[test]
+    fn parse_public_key_rejects_all_zero_sec1_material() {
+        for len in [33, 65] {
+            let payload = vec![0u8; len];
+
+            let err = EcdsaSecp256k1Sha256::parse_public_key(&payload)
+                .expect_err("all-zero secp256k1 public key material must fail");
+
+            assert!(
+                err.to_string().contains("all zero"),
+                "unexpected all-zero public-key error for {len} bytes: {err:?}"
+            );
+        }
     }
 
     #[test]

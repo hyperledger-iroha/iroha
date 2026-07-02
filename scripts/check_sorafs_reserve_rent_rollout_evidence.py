@@ -71,6 +71,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     require_sum_equal,
     require_zero_count,
 )
@@ -491,6 +492,23 @@ def validate_route_records(
             )
 
 
+def validate_route_inventory(
+    payload: dict[str, Any],
+    required_routes: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    require_count_equal(payload, "route_count", "passed_route_count", errors)
+    require_string_coverage(payload, "routes", "name", required_routes, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+
+
 def validate_policy_config(payload: dict[str, Any], errors: list[str]) -> None:
     require_policy_digest(payload, errors)
     require_positive_int(payload, "policy_version", errors)
@@ -550,8 +568,7 @@ def validate_lifecycle_service(
     options: ValidationOptions,
 ) -> None:
     require_policy_matrix_ledger_binding(payload, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_LIFECYCLE_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_LIFECYCLE_ROUTES, errors)
     require_maximum_number(
         payload,
         "max_lifecycle_lag_seconds",
@@ -572,8 +589,7 @@ def validate_signed_routes(
     options: ValidationOptions,
 ) -> None:
     require_policy_matrix_ledger_binding(payload, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_SIGNED_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_SIGNED_ROUTES, errors)
     require_maximum_number(
         payload,
         "max_route_latency_ms",

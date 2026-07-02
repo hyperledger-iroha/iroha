@@ -4533,3 +4533,91 @@ def require_string_coverage(
     for required in required_labels:
         if required not in present:
             errors.append(f"{array_name} must include {value_label} `{required}`")
+
+
+def _canonical_string_inventory_labels(
+    payload: Mapping[str, Any],
+    array_field: str,
+    field: str,
+    *,
+    allow_scalar_items: bool,
+) -> list[str] | None:
+    """Return canonical inventory labels when every row has canonical shape."""
+
+    items = payload.get(array_field)
+    if not isinstance(items, list):
+        return None
+    value_label = field or "value"
+    labels: list[str] = []
+    for item in items:
+        raw: Any = None
+        if isinstance(item, str) and allow_scalar_items and not field:
+            raw = item
+        elif isinstance(item, Mapping) and field:
+            raw = item.get(field)
+        else:
+            return None
+        row_errors: list[str] = []
+        value = _require_validation_label(
+            raw,
+            row_errors,
+            label_name=f"validation {value_label}",
+        )
+        if value is None:
+            return None
+        labels.append(value)
+    return labels
+
+
+def require_string_inventory_count_match(
+    payload: Mapping[str, Any],
+    array_field: str,
+    count_field: str,
+    errors: list[str],
+    *,
+    field: str = "",
+    allow_scalar_items: bool = True,
+) -> None:
+    """Require a count field to match unique canonical inventory labels."""
+
+    if not isinstance(allow_scalar_items, bool):
+        errors.append("validation allow_scalar_items must be a boolean")
+        return
+    if not isinstance(payload, Mapping):
+        errors.append("payload must be an object")
+        return
+    array_name = _require_validation_label(
+        array_field,
+        errors,
+        label_name="validation array field",
+    )
+    count_name = _require_validation_label(
+        count_field,
+        errors,
+        label_name="validation count field",
+    )
+    if field:
+        field_name = _require_validation_label(
+            field,
+            errors,
+            label_name="validation field",
+        )
+    else:
+        field_name = ""
+    if array_name is None or count_name is None or field_name is None:
+        return
+    labels = _canonical_string_inventory_labels(
+        payload,
+        array_name,
+        field_name,
+        allow_scalar_items=allow_scalar_items,
+    )
+    if labels is None:
+        return
+    unique_labels = set(labels)
+    if len(unique_labels) != len(labels):
+        errors.append(f"{array_name} must not contain duplicate values")
+    count = payload.get(count_name)
+    if isinstance(count, int) and not isinstance(count, bool):
+        if count != len(unique_labels):
+            errors.append(f"{count_name} must match unique {array_name} count")
