@@ -227,9 +227,9 @@ class OfflineCashCodecTest {
         val canonicalChallenge = hashHex(0xab)
         assertEquals(canonicalChallenge, deviceProof().challengeHashHex)
         assertEquals("ios", deviceProof(platform = "ios").platform)
-        assertEquals("android-keymint", deviceProof(platform = "android-keymint").platform)
+        assertEquals("android", deviceProof(platform = "android").platform)
 
-        for (invalidPlatform in listOf("ios-appattest", "android-keymint ", "Android")) {
+        for (invalidPlatform in listOf("ios-appattest", "android-keymint", "android-keymint ", "Android")) {
             assertEquals(
                 "platform must be a supported first-release value",
                 assertFailsWith<IllegalArgumentException> {
@@ -279,7 +279,7 @@ class OfflineCashCodecTest {
         assertEquals("production", deviceBinding(platform = "ios", iosEnvironment = "production").iosEnvironment)
         assertEquals("development", deviceBinding(platform = "ios", iosEnvironment = "development").iosEnvironment)
 
-        for (invalidPlatform in listOf("ios-appattest", "android-keymint ", "Android")) {
+        for (invalidPlatform in listOf("ios-appattest", "android-keymint", "android-keymint ", "Android")) {
             assertEquals(
                 "platform must be a supported first-release value",
                 assertFailsWith<IllegalArgumentException> {

@@ -1205,6 +1205,52 @@ def test_deploy_contract_encodes_alias_first_payload_and_parses_response() -> No
     }
 
 
+def test_deploy_contract_posts_fee_sponsor_metadata() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=202,
+            payload={
+                "ok": True,
+                "bundle_name": "single-contract-deploy",
+                "bundle_digest": "mock-bundle-digest",
+                "chain_fingerprint": "mock-chain@height-0",
+                "dry_run": False,
+                "completed_stages": ["plan", "deploy"],
+                "failure_point": None,
+                "contracts": [],
+                "init_calls": [],
+                "assertions": [],
+            },
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    client.deploy_contract(
+        authority=CANONICAL_OWNER,
+        private_key="00" * 32,
+        code_b64="AQID",
+        contract_alias="router::universal",
+        gas_asset_id="xor#sora",
+        fee_sponsor=CANONICAL_OWNER,
+        gas_limit=10_000_000,
+    )
+
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload["gas_asset_id"] == "xor#sora"
+    assert payload["fee_sponsor"] == CANONICAL_OWNER
+    assert payload["gas_limit"] == 10_000_000
+
+    with pytest.raises(ValueError, match="deploy_contract.fee_sponsor"):
+        client.deploy_contract(
+            authority=CANONICAL_OWNER,
+            private_key="00" * 32,
+            code_b64="AQID",
+            contract_alias="router::universal",
+            fee_sponsor="bad sponsor",
+        )
+
+
 def test_call_contract_posts_selector_payload_and_parses_response() -> None:
     session = RecordingSession()
     session.queue(

@@ -86,7 +86,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 14;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
 const SORAFS_ORDERBOOK_SIDE_ASK: u32 = 2;
@@ -8456,6 +8456,73 @@ fn kagemusha_recursive_spend_append_from_request_archive(
     .map_err(|_| BridgeError::KagemushaProve)
 }
 
+/// Prepare the initial online-to-offline Kagemusha top-up instruction.
+///
+/// Input is Norito archive bytes of
+/// `iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1`.
+/// Output is Norito archive bytes of
+/// `iroha_data_model::isi::offline::KagemushaTransfer`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup(
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_instruction_ptr: *mut *mut c_uchar,
+    out_instruction_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_instruction_ptr, out_instruction_len)?;
+        let bytes =
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
+        let instruction = kagemusha_recursive_spend_topup_from_init_request_archive(&bytes)?;
+        let archive = norito::to_bytes(&instruction).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe {
+            write_kagemusha_archive_bridge(out_instruction_ptr, out_instruction_len, &archive)
+        }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+fn kagemusha_recursive_spend_topup_from_init_request_archive(
+    request_archive: &[u8],
+) -> BridgeResult<iroha_data_model::isi::offline::KagemushaTransfer> {
+    use iroha_core::zk::{
+        kagemusha_verified_folded_public_inputs_from_record_bundle,
+        kagemusha_verified_folded_public_inputs_from_record_bundle_at_height,
+    };
+    use iroha_data_model::{
+        isi::offline::KagemushaTransfer, offline::KagemushaRecursiveSpendInitRequestV1,
+    };
+
+    let request: KagemushaRecursiveSpendInitRequestV1 =
+        norito::decode_from_bytes(request_archive).map_err(|_| BridgeError::KagemushaProve)?;
+    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)?;
+    request
+        .validate_public_binding()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    let _public_inputs = match request.block_height {
+        Some(block_height) => kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(
+            &request.record_bundle,
+            block_height,
+        ),
+        None => kagemusha_verified_folded_public_inputs_from_record_bundle(&request.record_bundle),
+    }
+    .map_err(|_| BridgeError::KagemushaProve)?;
+    let step = request
+        .record_bundle
+        .bundle
+        .steps
+        .first()
+        .ok_or(BridgeError::KagemushaProve)?;
+    Ok(KagemushaTransfer::new(
+        request.record_bundle.bundle.asset.clone(),
+        step.input_nullifiers.clone(),
+        step.output_commitments.clone(),
+        step.attachment.clone(),
+        Some(step.root_before),
+    ))
+}
+
 /// Build the canonical Reserved-lineage transition profile for an init request.
 ///
 /// Input is Norito archive bytes of
@@ -10265,6 +10332,16 @@ mod offline_note_prover_tests {
         norito::decode_from_bytes(&out).expect("decode Kagemusha recursive spend lineage witness")
     }
 
+    fn decode_kagemusha_transfer(
+        out_ptr: *mut c_uchar,
+        out_len: c_ulong,
+    ) -> iroha_data_model::isi::offline::KagemushaTransfer {
+        assert!(!out_ptr.is_null(), "prover output pointer must be set");
+        let out = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        connect_norito_free(out_ptr);
+        norito::decode_from_bytes(&out).expect("decode Kagemusha transfer")
+    }
+
     fn mutate_kagemusha_bundle_hop_envelope(
         bundle: &mut KagemushaVerifiedFoldBundle,
         mutate: impl FnOnce(&mut iroha_data_model::zk::OpenVerifyEnvelope),
@@ -10490,7 +10567,7 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_abi_version_advertises_sorafs_hedging_validation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 14);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 15);
     }
 
     #[test]
@@ -11787,7 +11864,7 @@ mod offline_note_prover_tests {
         type RecursiveSpendFfi =
             unsafe extern "C" fn(*const c_uchar, c_ulong, *mut *mut c_uchar, *mut c_ulong) -> c_int;
 
-        let entries: [(&str, RecursiveSpendFfi); 8] = [
+        let entries: [(&str, RecursiveSpendFfi); 9] = [
             (
                 "init",
                 connect_norito_kagemusha_recursive_spend_init as RecursiveSpendFfi,
@@ -11795,6 +11872,10 @@ mod offline_note_prover_tests {
             (
                 "append",
                 connect_norito_kagemusha_recursive_spend_append as RecursiveSpendFfi,
+            ),
+            (
+                "top-up",
+                connect_norito_kagemusha_recursive_spend_topup as RecursiveSpendFfi,
             ),
             (
                 "transition profile init",
@@ -12022,6 +12103,64 @@ mod offline_note_prover_tests {
             "missing Reserved-lineage key artifacts must not return bytes"
         );
         assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_topup_bridge_builds_transfer_from_init_request() {
+        let request = sample_recursive_spend_init_request_for_transition_profile();
+        let step = request
+            .record_bundle
+            .bundle
+            .steps
+            .first()
+            .expect("sample init request has one checked hop")
+            .clone();
+        let archive = norito::to_bytes(&request).expect("encode top-up init request");
+
+        let instruction = kagemusha_recursive_spend_topup_from_init_request_archive(&archive)
+            .expect("top-up bridge accepts valid checked one-hop init request");
+        assert_eq!(instruction.asset, request.record_bundle.bundle.asset);
+        assert_eq!(instruction.inputs, step.input_nullifiers);
+        assert_eq!(instruction.outputs, step.output_commitments);
+        assert_eq!(instruction.proof, step.attachment);
+        assert_eq!(instruction.root_hint, Some(step.root_before));
+
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let status = unsafe {
+            connect_norito_kagemusha_recursive_spend_topup(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, 0);
+        let ffi_instruction = decode_kagemusha_transfer(out_ptr, out_len);
+        assert_eq!(ffi_instruction, instruction);
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_topup_bridge_rejects_unchecked_or_wrong_shape_init_requests() {
+        let mut request = sample_recursive_spend_init_request_for_transition_profile();
+        mutate_kagemusha_bundle_hop_envelope(&mut request.record_bundle.bundle, |envelope| {
+            envelope.circuit_id = "bridge-forged-topup-hop-proof-circuit-id".to_owned();
+        });
+        let archive = norito::to_bytes(&request).expect("encode forged top-up init request");
+        assert!(
+            kagemusha_recursive_spend_topup_from_init_request_archive(&archive).is_err(),
+            "top-up bridge must verify the checked fold proof before emitting a transfer"
+        );
+
+        let mut two_hop = sample_recursive_spend_init_request_for_transition_profile();
+        two_hop.record_bundle = sample_two_hop_kagemusha_verified_record_bundle();
+        two_hop.current_note.note_commitment =
+            two_hop.record_bundle.bundle.steps[0].output_commitments[0];
+        let archive = norito::to_bytes(&two_hop).expect("encode two-hop top-up init request");
+        assert!(
+            kagemusha_recursive_spend_topup_from_init_request_archive(&archive).is_err(),
+            "top-up bridge accepts only the one-hop init request shape"
+        );
     }
 
     #[test]
@@ -12720,7 +12859,7 @@ mod offline_note_prover_tests {
                 spend_nullifier: fixed_bytes(b"bridge-lineage-append-current-nullifier"),
                 amount: Numeric::new(7, 0),
             },
-            output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
                 .to_owned(),
             previous_recursive_proof_open_envelopes_archive,
             lineage_verifier_key: None,
@@ -25111,6 +25250,27 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeTopUpSpend(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_recursive_spend_archive(&mut env, request_archive, "top-up", |bytes| {
+        let instruction = kagemusha_recursive_spend_topup_from_init_request_archive(bytes)
+            .map_err(|_| "invalid Kagemusha recursive spend top-up init request".to_owned())?;
+        norito::to_bytes(&instruction)
+            .map_err(|err| format!("failed to encode top-up instruction: {err}"))
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeTransitionProfileInit(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -25582,6 +25742,27 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         let bundle = kagemusha_recursive_spend_append_from_request_archive(bytes)
             .map_err(|_| "invalid Kagemusha recursive spend append request".to_owned())?;
         norito::to_bytes(&bundle).map_err(|err| format!("failed to encode append bundle: {err}"))
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeTopUpSpend(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_recursive_spend_archive(&mut env, request_archive, "top-up", |bytes| {
+        let instruction = kagemusha_recursive_spend_topup_from_init_request_archive(bytes)
+            .map_err(|_| "invalid Kagemusha recursive spend top-up init request".to_owned())?;
+        norito::to_bytes(&instruction)
+            .map_err(|err| format!("failed to encode top-up instruction: {err}"))
     })
 }
 
@@ -27961,6 +28142,11 @@ mod tests {
         PRIVACY_FFI_ERROR_PRODUCTION_DISABLED;
     #[cfg(feature = "privacy-production-enabled")]
     const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PROVING_FAILED;
+
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
 
     struct ResetConfig(AccelerationConfig);
 

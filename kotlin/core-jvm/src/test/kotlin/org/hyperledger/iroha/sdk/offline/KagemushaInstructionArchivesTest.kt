@@ -80,6 +80,31 @@ class KagemushaInstructionArchivesTest {
     }
 
     @Test
+    fun `topUpTransactionPayload preserves transfer archive bytes after caller mutation`() {
+        val archive = kagemushaArchive(KagemushaInstructionType.TRANSFER)
+        val expectedTransferArchive = archive.copyOf()
+        val payload = KagemushaInstructionArchives.topUpTransactionPayload(
+            instructionArchive = archive,
+            chainId = "00000042",
+            authority = sampleAuthority(),
+            creationTimeMs = 1_735_000_000_000L,
+            timeToLiveMs = 3_500L,
+            nonce = 17,
+            metadata = mapOf("mode" to "kagemusha-topup"),
+        )
+
+        val executable = assertIs<Executable.Instructions>(payload.executable)
+        val wire = assertIs<WirePayload>(executable.instructions.single().payload)
+        assertEquals(
+            "iroha_data_model::isi::offline::KagemushaTransfer",
+            wire.wireName,
+        )
+        assertContentEquals(expectedTransferArchive, wire.payloadBytes)
+        archive[0] = 0x7d.toByte()
+        assertContentEquals(expectedTransferArchive, wire.payloadBytes)
+    }
+
+    @Test
     fun `recursiveRedeemTransactionPayload preserves redeem archive bytes after caller mutation`() {
         val archive = kagemushaArchive(KagemushaInstructionType.REDEEM_RECURSIVE)
         val expectedRedeemArchive = archive.copyOf()
@@ -154,6 +179,32 @@ class KagemushaInstructionArchivesTest {
             "authority must not contain surrounding whitespace",
             paddedRequestAuthority.message,
         )
+
+        val paddedTopUpChainId = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
+                initRequestArchive = byteArrayOf(),
+                chainId = " 00000042",
+                authority = authority,
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals(
+            "chainId must not contain surrounding whitespace",
+            paddedTopUpChainId.message,
+        )
+
+        val paddedTopUpAuthority = assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
+                initRequestArchive = byteArrayOf(),
+                chainId = "00000042",
+                authority = " $authority",
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertEquals(
+            "authority must not contain surrounding whitespace",
+            paddedTopUpAuthority.message,
+        )
     }
 
     @Test
@@ -175,8 +226,19 @@ class KagemushaInstructionArchivesTest {
             KagemushaInstructionArchives.recursiveRedeemInstructionBoxFromRequest(byteArrayOf())
         }
         assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpInstructionBoxFromInitRequest(byteArrayOf())
+        }
+        assertFailsWith<IllegalArgumentException> {
             KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(
                 redeemRequestArchive = byteArrayOf(),
+                chainId = "00000042",
+                authority = sampleAuthority(),
+                creationTimeMs = 1_735_000_000_000L,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaInstructionArchives.topUpTransactionPayloadFromInitRequest(
+                initRequestArchive = byteArrayOf(),
                 chainId = "00000042",
                 authority = sampleAuthority(),
                 creationTimeMs = 1_735_000_000_000L,

@@ -1425,7 +1425,7 @@ impl IVMHost for DefaultHost {
                     return Ok(Self::pointer_gas(0));
                 }
                 let tlv = Self::decode_any_tlv(vm, ptr)?;
-                if tlv.type_id != PointerType::NoritoBytes {
+                if !matches!(tlv.type_id, PointerType::NoritoBytes | PointerType::Blob) {
                     return Err(VMError::NoritoInvalid);
                 }
                 let encoded_len = tlv.payload.len();
@@ -3353,6 +3353,23 @@ mod tests {
             .expect("roundtrip tlv");
         assert_eq!(roundtrip.type_id, PointerType::Blob);
         assert_eq!(roundtrip.payload, payload);
+
+        let blob_carrier = tlv(PointerType::Blob, &tlv(PointerType::Blob, payload));
+        let blob_carrier_ptr = vm
+            .alloc_input_tlv(&blob_carrier)
+            .expect("alloc blob carrier");
+        vm.set_register(10, blob_carrier_ptr);
+        vm.set_register(11, PointerType::Blob as u64);
+        assert_eq!(
+            host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
+            Ok(DefaultHost::pointer_gas(envelope_len))
+        );
+        let blob_roundtrip = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("blob-carrier roundtrip tlv");
+        assert_eq!(blob_roundtrip.type_id, PointerType::Blob);
+        assert_eq!(blob_roundtrip.payload, payload);
     }
 
     #[test]

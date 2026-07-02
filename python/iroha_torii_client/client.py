@@ -5963,6 +5963,9 @@ class ToriiClient:
         code_b64: str,
         contract_alias: str,
         lease_expiry_ms: Optional[int] = None,
+        gas_asset_id: Optional[str] = None,
+        fee_sponsor: Optional[str] = None,
+        gas_limit: Any = None,
     ) -> Optional[ContractDeployResponse]:
         """Deploy bytecode via ``POST /v1/contracts/deploy``."""
 
@@ -5991,6 +5994,21 @@ class ToriiClient:
         )
         if lease_expiry_value is not None:
             payload["lease_expiry_ms"] = lease_expiry_value
+        if gas_asset_id is not None:
+            payload["gas_asset_id"] = self._require_non_empty_string(
+                gas_asset_id,
+                "deploy_contract.gas_asset_id",
+            )
+        if fee_sponsor is not None:
+            payload["fee_sponsor"] = self._normalize_canonical_account_id(
+                fee_sponsor,
+                "deploy_contract.fee_sponsor",
+            )
+        if gas_limit is not None:
+            gas_limit_value = self._coerce_int(gas_limit, "deploy_contract.gas_limit")
+            if gas_limit_value <= 0:
+                raise ValueError("deploy_contract.gas_limit must be positive")
+            payload["gas_limit"] = gas_limit_value
         response = self._request(
             "POST",
             "/v1/contracts/deploy",

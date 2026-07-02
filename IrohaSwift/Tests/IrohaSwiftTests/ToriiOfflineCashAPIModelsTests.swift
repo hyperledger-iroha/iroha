@@ -70,7 +70,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             XCTAssertEqual(error as? OfflineNotePayloadError, .invalidField("issuer_signature_base64"))
         }
 
-        for invalidPlatform in ["android", "ios", "android-keymint ", "Android-keymint", "ios-appattest-android"] {
+        for invalidPlatform in ["android", "android-keymint ", "Android-keymint", "ios-appattest-android"] {
             XCTAssertThrowsError(try Self.certificate(
                 platform: invalidPlatform,
                 assertionScheme: "android-keymint-ecdsa-p256-usage-limit-v1",
@@ -268,10 +268,10 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         let canonicalChallenge = Self.hashHex(0xab)
         let canonicalAssertion = Data("assertion".utf8).base64EncodedString()
         XCTAssertEqual(try Self.proof().challengeHashHex, canonicalChallenge)
-        XCTAssertEqual(try Self.proof(platform: "android-keymint").platform, "android-keymint")
+        XCTAssertEqual(try Self.proof(platform: "android").platform, "android")
 
         func assertInvalidProof(
-            platform: String = OfflineNoteV2Constants.iosAppAttestPlatform,
+            platform: String = OfflineNoteV2Constants.iosPlatform,
             attestationKeyId: String = "attest-key",
             challengeHashHex: String = canonicalChallenge,
             assertionBase64: String = canonicalAssertion,
@@ -315,7 +315,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             }
         }
 
-        for invalidPlatform in ["ios", "android-keymint ", "Android"] {
+        for invalidPlatform in ["ios-appattest", "android-keymint", "android-keymint ", "Android"] {
             try assertInvalidProof(platform: invalidPlatform, expectedField: "platform")
         }
         for invalidKeyId in ["", " attest-key", "attest-key\n"] {
@@ -338,16 +338,16 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     func testDeviceBindingRejectsNonCanonicalIdentityFields() throws {
         XCTAssertEqual(try Self.binding().offlinePublicKey, "offline-public-key")
         XCTAssertEqual(
-            try Self.binding(platform: OfflineNoteV2Constants.iosAppAttestPlatform, iosEnvironment: "production").iosEnvironment,
+            try Self.binding(platform: OfflineNoteV2Constants.iosPlatform, iosEnvironment: "production").iosEnvironment,
             "production"
         )
         XCTAssertEqual(
-            try Self.binding(platform: OfflineNoteV2Constants.iosAppAttestPlatform, iosEnvironment: "development").iosEnvironment,
+            try Self.binding(platform: OfflineNoteV2Constants.iosPlatform, iosEnvironment: "development").iosEnvironment,
             "development"
         )
 
         func assertInvalidBinding(
-            platform: String = OfflineNoteV2Constants.iosAppAttestPlatform,
+            platform: String = OfflineNoteV2Constants.iosPlatform,
             attestationKeyId: String = "attest-key",
             deviceId: String = "device-1",
             offlinePublicKey: String = "offline-public-key",
@@ -413,7 +413,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             }
         }
 
-        for invalidPlatform in ["ios", "ios-app-attest", "android", "android-keymint ", "Android"] {
+        for invalidPlatform in ["ios-appattest", "ios-app-attest", "android-keymint", "android-keymint ", "Android"] {
             try assertInvalidBinding(platform: invalidPlatform, expectedField: "platform")
         }
         for (field, expectedField, applyInvalid) in [
@@ -1335,7 +1335,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     }
 
     private static func binding(
-        platform: String = OfflineNoteV2Constants.iosAppAttestPlatform,
+        platform: String = OfflineNoteV2Constants.iosPlatform,
         attestationKeyId: String = "attest-key",
         deviceId: String = "device-1",
         offlinePublicKey: String = "offline-public-key",
@@ -1359,7 +1359,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     }
 
     private static func proof(
-        platform: String = OfflineNoteV2Constants.iosAppAttestPlatform,
+        platform: String = OfflineNoteV2Constants.iosPlatform,
         attestationKeyId: String = "attest-key",
         challengeHashHex: String? = nil,
         assertionBase64: String = Data("assertion".utf8).base64EncodedString(),

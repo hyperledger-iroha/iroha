@@ -402,6 +402,15 @@ int32_t connect_norito_kagemusha_recursive_spend_append(
     uint8_t** out_bundle_ptr,
     unsigned long* out_bundle_len);
 
+// Prepare the initial online-to-offline Kagemusha top-up instruction.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendInitRequestV1`.
+// Output: Norito-archive bytes of `KagemushaTransfer`.
+int32_t connect_norito_kagemusha_recursive_spend_topup(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_instruction_ptr,
+    unsigned long* out_instruction_len);
+
 // Build the canonical initial Reserved-lineage accumulator transition profile.
 // Input: Norito-archive bytes of `KagemushaRecursiveSpendInitRequestV1`.
 // Output: Norito-archive bytes of `KagemushaRecursiveSpendTransitionProfileV1`.

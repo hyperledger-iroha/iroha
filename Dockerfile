@@ -44,6 +44,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
                 regular_bins="${regular_bins} ${bin}"; \
             fi; \
         done; \
+        cargo_target_profile_dir="${PROFILE}"; \
+        if [ "${PROFILE}" = "dev" ] || [ "${PROFILE}" = "test" ]; then \
+            cargo_target_profile_dir="debug"; \
+        fi; \
         if [ -n "${regular_bins}" ]; then \
             set -- cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}"; \
             for bin in ${regular_bins}; do \
@@ -51,12 +55,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
             done; \
             CARGO_BUILD_JOBS="${effective_cargo_build_jobs}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run "$@"; \
             for bin in ${regular_bins}; do \
-                cp "/app/target/${PROFILE}/${bin}" "/outbin/${bin}"; \
+                cp "/app/target/${cargo_target_profile_dir}/${bin}" "/outbin/${bin}"; \
             done; \
         fi; \
         if [ "${build_kagami}" = "1" ]; then \
             CARGO_BUILD_JOBS="${effective_cargo_build_jobs}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}" -p iroha_kagami --bin kagami; \
-            cp "/app/target/${PROFILE}/kagami" "/outbin/kagami"; \
+            cp "/app/target/${cargo_target_profile_dir}/kagami" "/outbin/kagami"; \
         fi; \
     fi
 

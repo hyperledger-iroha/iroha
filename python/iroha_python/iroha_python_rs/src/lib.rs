@@ -4845,82 +4845,6 @@ fn zk_ace_build_transfer_authorization_v1_py(
     )
 }
 
-#[pyfunction]
-#[pyo3(name = "zk_ace_verifying_key_registration_payload_v1")]
-fn zk_ace_verifying_key_registration_payload_v1_py() -> PyResult<String> {
-    let record = zk_ace_prover::zk_ace_verifying_key_record_v1(1).map_err(|err| {
-        PyValueError::new_err(format!(
-            "failed to build ZK-ACE verifying key record: {err}"
-        ))
-    })?;
-    let key = record
-        .key
-        .as_ref()
-        .ok_or_else(|| PyValueError::new_err("ZK-ACE verifying key record has no key bytes"))?;
-
-    let mut value = json::Map::new();
-    value.insert(
-        "backend".to_owned(),
-        json::Value::String(key.backend.as_str().to_owned()),
-    );
-    value.insert(
-        "name".to_owned(),
-        json::Value::String(iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned()),
-    );
-    value.insert(
-        "version".to_owned(),
-        json::to_value(&record.version)
-            .map_err(|err| PyValueError::new_err(format!("serialize ZK-ACE key version: {err}")))?,
-    );
-    value.insert(
-        "circuit_id".to_owned(),
-        json::Value::String(record.circuit_id.clone()),
-    );
-    value.insert(
-        "public_inputs_schema_hash_hex".to_owned(),
-        json::Value::String(hex_encode(record.public_inputs_schema_hash)),
-    );
-    value.insert(
-        "curve".to_owned(),
-        json::Value::String(record.curve.clone()),
-    );
-    if let Some(gas_schedule_id) = record.gas_schedule_id.as_deref() {
-        value.insert(
-            "gas_schedule_id".to_owned(),
-            json::Value::String(gas_schedule_id.to_owned()),
-        );
-    }
-    value.insert(
-        "vk_len".to_owned(),
-        json::to_value(&record.vk_len)
-            .map_err(|err| PyValueError::new_err(format!("serialize ZK-ACE key length: {err}")))?,
-    );
-    value.insert(
-        "max_proof_bytes".to_owned(),
-        json::to_value(&record.max_proof_bytes).map_err(|err| {
-            PyValueError::new_err(format!("serialize ZK-ACE max proof bytes: {err}"))
-        })?,
-    );
-    value.insert(
-        "vk_bytes".to_owned(),
-        json::Value::String(BASE64.encode(&key.bytes)),
-    );
-    value.insert(
-        "commitment_hex".to_owned(),
-        json::Value::String(hex_encode(record.commitment)),
-    );
-    value.insert(
-        "status".to_owned(),
-        json::Value::String("Active".to_owned()),
-    );
-
-    json::to_string(&json::Value::Object(value)).map_err(|err| {
-        PyValueError::new_err(format!(
-            "failed to serialize ZK-ACE verifier-key registration payload: {err}"
-        ))
-    })
-}
-
 fn py_sequence_items<'py>(
     value: &Bound<'py, PyAny>,
     context: &str,
@@ -6810,47 +6734,44 @@ mod tests {
 
     #[test]
     fn zk_ace_verifier_key_registration_payload_matches_native_record() {
-        let raw = zk_ace_verifying_key_registration_payload_v1_py()
-            .expect("serialize ZK-ACE verifier-key registration payload");
-        let payload: json::Value =
-            json::from_str(&raw).expect("ZK-ACE verifier-key payload is JSON");
-        let object = payload
-            .as_object()
-            .expect("ZK-ACE verifier-key payload is an object");
         let record = zk_ace_prover::zk_ace_verifying_key_record_v1(1)
             .expect("native ZK-ACE verifier-key record");
         let key = record.key.as_ref().expect("record carries key bytes");
 
-        assert_eq!(
-            object.get("backend").and_then(json::Value::as_str),
-            Some(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND)
-        );
-        assert_eq!(
-            object.get("name").and_then(json::Value::as_str),
-            Some(iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID)
-        );
-        assert_eq!(
-            object.get("circuit_id").and_then(json::Value::as_str),
-            Some(iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID)
-        );
-        assert_eq!(
-            object
-                .get("public_inputs_schema_hash_hex")
-                .and_then(json::Value::as_str),
-            Some(hex_encode(record.public_inputs_schema_hash).as_str())
-        );
-        assert_eq!(
-            object.get("commitment_hex").and_then(json::Value::as_str),
-            Some(hex_encode(record.commitment).as_str())
-        );
-        assert_eq!(
-            object.get("vk_bytes").and_then(json::Value::as_str),
-            Some(BASE64.encode(&key.bytes).as_str())
-        );
-        assert_eq!(
-            object.get("status").and_then(json::Value::as_str),
-            Some("Active")
-        );
+        ensure_python();
+        Python::attach(|py| {
+            let raw = zk_ace_verifying_key_registration_payload_v1_py(py)
+                .expect("serialize ZK-ACE verifier-key registration payload");
+            let object = raw
+                .bind(py)
+                .cast::<PyDict>()
+                .expect("ZK-ACE verifier-key payload is a dict");
+            let get_str = |key: &str| -> String {
+                object
+                    .get_item(key)
+                    .expect("read ZK-ACE payload field")
+                    .unwrap_or_else(|| panic!("missing ZK-ACE payload field `{key}`"))
+                    .extract()
+                    .unwrap_or_else(|_| panic!("ZK-ACE payload field `{key}` is a string"))
+            };
+
+            assert_eq!(get_str("backend"), ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND);
+            assert_eq!(
+                get_str("name"),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
+            );
+            assert_eq!(
+                get_str("circuit_id"),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
+            );
+            assert_eq!(
+                get_str("public_inputs_schema_hash_hex"),
+                hex_encode(record.public_inputs_schema_hash)
+            );
+            assert_eq!(get_str("commitment_hex"), hex_encode(record.commitment));
+            assert_eq!(get_str("vk_bytes"), BASE64.encode(&key.bytes));
+            assert_eq!(get_str("status"), "Active");
+        });
     }
 
     #[test]
@@ -23544,10 +23465,6 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         zk_ace_authorized_transfer_digest_check_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        zk_ace_verifying_key_registration_payload_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
