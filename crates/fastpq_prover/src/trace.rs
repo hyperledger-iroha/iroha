@@ -2477,7 +2477,7 @@ mod tests {
 
     #[cfg(feature = "fastpq-gpu")]
     #[test]
-    fn fused_poseidon_gpu_batch_executes() {
+    fn fused_poseidon_gpu_batch_matches_cpu_leaves_and_first_level() {
         let Some(backend) = backend::current_gpu_backend() else {
             return;
         };
@@ -2486,7 +2486,27 @@ mod tests {
         let batch =
             PoseidonColumnBatch::from_domains_and_columns(&domains, &columns).expect("batch");
         match gpu::poseidon_hash_columns_fused(&batch, backend) {
-            Ok(_) => {}
+            Ok(hashes) => {
+                let expected_leaves =
+                    hash_columns_cpu_batch_inputs(&domains, &columns).expect("valid CPU batch");
+                let expected_parents = compute_merkle_level(&expected_leaves);
+                assert_eq!(
+                    hashes.len(),
+                    expected_leaves.len() + expected_parents.len(),
+                    "fused Poseidon output must contain leaves followed by first-level parents"
+                );
+                let (actual_leaves, actual_parents) = hashes.split_at(expected_leaves.len());
+                assert_eq!(
+                    actual_leaves,
+                    expected_leaves.as_slice(),
+                    "low-level fused Poseidon leaves diverged from CPU"
+                );
+                assert_eq!(
+                    actual_parents,
+                    expected_parents.as_slice(),
+                    "low-level fused Poseidon parents diverged from CPU first level"
+                );
+            }
             Err(gpu::GpuError::Unsupported(_)) => {
                 eprintln!("skipping fused poseidon gpu batch test: backend unavailable");
             }

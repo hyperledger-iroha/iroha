@@ -37402,6 +37402,44 @@ mod tests {
         KeyPair::try_from_seed(seed, algorithm).expect("derive SCCP fixture key")
     }
 
+    fn refresh_shape_valid_source_bridge_config(evidence: &mut SccpSourceVerifierEvidenceV1) {
+        match evidence.source_domain {
+            SCCP_DOMAIN_ETH => {
+                let source_bridge_address = sccp_source_bridge_emitter_address_as_array(
+                    &evidence.source_bridge_emitter_address,
+                )
+                .expect("ETH source bridge address");
+                evidence.source_bridge_config_hash = sccp_eth_source_bridge_config_hash_v1(
+                    evidence.source_bridge_network_id,
+                    evidence.source_domain,
+                    SCCP_DOMAIN_SORA,
+                    source_bridge_address,
+                    evidence.source_bridge_emitter_code_hash,
+                )
+                .expect("shape-valid ETH source bridge config hash");
+            }
+            SCCP_DOMAIN_TRON => {
+                let source_bridge_address = sccp_source_bridge_emitter_address_as_array(
+                    &evidence.source_bridge_emitter_address,
+                )
+                .expect("TRON source bridge address");
+                let source_bridge_owner = sccp_source_bridge_emitter_address_as_array(
+                    &evidence.source_bridge_owner_address,
+                )
+                .expect("TRON source bridge owner");
+                evidence.source_bridge_config_hash = sccp_tron_source_bridge_config_hash_v1(
+                    evidence.source_bridge_network_id,
+                    evidence.source_domain,
+                    SCCP_DOMAIN_SORA,
+                    source_bridge_address,
+                    source_bridge_owner,
+                )
+                .expect("shape-valid TRON source bridge config hash");
+            }
+            _ => {}
+        }
+    }
+
     fn assert_json_error_redacts<T>(
         json: &str,
         expected_category: &str,
@@ -58149,47 +58187,6 @@ mod tests {
                         .is_none(),
                     "adapter verifier commitment helper must reject source verifier evidence profile drift after OpenVerify rebuild: {label}"
                 );
-            }
-
-            fn refresh_shape_valid_source_bridge_config(
-                evidence: &mut SccpSourceVerifierEvidenceV1,
-            ) {
-                match evidence.source_domain {
-                    SCCP_DOMAIN_ETH => {
-                        let source_bridge_address = sccp_source_bridge_emitter_address_as_array(
-                            &evidence.source_bridge_emitter_address,
-                        )
-                        .expect("ETH source bridge address");
-                        evidence.source_bridge_config_hash = sccp_eth_source_bridge_config_hash_v1(
-                            evidence.source_bridge_network_id,
-                            evidence.source_domain,
-                            SCCP_DOMAIN_SORA,
-                            source_bridge_address,
-                            evidence.source_bridge_emitter_code_hash,
-                        )
-                        .expect("shape-valid ETH source bridge config hash");
-                    }
-                    SCCP_DOMAIN_TRON => {
-                        let source_bridge_address = sccp_source_bridge_emitter_address_as_array(
-                            &evidence.source_bridge_emitter_address,
-                        )
-                        .expect("TRON source bridge address");
-                        let source_bridge_owner = sccp_source_bridge_emitter_address_as_array(
-                            &evidence.source_bridge_owner_address,
-                        )
-                        .expect("TRON source bridge owner");
-                        evidence.source_bridge_config_hash =
-                            sccp_tron_source_bridge_config_hash_v1(
-                                evidence.source_bridge_network_id,
-                                evidence.source_domain,
-                                SCCP_DOMAIN_SORA,
-                                source_bridge_address,
-                                source_bridge_owner,
-                            )
-                            .expect("shape-valid TRON source bridge config hash");
-                    }
-                    _ => {}
-                }
             }
 
             let mut material_only_evidence_replay_cases: Vec<(

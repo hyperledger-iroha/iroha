@@ -645,6 +645,20 @@ networks as remaining launch work for this release.
   old-path wording.
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- CUDA acceleration release readiness now has focused Norito helper, IVM CUDA
+  grouped-test, scheduler GPU fallback/adversarial, FASTPQ fused Poseidon
+  parity/negative, strict workspace warnings-as-errors clippy, workspace build,
+  and workspace test no-run coverage on the local CUDA toolchain. Remaining
+  release work is to keep those gates in CI and extend the hardware matrix to
+  the production GPU/driver profiles before relying on CUDA in validator fleets.
+- DA/NPoS integration release readiness now includes the 2026-07-02 follow-up
+  for full-suite failures around large-payload DA quorum timing, staged
+  permissioned-to-NPoS cutover, quorum-aware NPoS liveness, PRF collector
+  endpoint rotation, and VRF progress drivers. The full serialized
+  `consensus_and_da` corridor is currently green locally at 366 passed, 0
+  failed, and 9 ignored. Keep this corridor in the release validation rotation,
+  and reserve the ignored multi-hour localnet soaks for scheduled/manual
+  hardware windows.
 - The C# SDK package release corridor now has a reusable isolated
   package-consumer guard that installs the packed NuGet artifact, rejects
   project-reference fallback, and runs managed API smoke checks. The C# PR

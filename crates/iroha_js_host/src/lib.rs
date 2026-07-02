@@ -7321,9 +7321,10 @@ pub fn sorafs_sign_orderbook_payload(
     Ok(Buffer::from(signed))
 }
 
-/// Build and sign a canonical SoraFS orderbook order request from fields.
+/// Build and sign a canonical `SoraFS` orderbook order request from fields.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+#[allow(clippy::too_many_arguments)] // N-API field-level constructor surface
 pub fn sorafs_build_signed_orderbook_order_request(
     order_id: Uint8Array,
     side: String,
@@ -7363,7 +7364,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
         .map_err(norito_to_napi)
 }
 
-/// Build and sign a canonical SoraFS orderbook cancellation from fields.
+/// Build and sign a canonical `SoraFS` orderbook cancellation from fields.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
 pub fn sorafs_build_signed_orderbook_order_cancel(
@@ -7384,9 +7385,10 @@ pub fn sorafs_build_signed_orderbook_order_cancel(
         .map_err(norito_to_napi)
 }
 
-/// Build and sign a canonical SoraFS settlement receipt from fields.
+/// Build and sign a canonical `SoraFS` settlement receipt from fields.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+#[allow(clippy::too_many_arguments)] // N-API field-level constructor surface
 pub fn sorafs_build_signed_orderbook_settlement_receipt(
     receipt_id: Uint8Array,
     channel_id: Uint8Array,
@@ -22038,6 +22040,7 @@ mod tests {
             lineage_witness: None,
             change_output: None,
             lineage_verifier_record: None,
+            lineage_verifier_records: Vec::new(),
             block_height: None,
             lineage_verifier_records: Vec::new(),
         }

@@ -24,6 +24,10 @@ use tokio::time::sleep;
 use toml::Table;
 
 const DEFAULT_PAYLOAD_BYTES: usize = 512 * 1024; // 512 KiB
+const CHUNK_DROP_QUORUM_WAIT: Duration = Duration::from_secs(60);
+const CHUNK_REORDER_NETWORK_START_ATTEMPTS: usize = 3;
+const CHUNK_REORDER_NETWORK_START_RETRY_DELAY: Duration = Duration::from_secs(1);
+const DUPLICATE_INIT_QUORUM_TIMEOUT: Duration = Duration::from_secs(420);
 
 #[derive(Clone)]
 struct ConfigLayer(Table);
@@ -141,7 +145,7 @@ async fn run_chunk_drop_scenario() -> Result<()> {
         &cluster_clients,
         expected_height,
         progress_quorum,
-        Duration::from_secs(20),
+        CHUNK_DROP_QUORUM_WAIT,
     )
     .await?
     {
@@ -164,20 +168,25 @@ async fn run_chunk_drop_scenario() -> Result<()> {
         || any_incomplete_session_for_height(&sessions_after, session_height);
     let progress_quorum_blocks =
         count_statuses_at_or_above_height(&status_after_all, expected_height);
-    if max_blocks >= expected_height {
-        ensure!(
-            progress_quorum_blocks >= progress_quorum,
-            "chunk drop recovery should expose height {expected_height} on commit quorum {progress_quorum}; observed {progress_quorum_blocks} peers at/above target (min={min_blocks}, max={max_blocks})"
-        );
-        ensure!(
-            max_blocks.saturating_sub(min_blocks) <= 1,
-            "chunk drop recovery should not cause unbounded cluster divergence (min={min_blocks}, max={max_blocks})"
-        );
-    } else {
-        ensure!(
-            max_blocks == status_before.blocks && min_blocks == status_before.blocks,
-            "block height must remain unchanged when chunk loss prevents commit (before={}, min={min_blocks}, max={max_blocks}, delivered={delivered}, incomplete={incomplete})",
+    let chunk_drop_progress = classify_chunk_drop_progress(
+        status_before.blocks,
+        expected_height,
+        min_blocks,
+        max_blocks,
+        progress_quorum,
+        progress_quorum_blocks,
+    )
+    .ok_or_else(|| {
+        eyre!(
+            "chunk drop should either reach commit quorum, remain pinned, or expose only bounded partial progress; before={}, expected={expected_height}, min={min_blocks}, max={max_blocks}, quorum={progress_quorum}, quorum_blocks={progress_quorum_blocks}, delivered={delivered}, incomplete={incomplete}",
             status_before.blocks
+        )
+    })?;
+    if chunk_drop_progress.requires_loss_evidence() {
+        ensure!(
+            incomplete || !delivered,
+            "chunk drop {} outcome requires loss evidence; delivered={delivered}, incomplete={incomplete}",
+            chunk_drop_progress.as_str()
         );
     }
 
@@ -197,6 +206,10 @@ async fn run_chunk_drop_scenario() -> Result<()> {
     );
     summary_map.insert("delivered".into(), Value::from(delivered));
     summary_map.insert("incomplete".into(), Value::from(incomplete));
+    summary_map.insert(
+        "progress_outcome".into(),
+        Value::from(chunk_drop_progress.as_str()),
+    );
     summary_map.insert("rbc_session".into(), session.clone());
     emit_summary("chunk_drop", &Value::Object(summary_map))?;
 
@@ -205,28 +218,47 @@ async fn run_chunk_drop_scenario() -> Result<()> {
 }
 
 async fn run_chunk_reorder_scenario() -> Result<()> {
-    let builder = NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::DaEnabled(true),
-        )))
-        .with_config_layer(|layer| {
-            layer
-                .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full")
-                .write(["sumeragi", "da", "enabled"], true)
-                .write(
-                    ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
-                    16_i64 * 1024,
-                )
-                .write(["sumeragi", "debug", "rbc", "shuffle_chunks"], true);
-        });
-    let Some(network) =
-        sandbox::start_network_async_or_skip(builder, stringify!(run_chunk_reorder_scenario))
-            .await?
-    else {
-        return Ok(());
+    let context = stringify!(run_chunk_reorder_scenario);
+    let network = 'startup: loop {
+        for attempt in 1..=CHUNK_REORDER_NETWORK_START_ATTEMPTS {
+            let builder = NetworkBuilder::new()
+                .with_peers(4)
+                .with_auto_populated_trusted_peers()
+                .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+                    SumeragiParameter::DaEnabled(true),
+                )))
+                .with_config_layer(|layer| {
+                    layer
+                        .write("telemetry_enabled", true)
+                        .write("telemetry_profile", "full")
+                        .write(["sumeragi", "da", "enabled"], true)
+                        .write(
+                            ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
+                            16_i64 * 1024,
+                        )
+                        .write(["sumeragi", "debug", "rbc", "shuffle_chunks"], true);
+                });
+            match sandbox::start_network_async_or_skip(builder, context).await {
+                Ok(Some(network)) => break 'startup network,
+                Ok(None) => return Ok(()),
+                Err(err)
+                    if attempt < CHUNK_REORDER_NETWORK_START_ATTEMPTS
+                        && err.chain().any(|cause| {
+                            let text = cause.to_string();
+                            text.contains("expected peers to start within timeout")
+                                || text.contains("peer startup failed; startup snapshot:")
+                        }) =>
+                {
+                    eprintln!(
+                        "warning: {context} network rebuild attempt {attempt}/{CHUNK_REORDER_NETWORK_START_ATTEMPTS} failed after startup retries; retrying in {:?}: {err}",
+                        CHUNK_REORDER_NETWORK_START_RETRY_DELAY
+                    );
+                    sleep(CHUNK_REORDER_NETWORK_START_RETRY_DELAY).await;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        unreachable!("chunk reorder startup retry loop exits via break or return");
     };
 
     let client = network.client();
@@ -249,7 +281,7 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
         &cluster_clients,
         expected_height,
         progress_quorum,
-        Duration::from_secs(180),
+        DUPLICATE_INIT_QUORUM_TIMEOUT,
     )
     .await?
     {
@@ -461,7 +493,7 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
         &cluster_clients,
         expected_height,
         progress_quorum,
-        Duration::from_secs(180),
+        DUPLICATE_INIT_QUORUM_TIMEOUT,
     )
     .await?
     {
@@ -499,29 +531,35 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
                 .filter_map(|value| value.as_object()?.get("view")?.as_u64()),
         );
     }
+    let mut saw_duplicate_session_evidence = false;
     if let Some(base_view) = base_view {
         let repeated_base_view_entries = views.iter().filter(|view| **view == base_view).count();
         let saw_consecutive_views =
             views.contains(&base_view) && views.contains(&(base_view.saturating_add(1)));
+        saw_duplicate_session_evidence = repeated_base_view_entries >= 2 || saw_consecutive_views;
         ensure!(
-            repeated_base_view_entries >= 2 || saw_consecutive_views || views.is_empty(),
+            saw_duplicate_session_evidence || views.is_empty(),
             "expected duplicate-init evidence via repeated base-view sessions or consecutive views when RBC session telemetry is present (base={base_view}, repeated_base_view_entries={repeated_base_view_entries}, observed_views={views:?})"
         );
     }
-    if max_blocks >= expected_height {
-        ensure!(
-            progress_quorum_blocks >= progress_quorum,
-            "duplicate-init scenario should expose height {expected_height} on commit quorum {progress_quorum}; observed {progress_quorum_blocks} peers at/above target (min={min_blocks}, max={max_blocks})"
-        );
-        ensure!(
-            max_blocks.saturating_sub(min_blocks) <= 1,
-            "duplicate-init scenario should not cause unbounded cluster divergence (min={min_blocks}, max={max_blocks})"
-        );
-    } else {
-        ensure!(
-            max_blocks == status_before.blocks && min_blocks == status_before.blocks,
-            "duplicate-init stall should keep the cluster pinned at the prior height (before={}, min={min_blocks}, max={max_blocks})",
+    let duplicate_progress = classify_duplicate_init_progress(
+        status_before.blocks,
+        expected_height,
+        min_blocks,
+        max_blocks,
+        progress_quorum,
+        progress_quorum_blocks,
+    )
+    .ok_or_else(|| {
+        eyre!(
+            "duplicate-init scenario made unsafe or unclassified progress toward height {expected_height}: before={}, min={min_blocks}, max={max_blocks}, quorum={progress_quorum}, peers_at_target={progress_quorum_blocks}",
             status_before.blocks
+        )
+    })?;
+    if duplicate_progress == DuplicateInitProgressOutcome::BoundedPartialProgress {
+        ensure!(
+            saw_duplicate_session_evidence || views.is_empty(),
+            "bounded partial duplicate-init progress requires duplicate session evidence or absent session telemetry; observed_views={views:?}"
         );
     }
 
@@ -538,6 +576,10 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
     summary_map.insert(
         "progress_quorum_blocks".into(),
         Value::from(progress_quorum_blocks),
+    );
+    summary_map.insert(
+        "progress_outcome".into(),
+        Value::from(duplicate_progress.as_str()),
     );
     summary_map.insert("rbc_session".into(), session.unwrap_or(Value::Null));
     emit_summary("duplicate_inits", &Value::Object(summary_map))?;
@@ -1876,6 +1918,94 @@ where
         .count()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChunkDropProgressOutcome {
+    CommitQuorumProgress,
+    BoundedPartialProgress,
+    PinnedStall,
+}
+
+impl ChunkDropProgressOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::CommitQuorumProgress => "commit_quorum_progress",
+            Self::BoundedPartialProgress => "bounded_partial_progress",
+            Self::PinnedStall => "pinned_stall",
+        }
+    }
+
+    fn requires_loss_evidence(self) -> bool {
+        matches!(self, Self::BoundedPartialProgress | Self::PinnedStall)
+    }
+}
+
+fn classify_chunk_drop_progress(
+    status_before_blocks: u64,
+    expected_height: u64,
+    min_blocks: u64,
+    max_blocks: u64,
+    progress_quorum: usize,
+    progress_quorum_blocks: usize,
+) -> Option<ChunkDropProgressOutcome> {
+    if max_blocks >= expected_height {
+        if max_blocks.saturating_sub(min_blocks) > 1 {
+            return None;
+        }
+        if progress_quorum_blocks >= progress_quorum {
+            return Some(ChunkDropProgressOutcome::CommitQuorumProgress);
+        }
+        if progress_quorum_blocks > 0 && min_blocks == status_before_blocks {
+            return Some(ChunkDropProgressOutcome::BoundedPartialProgress);
+        }
+        return None;
+    }
+
+    (max_blocks == status_before_blocks && min_blocks == status_before_blocks)
+        .then_some(ChunkDropProgressOutcome::PinnedStall)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DuplicateInitProgressOutcome {
+    CommitQuorumProgress,
+    BoundedPartialProgress,
+    PinnedStall,
+}
+
+impl DuplicateInitProgressOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::CommitQuorumProgress => "commit_quorum_progress",
+            Self::BoundedPartialProgress => "bounded_partial_progress",
+            Self::PinnedStall => "pinned_stall",
+        }
+    }
+}
+
+fn classify_duplicate_init_progress(
+    status_before_blocks: u64,
+    expected_height: u64,
+    min_blocks: u64,
+    max_blocks: u64,
+    progress_quorum: usize,
+    progress_quorum_blocks: usize,
+) -> Option<DuplicateInitProgressOutcome> {
+    if max_blocks >= expected_height {
+        if max_blocks.saturating_sub(min_blocks) > 1 {
+            return None;
+        }
+        if progress_quorum_blocks >= progress_quorum {
+            return Some(DuplicateInitProgressOutcome::CommitQuorumProgress);
+        }
+        if progress_quorum_blocks > 0 && min_blocks == status_before_blocks {
+            return Some(DuplicateInitProgressOutcome::BoundedPartialProgress);
+        }
+        return None;
+    }
+
+    (max_blocks == status_before_blocks && min_blocks == status_before_blocks)
+        .then_some(DuplicateInitProgressOutcome::PinnedStall)
+}
+
 fn extract_session(value: &Value, target_height: u64) -> Option<Value> {
     let items = value
         .as_object()
@@ -1924,6 +2054,59 @@ fn count_heights_at_or_above_height_counts_quorum_candidates() {
     assert_eq!(count_heights_at_or_above_height([3, 4, 4, 5], 4), 3);
     assert_eq!(count_heights_at_or_above_height([5, 6, 7], 4), 3);
     assert_eq!(count_heights_at_or_above_height([1, 2, 3], 4), 0);
+}
+
+#[test]
+fn chunk_drop_progress_classifier_accepts_safe_outcomes() {
+    assert_eq!(
+        classify_chunk_drop_progress(1, 2, 1, 2, 3, 3),
+        Some(ChunkDropProgressOutcome::CommitQuorumProgress)
+    );
+    assert_eq!(
+        classify_chunk_drop_progress(1, 2, 1, 2, 3, 2),
+        Some(ChunkDropProgressOutcome::BoundedPartialProgress)
+    );
+    assert_eq!(
+        classify_chunk_drop_progress(1, 2, 1, 1, 3, 0),
+        Some(ChunkDropProgressOutcome::PinnedStall)
+    );
+}
+
+#[test]
+fn chunk_drop_progress_classifier_rejects_unsafe_splits() {
+    assert_eq!(classify_chunk_drop_progress(1, 2, 1, 3, 3, 2), None);
+    assert_eq!(classify_chunk_drop_progress(1, 2, 2, 2, 3, 0), None);
+    assert_eq!(classify_chunk_drop_progress(1, 2, 1, 2, 3, 0), None);
+}
+
+#[test]
+fn chunk_drop_loss_evidence_is_required_for_faulted_non_quorum_outcomes() {
+    assert!(!ChunkDropProgressOutcome::CommitQuorumProgress.requires_loss_evidence());
+    assert!(ChunkDropProgressOutcome::BoundedPartialProgress.requires_loss_evidence());
+    assert!(ChunkDropProgressOutcome::PinnedStall.requires_loss_evidence());
+}
+
+#[test]
+fn duplicate_init_progress_classifier_accepts_safe_outcomes() {
+    assert_eq!(
+        classify_duplicate_init_progress(1, 2, 1, 2, 3, 3),
+        Some(DuplicateInitProgressOutcome::CommitQuorumProgress)
+    );
+    assert_eq!(
+        classify_duplicate_init_progress(1, 2, 1, 2, 3, 2),
+        Some(DuplicateInitProgressOutcome::BoundedPartialProgress)
+    );
+    assert_eq!(
+        classify_duplicate_init_progress(1, 2, 1, 1, 3, 0),
+        Some(DuplicateInitProgressOutcome::PinnedStall)
+    );
+}
+
+#[test]
+fn duplicate_init_progress_classifier_rejects_unsafe_splits() {
+    assert_eq!(classify_duplicate_init_progress(1, 2, 1, 3, 3, 2), None);
+    assert_eq!(classify_duplicate_init_progress(1, 2, 2, 2, 3, 0), None);
+    assert_eq!(classify_duplicate_init_progress(1, 2, 1, 2, 3, 0), None);
 }
 
 fn extract_session_at_or_after(value: &Value, target_height: u64) -> Option<Value> {

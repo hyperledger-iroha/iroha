@@ -4491,6 +4491,7 @@ fn sorafs_sign_orderbook_payload_py(
 
 #[pyfunction]
 #[pyo3(name = "sorafs_build_signed_orderbook_order_request")]
+#[allow(clippy::too_many_arguments)] // Python field-level constructor surface
 fn sorafs_build_signed_orderbook_order_request_py(
     py: Python<'_>,
     order_id: &[u8],
@@ -4554,6 +4555,7 @@ fn sorafs_build_signed_orderbook_order_cancel_py(
 
 #[pyfunction]
 #[pyo3(name = "sorafs_build_signed_orderbook_settlement_receipt")]
+#[allow(clippy::too_many_arguments)] // Python field-level constructor surface
 fn sorafs_build_signed_orderbook_settlement_receipt_py(
     py: Python<'_>,
     receipt_id: &[u8],

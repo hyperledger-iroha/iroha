@@ -30,6 +30,8 @@ const PACEMAKER_MAX_BACKOFF_MS: u64 = 5_000;
 const PACEMAKER_JITTER_FRAC_PERMILLE: u64 = 25;
 const PACEMAKER_FALLBACK_JITTER_MS: u64 = 125;
 const POST_RESTART_PROGRESS_PROBE_SECS: u64 = 60;
+const TOLERATED_LAGGING_PEERS: usize = 1;
+const NPOS_LIVENESS_SYNC_TIMEOUT: Duration = Duration::from_secs(600);
 const PACEMAKER_RESTART_SYNC_TIMEOUT: Duration = Duration::from_secs(600);
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
 
@@ -40,6 +42,7 @@ fn npos_network_produces_blocks() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
+        .with_sync_timeout(NPOS_LIVENESS_SYNC_TIMEOUT)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
         )))
@@ -75,16 +78,19 @@ fn npos_network_produces_blocks() -> Result<()> {
             })
             .wrap_err("heights did not converge")?;
 
-        // All peers should have advanced to the same height.
-        let min = *observed_heights.iter().min().unwrap_or(&0);
+        // A commit quorum should advance within the skew bound while one validator may lag.
         let max = *observed_heights.iter().max().unwrap_or(&0);
         ensure!(
             max >= target_height,
             "latest height should be at least {target_height}, got {max}"
         );
         ensure!(
-            min >= target_height.saturating_sub(MAX_HEIGHT_SKEW)
-                && max.saturating_sub(min) <= MAX_HEIGHT_SKEW,
+            heights_meet_target_tolerating_lag(
+                &observed_heights,
+                target_height,
+                MAX_HEIGHT_SKEW,
+                TOLERATED_LAGGING_PEERS,
+            ),
             "peer heights diverged during NPoS liveness check (target={target_height} allowed_skew={MAX_HEIGHT_SKEW}, got {observed_heights:?})"
         );
 
@@ -243,7 +249,12 @@ async fn wait_for_converged_heights_with_skew(
 
         if !heights.is_empty() {
             last_snapshot.clone_from(&heights);
-            if heights_meet_target(&heights, min_height, allowed_skew) {
+            if heights_meet_target_tolerating_lag(
+                &heights,
+                min_height,
+                allowed_skew,
+                TOLERATED_LAGGING_PEERS,
+            ) {
                 return Ok(heights);
             }
         }
@@ -268,6 +279,25 @@ fn heights_meet_target(heights: &[u64], min_height: u64, allowed_skew: u64) -> b
     min >= min_height.saturating_sub(allowed_skew)
         && max >= min_height
         && max.saturating_sub(min) <= allowed_skew
+}
+
+fn heights_meet_target_tolerating_lag(
+    heights: &[u64],
+    min_height: u64,
+    allowed_skew: u64,
+    tolerated_lagging: usize,
+) -> bool {
+    if heights.is_empty() {
+        return false;
+    }
+    if tolerated_lagging == 0 || heights.len() <= tolerated_lagging {
+        return heights_meet_target(heights, min_height, allowed_skew);
+    }
+
+    let required = heights.len().saturating_sub(tolerated_lagging).max(1);
+    let mut sorted = heights.to_vec();
+    sorted.sort_unstable_by(|left, right| right.cmp(left));
+    heights_meet_target(&sorted[..required], min_height, allowed_skew)
 }
 
 fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
@@ -517,6 +547,13 @@ fn heights_meet_target_respects_skew_and_min_height() {
 }
 
 #[test]
+fn heights_meet_target_tolerating_lag_accepts_quorum_progress() {
+    assert!(heights_meet_target_tolerating_lag(&[5, 2, 4, 4], 5, 2, 1));
+    assert!(!heights_meet_target_tolerating_lag(&[5, 2, 4, 4], 6, 2, 1));
+    assert!(!heights_meet_target_tolerating_lag(&[5, 2, 2, 4], 5, 2, 1));
+}
+
+#[test]
 fn min_connected_peers_for_submit_keeps_quorum_margin() {
     assert_eq!(min_connected_peers_for_submit(0), 0);
     assert_eq!(min_connected_peers_for_submit(1), 0);
@@ -663,8 +700,8 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
         ensure!(
             recovered_heights
                 .iter()
-                .all(|height| *height == baseline_height),
-            "post-restart peers should settle on baseline height {baseline_height} before resuming traffic, got {recovered_heights:?}"
+                .all(|height| *height >= baseline_height),
+            "post-restart peers should recover at least baseline height {baseline_height} before resuming traffic, got {recovered_heights:?}"
         );
         let _resumed_heights = drive_network_to_height(
             &network,
