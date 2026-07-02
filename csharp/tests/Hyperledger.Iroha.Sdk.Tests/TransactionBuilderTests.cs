@@ -991,6 +991,7 @@ public sealed class TransactionBuilderTests
             .AddInstruction(TransactionInstruction.KagemushaInstructionArchive(
                 KagemushaInstructionType.Transfer,
                 transferArchive))
+            .KagemushaRecursiveTopUp(new KagemushaRecursiveSpendTopUpInstructionArchive(transferArchive))
             .KagemushaRecursiveRedeem(new KagemushaRecursiveSpendRedeemInstructionArchive(redeemArchive));
 
         Assert.Collection(
@@ -999,6 +1000,12 @@ public sealed class TransactionBuilderTests
             {
                 var kagemusha = Assert.IsType<KagemushaInstructionArchiveInstruction>(instruction);
                 Assert.Equal(KagemushaInstructionType.Transfer, kagemusha.InstructionType);
+            },
+            instruction =>
+            {
+                var kagemusha = Assert.IsType<KagemushaInstructionArchiveInstruction>(instruction);
+                Assert.Equal(KagemushaInstructionType.Transfer, kagemusha.InstructionType);
+                Assert.Equal(transferArchive, kagemusha.InstructionArchive);
             },
             instruction =>
             {
@@ -1310,6 +1317,32 @@ public sealed class TransactionBuilderTests
         var instructions = ReadEncodedInstructions(envelope.PayloadBytes);
         var instruction = Assert.Single(instructions);
         Assert.Equal("iroha_data_model::isi::offline::RedeemKagemushaRecursive", instruction.WireId);
+        Assert.Equal(archive, instruction.Payload);
+        Assert.Equal((byte)0x26, instruction.Payload[39]);
+
+        AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
+    }
+
+    [Fact]
+    public void BuildSignedEmbedsKagemushaRecursiveTopUpAsTransferArchive()
+    {
+        var archive = KagemushaArchive(
+            KagemushaInstructionType.Transfer,
+            new byte[] { 6, 7, 8, 9 },
+            flags: 0x26);
+
+        var envelope = new TransactionBuilder(
+                "00000042",
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+            .KagemushaRecursiveTopUp(new KagemushaRecursiveSpendTopUpInstructionArchive(archive))
+            .SetCreationTimeMilliseconds(1736000000000)
+            .SetTimeToLiveMilliseconds(3500)
+            .SetNonce(18)
+            .BuildSigned(Convert.FromHexString(FixtureSeedHex));
+
+        var instructions = ReadEncodedInstructions(envelope.PayloadBytes);
+        var instruction = Assert.Single(instructions);
+        Assert.Equal("iroha_data_model::isi::offline::KagemushaTransfer", instruction.WireId);
         Assert.Equal(archive, instruction.Payload);
         Assert.Equal((byte)0x26, instruction.Payload[39]);
 

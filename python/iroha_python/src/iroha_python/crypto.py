@@ -152,6 +152,8 @@ __all__ = [
     "verify_sm2",
     "derive_confidential_keyset",
     "derive_confidential_keyset_from_hex",
+    "compute_confidential_root_v2",
+    "computeConfidentialRootV2",
     "build_confidential_transfer_proof_v2",
     "buildConfidentialTransferProofV2",
     "build_confidential_unshield_proof_v3",
@@ -1042,6 +1044,22 @@ def _confidential_native_result(result: Any, context: str) -> Dict[str, Any]:
     return result
 
 
+def compute_confidential_root_v2(
+    tree_commitments: Iterable[bytes | bytearray | memoryview | str],
+) -> bytes:
+    """Compute the canonical confidential-transfer v2 tree root."""
+
+    if not hasattr(_crypto, "compute_confidential_root_v2"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing confidential root v2 support; rebuild the extension"
+        )
+    result = _crypto.compute_confidential_root_v2(list(tree_commitments))
+    root = bytes(result)
+    if len(root) != 32:
+        raise RuntimeError("confidential root v2 returned a non-32-byte root")
+    return root
+
+
 def build_confidential_transfer_proof_v2(
     *,
     chain_id: str,
@@ -1152,6 +1170,7 @@ def build_confidential_asset_hidden_transfer_proof_v1(
     return _confidential_native_result(result, "asset-hidden transfer v1 prover")
 
 
+computeConfidentialRootV2 = compute_confidential_root_v2
 buildConfidentialTransferProofV2 = build_confidential_transfer_proof_v2
 buildConfidentialUnshieldProofV3 = build_confidential_unshield_proof_v3
 buildConfidentialAssetHiddenTransferProofV1 = (
