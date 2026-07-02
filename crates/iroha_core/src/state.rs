@@ -27027,14 +27027,23 @@ impl State {
         self.fraud_monitoring = cfg;
     }
 
+    fn sccp_seed_config_route_manifests_enabled() -> bool {
+        std::env::var("IROHA_SCCP_SEED_CONFIG_ROUTE_MANIFESTS")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    }
+
     /// Update zero-knowledge verification settings using loaded configuration.
     pub fn set_zk(&mut self, mut zk: iroha_config::parameters::actual::Zk) {
         crate::gas::configure_confidential_gas(zk.gas.into());
         let configured_route_manifests = core::mem::take(&mut zk.sccp_route_manifests);
+        let force_seed_from_config = Self::sccp_seed_config_route_manifests_enabled();
         let can_seed_from_config = self.committed_height() == 0;
         let route_manifests = {
             let mut route_manifests = self.sccp_route_manifests.write();
-            if can_seed_from_config {
+            if can_seed_from_config
+                || (force_seed_from_config && !configured_route_manifests.is_empty())
+            {
                 *route_manifests = configured_route_manifests;
             }
             route_manifests.clone()
@@ -31966,7 +31975,14 @@ impl<'state> StateBlock<'state> {
             }
             let world_hold = if commit_error.is_none() {
                 let world_start = Instant::now();
-                *state_ref.sccp_route_manifests.write() = zk.sccp_route_manifests.clone();
+                let committed_route_manifests = if State::sccp_seed_config_route_manifests_enabled()
+                    && !state_ref.zk.sccp_route_manifests.is_empty()
+                {
+                    state_ref.zk.sccp_route_manifests.clone()
+                } else {
+                    zk.sccp_route_manifests.clone()
+                };
+                *state_ref.sccp_route_manifests.write() = committed_route_manifests;
                 // Commit world storage before taking the block-hashes write lock.
                 // Validation workers build `StateBlock`s by acquiring block-hash read snapshots
                 // first and then world storage transactions; committing block hashes first can

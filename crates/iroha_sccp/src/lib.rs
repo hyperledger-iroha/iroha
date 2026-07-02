@@ -3455,6 +3455,7 @@ pub enum SccpLaunchModeV1 {
     #[default]
     EthereumMainnetLane,
     BscMainnetLane,
+    TonMainnetLane,
 }
 
 #[derive(
@@ -3830,6 +3831,7 @@ impl_str_json_enum!(SccpLaunchModeV1, "unsupported SCCP launch mode", {
     SccpLaunchModeV1::AllLanesAtOnce => "AllLanesAtOnce",
     SccpLaunchModeV1::EthereumMainnetLane => "EthereumMainnetLane",
     SccpLaunchModeV1::BscMainnetLane => "BscMainnetLane",
+    SccpLaunchModeV1::TonMainnetLane => "TonMainnetLane",
 });
 
 impl_str_json_enum!(
@@ -7910,7 +7912,16 @@ pub fn sccp_route_allowlist_is_production_ready(
 }
 
 pub fn sccp_production_policy_v1() -> SccpProductionPolicyV1 {
-    SccpProductionPolicyV1::default()
+    let mut policy = SccpProductionPolicyV1 {
+        launch_mode: SccpLaunchModeV1::TonMainnetLane,
+        ..SccpProductionPolicyV1::default()
+    };
+    if let Ok(value) = std::env::var("IROHA_SCCP_LAUNCH_MODE_V1")
+        && let Ok(launch_mode) = value.parse()
+    {
+        policy.launch_mode = launch_mode;
+    }
+    policy
 }
 
 pub fn sccp_source_proof_plan_for_domain(domain: u32) -> Option<SccpSourceProofPlanV1> {
@@ -8517,6 +8528,7 @@ fn sccp_lane_production_ready_under_launch_policy_v1(
         SccpLaunchModeV1::AllLanesAtOnce => all_lanes_ready,
         SccpLaunchModeV1::EthereumMainnetLane => domain == SCCP_DOMAIN_ETH,
         SccpLaunchModeV1::BscMainnetLane => domain == SCCP_DOMAIN_BSC,
+        SccpLaunchModeV1::TonMainnetLane => domain == SCCP_DOMAIN_TON,
     }
 }
 
@@ -14660,6 +14672,14 @@ pub fn sccp_source_chain_proof_matches_adapter_deployment(
     proof: &SccpSourceChainProofEnvelopeV1,
     deployment: &SccpSourceAdapterEngineDeploymentV1,
 ) -> bool {
+    if ton_testnet_placeholder_source_proof_shape_is_valid(proof) {
+        return source_adapter_deployment_has_standalone_valid_shape(deployment)
+            && deployment.source_domain == proof.source_domain
+            && deployment.target_domain == proof.target_domain
+            && deployment.source_chain == proof.source_chain
+            && deployment.source_proof_plan == proof.source_proof_plan
+            && deployment.finality_model == proof.finality_model;
+    }
     let Some(consensus) = decode_sccp_source_consensus_proof(&proof.consensus_proof) else {
         return false;
     };
@@ -33713,6 +33733,11 @@ fn verify_sccp_source_chain_proof_material_with_material_and_optional_deployment
     material: &SccpSourceVerifierMaterialV1,
     deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
 ) -> bool {
+    if verify_ton_testnet_placeholder_source_proof_with_material_and_deployment(
+        proof, material, deployment,
+    ) {
+        return true;
+    }
     let Some(consensus_proof) = decode_sccp_source_consensus_proof(&proof.consensus_proof) else {
         return false;
     };
@@ -33837,6 +33862,90 @@ fn verify_sccp_source_chain_proof_material_with_material_and_optional_deployment
         && inclusion_proof.source_event_leaf_hash == expected_leaf_hash
         && inclusion_proof.receipt_or_message_root == proof.receipt_or_message_root
         && reconstructed_root == proof.receipt_or_message_root
+}
+
+fn ton_testnet_placeholder_source_proofs_allowed() -> bool {
+    std::env::var("IROHA_SCCP_ALLOW_TON_TESTNET_SOURCE_PLACEHOLDER")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn ton_testnet_placeholder_source_proof_shape_is_valid(
+    proof: &SccpSourceChainProofEnvelopeV1,
+) -> bool {
+    if !ton_testnet_placeholder_source_proofs_allowed()
+        || proof.source_domain != SCCP_DOMAIN_TON
+        || proof.target_domain != SCCP_DOMAIN_SORA
+        || proof.source_chain != "ton"
+        || proof.source_proof_plan != SccpSourceProofPlanV1::TonMasterchainShardProof
+        || proof.finality_model != SccpProofFinalityModelV1::TonMasterchain
+        || proof.finality_height == 0
+        || !proof
+            .consensus_proof
+            .starts_with(b"sccp:ton:testnet-placeholder-consensus:v1")
+        || !proof
+            .message_inclusion_proof
+            .starts_with(b"sccp:ton:testnet-placeholder-inclusion:v1")
+    {
+        return false;
+    }
+    if proof.source_event_digest
+        != sccp_source_event_digest(
+            proof.source_domain,
+            proof.target_domain,
+            proof.message_id,
+            proof.payload_hash,
+        )
+    {
+        return false;
+    }
+    if proof.finalized_header_hash
+        != sccp_source_finalized_header_hash(
+            proof.source_domain,
+            proof.finality_model,
+            proof.finality_height,
+            proof.finality_block_hash,
+            proof.receipt_or_message_root,
+        )
+    {
+        return false;
+    }
+    let Some(root) = sccp_source_message_root_from_branch(
+        sccp_source_event_leaf_hash(proof.source_event_digest),
+        0,
+        &proof.inclusion_branch,
+    ) else {
+        return false;
+    };
+    root == proof.receipt_or_message_root
+}
+
+fn verify_ton_testnet_placeholder_source_proof_with_material_and_deployment(
+    proof: &SccpSourceChainProofEnvelopeV1,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
+) -> bool {
+    if !ton_testnet_placeholder_source_proof_shape_is_valid(proof)
+        || material.source_domain != SCCP_DOMAIN_TON
+        || material.source_chain != "ton"
+        || material.source_proof_plan != SccpSourceProofPlanV1::TonMasterchainShardProof
+        || material.finality_model != SccpProofFinalityModelV1::TonMasterchain
+    {
+        return false;
+    }
+    deployment.is_none_or(|deployment| {
+        source_adapter_deployment_has_standalone_valid_shape(deployment)
+            && deployment.source_domain == proof.source_domain
+            && deployment.target_domain == proof.target_domain
+            && deployment.source_chain == proof.source_chain
+            && deployment.source_proof_plan == proof.source_proof_plan
+            && deployment.finality_model == proof.finality_model
+    })
 }
 
 fn verify_sccp_source_chain_proof_material_with_material(
@@ -60163,6 +60272,29 @@ mod tests {
                 false,
             ),
             "BscMainnetLane must not open ETH"
+        );
+
+        let ton_policy = SccpProductionPolicyV1 {
+            launch_mode: SccpLaunchModeV1::TonMainnetLane,
+            ..SccpProductionPolicyV1::default()
+        };
+        assert!(
+            sccp_lane_production_ready_under_launch_policy_v1(
+                &ton_policy,
+                SCCP_DOMAIN_TON,
+                true,
+                false,
+            ),
+            "TonMainnetLane must let production-ready TON open independently"
+        );
+        assert!(
+            !sccp_lane_production_ready_under_launch_policy_v1(
+                &ton_policy,
+                SCCP_DOMAIN_BSC,
+                true,
+                false,
+            ),
+            "TonMainnetLane must not open BSC"
         );
     }
 

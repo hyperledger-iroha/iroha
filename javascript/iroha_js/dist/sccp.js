@@ -143,6 +143,12 @@ const SCCP_GOVERNED_TON_FULL_LIGHT_CLIENT_AUDIT_HASHES_V1 = [
 ];
 export const SCCP_TON_CONTRACT_PROOF_BACKEND_V1 = "ton-contract-v1";
 export const SCCP_TON_MESSAGE_BODY_BOC_V1 = "ton_message_body_boc_v1";
+export const SCCP_TON_SUBMIT_CHUNK_OP_V1 = 0x53434351;
+export const SCCP_TON_SUBMIT_CHUNK_FINALIZE_OP_V1 = 0x53434352;
+export const SCCP_TON_CHUNKED_MESSAGE_SCHEMA_VERSION_V1 = 1;
+export const SCCP_TON_CHUNKED_MESSAGE_DEFAULT_CHUNK_BYTES_V1 = 24 * 1024;
+export const SCCP_TON_CHUNKED_MESSAGE_MAX_CHUNK_BYTES_V1 = 32 * 1024;
+export const SCCP_TON_WALLET_PAYLOAD_SAFE_BYTES_V1 = 48 * 1024;
 export const SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1 =
   "sccp:ton:source-state-verifier:shard-state-light-client-mainnet:v1";
 export const SCCP_TON_SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1 =
@@ -3464,6 +3470,82 @@ export const tairaXorTonCanonicalTransferPayloadBytes = (input) =>
 
 export const tairaXorTonTransferMessageId = (input, options = {}) =>
   sccpTransferMessageId(buildTairaXorTonTransferPayload(input), options);
+
+export const buildTairaXorTonToTairaTransferPayload = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(
+      "TAIRA XOR TON-source transfer payload input must be an object",
+    );
+  }
+  const routeId = normalizeTairaTonXorRouteIdInput(input);
+  const assetKey = normalizeTairaXorAssetKeyInput(input);
+  const sender = normalizeTonRawAddress(
+    strictResultField(
+      input,
+      "tonSender",
+      "tonSender",
+      "ton_sender",
+      "sender",
+      "senderAddress",
+      "sender_address",
+    ),
+    "tonSender",
+  );
+  const recipient = normalizeCanonicalTairaAccountId(
+    strictResultField(
+      input,
+      "tairaRecipient",
+      "tairaRecipient",
+      "taira_recipient",
+      "recipient",
+      "tairaAccountId",
+      "taira_account_id",
+    ),
+    "tairaRecipient",
+  );
+  const amount = normalizeUnsignedBigIntMax(
+    strictResultField(input, "amount", "amount"),
+    "amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (amount === 0n) {
+    throw new RangeError("amount must be greater than zero");
+  }
+  const nonce = normalizeUnsignedBigIntMax(
+    strictResultField(input, "nonce", "nonce"),
+    "nonce",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  return Object.freeze({
+    version: 1,
+    source_domain: SCCP_DOMAIN_TON,
+    dest_domain: SCCP_DOMAIN_SORA,
+    nonce: nonce.toString(),
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: assetKey,
+    amount: amount.toString(),
+    sender_codec: SCCP_CODEC_TON_RAW,
+    sender,
+    recipient_codec: SCCP_CODEC_TEXT_UTF8,
+    recipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: routeId,
+  });
+};
+
+export const tairaXorTonToTairaCanonicalTransferPayloadBytes = (input) =>
+  canonicalSccpTransferPayloadBytes(
+    buildTairaXorTonToTairaTransferPayload(input),
+  );
+
+export const tairaXorTonToTairaTransferMessageId = (input, options = {}) =>
+  sccpTransferMessageId(
+    buildTairaXorTonToTairaTransferPayload(input),
+    options,
+  );
 
 export const buildTairaXorSccpRecordDescriptor = (input) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -8556,6 +8638,276 @@ export const buildSccpTonMessageBodyBocFromBytes = (input) => {
   const metadataRoot = pushTonBlobCells(cells, metadataBytes);
   cells[0].refs = [publicInputsRoot, proofRoot, bundleRoot, metadataRoot];
   return encodeTonBocSingleRoot(cells, 0);
+};
+
+const normalizeTonChunkSize = (value) => {
+  const raw =
+    value === SCCP_OPTIONAL_FIELD_MISSING ||
+    value === undefined ||
+    value === null ||
+    value === ""
+      ? SCCP_TON_CHUNKED_MESSAGE_DEFAULT_CHUNK_BYTES_V1
+      : Number(value);
+  if (
+    !Number.isSafeInteger(raw) ||
+    raw <= 0 ||
+    raw > SCCP_TON_CHUNKED_MESSAGE_MAX_CHUNK_BYTES_V1
+  ) {
+    throw new RangeError(
+      `TON SCCP chunk size must be a positive integer no larger than ${SCCP_TON_CHUNKED_MESSAGE_MAX_CHUNK_BYTES_V1} bytes`,
+    );
+  }
+  return raw;
+};
+
+const sccpTonChunkHash = ({
+  messageIdBytes,
+  bodyHashBytes,
+  chunkIndex,
+  chunkOffset,
+  chunk,
+}) => {
+  let payload = textEncoder.encode("sccp:ton:chunk:v1");
+  payload = concatBytes(payload, messageIdBytes, bodyHashBytes);
+  payload = writeU16Be(payload, chunkIndex);
+  payload = writeU32Be(payload, chunkOffset);
+  payload = writeU16Be(payload, chunk.length);
+  payload = concatBytes(payload, chunk);
+  return sha256(payload);
+};
+
+const sccpTonChunkRoot = (chunkHashes) => {
+  if (!Array.isArray(chunkHashes) || chunkHashes.length === 0) {
+    throw new TypeError("TON SCCP chunk hashes must not be empty");
+  }
+  let payload = textEncoder.encode("sccp:ton:chunk-root:v1");
+  payload = writeU16Be(payload, chunkHashes.length);
+  for (const chunkHash of chunkHashes) {
+    payload = concatBytes(payload, toBytes(chunkHash, "chunkHash"));
+  }
+  return sha256(payload);
+};
+
+const buildSccpTonChunkUploadBoc = ({
+  queryId,
+  messageIdBytes,
+  bodyHashBytes,
+  chunkRootBytes,
+  totalBytes,
+  chunkCount,
+  chunkIndex,
+  chunkOffset,
+  chunk,
+  chunkHashBytes,
+}) => {
+  let rootData = new Uint8Array();
+  rootData = writeU32Be(rootData, SCCP_TON_SUBMIT_CHUNK_OP_V1);
+  rootData = writeU64Be(rootData, queryId);
+  rootData = writeU16Be(
+    rootData,
+    SCCP_TON_CHUNKED_MESSAGE_SCHEMA_VERSION_V1,
+  );
+  rootData = concatBytes(rootData, messageIdBytes, bodyHashBytes, chunkRootBytes);
+  let metadata = new Uint8Array();
+  metadata = writeU32Be(metadata, totalBytes);
+  metadata = writeU16Be(metadata, chunkCount);
+  metadata = writeU16Be(metadata, chunkIndex);
+  metadata = writeU32Be(metadata, chunkOffset);
+  metadata = writeU16Be(metadata, chunk.length);
+  metadata = concatBytes(metadata, chunkHashBytes);
+  const cells = [
+    { data: rootData, refs: [] },
+    { data: metadata, refs: [] },
+  ];
+  const chunkRoot = pushTonBlobCells(cells, chunk);
+  cells[0].refs = [1, chunkRoot];
+  return encodeTonBocSingleRoot(cells, 0);
+};
+
+const buildSccpTonChunkFinalizeBoc = ({
+  queryId,
+  messageIdBytes,
+  bodyHashBytes,
+  chunkRootBytes,
+  totalBytes,
+  chunkCount,
+  statementHash,
+  destinationBindingHash,
+}) => {
+  let rootData = new Uint8Array();
+  rootData = writeU32Be(rootData, SCCP_TON_SUBMIT_CHUNK_FINALIZE_OP_V1);
+  rootData = writeU64Be(rootData, queryId);
+  rootData = writeU16Be(
+    rootData,
+    SCCP_TON_CHUNKED_MESSAGE_SCHEMA_VERSION_V1,
+  );
+  rootData = concatBytes(rootData, messageIdBytes, bodyHashBytes, chunkRootBytes);
+  let metadata = new Uint8Array();
+  metadata = writeU32Be(metadata, totalBytes);
+  metadata = writeU16Be(metadata, chunkCount);
+  const context = concatBytes(
+    hexToBytes(statementHash, "statementHash", 32),
+    hexToBytes(destinationBindingHash, "destinationBindingHash", 32),
+  );
+  const cells = [
+    { data: rootData, refs: [1, 2] },
+    { data: metadata, refs: [] },
+    { data: context, refs: [] },
+  ];
+  return encodeTonBocSingleRoot(cells, 0);
+};
+
+export const buildSccpTonChunkedMessageBodyBocsFromBytes = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON SCCP chunked message input must be an object");
+  }
+  const bodyBytes = toBytes(
+    strictResultField(
+      input,
+      "messageBodyBocBytes",
+      "messageBodyBocBytes",
+      "message_body_boc_bytes",
+      "messageBodyBocHex",
+      "message_body_boc_hex",
+    ),
+    "messageBodyBocBytes",
+  );
+  if (bodyBytes.length === 0) {
+    throw new TypeError("messageBodyBocBytes must not be empty");
+  }
+  const messageIdBytes = hexToBytes(
+    normalizeNonZeroHex32(
+      strictResultField(input, "messageId", "messageId", "message_id"),
+      "messageId",
+    ),
+    "messageId",
+    32,
+  );
+  const statementHash = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "statementHash",
+      "statementHash",
+      "statement_hash",
+    ),
+    "statementHash",
+  );
+  const destinationBindingHash = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "destinationBindingHash",
+      "destinationBindingHash",
+      "destination_binding_hash",
+    ),
+    "destinationBindingHash",
+  );
+  const queryIdInput = strictOptionalResultField(
+    input,
+    "queryId",
+    "queryId",
+    "query_id",
+  );
+  const queryId =
+    queryIdInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? new DataView(
+          messageIdBytes.buffer,
+          messageIdBytes.byteOffset,
+          messageIdBytes.byteLength,
+        ).getBigUint64(0, false)
+      : queryIdInput;
+  const chunkSize = normalizeTonChunkSize(
+    strictOptionalResultField(input, "chunkSize", "chunkSize", "chunk_size"),
+  );
+  const chunkCount = Math.ceil(bodyBytes.length / chunkSize);
+  if (chunkCount > 0xffff) {
+    throw new RangeError("TON SCCP chunk count exceeds u16");
+  }
+  const bodyHashBytes = sha256(bodyBytes);
+  const chunks = [];
+  const chunkHashes = [];
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+    const offset = chunkIndex * chunkSize;
+    const chunk = bodyBytes.subarray(
+      offset,
+      Math.min(offset + chunkSize, bodyBytes.length),
+    );
+    const chunkHash = sccpTonChunkHash({
+      messageIdBytes,
+      bodyHashBytes,
+      chunkIndex,
+      chunkOffset: offset,
+      chunk,
+    });
+    chunks.push({
+      chunkIndex,
+      chunkOffset: offset,
+      chunkLength: chunk.length,
+      chunkHash,
+      chunk,
+    });
+    chunkHashes.push(chunkHash);
+  }
+  const chunkRootBytes = sccpTonChunkRoot(chunkHashes);
+  const uploadMessages = chunks.map((entry) => {
+    const payloadBoc = buildSccpTonChunkUploadBoc({
+      queryId,
+      messageIdBytes,
+      bodyHashBytes,
+      chunkRootBytes,
+      totalBytes: bodyBytes.length,
+      chunkCount,
+      chunkIndex: entry.chunkIndex,
+      chunkOffset: entry.chunkOffset,
+      chunk: entry.chunk,
+      chunkHashBytes: entry.chunkHash,
+    });
+    if (payloadBoc.length > SCCP_TON_WALLET_PAYLOAD_SAFE_BYTES_V1) {
+      throw new RangeError(
+        "TON SCCP chunk payload exceeds the wallet-safe payload limit",
+      );
+    }
+    return Object.freeze({
+      index: entry.chunkIndex,
+      offset: entry.chunkOffset,
+      length: entry.chunkLength,
+      chunkHash: bytesToHex(entry.chunkHash),
+      payloadBocHex: bytesToHex(payloadBoc),
+      payloadBocBytes: payloadBoc,
+    });
+  });
+  const finalizePayloadBoc = buildSccpTonChunkFinalizeBoc({
+    queryId,
+    messageIdBytes,
+    bodyHashBytes,
+    chunkRootBytes,
+    totalBytes: bodyBytes.length,
+    chunkCount,
+    statementHash,
+    destinationBindingHash,
+  });
+  if (finalizePayloadBoc.length > SCCP_TON_WALLET_PAYLOAD_SAFE_BYTES_V1) {
+    throw new RangeError(
+      "TON SCCP finalize payload exceeds the wallet-safe payload limit",
+    );
+  }
+  return Object.freeze({
+    version: SCCP_TON_CHUNKED_MESSAGE_SCHEMA_VERSION_V1,
+    protocol: "ton_sccp_chunked_message_body_boc_v1",
+    opChunk: SCCP_TON_SUBMIT_CHUNK_OP_V1,
+    opFinalize: SCCP_TON_SUBMIT_CHUNK_FINALIZE_OP_V1,
+    messageId: bytesToHex(messageIdBytes),
+    queryId: normalizeUnsignedBigInt(queryId, "queryId").toString(10),
+    totalBytes: bodyBytes.length,
+    chunkSize,
+    chunkCount,
+    bodyHash: bytesToHex(bodyHashBytes),
+    chunkRoot: bytesToHex(chunkRootBytes),
+    uploadMessages,
+    finalizeMessage: Object.freeze({
+      payloadBocHex: bytesToHex(finalizePayloadBoc),
+      payloadBocBytes: finalizePayloadBoc,
+    }),
+  });
 };
 
 const normalizeSccpProofContext = (input, label = "SCCP proof context") => {
@@ -37065,6 +37417,157 @@ export function buildBscPlaceholderSourceChainProofEnvelope(input) {
   });
 }
 
+/*
+ * TAIRA testnet compatibility builder for TON -> SORA live demos. This is a
+ * source-chain proof envelope with the same outer binding as production TON
+ * proofs, but with explicit placeholder consensus/inclusion bytes. Iroha nodes
+ * must opt in with IROHA_SCCP_ALLOW_TON_TESTNET_SOURCE_PLACEHOLDER=1 before
+ * accepting it.
+ */
+export function buildTonTestnetPlaceholderSourceChainProofEnvelope(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TON testnet placeholder source-chain proof input must be an object");
+  }
+  const optionalInput = (label, ...names) => {
+    const selected = strictOptionalResultField(input, label, ...names);
+    return selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected;
+  };
+  const messageId = normalizeNonZeroHex32(
+    strictResultField(input, "messageId", "messageId", "message_id"),
+    "messageId",
+  );
+  const payloadHash = normalizeNonZeroHex32(
+    strictResultField(input, "payloadHash", "payloadHash", "payload_hash"),
+    "payloadHash",
+  );
+  const commitmentRoot = normalizeNonZeroHex32(
+    strictResultField(
+      input,
+      "commitmentRoot",
+      "commitmentRoot",
+      "commitment_root",
+    ),
+    "commitmentRoot",
+  );
+  const sourceEventDigest = sccpSourceEventDigest(
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_SORA,
+    messageId,
+    payloadHash,
+  );
+  const sourceEventLeafHash = sccpSourceEventLeafHash(sourceEventDigest);
+  const branchSeed = prefixedBlake2b(
+    "sccp:ton:testnet-placeholder-source-branch:v1",
+    concatBytes(
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(commitmentRoot, "commitmentRoot", 32),
+    ),
+  );
+  const inclusionBranch = Object.freeze([bytesToHex(branchSeed)]);
+  const receiptOrMessageRoot = sccpSourceMessageRootFromBranch(
+    sourceEventLeafHash,
+    0,
+    inclusionBranch,
+  );
+  const txIdInput =
+    optionalInput(
+      "txId",
+      "txId",
+      "txID",
+      "transactionHash",
+      "transaction_hash",
+      "transactionId",
+      "transaction_id",
+    ) ?? messageId;
+  const txId = normalizeNonZeroHex32(txIdInput, "txId");
+  const finalityHeight = normalizeUnsignedBigIntMax(
+    optionalInput("finalityHeight", "finalityHeight", "finality_height") ??
+      new DataView(
+        hexToBytes(txId, "txId", 32).buffer,
+        0,
+        8,
+      ).getBigUint64(0, false),
+    "finalityHeight",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  if (finalityHeight === 0n) {
+    throw new TypeError("finalityHeight must not be zero");
+  }
+  const finalityBlockHash =
+    optionalInput(
+      "finalityBlockHash",
+      "finalityBlockHash",
+      "finality_block_hash",
+      "blockHash",
+      "block_hash",
+    ) ??
+    bytesToHex(
+      prefixedBlake2b(
+        "sccp:ton:testnet-placeholder-finality-block:v1",
+        concatBytes(
+          hexToBytes(txId, "txId", 32),
+          hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+        ),
+      ),
+    );
+  const normalizedFinalityBlockHash = normalizeNonZeroHex32(
+    finalityBlockHash,
+    "finalityBlockHash",
+  );
+  const finalizedHeaderHash = sccpSourceFinalizedHeaderHash({
+    sourceDomain: SCCP_DOMAIN_TON,
+    finalityModelCanonical: 4,
+    finalityHeight,
+    finalityBlockHash: normalizedFinalityBlockHash,
+    receiptOrMessageRoot,
+  });
+  const consensusProof = concatBytes(
+    textEncoder.encode("sccp:ton:testnet-placeholder-consensus:v1"),
+    hexToBytes(txId, "txId", 32),
+    hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+  );
+  const messageInclusionProof = concatBytes(
+    textEncoder.encode("sccp:ton:testnet-placeholder-inclusion:v1"),
+    hexToBytes(sourceEventLeafHash, "sourceEventLeafHash", 32),
+    hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
+  );
+  const sourceProofBytes = noritoFrame(
+    noritoStructValue([
+      noritoU8(1),
+      noritoU32Value(SCCP_DOMAIN_TON),
+      noritoU32Value(SCCP_DOMAIN_SORA),
+      noritoStringValue("ton", false, "sourceChain"),
+      noritoU32Value(4),
+      noritoU32Value(3),
+      hexToBytes(messageId, "messageId", 32),
+      hexToBytes(payloadHash, "payloadHash", 32),
+      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
+      hexToBytes(commitmentRoot, "commitmentRoot", 32),
+      noritoU64Value(finalityHeight),
+      hexToBytes(normalizedFinalityBlockHash, "finalityBlockHash", 32),
+      hexToBytes(finalizedHeaderHash, "finalizedHeaderHash", 32),
+      hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
+      noritoRawByteVecValue(consensusProof, "consensusProof"),
+      noritoRawByteVecValue(messageInclusionProof, "messageInclusionProof"),
+      noritoByteVecSequenceValue(inclusionBranch, "inclusionBranch"),
+    ]),
+    SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH_HEX,
+  );
+  decodeSccpSourceChainProofSummary(sourceProofBytes, "sourceProofBytes");
+  return Object.freeze({
+    sourceProofHex: bytesToHex(sourceProofBytes),
+    sourceProofBytes: copyBytes(sourceProofBytes),
+    sourceEventDigest,
+    sourceEventLeafHash,
+    receiptOrMessageRoot,
+    finalityHeight: finalityHeight.toString(),
+    finalityBlockHash: normalizedFinalityBlockHash,
+    finalizedHeaderHash,
+    txId,
+  });
+}
+
 const sccpSourceEventLeafHash = (sourceEventDigest) =>
   bytesToHex(
     prefixedBlake2b(
@@ -42850,6 +43353,44 @@ const normalizeTairaXorBscToTairaSettlementFragment = (value, label) => {
   return settlement;
 };
 
+const normalizeTairaXorTonToTairaSettlementFragment = (value, label) => {
+  if (
+    value === SCCP_OPTIONAL_FIELD_MISSING ||
+    value === undefined ||
+    value === null
+  ) {
+    return {};
+  }
+  const settlement = requirePlainObject(value, label);
+  const entrypoint = optionalStringAlias(
+    settlement,
+    `${label}.entrypoint`,
+    "entrypoint",
+  );
+  if (entrypoint && entrypoint !== "finalize_inbound") {
+    throw new TypeError(`${label}.entrypoint must be finalize_inbound`);
+  }
+  const route = optionalStringAlias(
+    settlement,
+    `${label}.route`,
+    "route",
+    "route_id",
+  );
+  if (route && route !== SCCP_TAIRA_TON_XOR_ROUTE_ID_V1) {
+    throw new TypeError(`${label}.route must be taira_ton_xor`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(settlement, "payload") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payload_json") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payloadJson") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payload_bytes") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payloadBytes")
+  ) {
+    throw new TypeError(`${label} payload must be generated by Torii`);
+  }
+  return settlement;
+};
+
 const normalizeTairaXorTronEventName = (value, label = "eventName") =>
   normalizeNonEmptyString(value, label)
     .replace(/[^a-z0-9]/giu, "")
@@ -43417,6 +43958,70 @@ const readTairaXorEvmAddressPayload = (value, label) => {
     const kind = strictResultField(value, `${label}.kind`, "kind");
     if (kind !== "EvmHex") {
       throw new TypeError(`${label} must be an EvmHex SCCP codec value`);
+    }
+    const payload = strictOptionalResultField(
+      value,
+      `${label}.payload`,
+      "payload",
+    );
+    const canonicalValue = strictOptionalResultField(
+      value,
+      `${label}.value`,
+      "value",
+    );
+    let normalized = null;
+    for (const [field, candidate] of [
+      ["payload", payload],
+      ["value", canonicalValue],
+    ]) {
+      if (candidate === SCCP_OPTIONAL_FIELD_MISSING) {
+        continue;
+      }
+      const candidateNormalized = normalizeCandidate(
+        candidate,
+        `${label}.${field}`,
+      );
+      if (normalized === null) {
+        normalized = candidateNormalized;
+        continue;
+      }
+      if (normalized !== candidateNormalized) {
+        throw new TypeError(`${label}.payload must match ${label}.value`);
+      }
+    }
+    if (normalized === null) {
+      throw new TypeError(`${label}.value is required`);
+    }
+    return normalized;
+  }
+  return normalizeCandidate(value, label);
+};
+
+const readTairaXorTonAddressPayload = (value, label) => {
+  const normalizeCandidate = (candidate, candidateLabel) => {
+    if (typeof candidate === "string") {
+      const text = normalizeNonEmptyString(candidate, candidateLabel);
+      if (/^0x(?:[0-9a-fA-F]{2})+$/u.test(text)) {
+        try {
+          return normalizeTonRawAddress(
+            decodeCanonicalUtf8Bytes(toBytes(text, candidateLabel), candidateLabel),
+            candidateLabel,
+          );
+        } catch (_error) {
+          return normalizeTonRawAddress(text, candidateLabel);
+        }
+      }
+      return normalizeTonRawAddress(text, candidateLabel);
+    }
+    return normalizeTonRawAddress(
+      decodeCanonicalUtf8Bytes(toBytes(candidate, candidateLabel), candidateLabel),
+      candidateLabel,
+    );
+  };
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const kind = strictResultField(value, `${label}.kind`, "kind");
+    if (kind !== "TonRaw") {
+      throw new TypeError(`${label} must be a TonRaw SCCP codec value`);
     }
     const payload = strictOptionalResultField(
       value,
@@ -44111,6 +44716,341 @@ export function bindTairaXorBscToTairaSourceProofPackage(input) {
       ...settlement,
       entrypoint: "finalize_inbound",
       route: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+    }),
+    sourceEventDigest,
+    txId: expectedTxId,
+    messageId: commitmentMessageId,
+    commitmentRoot: bundleCommitmentRoot,
+    amount: amount.toString(),
+  });
+}
+
+const normalizeTairaXorTonTxId = (value, label) =>
+  normalizeNonZeroHex32(value, label);
+
+export function bindTairaXorTonToTairaSourceProofPackage(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(
+      "TAIRA XOR TON-source proof package input must be an object",
+    );
+  }
+  const proofPackage = requirePlainObject(
+    strictResultField(input, "proofPackage", "proofPackage", "proof_package"),
+    "proofPackage",
+  );
+  const messageBundle = requirePlainObject(
+    strictResultField(
+      proofPackage,
+      "proofPackage.messageBundle",
+      "messageBundle",
+      "message_bundle",
+    ),
+    "proofPackage.messageBundle",
+  );
+  const settlementInput = strictOptionalResultField(
+    proofPackage,
+    "proofPackage.settlement",
+    "settlement",
+  );
+  const settlementDefaultsInput = strictOptionalResultField(
+    input,
+    "settlementDefaults",
+    "settlementDefaults",
+    "settlement_defaults",
+  );
+  const settlementDefaults = normalizeTairaXorTonToTairaSettlementFragment(
+    settlementDefaultsInput,
+    "settlementDefaults",
+  );
+  const settlement = normalizeTairaXorTonToTairaSettlementFragment(
+    settlementInput,
+    "proofPackage.settlement",
+  );
+
+  const expectedTxId = normalizeTairaXorTonTxId(
+    strictResultField(
+      input,
+      "txId",
+      "txId",
+      "txID",
+      "transactionHash",
+      "transaction_hash",
+      "transactionId",
+      "transaction_id",
+    ),
+    "txId",
+  );
+  const packageTxId = normalizeTairaXorTonTxId(
+    strictResultField(
+      proofPackage,
+      "proofPackage.txId",
+      "txId",
+      "txID",
+      "transactionHash",
+      "transaction_hash",
+      "transactionId",
+      "transaction_id",
+    ),
+    "proofPackage.txId",
+  );
+  if (packageTxId !== expectedTxId) {
+    throw new TypeError("proofPackage.txId must match txId");
+  }
+
+  const normalizedCommitment = normalizeMessageBundleCommitment(
+    messageBundle.commitment,
+  );
+  const commitmentMessageId = normalizeHex32(
+    normalizedCommitment.message_id,
+    "messageBundle.commitment.message_id",
+  );
+  const commitmentPayloadHash = normalizeHex32(
+    normalizedCommitment.payload_hash,
+    "messageBundle.commitment.payload_hash",
+  );
+  const commitmentTargetDomain = normalizeSccpDomainId(
+    normalizedCommitment.target_domain,
+    "messageBundle.commitment.target_domain",
+  );
+  if (commitmentTargetDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("messageBundle must target TAIRA/SORA");
+  }
+
+  const payloadEnvelope = normalizeSccpPayloadEnvelope(messageBundle.payload);
+  if (payloadEnvelope.kind !== "Transfer") {
+    throw new TypeError("messageBundle payload must be a Transfer");
+  }
+  const transfer = payloadEnvelope.value;
+  requireV1Version(
+    strictResultField(transfer, "payload.version", "version"),
+    "payload.version",
+  );
+  requireTransferDomain(
+    transfer,
+    "source_domain",
+    SCCP_DOMAIN_TON,
+    "payload.source_domain",
+  );
+  requireTransferDomain(
+    transfer,
+    "dest_domain",
+    SCCP_DOMAIN_SORA,
+    "payload.dest_domain",
+  );
+  requireTransferDomain(
+    transfer,
+    "asset_home_domain",
+    SCCP_DOMAIN_SORA,
+    "payload.asset_home_domain",
+  );
+  requireTransferCodec(
+    transfer,
+    "asset_id_codec",
+    SCCP_CODEC_TEXT_UTF8,
+    "payload.asset_id_codec",
+  );
+  requireTransferCodec(
+    transfer,
+    "sender_codec",
+    SCCP_CODEC_TON_RAW,
+    "payload.sender_codec",
+  );
+  requireTransferCodec(
+    transfer,
+    "recipient_codec",
+    SCCP_CODEC_TEXT_UTF8,
+    "payload.recipient_codec",
+  );
+  requireTransferCodec(
+    transfer,
+    "route_id_codec",
+    SCCP_CODEC_TEXT_UTF8,
+    "payload.route_id_codec",
+  );
+
+  const amount = normalizeUnsignedBigIntMax(
+    strictResultField(input, "amount", "amount"),
+    "amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (amount === 0n) {
+    throw new RangeError("amount must be greater than zero");
+  }
+  const transferAmount = normalizeUnsignedBigIntMax(
+    strictResultField(transfer, "payload.amount", "amount"),
+    "payload.amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (transferAmount !== amount) {
+    throw new TypeError("payload.amount must match amount");
+  }
+
+  const tonSender = normalizeTonRawAddress(
+    strictResultField(
+      input,
+      "tonSender",
+      "tonSender",
+      "ton_sender",
+      "sender",
+    ),
+    "tonSender",
+  );
+  if (
+    readTairaXorTonAddressPayload(transfer.sender, "payload.sender") !==
+    tonSender
+  ) {
+    throw new TypeError("payload.sender must match tonSender");
+  }
+  const tairaRecipient = normalizeCanonicalTairaAccountId(
+    strictResultField(
+      input,
+      "tairaRecipient",
+      "tairaRecipient",
+      "taira_recipient",
+      "recipient",
+      "tairaAccountId",
+      "taira_account_id",
+    ),
+    "tairaRecipient",
+  );
+  if (
+    readTairaXorTextValue(transfer.recipient, "payload.recipient") !==
+    tairaRecipient
+  ) {
+    throw new TypeError("payload.recipient must match tairaRecipient");
+  }
+  if (
+    readTairaXorTextValue(transfer.asset_id, "payload.asset_id") !==
+    SCCP_TAIRA_XOR_ASSET_KEY_V1
+  ) {
+    throw new TypeError("payload.asset_id must be xor");
+  }
+  if (
+    readTairaXorTextValue(transfer.route_id, "payload.route_id") !==
+    SCCP_TAIRA_TON_XOR_ROUTE_ID_V1
+  ) {
+    throw new TypeError("payload.route_id must be taira_ton_xor");
+  }
+
+  const transferNonce = strictResultField(transfer, "payload.nonce", "nonce");
+  const expectedPayload = buildTairaXorTonToTairaTransferPayload({
+    tonSender,
+    tairaRecipient,
+    amount,
+    nonce: transferNonce,
+  });
+  const expectedPayloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({
+      kind: "Transfer",
+      value: expectedPayload,
+    }),
+  );
+  if (commitmentPayloadHash !== expectedPayloadHash) {
+    throw new TypeError(
+      "messageBundle commitment payload hash must match the TAIRA XOR TON payload",
+    );
+  }
+  const expectedMessageId = sccpTransferMessageId(expectedPayload);
+  if (commitmentMessageId !== expectedMessageId) {
+    throw new TypeError(
+      "messageBundle commitment message id must match the TAIRA XOR TON payload",
+    );
+  }
+
+  const bundleCommitmentRoot = normalizeHex32(
+    strictResultField(
+      messageBundle,
+      "messageBundle.commitmentRoot",
+      "commitmentRoot",
+      "commitment_root",
+    ),
+    "messageBundle.commitmentRoot",
+  );
+  const normalizedMerkleProof = normalizeMessageBundleMerkleProof(
+    messageBundle.merkle_proof ?? messageBundle.merkleProof,
+  );
+  const expectedCommitmentRoot = sccpMerkleRootFromCommitment(
+    normalizedCommitment,
+    normalizedMerkleProof,
+  );
+  if (bundleCommitmentRoot !== expectedCommitmentRoot) {
+    throw new TypeError(
+      "messageBundle.commitmentRoot must match the commitment Merkle proof",
+    );
+  }
+  const normalizedMessageBundle = Object.freeze({
+    version: normalizeV1Version(messageBundle.version, "messageBundle.version"),
+    commitmentRoot: bundleCommitmentRoot,
+    commitment: normalizedCommitment,
+    merkleProof: normalizedMerkleProof,
+    payload: Object.freeze({
+      kind: "Transfer",
+      value: expectedPayload,
+    }),
+    finalityProof:
+      messageBundle.finality_proof ??
+      messageBundle.finalityProof ??
+      new Uint8Array(),
+  });
+  const packageMessageId = strictOptionalResultField(
+    proofPackage,
+    "proofPackage.messageId",
+    "messageId",
+    "message_id",
+  );
+  if (
+    packageMessageId !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeHex32(packageMessageId, "proofPackage.messageId") !==
+      commitmentMessageId
+  ) {
+    throw new TypeError("proofPackage.messageId must match the message bundle");
+  }
+  const packageCommitmentRoot = strictOptionalResultField(
+    proofPackage,
+    "proofPackage.commitmentRoot",
+    "commitmentRoot",
+    "commitment_root",
+  );
+  if (
+    packageCommitmentRoot !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeHex32(packageCommitmentRoot, "proofPackage.commitmentRoot") !==
+      bundleCommitmentRoot
+  ) {
+    throw new TypeError(
+      "proofPackage.commitmentRoot must match the message bundle",
+    );
+  }
+  const sourceEventDigest = normalizeNonZeroHex32(
+    strictResultField(
+      proofPackage,
+      "proofPackage.sourceEventDigest",
+      "sourceEventDigest",
+      "source_event_digest",
+    ),
+    "proofPackage.sourceEventDigest",
+  );
+  const expectedSourceEventDigest = sccpSourceEventDigest(
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_SORA,
+    commitmentMessageId,
+    commitmentPayloadHash,
+  );
+  if (sourceEventDigest !== expectedSourceEventDigest) {
+    throw new TypeError(
+      "proofPackage.sourceEventDigest must match the TON SCCP source event digest",
+    );
+  }
+
+  canonicalSccpMessageProofBundleBytes(normalizedMessageBundle);
+  return Object.freeze({
+    messageBundle: normalizedMessageBundle,
+    settlement: Object.freeze({
+      ...settlementDefaults,
+      ...settlement,
+      entrypoint: "finalize_inbound",
+      route: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1,
     }),
     sourceEventDigest,
     txId: expectedTxId,

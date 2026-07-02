@@ -8589,6 +8589,11 @@ pub mod isi {
                 "SCCP BSC mainnet lane launch policy",
                 "BSC mainnet",
             )),
+            iroha_sccp::SccpLaunchModeV1::TonMainnetLane => Some((
+                iroha_sccp::SCCP_DOMAIN_TON,
+                "SCCP TON mainnet lane launch policy",
+                "TON mainnet",
+            )),
         }
     }
 
