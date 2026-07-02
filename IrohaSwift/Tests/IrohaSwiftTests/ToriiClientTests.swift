@@ -505,6 +505,16 @@ final class ToriiClientTests: XCTestCase {
     private let encodedRoseAssetID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private let roseAssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
+    private func noncanonicalStandardBase64PadBitAlias(_ encoded: String) -> String {
+        XCTAssertTrue(encoded.hasSuffix("=="))
+        let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".utf8)
+        var bytes = Array(encoded.utf8)
+        let index = bytes.count - 3
+        let value = alphabet.firstIndex(of: bytes[index])!
+        bytes[index] = alphabet[value ^ 0x01]
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
     override func tearDown() {
         StubURLProtocol.handler = nil
         super.tearDown()
@@ -9670,7 +9680,7 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetOfflineReadinessRejectsMalformedRecursiveCompactReadiness() async throws {
+    func testGetOfflineReadinessRejectsMalformedKagemushaAbiVersions() async throws {
         func payload(extra: String = "",
                      compactAvailable: String = "true",
                      compactMode: String = "\"recursive_compact_v1\"",
@@ -9697,6 +9707,11 @@ final class ToriiClientTests: XCTestCase {
             (payload(compact: "\"2147483648\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must fit in signed 32-bit range"),
             (payload(compactAvailable: "1"), "Expected to decode Bool"),
             (payload(compactCircuit: "\"kagemusha-recursive-compact-v1 \""), "offline_kagemusha_recursive_compact_circuit_id must not contain surrounding whitespace"),
+            (payload(extra: "\"offline_kagemusha_abi7\": true,"), "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_mode\": \"recursive_compact_v1\","), "offline_kagemusha_abi7_mode is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_bridge_abi_version\": 7,"), "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_circuit_id\": \"kagemusha-recursive-compact-v1\","), "offline_kagemusha_abi7_circuit_id is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_artifacts\": false,"), "offline_kagemusha_abi7_artifacts is not supported; use offline_kagemusha_recursive_compact_*"),
             (payload(extra: "\"unexpected_offline_readiness_field\": true,"), "unexpected_offline_readiness_field is not a supported offline readiness field")
         ]
 
@@ -14229,6 +14244,82 @@ id: 88
             expectation.fulfill()
         }
         waitForExpectations(timeout: 1)
+    }
+
+    func testSignatureB64RequestsRejectNoncanonicalBase64Text() throws {
+        let account = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        let signer = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
+        let canonicalSignature = Data(repeating: 0x01, count: 64).base64EncodedString()
+        let invalidSignatures = [
+            " \(canonicalSignature)",
+            noncanonicalStandardBase64PadBitAlias(canonicalSignature)
+        ]
+
+        for signatureB64 in invalidSignatures {
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(
+                    ToriiContractCallRequest(
+                        authority: account,
+                        signatureB64: signatureB64,
+                        contractAlias: "mint::universal",
+                        gasLimit: 1
+                    )
+                )
+            ) { error in
+                XCTAssertTrue("\(error)".contains("signature_b64"))
+            }
+
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(
+                    ToriiMultisigProposeRequest(
+                        selector: ToriiMultisigAccountSelector(multisigAccountId: account),
+                        signerAccountId: signer,
+                        signatureB64: signatureB64,
+                        instructions: [try ToriiMultisigProposeInstruction(base64: "AQID")]
+                    )
+                )
+            ) { error in
+                XCTAssertTrue("\(error)".contains("signature_b64"))
+            }
+
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(
+                    ToriiMultisigContractCallProposeRequest(
+                        selector: ToriiMultisigAccountSelector(multisigAccountId: account),
+                        signerAccountId: signer,
+                        signatureB64: signatureB64,
+                        contractAlias: "mint::universal",
+                        entrypoint: "create"
+                    )
+                )
+            ) { error in
+                XCTAssertTrue("\(error)".contains("signature_b64"))
+            }
+
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(
+                    ToriiMultisigContractCallApproveRequest(
+                        selector: ToriiMultisigAccountSelector(multisigAccountId: account),
+                        signerAccountId: signer,
+                        signatureB64: signatureB64,
+                        proposalId: String(repeating: "b", count: 64)
+                    )
+                )
+            ) { error in
+                XCTAssertTrue("\(error)".contains("signature_b64"))
+            }
+
+            XCTAssertThrowsError(
+                try JSONEncoder().encode(
+                    ToriiBridgeProofSubmitRequest(
+                        authority: account,
+                        signatureB64: signatureB64
+                    )
+                )
+            ) { error in
+                XCTAssertTrue("\(error)".contains("signature_b64"))
+            }
+        }
     }
 
     func testApproveMultisigContractCallEncodesConcreteSelector() {

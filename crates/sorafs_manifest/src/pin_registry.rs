@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 
 use blake3::Hasher;
-use iroha_crypto::{Algorithm, PublicKey, Signature};
+use iroha_crypto::{Algorithm, PublicKey};
 use norito::{
     Error as NoritoError,
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
@@ -444,7 +444,7 @@ pub fn verify_alias_proof_bundle(
                     reason: format!("signer {signer_hex}: {err}"),
                 }
             })?;
-        let sig = Signature::try_from_bytes(&signature.signature).map_err(|err| {
+        let sig = iroha_crypto::ed25519_parse_signature(&signature.signature).map_err(|err| {
             AliasProofVerificationError::SignatureVerificationFailed {
                 index,
                 reason: format!("signer {signer_hex}: invalid signature material: {err}"),

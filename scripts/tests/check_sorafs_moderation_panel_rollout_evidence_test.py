@@ -63,6 +63,10 @@ def appeal_intake() -> dict:
         "routes": routes,
         "case_count": 2,
         "accepted_case_count": 2,
+        "cases": [
+            {"name": "appeal-case-00", "accepted": True},
+            {"name": "appeal-case-01", "accepted": True},
+        ],
         "appellant_auth_enforced": True,
         "proof_token_verified": True,
         "deposit_confirmation_bound": True,
@@ -84,6 +88,10 @@ def sortition_roster(*, panel_size: int = 7) -> dict:
         "roster_hash_hex": DIGEST,
         "sortition_seed_hex": DIGEST,
         "panel_size": panel_size,
+        "jurors": [
+            {"name": f"roster-juror-{index:02d}", "eligible": True}
+            for index in range(panel_size)
+        ],
         "quorum": 5,
         "pop_snapshot_bound": True,
         "juror_eligibility_verified": True,
@@ -103,6 +111,11 @@ def evidence_viewer() -> dict:
         "session_count": 3,
         "attested_session_count": 3,
         "logged_session_count": 3,
+        "sessions": [
+            {"name": "viewer-session-00", "attested": True, "logged": True},
+            {"name": "viewer-session-01", "attested": True, "logged": True},
+            {"name": "viewer-session-02", "attested": True, "logged": True},
+        ],
         "attested_viewer_enabled": True,
         "role_scoped_manifest_verified": True,
         "short_lived_urls_verified": True,
@@ -184,7 +197,12 @@ def juror_notifications() -> dict:
         "roster_hash_hex": DIGEST,
         "notification_count": 7,
         "delivered_notification_count": 7,
+        "notifications": [
+            {"name": f"notification-{index:02d}", "delivered": True}
+            for index in range(7)
+        ],
         "juror_count": 7,
+        "jurors": [{"name": f"juror-{index:02d}"} for index in range(7)],
         "dedup_keys_verified": True,
         "transport_canary_passed": True,
         "retry_policy_verified": True,
@@ -213,7 +231,9 @@ def commit_reveal(*, lag: int = 60) -> dict:
         "routes": routes,
         "panel_size": 7,
         "commit_count": 7,
+        "commits": [{"name": f"commit-{index:02d}"} for index in range(7)],
         "reveal_count": 7,
+        "reveals": [{"name": f"reveal-{index:02d}"} for index in range(7)],
         "commit_auth_bound_to_juror": True,
         "reveal_auth_bound_to_juror": True,
         "quorum_satisfied": True,
@@ -277,6 +297,10 @@ def settlement_integration() -> dict:
         "roster_hash_hex": DIGEST,
         "tally_digest_hex": DIGEST,
         "settlement_count": 2,
+        "settlements": [
+            {"name": "appeal-settlement-00"},
+            {"name": "appeal-settlement-01"},
+        ],
         "appeal_finance_report_published": True,
         "settlement_receipt_published": True,
         "treasury_reconciliation_passed": True,
@@ -312,6 +336,8 @@ def transparency_reputation() -> dict:
 
 
 def e2e_panel(*, peer_count: int = 4) -> dict:
+    peers = [{"name": f"peer-{index:02d}"} for index in range(peer_count)]
+    validators = [{"name": f"validator-{index:02d}"} for index in range(peer_count)]
     return with_context({
         "schema": "sorafs.moderation_panel.e2e_panel_canary.v1",
         "status": "passed",
@@ -321,8 +347,14 @@ def e2e_panel(*, peer_count: int = 4) -> dict:
         "tally_digest_hex": DIGEST,
         "policy_digest_hex": DIGEST,
         "peer_count": peer_count,
+        "peers": peers,
         "validator_count": peer_count,
+        "validators": validators,
         "case_count": 2,
+        "cases": [
+            {"name": "panel-case-00", "passed": True},
+            {"name": "panel-case-01", "passed": True},
+        ],
         "appeal_submission_verified": True,
         "juror_selection_verified": True,
         "evidence_access_verified": True,
@@ -632,6 +664,70 @@ def test_routes_must_not_duplicate_for_route_artifacts(tmp_path: Path) -> None:
         assert "route_count must match unique routes count" in artifact["errors"]
 
 
+def test_appeal_intake_case_count_must_match_unique_cases(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = appeal_intake()
+    payload["case_count"] += 1
+    payload["accepted_case_count"] = payload["case_count"]
+    write_json(tmp_path / "appeal-intake.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["appeal_intake"]["artifacts"][0]
+    assert "case_count must match unique cases count" in artifact["errors"]
+
+
+def test_appeal_intake_cases_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = appeal_intake()
+    payload["cases"].append(dict(payload["cases"][0]))
+    payload["case_count"] = len(payload["cases"])
+    payload["accepted_case_count"] = len(payload["cases"])
+    write_json(tmp_path / "appeal-intake.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["appeal_intake"]["artifacts"][0]
+    assert "cases must not contain duplicate values" in artifact["errors"]
+    assert "case_count must match unique cases count" in artifact["errors"]
+
+
+def test_appeal_intake_accepted_case_count_must_match_inventory(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = appeal_intake()
+    payload["cases"][0]["accepted"] = False
+    write_json(tmp_path / "appeal-intake.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["appeal_intake"]["artifacts"][0]
+    assert "accepted_case_count must match accepted cases count" in artifact["errors"]
+
+
+def test_appeal_intake_case_acceptance_must_be_boolean(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = appeal_intake()
+    payload["cases"][0]["accepted"] = "yes"
+    write_json(tmp_path / "appeal-intake.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["appeal_intake"]["artifacts"][0]
+    assert "cases[0].accepted must be a boolean" in artifact["errors"]
+
+
 def test_payload_leakage_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = commit_reveal()
@@ -670,6 +766,76 @@ def test_evidence_viewer_logged_session_count_must_match(tmp_path: Path) -> None
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["evidence_viewer"]["artifacts"][0]
     assert "logged_session_count must equal session_count" in artifact["errors"]
+
+
+def test_evidence_viewer_session_count_must_match_unique_sessions(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = evidence_viewer()
+    payload["session_count"] += 1
+    payload["attested_session_count"] = payload["session_count"]
+    payload["logged_session_count"] = payload["session_count"]
+    write_json(tmp_path / "evidence-viewer.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["evidence_viewer"]["artifacts"][0]
+    assert "session_count must match unique sessions count" in artifact["errors"]
+
+
+def test_evidence_viewer_sessions_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = evidence_viewer()
+    payload["sessions"].append(dict(payload["sessions"][0]))
+    payload["session_count"] = len(payload["sessions"])
+    payload["attested_session_count"] = len(payload["sessions"])
+    payload["logged_session_count"] = len(payload["sessions"])
+    write_json(tmp_path / "evidence-viewer.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["evidence_viewer"]["artifacts"][0]
+    assert "sessions must not contain duplicate values" in artifact["errors"]
+    assert "session_count must match unique sessions count" in artifact["errors"]
+
+
+def test_evidence_viewer_session_attestation_must_be_boolean(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = evidence_viewer()
+    payload["sessions"][0]["attested"] = "yes"
+    write_json(tmp_path / "evidence-viewer.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["evidence_viewer"]["artifacts"][0]
+    assert "sessions[0].attested must be a boolean" in artifact["errors"]
+
+
+def test_evidence_viewer_logged_session_count_must_match_inventory(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = evidence_viewer()
+    payload["sessions"][0]["logged"] = False
+    write_json(tmp_path / "evidence-viewer.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["evidence_viewer"]["artifacts"][0]
+    assert "logged_session_count must match logged sessions count" in artifact[
+        "errors"
+    ]
 
 
 def test_evidence_viewer_requires_access_event_coverage(tmp_path: Path) -> None:
@@ -723,11 +889,176 @@ def test_evidence_viewer_rejects_signed_url_leakage(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_juror_notification_count_must_match_unique_notifications(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = juror_notifications()
+    payload["notification_count"] += 1
+    payload["delivered_notification_count"] = payload["notification_count"]
+    write_json(tmp_path / "juror-notifications.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["juror_notifications"]["artifacts"][0]
+    assert "notification_count must match unique notifications count" in artifact[
+        "errors"
+    ]
+
+
+def test_juror_notifications_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = juror_notifications()
+    payload["notifications"].append(dict(payload["notifications"][0]))
+    payload["notification_count"] = len(payload["notifications"])
+    payload["delivered_notification_count"] = len(payload["notifications"])
+    write_json(tmp_path / "juror-notifications.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["juror_notifications"]["artifacts"][0]
+    assert "notifications must not contain duplicate values" in artifact["errors"]
+    assert "notification_count must match unique notifications count" in artifact[
+        "errors"
+    ]
+
+
+def test_delivered_notification_count_must_match_inventory(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = juror_notifications()
+    payload["notifications"][0]["delivered"] = False
+    write_json(tmp_path / "juror-notifications.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["juror_notifications"]["artifacts"][0]
+    assert (
+        "delivered_notification_count must match delivered notifications count"
+        in artifact["errors"]
+    )
+
+
+def test_juror_notification_delivery_must_be_boolean(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = juror_notifications()
+    payload["notifications"][0]["delivered"] = "yes"
+    write_json(tmp_path / "juror-notifications.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["juror_notifications"]["artifacts"][0]
+    assert "notifications[0].delivered must be a boolean" in artifact["errors"]
+
+
+def test_juror_count_must_match_unique_jurors(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = juror_notifications()
+    payload["juror_count"] -= 1
+    write_json(tmp_path / "juror-notifications.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["juror_notifications"]["artifacts"][0]
+    assert "juror_count must match unique jurors count" in artifact["errors"]
+
+
+def test_jurors_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = juror_notifications()
+    payload["jurors"].append(dict(payload["jurors"][0]))
+    payload["juror_count"] = len(payload["jurors"])
+    write_json(tmp_path / "juror-notifications.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["juror_notifications"]["artifacts"][0]
+    assert "jurors must not contain duplicate values" in artifact["errors"]
+    assert "juror_count must match unique jurors count" in artifact["errors"]
+
+
 def test_low_panel_size_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "sortition-roster.json", sortition_roster(panel_size=5))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_sortition_roster_panel_size_must_match_unique_jurors(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = sortition_roster()
+    payload["panel_size"] += 1
+    write_json(tmp_path / "sortition-roster.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["sortition_roster"]["artifacts"][0]
+    assert "panel_size must match unique jurors count" in artifact["errors"]
+
+
+def test_sortition_roster_jurors_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = sortition_roster()
+    payload["jurors"].append(dict(payload["jurors"][0]))
+    payload["panel_size"] = len(payload["jurors"])
+    write_json(tmp_path / "sortition-roster.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["sortition_roster"]["artifacts"][0]
+    assert "jurors must not contain duplicate values" in artifact["errors"]
+    assert "panel_size must match unique jurors count" in artifact["errors"]
+
+
+def test_sortition_roster_eligible_juror_count_must_match_inventory(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = sortition_roster()
+    payload["jurors"][0]["eligible"] = False
+    write_json(tmp_path / "sortition-roster.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["sortition_roster"]["artifacts"][0]
+    assert "panel_size must match eligible jurors count" in artifact["errors"]
+
+
+def test_sortition_roster_juror_eligibility_must_be_boolean(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = sortition_roster()
+    payload["jurors"][0]["eligible"] = "yes"
+    write_json(tmp_path / "sortition-roster.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["sortition_roster"]["artifacts"][0]
+    assert "jurors[0].eligible must be a boolean" in artifact["errors"]
 
 
 def test_sortition_roster_quorum_must_not_exceed_panel_size(tmp_path: Path) -> None:
@@ -843,11 +1174,248 @@ def test_commit_reveal_requires_negative_scenario_coverage(tmp_path: Path) -> No
     assert run_gate(tmp_path) == 1
 
 
+def test_commit_reveal_commit_count_must_match_unique_commits(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = commit_reveal()
+    payload["commit_count"] += 1
+    write_json(tmp_path / "commit-reveal.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["commit_reveal"]["artifacts"][0]
+    assert "commit_count must match unique commits count" in artifact["errors"]
+
+
+def test_commit_reveal_commits_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = commit_reveal()
+    payload["commits"].append(dict(payload["commits"][0]))
+    payload["commit_count"] = len(payload["commits"])
+    write_json(tmp_path / "commit-reveal.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["commit_reveal"]["artifacts"][0]
+    assert "commits must not contain duplicate values" in artifact["errors"]
+    assert "commit_count must match unique commits count" in artifact["errors"]
+
+
+def test_commit_reveal_reveal_count_must_match_unique_reveals(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = commit_reveal()
+    payload["reveal_count"] -= 1
+    write_json(tmp_path / "commit-reveal.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["commit_reveal"]["artifacts"][0]
+    assert "reveal_count must match unique reveals count" in artifact["errors"]
+
+
+def test_commit_reveal_reveals_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = commit_reveal()
+    payload["reveals"].append(dict(payload["reveals"][0]))
+    payload["reveal_count"] = len(payload["reveals"])
+    write_json(tmp_path / "commit-reveal.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["commit_reveal"]["artifacts"][0]
+    assert "reveals must not contain duplicate values" in artifact["errors"]
+    assert "reveal_count must match unique reveals count" in artifact["errors"]
+
+
+def test_commit_reveal_reveal_count_must_not_exceed_commit_count(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = commit_reveal()
+    payload["reveals"].append({"name": "reveal-07"})
+    payload["reveal_count"] = len(payload["reveals"])
+    write_json(tmp_path / "commit-reveal.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["commit_reveal"]["artifacts"][0]
+    assert "reveal_count must be <= commit_count" in artifact["errors"]
+
+
+def test_settlement_integration_count_must_match_unique_settlements(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_integration()
+    payload["settlement_count"] += 1
+    write_json(tmp_path / "settlement-integration.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_integration"]["artifacts"][0]
+    assert "settlement_count must match unique settlements count" in artifact[
+        "errors"
+    ]
+
+
+def test_settlement_integration_settlements_must_not_duplicate(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_integration()
+    payload["settlements"].append(dict(payload["settlements"][0]))
+    payload["settlement_count"] = len(payload["settlements"])
+    write_json(tmp_path / "settlement-integration.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_integration"]["artifacts"][0]
+    assert "settlements must not contain duplicate values" in artifact["errors"]
+    assert "settlement_count must match unique settlements count" in artifact[
+        "errors"
+    ]
+
+
 def test_e2e_peer_count_below_minimum_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "e2e-panel.json", e2e_panel(peer_count=3))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_e2e_peer_count_must_match_unique_peers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = e2e_panel()
+    payload["peer_count"] += 1
+    write_json(tmp_path / "e2e-panel.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["e2e_panel"]["artifacts"][0]
+    assert "peer_count must match unique peers count" in artifact["errors"]
+
+
+def test_e2e_peers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = e2e_panel()
+    payload["peers"].append(dict(payload["peers"][0]))
+    payload["peer_count"] = len(payload["peers"])
+    write_json(tmp_path / "e2e-panel.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["e2e_panel"]["artifacts"][0]
+    assert "peers must not contain duplicate values" in artifact["errors"]
+    assert "peer_count must match unique peers count" in artifact["errors"]
+
+
+def test_e2e_validator_count_must_match_unique_validators(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = e2e_panel()
+    payload["validator_count"] += 1
+    write_json(tmp_path / "e2e-panel.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["e2e_panel"]["artifacts"][0]
+    assert "validator_count must match unique validators count" in artifact["errors"]
+
+
+def test_e2e_case_count_must_match_unique_cases(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = e2e_panel()
+    payload["case_count"] += 1
+    write_json(tmp_path / "e2e-panel.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["e2e_panel"]["artifacts"][0]
+    assert "case_count must match unique cases count" in artifact["errors"]
+
+
+def test_e2e_cases_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = e2e_panel()
+    payload["cases"].append(dict(payload["cases"][0]))
+    payload["case_count"] = len(payload["cases"])
+    write_json(tmp_path / "e2e-panel.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["e2e_panel"]["artifacts"][0]
+    assert "cases must not contain duplicate values" in artifact["errors"]
+    assert "case_count must match unique cases count" in artifact["errors"]
+
+
+def test_e2e_passed_case_count_must_match_inventory(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = e2e_panel()
+    payload["cases"][0]["passed"] = False
+    write_json(tmp_path / "e2e-panel.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["e2e_panel"]["artifacts"][0]
+    assert "case_count must match passed cases count" in artifact["errors"]
+
+
+def test_e2e_case_passed_must_be_boolean(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = e2e_panel()
+    payload["cases"][0]["passed"] = "yes"
+    write_json(tmp_path / "e2e-panel.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["e2e_panel"]["artifacts"][0]
+    assert "cases[0].passed must be a boolean" in artifact["errors"]
+
+
+def test_e2e_validators_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = e2e_panel()
+    payload["validators"].append(dict(payload["validators"][0]))
+    payload["validator_count"] = len(payload["validators"])
+    write_json(tmp_path / "e2e-panel.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["e2e_panel"]["artifacts"][0]
+    assert "validators must not contain duplicate values" in artifact["errors"]
+    assert "validator_count must match unique validators count" in artifact["errors"]
 
 
 def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:

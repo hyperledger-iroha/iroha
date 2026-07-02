@@ -21,6 +21,13 @@ clients reject retired note issue locally before posting to Torii.
 Historical serialization and proof fixtures may still mention those types, but
 production payment admission uses Kagemusha online-to-offline top-ups,
 `KagemushaTransfer`, and `RedeemKagemushaRecursive`.
+The SDK top-up producer lowers a `KagemushaRecursiveSpendInitRequestV1` Norito
+archive into a `KagemushaTransfer` instruction archive. It does not accept the
+init result bundle by itself, because the init request carries the checked hop
+proof, verifier records, current-note binding, and Pallas opening metadata
+needed to validate the top-up before instruction serialization. Submission uses
+the existing signed transaction pipeline; there is no separate
+`/offline/v2/notes/topup` JSON route for this SDK bridge path.
 
 `KagemushaTransfer` is the chain-side shielded offline-offline instruction. It
 reuses the existing ZK asset accumulator in WSV instead of introducing a second
@@ -2544,8 +2551,7 @@ cannot leave a partial artifact under a trusted release path. The ABI-7 compact 
 key remains CID-distinct from the ABI-6 recursive aggregation verifier key while
 reusing the semantic aggregation circuit shape for projection tests; those
 projection helpers are not a receiver-admission path.
-Bridge ABI 6 introduced, and ABI 6-or-later bridges expose, the production
-recursive spendable-cash entry points:
+Bridge ABI 6 introduced, and ABI 6-or-later bridges expose, the production recursive spendable-cash entry points:
 `connect_norito_kagemusha_recursive_spend_init`,
 `connect_norito_kagemusha_recursive_spend_append`,
 `connect_norito_kagemusha_recursive_spend_transition_profile_init`,
@@ -2554,13 +2560,16 @@ recursive spendable-cash entry points:
 `connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result`,
 `connect_norito_kagemusha_recursive_spend_lineage_witness_append_result`,
 `connect_norito_kagemusha_recursive_spend_verify`, and
-`connect_norito_kagemusha_recursive_spend_redeem`. All nine entry points accept
-and return raw Norito archives so SDKs do not implement recursive proof internals,
+`connect_norito_kagemusha_recursive_spend_redeem`. Bridge ABI 15 adds
+`connect_norito_kagemusha_recursive_spend_topup`, which lowers a validated init
+request archive into the first `KagemushaTransfer` instruction archive. All ten
+entry points accept and return raw Norito archives so SDKs do not implement recursive proof internals,
 accumulator derivation, or witness merging. The data model round-trips the raw
 archive contracts for `init`, `append`, transition-profile preflight,
-lineage-witness assembly, `verify`, `verify_result`, and `redeem` so SDK
+lineage-witness assembly, `topup`, `verify`, `verify_result`, and `redeem` so SDK
 wrappers share one Norito ABI shape. The
-offline recipe is: load/top-up online, build the first
+offline recipe is: load/top-up online by deriving and submitting the
+`KagemushaTransfer` with `topup`, build the first
 `KagemushaRecursiveSpendBundleV1` with `init`, verify and store the bundle on
 receipt, append one verified hop plus the new spendable note descriptor for
 every offline re-spend, and call `redeem` when the final holder comes back
@@ -3454,7 +3463,7 @@ not as a soft invalid unavailable proof result; Kotlin/JVM and Java Android
 wrapper tests pin the same classifier boundary for verifier-key hash mismatch
 diagnostics.
 JavaScript/Node, Python, Kotlin/JVM, Java Android, and C# apply the same
-fail-closed rule in their native availability probes: init, append, both
+fail-closed rule in their native availability probes: init, append, top-up, both
 transition-profile helpers, the append-boundary helper, both lineage-witness
 helpers, verify, and redeem must be callable from the loaded native bridge
 before wallet code is told recursive redemption is supported.

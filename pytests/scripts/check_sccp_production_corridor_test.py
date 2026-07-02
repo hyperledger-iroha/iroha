@@ -766,6 +766,26 @@ def test_sccp_production_corridor_evidence_phase_runs_retired_network_scan() -> 
     assert "pytests/scripts/sccp_retired_network_surface_test.py" in completed.stdout
 
 
+def test_sccp_production_corridor_evidence_phase_runs_source_template_hash_guard() -> None:
+    """The evidence phase must certify the shared SCCP source-template denylist."""
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--dry-run",
+            "--phase",
+            "evidence-scripts",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert "pytests/scripts/sccp_source_template_hashes_test.py" in completed.stdout
+
+
 def test_sccp_production_corridor_test_paths_are_release_inventory_tracked() -> None:
     """Path-based corridor test commands must be present in release evidence."""
 
@@ -5558,6 +5578,36 @@ esac
                 'name="Passes" /></UnitTest></TestDefinitions></TestRun>\n'
             ),
             "requires TRX VSTest attributes to contain no sensitive metadata",
+        ),
+        (
+            "schema-known-deep-percent-sensitive-attribute",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" '
+                'testName="Hyperledger.Iroha.Sdk.Tests.SccpFake.Passes" '
+                'outcome="Passed" '
+                'computerName="ci-runner%2525253Aoperator%2525252Fprivate%2525252Fsccp-dotnet-sdk.trx" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes" /></UnitTest></TestDefinitions></TestRun>\n'
+            ),
+            "requires TRX VSTest attributes to contain no sensitive metadata",
+        ),
+        (
+            "schema-known-excessive-percent-encoding",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" '
+                'testName="Hyperledger.Iroha.Sdk.Tests.SccpFake.Passes" '
+                'outcome="Passed" '
+                'computerName="ci-runner%25252525252525253Avalue" />'
+                '</Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" name="SccpFake.Passes">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes" /></UnitTest></TestDefinitions></TestRun>\n'
+            ),
+            "requires TRX XML metadata to avoid deeply nested percent encoding",
         ),
         (
             "schema-known-percent-control-attribute",

@@ -5182,7 +5182,7 @@ def check_docs_reserved_lineage_policy():
     for needle in (
         "Bridge ABI 6 introduced, and ABI 6-or-later bridges expose, the production recursive spendable-cash entry points:",
         "`connect_norito_kagemusha_recursive_spend_lineage_append_boundary`",
-        "All nine entry points accept and return raw Norito archives",
+        "All ten entry points accept and return raw Norito archives",
         "SDKs must treat `previous_recursive_proof_open_envelopes_archive` as opaque native prover material",
         "must not construct, rewrite, or mutate it",
         "the native bridge and SDK append wrappers validate the metadata tuple",
@@ -5191,7 +5191,7 @@ def check_docs_reserved_lineage_policy():
         "native bridge and SDK `verify` results are split between offline spendability and chain admission",
         "native bridge and SDK `redeem` entry points are fail-closed on the chain-admission gate",
         "Native bridge and SDK verifier wrappers reject malformed Reserved-lineage verify request archives before returning a diagnostic result",
-        "native availability probes: init, append, both transition-profile helpers, the append-boundary helper, both lineage-witness helpers, verify, and redeem must be callable",
+        "native availability probes: init, append, top-up, both transition-profile helpers, the append-boundary helper, both lineage-witness helpers, verify, and redeem must be callable",
         "Request-backed append transition profiles additionally bind `previous_recursive_proof_open_envelopes_archive_digest`",
         "Reserved-lineage append proof output also binds `append_opening_preflight_digest`",
         "`KagemushaRecursiveSpendLineageAppendOpeningPreflightV1` Norito contract",
@@ -13604,7 +13604,7 @@ if mode == "--negative-control-doc-sdk-availability-surface":
         message = str(error)
         expected = (
             "docs/source/offline_kagemusha.md is missing previous-proof opening SDK-host boundary documentation: "
-            "native availability probes: init, append, both transition-profile helpers, the append-boundary helper, "
+            "native availability probes: init, append, top-up, both transition-profile helpers, the append-boundary helper, "
             "both lineage-witness helpers, verify, and redeem must be callable"
         )
         if expected not in message:
@@ -13620,7 +13620,7 @@ if mode == "--negative-control-doc-sdk-availability-surface":
 if mode == "--negative-control-doc-abi-entry-count":
     target = "docs/source/offline_kagemusha.md"
     source = read(target)
-    mutated = source.replace("All nine entry points accept", "All eight entry points accept", 1)
+    mutated = source.replace("All ten entry points accept", "All nine entry points accept", 1)
     if mutated == source:
         raise SystemExit("negative control failed: unable to mutate documented ABI-6 entry count")
     text_overrides[target] = mutated

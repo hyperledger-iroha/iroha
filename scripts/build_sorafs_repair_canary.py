@@ -92,6 +92,30 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    kind: str,
+    count_option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return reviewed unique inventory labels whose count matches a CLI count."""
+
+    items = list(values)
+    if not items:
+        errors.append(f"{option} is required for {kind}")
+    for index, item in enumerate(items):
+        validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+    unique_items = set(items)
+    if len(unique_items) != len(items):
+        errors.append(f"{option} must not contain duplicates")
+    if len(unique_items) != expected_count:
+        errors.append(f"{option} unique values must match {count_option}")
+    return items
+
+
 def validate_output_path(path: Path, errors: list[str]) -> None:
     """Reject unsafe output targets before writing a canary artifact."""
 
@@ -176,6 +200,12 @@ def build_route_records(args: argparse.Namespace, routes: Sequence[str]) -> list
     ]
 
 
+def build_inventory_records(names: Sequence[str]) -> list[dict[str, str]]:
+    """Build reviewed payload-free inventory records."""
+
+    return [{"name": name} for name in names]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free repair rollout canary payload."""
 
@@ -189,6 +219,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "runbook_published": True,
                 "auditor_notifications_configured": True,
                 "auditor_count": args.auditor_count,
+                "auditors": build_inventory_records(args.auditors),
                 "roster_digest_hex": args.roster_digest_hex,
                 "raw_roster_included": False,
             }
@@ -342,7 +373,16 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             (("--policy-digest-hex", args.policy_digest_hex),),
         )
         validate_hex64(args.policy_digest_hex, option="--policy-digest-hex", errors=errors)
-    if args.kind == "failure_capture":
+    if args.kind == "auditor_roster":
+        args.auditors = validate_reviewed_inventory(
+            split_csv_values(args.auditor),
+            expected_count=args.auditor_count,
+            option="--auditor",
+            kind="auditor_roster",
+            count_option="--auditor-count",
+            errors=errors,
+        )
+    elif args.kind == "failure_capture":
         args.failure_sources = validate_name_set(
             split_csv_values(args.failure_source),
             allowed=REQUIRED_FAILURE_SOURCES,
@@ -501,6 +541,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lifecycle-status", action="append", default=[])
     parser.add_argument("--handoff-target", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
+    parser.add_argument("--auditor", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=200)
     parser.add_argument("--event-lag-seconds", type=non_negative_int_arg, default=30)

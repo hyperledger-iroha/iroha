@@ -41,6 +41,21 @@ const BOB_ID = AccountAddress.fromAccount({ publicKey: BOB_KEY }).toI105();
 const CAROL_ID = AccountAddress.fromAccount({ publicKey: CAROL_KEY }).toI105();
 const CONTROLLER_ID = AccountAddress.fromAccount({ publicKey: CONTROLLER_KEY }).toI105();
 
+function canonicalSignatureBase64Fixture() {
+  return Buffer.alloc(64, 0x01).toString("base64");
+}
+
+function noncanonicalStandardBase64PadBitAlias(encoded) {
+  assert.equal(encoded.endsWith("=="), true);
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const chars = [...encoded];
+  const index = chars.length - 3;
+  const value = alphabet.indexOf(chars[index]);
+  assert.notEqual(value, -1);
+  chars[index] = alphabet[value ^ 0x01];
+  return chars.join("");
+}
+
 function sampleSpec() {
   return new MultisigSpecBuilder()
     .setQuorum(2)
@@ -241,6 +256,39 @@ test("buildMultisigContractCallApproveRequest normalizes selector and lookup key
     instructions_hash: "aa".repeat(32),
     signature_b64: "AQ==",
   });
+});
+
+test("multisig contract-call request builders reject noncanonical signatureB64", () => {
+  const canonicalSignature = canonicalSignatureBase64Fixture();
+  for (const signatureB64 of [
+    ` ${canonicalSignature} `,
+    canonicalSignature.replace(/=+$/u, ""),
+    noncanonicalStandardBase64PadBitAlias(canonicalSignature),
+  ]) {
+    assert.throws(
+      () =>
+        buildMultisigContractCallProposeRequest({
+          multisigAccountAlias: "mintops@banka",
+          signerAccountId: ALICE_ID,
+          contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+          entrypoint: "execute",
+          trigger: "staged_mint_request_hbl",
+          args: { request_id: "req-signature" },
+          signatureB64,
+        }),
+      /exact standard-base64/,
+    );
+    assert.throws(
+      () =>
+        buildMultisigContractCallApproveRequest({
+          multisigAccountId: CONTROLLER_ID,
+          signerAccountId: BOB_ID,
+          instructionsHash: "AA".repeat(32),
+          signatureB64,
+        }),
+      /exact standard-base64/,
+    );
+  }
 });
 
 test("buildMultisigContractCallProposeRequest accepts detached private key variants", () => {

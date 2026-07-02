@@ -15284,6 +15284,9 @@ class ToriiClient(_BaseToriiClient):
         scope: str = "global",
         success_statuses: Optional[Iterable[str]] = None,
         failure_statuses: Optional[Iterable[str]] = None,
+        gas_asset_id: Optional[str] = None,
+        fee_sponsor: Optional[str] = None,
+        gas_limit: Any = None,
         gov_manifest_approvers: Optional[Iterable[str]] = None,
     ) -> Any:
         """Deploy a compiled contract through the typed Torii endpoint wrapper.
@@ -15306,6 +15309,12 @@ class ToriiClient(_BaseToriiClient):
         }
         if lease_expiry_ms is not None:
             request["lease_expiry_ms"] = lease_expiry_ms
+        if gas_asset_id is not None:
+            request["gas_asset_id"] = str(gas_asset_id)
+        if fee_sponsor is not None:
+            request["fee_sponsor"] = str(fee_sponsor)
+        if gas_limit is not None:
+            request["gas_limit"] = gas_limit
         if gov_manifest_approvers is not None:
             approvers = [
                 str(approver).strip()

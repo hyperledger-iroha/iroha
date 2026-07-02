@@ -152,6 +152,47 @@ def validate_hex64(value: str, *, option: str, errors: list[str]) -> None:
         errors.append(f"{option} must be exact lowercase 32-byte hex")
 
 
+def validate_canonical_string(value: str | None, *, label: str, errors: list[str]) -> None:
+    """Require a non-empty canonical string without control characters."""
+
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value != value.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        errors.append(f"{label} must be a non-empty canonical string")
+
+
+def validate_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    count_option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return reviewed unique inventory labels whose count matches a CLI count."""
+
+    items = list(values)
+    if not items:
+        errors.append(f"{option} is required")
+    for index, item in enumerate(items):
+        validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+    unique_items = set(items)
+    if len(unique_items) != len(items):
+        errors.append(f"{option} must not contain duplicates")
+    if len(unique_items) != expected_count:
+        errors.append(f"{option} unique values must match {count_option}")
+    return items
+
+
+def build_session_records(names: Sequence[str]) -> list[dict[str, Any]]:
+    """Build reviewed payload-free evidence-viewer session records."""
+
+    return [{"name": name, "attested": True, "logged": True} for name in names]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build the payload-free evidence-viewer canary payload."""
 
@@ -165,8 +206,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         "case_digest_hex": args.case_digest_hex,
         "roster_hash_hex": args.roster_hash_hex,
         "session_count": args.session_count,
-        "attested_session_count": args.attested_session_count,
-        "logged_session_count": args.logged_session_count,
+        "attested_session_count": args.session_count,
+        "logged_session_count": args.session_count,
+        "sessions": build_session_records(args.viewer_sessions),
         "max_url_ttl_secs": args.max_url_ttl_secs,
         "roles_tested": args.roles,
         "viewer_security_controls": args.security_controls,
@@ -229,11 +271,13 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         option="--verified-claim",
         errors=errors,
     )
-
-    if args.attested_session_count != args.session_count:
-        errors.append("--attested-session-count must equal --session-count")
-    if args.logged_session_count != args.session_count:
-        errors.append("--logged-session-count must equal --session-count")
+    args.viewer_sessions = validate_reviewed_inventory(
+        split_csv_values(args.viewer_session),
+        expected_count=args.session_count,
+        option="--viewer-session",
+        count_option="--session-count",
+        errors=errors,
+    )
     if args.max_url_ttl_secs > DEFAULT_MAX_VIEWER_URL_TTL_SECS:
         errors.append(
             f"--max-url-ttl-secs must be <= {DEFAULT_MAX_VIEWER_URL_TTL_SECS}"
@@ -321,8 +365,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--case-digest-hex", required=True)
     parser.add_argument("--roster-hash-hex", required=True)
     parser.add_argument("--session-count", type=positive_int_arg, required=True)
-    parser.add_argument("--attested-session-count", type=positive_int_arg, required=True)
-    parser.add_argument("--logged-session-count", type=positive_int_arg, required=True)
+    parser.add_argument("--viewer-session", action="append", default=[])
     parser.add_argument(
         "--max-url-ttl-secs",
         type=positive_int_arg,

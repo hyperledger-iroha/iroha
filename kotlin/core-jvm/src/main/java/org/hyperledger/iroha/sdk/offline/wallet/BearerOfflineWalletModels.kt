@@ -127,8 +127,8 @@ private fun expectedAssertionUsageCountLimit(platform: String): Int? =
         else -> throw IllegalArgumentException("platform must be a supported first-release value")
     }
 
-private fun isSupportedFirstReleasePlatform(platform: String): Boolean =
-    platform == OfflineNoteV2.ANDROID_KEYMINT_PLATFORM || platform == OfflineNoteV2.IOS_APP_ATTEST_PLATFORM
+private fun isSupportedFirstReleaseDevicePlatform(platform: String): Boolean =
+    platform == "ios" || platform == "android"
 
 private fun String.isExactNonEmptyProtocolString(): Boolean =
     isNotEmpty() && trim() == this
@@ -290,6 +290,9 @@ data class OfflineDeviceBinding(
     @SerialName("ios_environment") val iosEnvironment: String? = null
 ) {
     init {
+        require(isSupportedFirstReleaseDevicePlatform(platform)) {
+            "platform must be a supported first-release value"
+        }
         require(devicePublicKey == null) {
             "device_public_key is retired; use assertion_public_key"
         }
@@ -372,7 +375,7 @@ data class OfflineDeviceProof(
     val counter: Long? = null
 ) {
     init {
-        require(isSupportedFirstReleasePlatform(platform)) {
+        require(isSupportedFirstReleaseDevicePlatform(platform)) {
             "platform must be a supported first-release value"
         }
         require(attestationKeyId.isExactNonEmptyProtocolString()) {

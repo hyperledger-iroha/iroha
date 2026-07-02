@@ -59,6 +59,15 @@ def eth_args(module):
     )
 
 
+def active_template_hash(module, lane, field):
+    for template_lane, template_field, template_hash in (
+        module.sccp_active_source_template_component_hashes()
+    ):
+        if template_lane == lane and template_field == field:
+            return template_hash
+    raise AssertionError(f"missing active {lane} template hash for {field}")
+
+
 def test_eth_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
@@ -1048,6 +1057,36 @@ def test_eth_direct_record_hashes_reject_cross_role_template_component_hashes():
         else:
             raise AssertionError(
                 f"ETH record hash accepted cross-role template hash for {field}"
+            )
+
+
+def test_eth_direct_record_hashes_reject_foreign_active_lane_template_component_hashes():
+    module = load_evidence_module()
+    template_hash = active_template_hash(
+        module,
+        "Solana",
+        "consensus_verifier_hash",
+    )
+
+    for record_hash, field in (
+        (module.eth_source_verifier_material_record_hash, "source_trust_anchor_hash"),
+        (
+            module.eth_source_adapter_engine_deployment_record_hash,
+            "source_bridge_emitter_code_hash",
+        ),
+    ):
+        args = eth_args(module)
+        setattr(args, field, template_hash)
+        label = field.replace("_", " ")
+
+        try:
+            record_hash(args)
+        except ValueError as exc:
+            assert f"live {label}" in str(exc)
+            assert "template-derived Solana consensus verifier hash" in str(exc)
+        else:
+            raise AssertionError(
+                f"ETH record hash accepted foreign template hash for {field}"
             )
 
 

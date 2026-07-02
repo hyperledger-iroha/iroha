@@ -30,7 +30,7 @@ use iroha_crypto::fhe_bfv::{
     validate_bfv_full_bootstrap_material_proof_input_material_v1,
 };
 use iroha_crypto::{
-    Hash, PublicKey,
+    Algorithm, Hash, PublicKey, Signature,
     fhe_bfv::{
         BfvBootstrapKeyMode, BfvCiphertext, BfvEvaluationBudget, BfvEvaluationKeyBundle,
         BfvEvaluationPlan, BfvFullBootstrapCircuitArtifactBundleV1,
@@ -306,6 +306,17 @@ fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         message.into(),
     ))
+}
+
+fn verify_signature_for_signer(
+    signature: &Signature,
+    signer: &PublicKey,
+    payload: &[u8],
+) -> Result<(), iroha_crypto::Error> {
+    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    }
+    signature.verify(signer, payload)
 }
 
 fn numeric_to_u128(value: &Numeric) -> Result<u128, InstructionExecutionError> {
@@ -604,9 +615,7 @@ fn verify_bundle_provenance(
         initial_service_secrets,
     )
     .map_err(|err| invalid_parameter(format!("failed to encode bundle provenance: {err}")))?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
         .map_err(|_| invalid_parameter("bundle provenance signature verification failed"))?;
     Ok(())
 }
@@ -624,9 +633,7 @@ fn verify_app_infra_provenance(
     let payload = encode_app_infra_provenance_payload(manifest).map_err(|err| {
         invalid_parameter(format!("failed to encode app infra provenance: {err}"))
     })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
         .map_err(|_| invalid_parameter("app infra provenance signature verification failed"))?;
     Ok(())
 }
@@ -644,9 +651,7 @@ fn verify_rollback_provenance(
     }
     let payload = encode_rollback_provenance_payload(service_name.as_ref(), target_version)
         .map_err(|err| invalid_parameter(format!("failed to encode rollback provenance: {err}")))?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
         .map_err(|_| invalid_parameter("rollback provenance signature verification failed"))?;
     Ok(())
 }
@@ -677,12 +682,9 @@ fn verify_service_config_set_provenance(
     .map_err(|err| {
         invalid_parameter(format!("failed to encode service config provenance: {err}"))
     })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("service config provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("service config provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -704,12 +706,9 @@ fn verify_service_config_delete_provenance(
                     "failed to encode service config delete provenance: {err}"
                 ))
             })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("service config delete provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("service config delete provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -730,12 +729,9 @@ fn verify_service_secret_set_provenance(
             .map_err(|err| {
                 invalid_parameter(format!("failed to encode service secret provenance: {err}"))
             })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("service secret provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("service secret provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -757,12 +753,9 @@ fn verify_service_secret_delete_provenance(
                     "failed to encode service secret delete provenance: {err}"
                 ))
             })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("service secret delete provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("service secret delete provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -788,9 +781,7 @@ fn verify_rollout_provenance(
         governance_tx_hash,
     )
     .map_err(|err| invalid_parameter(format!("failed to encode rollout provenance: {err}")))?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
         .map_err(|_| invalid_parameter("rollout provenance signature verification failed"))?;
     Ok(())
 }
@@ -831,12 +822,9 @@ fn verify_state_mutation_provenance(
     .map_err(|err| {
         invalid_parameter(format!("failed to encode state mutation provenance: {err}"))
     })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("state mutation provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("state mutation provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -5282,9 +5270,7 @@ fn verify_fhe_job_run_provenance(
         governance_tx_hash,
     )
     .map_err(|err| invalid_parameter(format!("failed to encode fhe job provenance: {err}")))?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
         .map_err(|_| invalid_parameter("fhe job provenance signature verification failed"))?;
     Ok(())
 }
@@ -5306,12 +5292,9 @@ fn verify_decryption_request_provenance(
             .map_err(|err| {
                 invalid_parameter(format!("failed to encode decryption provenance: {err}"))
             })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("decryption request provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("decryption request provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -5349,12 +5332,9 @@ fn verify_training_job_start_provenance(
     .map_err(|err| {
         invalid_parameter(format!("failed to encode training start provenance: {err}"))
     })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("training job start provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("training job start provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -5384,12 +5364,9 @@ fn verify_training_job_checkpoint_provenance(
             "failed to encode training checkpoint provenance: {err}"
         ))
     })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("training checkpoint provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("training checkpoint provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -5410,12 +5387,9 @@ fn verify_training_job_retry_provenance(
             .map_err(|err| {
                 invalid_parameter(format!("failed to encode training retry provenance: {err}"))
             })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("training retry provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("training retry provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -5450,12 +5424,9 @@ fn verify_model_artifact_register_provenance(
     .map_err(|err| {
         invalid_parameter(format!("failed to encode model artifact provenance: {err}"))
     })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("model artifact register provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("model artifact register provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -5492,12 +5463,9 @@ fn verify_model_weight_register_provenance(
         provenance_attestation_hash,
     )
     .map_err(|err| invalid_parameter(format!("failed to encode model weight provenance: {err}")))?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("model weight register provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("model weight register provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -5527,12 +5495,9 @@ fn verify_model_weight_promote_provenance(
             "failed to encode model weight promotion provenance: {err}"
         ))
     })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("model weight promote provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("model weight promote provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -5560,12 +5525,9 @@ fn verify_model_weight_rollback_provenance(
             "failed to encode model weight rollback provenance: {err}"
         ))
     })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("model weight rollback provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("model weight rollback provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -5585,12 +5547,9 @@ fn verify_uploaded_model_bundle_register_provenance(
                 "failed to encode uploaded model bundle provenance: {err}"
             ))
         })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("uploaded model bundle provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("uploaded model bundle provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -5633,12 +5592,9 @@ fn verify_uploaded_model_finalize_provenance(
             "failed to encode uploaded model finalize provenance: {err}"
         ))
     })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter("uploaded model finalize provenance signature verification failed")
-        })?;
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+        |_| invalid_parameter("uploaded model finalize provenance signature verification failed"),
+    )?;
     Ok(())
 }
 
@@ -5980,9 +5936,7 @@ fn verify_provenance_payload(
     if authority.signatory() != &provenance.signer {
         return Err(invalid_parameter(signer_mismatch));
     }
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
+    verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
         .map_err(|_| invalid_parameter(verification_failed))?;
     Ok(())
 }
@@ -18017,7 +17971,7 @@ mod tests {
         metadata::Metadata,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
-            LaneConfig, LaneId, LaneVisibility, PublicLaneValidatorRecord,
+            LaneConfig, LaneId, LaneVisibility, PublicLaneStakeShare, PublicLaneValidatorRecord,
             PublicLaneValidatorStatus,
         },
         permission::Permission,
@@ -18074,6 +18028,33 @@ mod tests {
     ) -> iroha_crypto::Signature {
         iroha_crypto::Signature::try_new(private_key, payload)
             .expect("test fixture signing should succeed")
+    }
+
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    fn signature_with_malformed_ed25519_r(
+        signature: &iroha_crypto::Signature,
+    ) -> iroha_crypto::Signature {
+        let mut payload = signature.payload().to_vec();
+        payload[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+        iroha_crypto::Signature::from_bytes(&payload)
+    }
+
+    #[test]
+    fn soracloud_provenance_signature_admission_rejects_malformed_ed25519_signature_r() {
+        let key_pair = KeyPair::try_from_seed(vec![0x61; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("derive checked Soracloud Ed25519 provenance keypair");
+        let payload = b"soracloud-provenance-ed25519-admission";
+        let signature = checked_signature(key_pair.private_key(), payload);
+        let signature = signature_with_malformed_ed25519_r(&signature);
+
+        assert!(
+            verify_signature_for_signer(&signature, key_pair.public_key(), payload).is_err(),
+            "Soracloud provenance Ed25519 admission must reject malformed R before backend verification"
+        );
     }
 
     #[track_caller]
@@ -18309,20 +18290,32 @@ mod tests {
         validator: AccountId,
         total_stake: u64,
     ) {
+        let bonded = Numeric::new(total_stake, 0);
         state_transaction.world.public_lane_validators.insert(
             (LaneId::SINGLE, validator.clone()),
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
                 peer_id: PeerId::from(validator.signatory().clone()),
-                stake_account: validator,
-                total_stake: Numeric::new(total_stake, 0),
-                self_stake: Numeric::new(total_stake, 0),
+                stake_account: validator.clone(),
+                total_stake: bonded.clone(),
+                self_stake: bonded.clone(),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
                 activation_height: None,
                 last_reward_epoch: None,
+            },
+        );
+        state_transaction.world.public_lane_stake_shares.insert(
+            (LaneId::SINGLE, validator.clone(), validator.clone()),
+            PublicLaneStakeShare {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                staker: validator,
+                bonded,
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
             },
         );
     }
@@ -18366,20 +18359,32 @@ mod tests {
         validator: AccountId,
         total_stake: u64,
     ) {
+        let bonded = Numeric::new(total_stake, 0);
         state_transaction.world.public_lane_validators.insert(
             (lane_id, validator.clone()),
             PublicLaneValidatorRecord {
                 lane_id,
                 validator: validator.clone(),
                 peer_id: PeerId::from(validator.signatory().clone()),
-                stake_account: validator,
-                total_stake: Numeric::new(total_stake, 0),
-                self_stake: Numeric::new(total_stake, 0),
+                stake_account: validator.clone(),
+                total_stake: bonded.clone(),
+                self_stake: bonded.clone(),
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_epoch: None,
                 activation_height: None,
                 last_reward_epoch: None,
+            },
+        );
+        state_transaction.world.public_lane_stake_shares.insert(
+            (lane_id, validator.clone(), validator.clone()),
+            PublicLaneStakeShare {
+                lane_id,
+                validator: validator.clone(),
+                staker: validator,
+                bonded,
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
             },
         );
     }

@@ -51,6 +51,9 @@ digest, and the checker emits those valid handoff policies as
 `valid_policy_digests`. Signed auditor API, worker lifecycle, and event stream
 artifacts also bind `route_count` to the unique canonical `routes[].name`
 inventory and reject duplicate route entries before promotion can report ready.
+Auditor-roster artifacts also bind `auditor_count` to the unique canonical
+`auditors[].name` inventory and reject duplicate auditor entries before
+promotion can report ready.
 `scripts/build_sorafs_repair_canary.py` builds individual payload-free SF-8b
 canary artifacts for auditor roster, failure capture, signed auditor API,
 worker lifecycle, event streams, governance handoff, observability, and
@@ -58,7 +61,8 @@ governance approval evidence. The builder requires reviewed deployment
 context, complete failure-source, repair route, lifecycle-status,
 handoff-target, and metric coverage where applicable, auditor-roster and
 failure-bundle digest bindings, governance handoff digest bindings, auditor
-minimum counts, route, event-lag, and repair-latency threshold facts,
+minimum counts, reviewed auditor names matching that count, route, event-lag,
+and repair-latency threshold facts,
 config-backed governance metadata, reviewed policy-digest input for
 governance handoff and approval evidence, and
 validates every generated artifact through
@@ -416,6 +420,9 @@ those values as `valid_policy_digests`, and governance approval artifacts must
 carry a matching `policy_digest_hex`. Signed auditor API, worker lifecycle, and
 event stream artifacts must also keep `route_count` equal to the unique
 canonical `routes[].name` inventory and reject duplicate route entries.
+Auditor-roster artifacts also bind `auditor_count` to the unique canonical
+`auditors[].name` inventory and reject duplicate auditor entries before
+promotion can report ready.
 Its collection planner exposes those exact required payload fields through
 `--dry-run` and validates the schema-closed collection plan, required kinds,
 thresholds, external evidence map, evidence contract, and command steps before

@@ -12,6 +12,8 @@ public enum OfflineNoteV2Constants {
     public static let recursiveVerifierName = "offline-note-v2-recursive-v1"
     public static let recursivePublicInputsSchemaV1 = #"{"schema":"offline_note_recursive","public_inputs":["public_inputs_hash_limb0","public_inputs_hash_limb1","public_inputs_hash_limb2","public_inputs_hash_limb3","proof_mode","input_count","output_count","input_amount_sum","output_amount_sum","input_nullifier_sum_limb0","output_commitment_sum_limb0","key_certificate_payload_hash_limb0","source_or_token_limb0","input_claim_hash_sum_limb0","output_claim_hash_sum_limb0","reserved_zero"]}"#
     public static let keyCertificateVersion: UInt16 = 1
+    public static let iosPlatform = "ios"
+    public static let androidPlatform = "android"
     public static let iosAppAttestPlatform = "ios-appattest"
     public static let iosAppAttestAssertionScheme = "apple-appattest-counter-v1"
     public static let iosAppAttestAssertionKeyAlgorithm = "app-attest-p256"

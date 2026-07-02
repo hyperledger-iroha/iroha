@@ -26,6 +26,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { isIP } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -1779,22 +1780,87 @@ function normalizeTairaPrivateKeyEnvName(
   return normalized;
 }
 
-function normalizeTairaToriiUrl(value = DEFAULT_TAIRA_TORII_URL) {
-  const text = trim(value) || DEFAULT_TAIRA_TORII_URL;
+function normalizeUrlHostname(hostname) {
+  return String(hostname ?? "")
+    .toLowerCase()
+    .replace(/^\[/u, "")
+    .replace(/\]$/u, "");
+}
+
+function isLoopbackEndpointHost(hostname) {
+  const host = normalizeUrlHostname(hostname);
+  if (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "::1"
+  ) {
+    return true;
+  }
+  const ipv4 = host.match(/^(\d{1,3})(?:\.(\d{1,3})){3}$/u);
+  if (!ipv4) {
+    return false;
+  }
+  const octets = host.split(".").map((octet) => Number.parseInt(octet, 10));
+  return octets.every((octet) => octet >= 0 && octet <= 255) && octets[0] === 127;
+}
+
+function isNonPublicEndpointDnsHost(hostname) {
+  const host = normalizeUrlHostname(hostname);
+  if (!host) {
+    return true;
+  }
+  const labels = host.split(".");
+  return (
+    isLoopbackEndpointHost(host) ||
+    host.endsWith(".local") ||
+    !host.includes(".") ||
+    isIP(host) !== 0 ||
+    labels.some(
+      (label) =>
+        label === "" ||
+        !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label),
+    )
+  );
+}
+
+function normalizeEndpointText(value, defaultValue, label) {
+  if (value === undefined || value === null) {
+    return defaultValue;
+  }
+  if (
+    typeof value !== "string" ||
+    value === "" ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new Error(`${label} must be an exact http(s) URL.`);
+  }
+  return value;
+}
+
+export function normalizeTairaToriiUrl(value = DEFAULT_TAIRA_TORII_URL) {
+  const text = normalizeEndpointText(
+    value,
+    DEFAULT_TAIRA_TORII_URL,
+    "--torii-url",
+  );
   let url;
   try {
     url = new URL(text);
   } catch (_error) {
-    throw new Error("--torii-url must be a valid URL.");
+    throw new Error("--torii-url must be a valid HTTP(S) URL.");
   }
-  const isLoopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  const isLoopback = isLoopbackEndpointHost(url.hostname);
   if (url.protocol !== "https:" && !(isLoopback && url.protocol === "http:")) {
     throw new Error("--torii-url must use HTTPS unless it is loopback HTTP.");
   }
-  if (url.username || url.password || url.search || url.hash) {
+  if (url.username || url.password || url.search || url.hash || text.includes(";")) {
     throw new Error(
-      "--torii-url must not contain credentials, query strings, or fragments.",
+      "--torii-url must not contain credentials, params, query strings, or fragments.",
     );
+  }
+  if (url.protocol === "https:" && isNonPublicEndpointDnsHost(url.hostname)) {
+    throw new Error("--torii-url HTTPS host must use public DNS.");
   }
   return url.toString().replace(/\/$/u, "");
 }
@@ -1812,7 +1878,14 @@ function normalizeTairaChainId(value = DEFAULT_TAIRA_CHAIN_ID) {
 }
 
 function normalizeBrowserProverModuleUrl(value, label) {
-  const text = normalizeNonEmptyText(value, label);
+  if (
+    typeof value !== "string" ||
+    value === "" ||
+    value.trim() !== value
+  ) {
+    throw new Error(`${label} must be a non-empty canonical module URL.`);
+  }
+  const text = value;
   if (/[\u0000-\u001f\u007f]/u.test(text)) {
     throw new Error(`${label} contains control characters.`);
   }
@@ -1823,34 +1896,45 @@ function normalizeBrowserProverModuleUrl(value, label) {
     } catch (_error) {
       throw new Error(`${label} must be a valid URL.`);
     }
-    const isLoopback = ["localhost", "127.0.0.1", "::1"].includes(
-      url.hostname,
-    );
+    const isLoopback = isLoopbackEndpointHost(url.hostname);
     if (
       url.protocol !== "https:" &&
       !(isLoopback && url.protocol === "http:")
     ) {
       throw new Error(`${label} must use HTTPS or loopback HTTP.`);
     }
-    if (url.username || url.password || url.search || url.hash) {
+    if (
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      text.includes(";")
+    ) {
       throw new Error(
-        `${label} must not contain credentials, query strings, or fragments.`,
+        `${label} must not contain credentials, params, query strings, or fragments.`,
       );
+    }
+    if (url.protocol === "https:" && isNonPublicEndpointDnsHost(url.hostname)) {
+      throw new Error(`${label} HTTPS URLs must use public DNS.`);
     }
     return url.toString();
   }
+  if (text.split("/").includes("..")) {
+    throw new Error(`${label} must not traverse parent directories.`);
+  }
   if (
-    !(
-      text.startsWith("/") ||
-      text.startsWith("./") ||
-      text.startsWith("../")
-    ) ||
+    text.startsWith("/") ||
+    text.startsWith("//") ||
     text.includes("?") ||
     text.includes("#") ||
-    text.includes("\\")
+    text.includes("\\") ||
+    !/^(?:\.\/|@?[A-Za-z0-9_-])[-A-Za-z0-9_@./]*$/u.test(text) ||
+    text.split("/").some(
+      (segment, index) => segment === "" || (segment === "." && index !== 0),
+    )
   ) {
     throw new Error(
-      `${label} must be package-relative, root-relative, HTTPS, or loopback HTTP without query strings or fragments.`,
+      `${label} must be package-relative, HTTPS, or loopback HTTP without query strings or fragments.`,
     );
   }
   return text;
@@ -2196,24 +2280,31 @@ export function normalizeBscRpcUrl(
   value = DEFAULT_BSC_RPC_URL,
   { allowLocal = false } = {},
 ) {
-  const endpoint = trim(value) || DEFAULT_BSC_RPC_URL;
+  const endpoint = normalizeEndpointText(
+    value,
+    DEFAULT_BSC_RPC_URL,
+    "BSC RPC URL",
+  );
   let url;
   try {
     url = new URL(endpoint);
   } catch (_error) {
-    throw new Error("BSC RPC URL must be a valid URL.");
+    throw new Error("BSC RPC URL must be a valid HTTP(S) URL.");
   }
-  const isLocalhost = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
-  if (url.protocol !== "https:" && !(allowLocal && url.protocol === "http:")) {
-    throw new Error("BSC RPC URL must use HTTPS unless localhost is allowed.");
+  const isLoopback = isLoopbackEndpointHost(url.hostname);
+  if (
+    url.protocol !== "https:" &&
+    !(allowLocal && isLoopback && url.protocol === "http:")
+  ) {
+    throw new Error("BSC RPC URL must use HTTPS unless loopback HTTP is allowed.");
   }
-  if (url.username || url.password || url.search || url.hash) {
+  if (url.username || url.password || url.search || url.hash || endpoint.includes(";")) {
     throw new Error(
-      "BSC RPC URL must not contain credentials, query strings, or fragments.",
+      "BSC RPC URL must not contain credentials, params, query strings, or fragments.",
     );
   }
-  if (url.protocol === "http:" && !isLocalhost) {
-    throw new Error("HTTP BSC RPC URLs are only allowed for localhost.");
+  if (url.protocol === "https:" && isNonPublicEndpointDnsHost(url.hostname)) {
+    throw new Error("BSC RPC URL HTTPS host must use public DNS.");
   }
   url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
   return url.toString().replace(/\/$/u, "");

@@ -291,6 +291,50 @@ def test_solana_json_rpc_rejects_duplicate_json_keys():
         raise AssertionError("duplicate-key Solana JSON-RPC response was accepted")
 
 
+def test_solana_json_rpc_url_rejects_hidden_request_state():
+    module = load_live_module()
+
+    assert module._normalize_solana_rpc_url("https://solana.example.invalid") == (
+        "https://solana.example.invalid"
+    )
+    assert module._normalize_solana_rpc_url(
+        "https://solana.example.invalid/provider-token"
+    ) == "https://solana.example.invalid/provider-token"
+    assert module._normalize_solana_rpc_url("http://127.0.0.1:8899") == (
+        "http://127.0.0.1:8899"
+    )
+
+    def forbidden_opener(_request, timeout):
+        raise AssertionError("malformed Solana RPC URL reached the opener")
+
+    for rpc_url, expected_error in (
+        ("https://token@solana.example.invalid", "credentials"),
+        ("https://solana.example.invalid/root;param", "params, query, or fragment"),
+        ("https://solana.example.invalid?api_key=secret", "params, query, or fragment"),
+        ("https://solana.example.invalid#fragment", "params, query, or fragment"),
+        ("http://solana.example.invalid", "HTTPS unless it is loopback HTTP"),
+        ("https://localhost", "public DNS"),
+        ("https://127.0.0.1", "public DNS"),
+        ("https://solana", "public DNS"),
+        ("https://solana.local", "public DNS"),
+        ("https://bad_host.solana.example.invalid", "public DNS"),
+        (" https://solana.example.invalid", "exact http(s) URL"),
+        ("https://solana.example.invalid\nsecret", "exact http(s) URL"),
+    ):
+        try:
+            module._json_rpc(
+                rpc_url,
+                "getAccountInfo",
+                [],
+                opener=forbidden_opener,
+                timeout=3.0,
+            )
+        except ValueError as exc:
+            assert expected_error in str(exc)
+        else:
+            raise AssertionError(f"hidden Solana RPC URL state {rpc_url!r} was accepted")
+
+
 def test_solana_json_rpc_redacts_transport_and_error_response_details():
     module = load_live_module()
 

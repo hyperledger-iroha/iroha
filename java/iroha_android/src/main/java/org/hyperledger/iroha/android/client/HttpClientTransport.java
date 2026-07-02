@@ -2114,7 +2114,7 @@ public final class HttpClientTransport implements IrohaClient {
     if (request.signatureB64() != null) {
       payload.put(
           "signature_b64",
-          normalizeRequiredBase64Payload(request.signatureB64(), "signatureB64"));
+          normalizeRequiredExactBase64Payload(request.signatureB64(), "signatureB64"));
     }
     if (request.creationTimeMs() != null) {
       if (request.creationTimeMs().longValue() < 0L) {
@@ -2308,6 +2308,25 @@ public final class HttpClientTransport implements IrohaClient {
       throw new IllegalArgumentException(field + " must not decode to empty bytes");
     }
     return normalized;
+  }
+
+  static String normalizeRequiredExactBase64Payload(final String value, final String field) {
+    if (value.isEmpty() || !value.equals(value.trim())) {
+      throw new IllegalArgumentException(field + " must be exact standard-base64");
+    }
+    final byte[] decoded;
+    try {
+      decoded = Base64.getDecoder().decode(value);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(field + " must be valid base64", ex);
+    }
+    if (decoded.length == 0) {
+      throw new IllegalArgumentException(field + " must not decode to empty bytes");
+    }
+    if (!Base64.getEncoder().encodeToString(decoded).equals(value)) {
+      throw new IllegalArgumentException(field + " must be exact standard-base64");
+    }
+    return value;
   }
 
   static String normalizeOptionalNonBlank(final String value, final String field) {

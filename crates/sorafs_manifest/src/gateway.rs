@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use hex::FromHex;
-use iroha_crypto::{Algorithm, PublicKey, Signature};
+use iroha_crypto::{Algorithm, PublicKey};
 use norito::json::{Map, Value};
 use thiserror::Error;
 
@@ -423,8 +423,11 @@ impl GatewayAuthorizationVerifier {
         })?;
 
         let signing_input = format!("{header_segment}.{payload_segment}");
-        let signature = Signature::try_from_bytes(&signature_bytes)
-            .map_err(GatewayAuthorizationError::InvalidSignatureMaterial)?;
+        let signature = iroha_crypto::ed25519_parse_signature(&signature_bytes).map_err(|err| {
+            GatewayAuthorizationError::InvalidEd25519SignatureMaterial {
+                reason: err.to_string(),
+            }
+        })?;
 
         let header_value: Value = norito::json::from_slice(&header_bytes)
             .map_err(|err| GatewayAuthorizationError::Json(format!("header: {err}")))?;

@@ -9,7 +9,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::Hash;
-use iroha_crypto::{Algorithm, HybridPublicKey, HybridSuite, PublicKey, Signature};
+use iroha_crypto::{Algorithm, HybridPublicKey, HybridSuite, PublicKey};
 use norito::{
     json::{Map, Value, to_string_pretty},
     to_bytes,
@@ -1652,9 +1652,12 @@ fn verify_manifest_signatures_file(
 
         match PublicKey::from_bytes(Algorithm::Ed25519, &signer_bytes) {
             Ok(public_key) => {
-                let signature = Signature::try_from_bytes(&signature_bytes).map_err(|err| {
-                    format!("invalid council signature material for signer `{signer_hex}`: {err}")
-                })?;
+                let signature =
+                    iroha_crypto::ed25519_parse_signature(&signature_bytes).map_err(|err| {
+                        format!(
+                            "invalid council signature material for signer `{signer_hex}`: {err}"
+                        )
+                    })?;
                 signature
                     .verify(&public_key, manifest_digest.as_bytes())
                     .map_err(|err| {
@@ -2046,7 +2049,7 @@ mod tests {
             .expect_err("malformed signature R must fail verification");
 
             assert!(
-                err.contains("failed to verify council signature"),
+                err.contains("invalid council signature material"),
                 "{label} signature R produced unexpected error: {err}"
             );
         }

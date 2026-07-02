@@ -1537,6 +1537,9 @@ class OfflineNoteTest {
             OfflineQrStream.TextCodec.decode("$encoded\n", OfflineQrStream.FrameEncoding.BASE64)
         }
         assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.TextCodec.decode("iroha:qr:AB==", OfflineQrStream.FrameEncoding.BASE64)
+        }
+        assertFailsWith<IllegalArgumentException> {
             OfflineQrStream.TextCodec.decode(retiredPrefix, OfflineQrStream.FrameEncoding.BASE64)
         }
     }
@@ -1596,6 +1599,14 @@ class OfflineNoteTest {
         }
         assertFailsWith<IllegalArgumentException> {
             OfflineNotePaymentTokenCodec.decodeText("$text=")
+        }
+        val nonCanonicalPaymentText = OfflineNotePaymentTokenCodec.TEXT_PREFIX + "AB"
+        assertNull(OfflineBearerCashTextCodec.payloadKind(nonCanonicalPaymentText))
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNotePaymentTokenCodec.decodeText(nonCanonicalPaymentText)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineBearerCashTextCodec.decodePaymentText(nonCanonicalPaymentText)
         }
 
         val frames = OfflineNotePaymentTokenCodec.encodeQrFrameBytes(
@@ -1746,6 +1757,14 @@ class OfflineNoteTest {
         assertFailsWith<IllegalArgumentException> {
             OfflineNoteReceiveRequestCodec.decodeText("$text=")
         }
+        val nonCanonicalReceiveRequestText = OfflineNoteReceiveRequestCodec.TEXT_PREFIX + "AB"
+        assertNull(OfflineBearerCashTextCodec.payloadKind(nonCanonicalReceiveRequestText))
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiveRequestCodec.decodeText(nonCanonicalReceiveRequestText)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineBearerCashTextCodec.decodeReceiveRequestText(nonCanonicalReceiveRequestText)
+        }
 
         val frames = OfflineNoteReceiveRequestCodec.encodeQrFrameBytes(
             request,
@@ -1799,6 +1818,14 @@ class OfflineNoteTest {
         }
         assertFailsWith<IllegalArgumentException> {
             OfflineNoteReceiptAckCodec.decodeText("$text=")
+        }
+        val nonCanonicalAckText = OfflineNoteReceiptAckCodec.TEXT_PREFIX + "AB"
+        assertNull(OfflineBearerCashTextCodec.payloadKind(nonCanonicalAckText))
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiptAckCodec.decodeText(nonCanonicalAckText)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineBearerCashTextCodec.decodeAckText(nonCanonicalAckText)
         }
 
         val frames = OfflineNoteReceiptAckCodec.encodeQrFrameBytes(
@@ -2737,10 +2764,14 @@ class OfflineNoteTest {
         val paddedPayload = """
             {"kind":"receive_request","payload":"YQ==","contentType":"application/vnd.iroha.offline.receive-request+norito","pairingChallenge":"nearby_pairing_bird"}
         """.trimIndent().toByteArray()
+        val nonCanonicalPayload = """
+            {"kind":"receive_request","payload":"AB","contentType":"application/vnd.iroha.offline.receive-request+norito","pairingChallenge":"nearby_pairing_bird"}
+        """.trimIndent().toByteArray()
         assertFailsWith<IllegalArgumentException> { OfflineNoteNearbyEnvelope.decode(unknownField) }
         assertFailsWith<IllegalArgumentException> { OfflineNoteNearbyEnvelope.decode(challengeContentTypeDowngrade) }
         assertFailsWith<IllegalArgumentException> { OfflineNoteNearbyEnvelope.decode(ackContentTypeDowngrade) }
         assertFailsWith<IllegalArgumentException> { OfflineNoteNearbyEnvelope.decode(paddedPayload) }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteNearbyEnvelope.decode(nonCanonicalPayload) }
 
         val topLevelArray = "[]".toByteArray()
         val invalidBase64Payload = """

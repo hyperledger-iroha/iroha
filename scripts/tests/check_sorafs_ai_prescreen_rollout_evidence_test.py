@@ -75,6 +75,11 @@ def committee(*, status: str = "verified") -> dict:
         "quorum": 2,
         "aggregation": "median_score_bps",
         "result_count": 3,
+        "results": [
+            {"name": "runner-result-a"},
+            {"name": "runner-result-b"},
+            {"name": "runner-result-c"},
+        ],
         "subject": "cid:example",
         "subject_digest_hex": DIGEST,
         "aggregated_score_bps": 7250,
@@ -460,6 +465,36 @@ def test_committee_must_match_runner_subject_binding(tmp_path: Path) -> None:
     )
 
 
+def test_committee_result_count_must_match_unique_results(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = committee()
+    payload["result_count"] += 1
+    write_json(tmp_path / "committee.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["committee"]["artifacts"][0]
+    assert "result_count must match unique results count" in artifact["errors"]
+
+
+def test_committee_results_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = committee()
+    payload["results"].append(dict(payload["results"][0]))
+    payload["result_count"] = len(payload["results"])
+    write_json(tmp_path / "committee.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["committee"]["artifacts"][0]
+    assert "results must not contain duplicate values" in artifact["errors"]
+    assert "result_count must match unique results count" in artifact["errors"]
+
+
 def test_operator_canary_must_cover_juror_notifications(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(
@@ -585,6 +620,45 @@ def test_notification_transport_acceptance_must_equal_probe_count(tmp_path: Path
     assert run_gate(tmp_path) == 1
 
 
+def test_notification_probe_count_must_match_unique_deliveries(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = notification_transport()
+    payload["probe_count"] += 1
+    payload["accepted_count"] = payload["probe_count"]
+    write_json(tmp_path / "notification-transport.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["notification_transport"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "probe_count must equal probes length" in artifact["errors"]
+    assert "probe_count must match unique probes count" in artifact["errors"]
+    assert "accepted_count must match unique probes count" in artifact["errors"]
+
+
+def test_notification_probes_must_not_duplicate_delivery_id(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = notification_transport()
+    payload["probes"].append(dict(payload["probes"][0]))
+    payload["probe_count"] = len(payload["probes"])
+    payload["accepted_count"] = len(payload["probes"])
+    write_json(tmp_path / "notification-transport.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["notification_transport"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "probes must not contain duplicate values" in artifact["errors"]
+    assert "probe_count must match unique probes count" in artifact["errors"]
+    assert "accepted_count must match unique probes count" in artifact["errors"]
+
+
 def test_executor_requires_execution_summary(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(
@@ -665,6 +739,70 @@ def test_transparency_publication_requires_moderation_source_kinds(tmp_path: Pat
     )
 
     assert run_gate(tmp_path) == 1
+
+
+def test_transparency_probe_count_must_match_unique_source_kinds(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = transparency_publication()
+    payload["probe_count"] += 1
+    payload["passed_probe_count"] = payload["probe_count"]
+    payload["source_entry_probe_count"] = payload["probe_count"]
+    write_json(tmp_path / "transparency-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["transparency_publication"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "probe_count must equal probes length" in artifact["errors"]
+    assert "probe_count must match unique probes count" in artifact["errors"]
+    assert (
+        "source_entry_probe_count must match unique probes count"
+        in artifact["errors"]
+    )
+
+
+def test_transparency_probes_must_not_duplicate_source_kind(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = transparency_publication()
+    payload["probes"].append(dict(payload["probes"][0]))
+    payload["probe_count"] = len(payload["probes"])
+    payload["passed_probe_count"] = len(payload["probes"])
+    payload["source_entry_probe_count"] = len(payload["probes"])
+    write_json(tmp_path / "transparency-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["transparency_publication"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "probes must not contain duplicate values" in artifact["errors"]
+    assert "probe_count must match unique probes count" in artifact["errors"]
+    assert (
+        "source_entry_probe_count must match unique probes count"
+        in artifact["errors"]
+    )
+
+
+def test_transparency_source_entry_probe_count_must_match_probe_count(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = transparency_publication()
+    payload["source_entry_probe_count"] -= 1
+    write_json(tmp_path / "transparency-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["transparency_publication"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "source_entry_probe_count must equal probe_count" in artifact["errors"]
 
 
 def test_governance_dag_must_be_config_bound(tmp_path: Path) -> None:

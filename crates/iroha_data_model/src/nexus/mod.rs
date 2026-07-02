@@ -1,10 +1,9 @@
-//! Nexus-lane scaffolding types.
+//! Nexus lane and dataspace routing types.
 //!
-//! These identifiers provide a forward-compatible shell for the
-//! multi-lane/data-space routing surface described in `nexus.md` and the
-//! `nexus_transition_notes`. They currently default to single-lane
-//! placeholders but are Norito-compatible so downstream crates can start
-//! threading them through APIs.
+//! These identifiers model the multi-lane/data-space routing surface described
+//! in `nexus.md` and `nexus_transition_notes`. The default catalog remains a
+//! single primary lane for compatibility, while deployments may add lane and
+//! dataspace entries for independent routing, storage, and consensus policy.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -89,7 +88,7 @@ pub struct LaneId(u32);
 pub struct ShardId(u32);
 
 impl LaneId {
-    /// Placeholder identifier used while the system operates with a single lane.
+    /// Canonical primary lane identifier used by the default single-lane catalog.
     pub const SINGLE: Self = Self(0);
 
     /// Construct a [`LaneId`] from a zero-based lane index constrained by the provided lane count.

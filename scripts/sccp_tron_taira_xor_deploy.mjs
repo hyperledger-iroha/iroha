@@ -10,6 +10,7 @@
 // - Optional `TRON_PRO_API_KEY` or `TRON_GRID_API_KEY` for TronGrid calls.
 import { createRequire } from "node:module";
 import { lstat, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { secp256k1 } from "../javascript/iroha_js/node_modules/@noble/curves/secp256k1.js";
@@ -615,11 +616,36 @@ function isPrivateTronEndpointHost(hostname) {
   );
 }
 
+function isNonPublicTronEndpointDnsHost(hostname) {
+  const normalized = String(hostname ?? "")
+    .toLowerCase()
+    .replace(/^\[/u, "")
+    .replace(/\]$/u, "");
+  if (!normalized) return true;
+  const labels = normalized.split(".");
+  return (
+    isPrivateTronEndpointHost(normalized) ||
+    normalized.endsWith(".local") ||
+    !normalized.includes(".") ||
+    isIP(normalized) !== 0 ||
+    labels.some(
+      (label) =>
+        label === "" ||
+        !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label),
+    )
+  );
+}
+
 function normalizeTronEndpoint(endpoint = DEFAULT_TRON_ENDPOINT) {
-  const raw =
-    endpoint === undefined || endpoint === null || endpoint === ""
-      ? DEFAULT_TRON_ENDPOINT
-      : String(endpoint).trim();
+  const raw = endpoint === undefined ? DEFAULT_TRON_ENDPOINT : endpoint;
+  if (
+    typeof raw !== "string" ||
+    raw === "" ||
+    raw.trim() !== raw ||
+    /[\u0000-\u001f\u007f]/u.test(raw)
+  ) {
+    throw new Error("TRON endpoint must be an exact HTTPS URL");
+  }
   let parsed;
   try {
     parsed = new URL(raw);
@@ -632,11 +658,13 @@ function normalizeTronEndpoint(endpoint = DEFAULT_TRON_ENDPOINT) {
   if (parsed.username || parsed.password) {
     throw new Error("TRON endpoint must not include credentials");
   }
-  if (parsed.search || parsed.hash) {
-    throw new Error("TRON endpoint must not include query strings or fragments");
+  if (parsed.search || parsed.hash || raw.includes(";")) {
+    throw new Error(
+      "TRON endpoint must not include params, query strings, or fragments",
+    );
   }
-  if (isPrivateTronEndpointHost(parsed.hostname)) {
-    throw new Error("TRON endpoint must not target localhost or private networks");
+  if (isNonPublicTronEndpointDnsHost(parsed.hostname)) {
+    throw new Error("TRON endpoint HTTPS host must use public DNS");
   }
   const pathname = parsed.pathname.replace(/\/+$/u, "");
   return `${parsed.origin}${pathname === "/" ? "" : pathname}`;

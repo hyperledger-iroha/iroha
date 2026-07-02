@@ -207,6 +207,54 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    kind: str,
+    count_option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return reviewed unique inventory labels whose count matches a CLI count."""
+
+    items = list(values)
+    if not items:
+        errors.append(f"{option} is required for {kind}")
+    for index, item in enumerate(items):
+        validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+    unique_items = set(items)
+    if len(unique_items) != len(items):
+        errors.append(f"{option} must not contain duplicates")
+    if len(unique_items) != expected_count:
+        errors.append(f"{option} unique values must match {count_option}")
+    return items
+
+
+def validate_optional_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    kind: str,
+    count_option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return reviewed inventory labels, allowing an empty zero-count inventory."""
+
+    items = list(values)
+    if expected_count == 0 and not items:
+        return []
+    return validate_reviewed_inventory(
+        items,
+        expected_count=expected_count,
+        option=option,
+        kind=kind,
+        count_option=count_option,
+        errors=errors,
+    )
+
+
 def validate_output_path(path: Path, errors: list[str]) -> None:
     """Reject unsafe output targets before writing a canary artifact."""
 
@@ -306,6 +354,42 @@ def build_route_records(
     ]
 
 
+def build_inventory_records(names: Sequence[str]) -> list[dict[str, str]]:
+    """Build reviewed payload-free inventory records."""
+
+    return [{"name": name} for name in names]
+
+
+def build_deposit_probe_records(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Build reviewed payload-free deposit probe records."""
+
+    return [
+        {"name": name, "confirmed": True}
+        for name in args.confirmed_deposit_probes
+    ] + [
+        {"name": name, "confirmed": False}
+        for name in args.unconfirmed_deposit_probes
+    ]
+
+
+def build_submitter_step_records(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Build reviewed payload-free submitter step records."""
+
+    return [
+        {"name": name, "submitted": True}
+        for name in args.submitted_steps
+    ] + [
+        {"name": name, "submitted": False}
+        for name in args.queued_only_steps
+    ]
+
+
+def build_reconciliation_case_records(names: Sequence[str]) -> list[dict[str, Any]]:
+    """Build reviewed payload-free reconciliation case records."""
+
+    return [{"name": name, "reconciled": True} for name in names]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free appeal finance rollout canary payload."""
 
@@ -342,6 +426,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "passed_route_count": len(routes),
                 "routes": routes,
                 "deposit_probe_count": args.deposit_probe_count,
+                "deposit_probes": build_deposit_probe_records(args),
                 "confirmed_deposit_count": args.confirmed_deposit_count,
                 "max_route_latency_ms": args.max_route_latency_ms,
             }
@@ -363,7 +448,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "configured_signer_count": args.configured_signer_count,
+                "signers": build_inventory_records(args.signers),
                 "queued_step_count": args.queued_step_count,
+                "steps": build_submitter_step_records(args),
                 "submitted_step_count": args.submitted_step_count,
                 "max_settlement_lag_seconds": args.max_settlement_lag_seconds,
             }
@@ -379,8 +466,13 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "report_count": args.report_count,
+                "reports": build_inventory_records(args.reports),
                 "weekly_rollup_count": args.weekly_rollup_count,
+                "weekly_rollups": build_inventory_records(args.weekly_rollups),
                 "settlement_receipt_count": args.settlement_receipt_count,
+                "settlement_receipts": build_inventory_records(
+                    args.settlement_receipts
+                ),
                 "payload_kinds": args.payload_kinds,
             }
         )
@@ -395,8 +487,11 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "peer_count": args.peer_count,
+                "peers": build_inventory_records(args.peers),
                 "validator_count": args.validator_count,
+                "validators": build_inventory_records(args.validators),
                 "case_count": args.case_count,
+                "cases": build_reconciliation_case_records(args.reconciliation_cases),
                 "mismatch_count": 0,
                 "unexpected_failure_count": 0,
             }
@@ -492,6 +587,40 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--deposit-route",
             errors=errors,
         )
+        args.confirmed_deposit_probes = validate_reviewed_inventory(
+            split_csv_values(args.confirmed_deposit_probe),
+            expected_count=args.confirmed_deposit_count or 0,
+            option="--confirmed-deposit-probe",
+            kind="deposit_lifecycle",
+            count_option="--confirmed-deposit-count",
+            errors=errors,
+        )
+        unconfirmed_probe_count = 0
+        if args.deposit_probe_count is not None and args.confirmed_deposit_count is not None:
+            if args.confirmed_deposit_count > args.deposit_probe_count:
+                errors.append(
+                    "--confirmed-deposit-count must be <= --deposit-probe-count"
+                )
+            else:
+                unconfirmed_probe_count = (
+                    args.deposit_probe_count - args.confirmed_deposit_count
+                )
+        args.unconfirmed_deposit_probes = validate_optional_reviewed_inventory(
+            split_csv_values(args.unconfirmed_deposit_probe),
+            expected_count=unconfirmed_probe_count,
+            option="--unconfirmed-deposit-probe",
+            kind="deposit_lifecycle",
+            count_option="--deposit-probe-count",
+            errors=errors,
+        )
+        deposit_probe_names = (
+            args.confirmed_deposit_probes + args.unconfirmed_deposit_probes
+        )
+        if len(set(deposit_probe_names)) != len(deposit_probe_names):
+            errors.append(
+                "--confirmed-deposit-probe and --unconfirmed-deposit-probe "
+                "must not overlap"
+            )
     elif args.kind == "settlement_execution":
         require_kind_options(
             args,
@@ -530,6 +659,39 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--max-settlement-lag-seconds", args.max_settlement_lag_seconds),
             ),
         )
+        args.signers = validate_reviewed_inventory(
+            split_csv_values(args.signer),
+            expected_count=args.configured_signer_count or 0,
+            option="--signer",
+            kind="settlement_submitter",
+            count_option="--configured-signer-count",
+            errors=errors,
+        )
+        args.submitted_steps = validate_reviewed_inventory(
+            split_csv_values(args.submitted_step),
+            expected_count=args.submitted_step_count or 0,
+            option="--submitted-step",
+            kind="settlement_submitter",
+            count_option="--submitted-step-count",
+            errors=errors,
+        )
+        queued_only_step_count = 0
+        if args.queued_step_count is not None and args.submitted_step_count is not None:
+            if args.submitted_step_count > args.queued_step_count:
+                errors.append("--submitted-step-count must be <= --queued-step-count")
+            else:
+                queued_only_step_count = args.queued_step_count - args.submitted_step_count
+        args.queued_only_steps = validate_optional_reviewed_inventory(
+            split_csv_values(args.queued_only_step),
+            expected_count=queued_only_step_count,
+            option="--queued-only-step",
+            kind="settlement_submitter",
+            count_option="--queued-step-count",
+            errors=errors,
+        )
+        step_names = args.submitted_steps + args.queued_only_steps
+        if len(set(step_names)) != len(step_names):
+            errors.append("--submitted-step and --queued-only-step must not overlap")
     elif args.kind == "moderation_worker":
         require_kind_options(
             args,
@@ -548,6 +710,30 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--weekly-rollup-count", args.weekly_rollup_count),
                 ("--settlement-receipt-count", args.settlement_receipt_count),
             ),
+        )
+        args.reports = validate_reviewed_inventory(
+            split_csv_values(args.report),
+            expected_count=args.report_count or 0,
+            option="--report",
+            kind="governance_dag_publication",
+            count_option="--report-count",
+            errors=errors,
+        )
+        args.weekly_rollups = validate_reviewed_inventory(
+            split_csv_values(args.weekly_rollup),
+            expected_count=args.weekly_rollup_count or 0,
+            option="--weekly-rollup",
+            kind="governance_dag_publication",
+            count_option="--weekly-rollup-count",
+            errors=errors,
+        )
+        args.settlement_receipts = validate_reviewed_inventory(
+            split_csv_values(args.settlement_receipt),
+            expected_count=args.settlement_receipt_count or 0,
+            option="--settlement-receipt",
+            kind="governance_dag_publication",
+            count_option="--settlement-receipt-count",
+            errors=errors,
         )
         args.payload_kinds = validate_name_set(
             split_csv_values(args.payload_kind),
@@ -582,6 +768,30 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             errors.append(f"--peer-count must be >= {DEFAULT_MIN_PEERS}")
         if args.validator_count is not None and args.validator_count < DEFAULT_MIN_PEERS:
             errors.append(f"--validator-count must be >= {DEFAULT_MIN_PEERS}")
+        args.peers = validate_reviewed_inventory(
+            split_csv_values(args.peer),
+            expected_count=args.peer_count or 0,
+            option="--peer",
+            kind="multi_peer_reconciliation",
+            count_option="--peer-count",
+            errors=errors,
+        )
+        args.validators = validate_reviewed_inventory(
+            split_csv_values(args.validator),
+            expected_count=args.validator_count or 0,
+            option="--validator",
+            kind="multi_peer_reconciliation",
+            count_option="--validator-count",
+            errors=errors,
+        )
+        args.reconciliation_cases = validate_reviewed_inventory(
+            split_csv_values(args.reconciliation_case),
+            expected_count=args.case_count or 0,
+            option="--reconciliation-case",
+            kind="multi_peer_reconciliation",
+            count_option="--case-count",
+            errors=errors,
+        )
     if args.kind in POLICY_DIGEST_KINDS:
         require_kind_options(
             args,
@@ -690,6 +900,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--quote-count", type=positive_int_arg)
     parser.add_argument("--deposit-route", action="append", default=[])
     parser.add_argument("--deposit-probe-count", type=positive_int_arg)
+    parser.add_argument("--confirmed-deposit-probe", action="append", default=[])
+    parser.add_argument("--unconfirmed-deposit-probe", action="append", default=[])
     parser.add_argument("--confirmed-deposit-count", type=positive_int_arg)
     parser.add_argument("--settlement-route", action="append", default=[])
     parser.add_argument("--settlement-probe-count", type=positive_int_arg)
@@ -700,18 +912,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=30)
     parser.add_argument("--max-route-latency-ms", type=positive_int_arg)
     parser.add_argument("--configured-signer-count", type=positive_int_arg)
+    parser.add_argument("--signer", action="append", default=[])
     parser.add_argument("--queued-step-count", type=positive_int_arg)
+    parser.add_argument("--submitted-step", action="append", default=[])
+    parser.add_argument("--queued-only-step", action="append", default=[])
     parser.add_argument("--submitted-step-count", type=positive_int_arg)
     parser.add_argument("--max-settlement-lag-seconds", type=non_negative_int_arg)
     parser.add_argument("--ballot-replay-count", type=positive_int_arg)
     parser.add_argument("--report-count", type=positive_int_arg)
+    parser.add_argument("--report", action="append", default=[])
     parser.add_argument("--weekly-rollup-count", type=positive_int_arg)
+    parser.add_argument("--weekly-rollup", action="append", default=[])
     parser.add_argument("--settlement-receipt-count", type=positive_int_arg)
+    parser.add_argument("--settlement-receipt", action="append", default=[])
     parser.add_argument("--payload-kind", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--peer-count", type=positive_int_arg)
+    parser.add_argument("--peer", action="append", default=[])
     parser.add_argument("--validator-count", type=positive_int_arg)
+    parser.add_argument("--validator", action="append", default=[])
     parser.add_argument("--case-count", type=positive_int_arg)
+    parser.add_argument("--reconciliation-case", action="append", default=[])
     parser.add_argument("--policy-digest-hex")
     raw_args = sys.argv[1:] if argv is None else argv
     try:

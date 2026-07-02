@@ -2,7 +2,7 @@ use core::convert::TryFrom;
 use std::{collections::BTreeSet, str::FromStr, sync::OnceLock};
 
 use blake3::hash as blake3_hash;
-use iroha_crypto::{Algorithm, PublicKey, Signature};
+use iroha_crypto::{Algorithm, PublicKey, ed25519_parse_signature};
 use iroha_data_model::{
     asset::AssetId,
     events::data::sorafs::{SorafsGatewayEvent, SorafsProofHealthAlert},
@@ -815,7 +815,7 @@ fn verify_council_envelope(
             )));
         }
 
-        let signature = Signature::try_from_bytes(&signature_bytes).map_err(|err| {
+        let signature = ed25519_parse_signature(&signature_bytes).map_err(|err| {
             invalid_parameter(format!(
                 "invalid council signature material for signer `{signer_hex}` in manifest {manifest_label}: {err}"
             ))
@@ -2440,6 +2440,17 @@ mod sorafs_tests {
         serialized.push(b'\n');
         (serialized, signature_hex)
     }
+
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
 
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("SoraFS fixture key generation should succeed")
@@ -4882,6 +4893,74 @@ mod sorafs_tests {
             message.contains("signature payload must not be all zero"),
             "unexpected error message: {message}"
         );
+    }
+
+    #[test]
+    fn approve_manifest_rejects_malformed_ed25519_signature_r() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect("register manifest");
+
+        let stored_record = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored")
+            .clone();
+        let council_key = checked_ed25519_keypair();
+        let (envelope, signature_hex) = build_envelope(&stored_record, &council_key);
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut modified_signature =
+                hex::decode(&signature_hex).expect("signature hex decodes cleanly");
+            modified_signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let bad_signature_hex = hex::encode(modified_signature);
+
+            let mut invalid_json =
+                String::from_utf8(envelope.clone()).expect("envelope is valid UTF-8 JSON");
+            invalid_json = invalid_json.replacen(&signature_hex, &bad_signature_hex, 1);
+
+            let approve = ApprovePinManifest {
+                digest: default_digest(),
+                approved_epoch: 7,
+                council_envelope: Some(invalid_json.into_bytes()),
+                council_envelope_digest: None,
+            };
+            let err = approve
+                .execute(&alice(), &mut stx)
+                .expect_err("approval must reject malformed signature R");
+            let message = match err {
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message),
+                ) => message,
+                other => panic!("unexpected error: {other:?}"),
+            };
+            assert!(
+                message.contains("invalid council signature material"),
+                "{label} signature R produced unexpected error message: {message}"
+            );
+            assert!(
+                !message.contains("failed to verify council signature"),
+                "{label} signature R reached backend verification: {message}"
+            );
+        }
     }
 
     #[test]

@@ -971,17 +971,17 @@ fn generic_sol_source_verifier_material() -> iroha_sccp::SccpSourceVerifierMater
 }
 
 fn configured_bsc_source_verifier_material() -> iroha_sccp::SccpSourceVerifierMaterialV1 {
-    let material =
-        iroha_sccp::sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
-            iroha_sccp::SCCP_DOMAIN_BSC,
-            bsc_validator_set_hash(),
-            [0xb2; 32],
-            [0xc3; 32],
-            [0xd4; 32],
-            [0x43; 20],
-            [0x53; 32],
-        )
-        .expect("BSC mainnet source verifier material");
+    let material = iroha_sccp::sccp_bsc_source_verifier_material_with_hashes_emitter_and_config_v1(
+        bsc_validator_set_hash(),
+        [0xb2; 32],
+        [0xc3; 32],
+        [0xd4; 32],
+        [0x43; 20],
+        [0x53; 32],
+        iroha_sccp::sccp_bsc_mainnet_network_id_word_v1(),
+        [0x54; 20],
+    )
+    .expect("BSC mainnet source verifier material");
     assert!(iroha_sccp::sccp_source_verifier_material_is_production_ready(&material));
     material
 }

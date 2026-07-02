@@ -53,6 +53,20 @@ def route(name: str, *, latency_ms: int = 120) -> dict:
 
 
 def feed_promotion(*, ack_count: int = 3) -> dict:
+    gateways = [
+        {"name": "gateway-a"},
+        {"name": "gateway-b"},
+        {"name": "gateway-c"},
+    ]
+    denylist_entries = [
+        {"name": "ofac"},
+        {"name": "eu-sanctions"},
+        {"name": "malware"},
+        {"name": "csam-hash"},
+        {"name": "legal-hold"},
+    ]
+    if ack_count != len(gateways):
+        gateways = [{"name": f"gateway-{index}"} for index in range(ack_count)]
     payload = base("sorafs.gateway_compliance.feed_promotion_canary.v1")
     payload.update(
         {
@@ -63,7 +77,9 @@ def feed_promotion(*, ack_count: int = 3) -> dict:
             "merkle_root_bound": True,
             "update_history_persisted": True,
             "gateway_ack_count": ack_count,
-            "denylist_entry_count": 5,
+            "gateways": gateways,
+            "denylist_entry_count": len(denylist_entries),
+            "denylist_entries": denylist_entries,
             "bundle_digest_hex": DIGEST,
             "policy_digest_hex": POLICY_DIGEST,
             "raw_feeds_included": False,
@@ -74,6 +90,7 @@ def feed_promotion(*, ack_count: int = 3) -> dict:
 
 
 def controller_runtime() -> dict:
+    feeds = [{"name": "ofac"}, {"name": "malware"}]
     payload = base("sorafs.gateway_compliance.controller_runtime_canary.v1")
     payload.update(
         {
@@ -81,10 +98,11 @@ def controller_runtime() -> dict:
             "controller_instance_id": "gateway-compliance-controller-a",
             "iroha_config_bound": True,
             "config_source": "iroha_config",
-            "external_feed_count": 2,
-            "fetched_feed_count": 2,
-            "normalized_feed_count": 2,
-            "signed_feed_count": 2,
+            "external_feed_count": len(feeds),
+            "fetched_feed_count": len(feeds),
+            "normalized_feed_count": len(feeds),
+            "signed_feed_count": len(feeds),
+            "feeds": feeds,
             "controller_service_enabled": True,
             "scheduler_config_bound": True,
             "external_feeds_fetched": True,
@@ -104,13 +122,15 @@ def controller_runtime() -> dict:
 
 
 def moderation_toggle() -> dict:
+    toggles = [{"name": "provider-deny"}, {"name": "appeal-override"}]
     payload = base("sorafs.gateway_compliance.moderation_toggle_canary.v1")
     payload.update(
         {
             "bundle_digest_hex": DIGEST,
             "toggle_api_url": "https://gateway.example/v1/sorafs/gateway/moderation-toggles",
-            "toggle_count": 2,
-            "approved_toggle_count": 2,
+            "toggle_count": len(toggles),
+            "approved_toggle_count": len(toggles),
+            "toggles": toggles,
             "toggle_digest_hex": DIGEST,
             "iroha_config_bound": True,
             "config_source": "iroha_config",
@@ -128,11 +148,17 @@ def moderation_toggle() -> dict:
 
 
 def gateway_reload(*, reload_latency_ms: int = 1_000) -> dict:
+    gateways = [
+        {"name": "gateway-a"},
+        {"name": "gateway-b"},
+        {"name": "gateway-c"},
+    ]
     payload = base("sorafs.gateway_compliance.gateway_reload_canary.v1")
     payload.update(
         {
             "bundle_digest_hex": DIGEST,
-            "reload_ack_count": 3,
+            "reload_ack_count": len(gateways),
+            "gateways": gateways,
             "max_reload_latency_ms": reload_latency_ms,
             "hot_reload_verified": True,
             "cache_version_bound": True,
@@ -171,11 +197,13 @@ def enforcement_probe(*, reasons: list[str] | None = None) -> dict:
 
 
 def honey_audit(*, probe_count: int = 4) -> dict:
+    probes = [{"name": f"honey-probe-{index}"} for index in range(probe_count)]
     payload = base("sorafs.gateway_compliance.honey_audit_canary.v1")
     payload.update(
         {
             "bundle_digest_hex": DIGEST,
             "honey_probe_count": probe_count,
+            "probes": probes,
             "denied_response_verified": True,
             "cache_version_binding_verified": True,
             "proof_token_verified": True,
@@ -342,6 +370,42 @@ def test_controller_runtime_requires_feed_count_equality(tmp_path: Path) -> None
     assert run_gate(tmp_path) == 1
 
 
+def test_controller_runtime_feed_count_must_match_unique_feeds(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = controller_runtime()
+    payload["external_feed_count"] += 1
+    payload["fetched_feed_count"] = payload["external_feed_count"]
+    payload["normalized_feed_count"] = payload["external_feed_count"]
+    payload["signed_feed_count"] = payload["external_feed_count"]
+    write_json(tmp_path / "controller-runtime.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["controller_runtime"]["artifacts"][0]
+    assert "external_feed_count must match unique feeds count" in artifact["errors"]
+
+
+def test_controller_runtime_feeds_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = controller_runtime()
+    payload["feeds"].append({"name": "ofac"})
+    payload["external_feed_count"] = len(payload["feeds"])
+    payload["fetched_feed_count"] = len(payload["feeds"])
+    payload["normalized_feed_count"] = len(payload["feeds"])
+    payload["signed_feed_count"] = len(payload["feeds"])
+    write_json(tmp_path / "controller-runtime.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["controller_runtime"]["artifacts"][0]
+    assert "feeds must not contain duplicate values" in artifact["errors"]
+    assert "external_feed_count must match unique feeds count" in artifact["errors"]
+
+
 def test_controller_runtime_bundle_binding_must_match_feed_promotion(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = controller_runtime()
@@ -411,6 +475,38 @@ def test_moderation_toggle_requires_approved_toggle_count_equality(
     assert run_gate(tmp_path) == 1
 
 
+def test_moderation_toggle_count_must_match_unique_toggles(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = moderation_toggle()
+    payload["toggle_count"] += 1
+    payload["approved_toggle_count"] = payload["toggle_count"]
+    write_json(tmp_path / "moderation-toggle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["moderation_toggle"]["artifacts"][0]
+    assert "toggle_count must match unique toggles count" in artifact["errors"]
+
+
+def test_moderation_toggle_toggles_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = moderation_toggle()
+    payload["toggles"].append({"name": "provider-deny"})
+    payload["toggle_count"] = len(payload["toggles"])
+    payload["approved_toggle_count"] = len(payload["toggles"])
+    write_json(tmp_path / "moderation-toggle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["moderation_toggle"]["artifacts"][0]
+    assert "toggles must not contain duplicate values" in artifact["errors"]
+    assert "toggle_count must match unique toggles count" in artifact["errors"]
+
+
 def test_moderation_toggle_bundle_binding_must_match_feed_promotion(
     tmp_path: Path,
 ) -> None:
@@ -471,6 +567,36 @@ def test_invalid_feed_promotion_does_not_anchor_bundle_bound_evidence(tmp_path: 
     ]
 
 
+def test_gateway_reload_ack_count_must_match_unique_gateways(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = gateway_reload()
+    payload["reload_ack_count"] += 1
+    write_json(tmp_path / "gateway-reload.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["gateway_reload"]["artifacts"][0]
+    assert "reload_ack_count must match unique gateways count" in artifact["errors"]
+
+
+def test_gateway_reload_gateways_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = gateway_reload()
+    payload["gateways"].append({"name": "gateway-a"})
+    payload["reload_ack_count"] = len(payload["gateways"])
+    write_json(tmp_path / "gateway-reload.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["gateway_reload"]["artifacts"][0]
+    assert "gateways must not contain duplicate values" in artifact["errors"]
+    assert "reload_ack_count must match unique gateways count" in artifact["errors"]
+
+
 def test_stale_feed_promotion_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = feed_promotion()
@@ -478,6 +604,76 @@ def test_stale_feed_promotion_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "feed-promotion.json", payload)
 
     assert run_gate(tmp_path) == 1
+
+
+def test_feed_promotion_ack_count_must_match_unique_gateways(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_promotion()
+    payload["gateway_ack_count"] += 1
+    write_json(tmp_path / "feed-promotion.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["feed_promotion"]["artifacts"][0]
+    assert "gateway_ack_count must match unique gateways count" in artifact["errors"]
+
+
+def test_feed_promotion_gateways_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_promotion()
+    payload["gateways"].append({"name": "gateway-a"})
+    payload["gateway_ack_count"] = len(payload["gateways"])
+    write_json(tmp_path / "feed-promotion.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["feed_promotion"]["artifacts"][0]
+    assert "gateways must not contain duplicate values" in artifact["errors"]
+    assert "gateway_ack_count must match unique gateways count" in artifact["errors"]
+
+
+def test_feed_promotion_denylist_entry_count_must_match_unique_entries(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_promotion()
+    payload["denylist_entry_count"] += 1
+    write_json(tmp_path / "feed-promotion.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["feed_promotion"]["artifacts"][0]
+    assert (
+        "denylist_entry_count must match unique denylist_entries count"
+        in artifact["errors"]
+    )
+
+
+def test_feed_promotion_denylist_entries_must_not_duplicate(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_promotion()
+    payload["denylist_entries"].append(dict(payload["denylist_entries"][0]))
+    payload["denylist_entry_count"] = len(payload["denylist_entries"])
+    write_json(tmp_path / "feed-promotion.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["feed_promotion"]["artifacts"][0]
+    assert "denylist_entries must not contain duplicate values" in artifact["errors"]
+    assert (
+        "denylist_entry_count must match unique denylist_entries count"
+        in artifact["errors"]
+    )
 
 
 def test_raw_feed_leakage_fails(tmp_path: Path) -> None:
@@ -533,6 +729,36 @@ def test_honey_audit_requires_minimum_probe_count(tmp_path: Path) -> None:
     write_json(tmp_path / "honey-audit.json", honey_audit(probe_count=1))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_honey_audit_probe_count_must_match_unique_probes(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = honey_audit()
+    payload["honey_probe_count"] += 1
+    write_json(tmp_path / "honey-audit.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["honey_audit"]["artifacts"][0]
+    assert "honey_probe_count must match unique probes count" in artifact["errors"]
+
+
+def test_honey_audit_probes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = honey_audit()
+    payload["probes"].append({"name": "honey-probe-0"})
+    payload["honey_probe_count"] = len(payload["probes"])
+    write_json(tmp_path / "honey-audit.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["honey_audit"]["artifacts"][0]
+    assert "probes must not contain duplicate values" in artifact["errors"]
+    assert "honey_probe_count must match unique probes count" in artifact["errors"]
 
 
 def test_governance_must_use_iroha_config(tmp_path: Path) -> None:

@@ -4,13 +4,12 @@ direction: ltr
 source: docs/source/sorafs_repair_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5b7cab5babd679e794e286d1de337e02c346a87d6666f81b59eb85a8ef277380
-source_last_modified: "2026-06-25T17:31:52+00:00"
-translation_last_reviewed: 2026-06-25
+source_hash: ab785fecff79d0dc2664662906369dd7e2a801b4b7b73b4461e510036baf1017
+source_last_modified: "2026-07-02T08:17:43.239148+00:00"
+translation_last_reviewed: 2026-07-02
 title: SoraFS Repair Automation & Auditor API
 summary: SF-8b implementation status for repair scheduling, signed auditor APIs, worker flows, telemetry, persistence, and remaining rollout evidence.
 ---
-
 # SoraFS Repair Automation & Auditor API
 
 ## Goals & Scope
@@ -59,6 +58,9 @@ digest, and the checker emits those valid handoff policies as
 `valid_policy_digests`. Signed auditor API, worker lifecycle, and event stream
 artifacts also bind `route_count` to the unique canonical `routes[].name`
 inventory and reject duplicate route entries before promotion can report ready.
+Auditor-roster artifacts also bind `auditor_count` to the unique canonical
+`auditors[].name` inventory and reject duplicate auditor entries before
+promotion can report ready.
 `scripts/build_sorafs_repair_canary.py` builds individual payload-free SF-8b
 canary artifacts for auditor roster, failure capture, signed auditor API,
 worker lifecycle, event streams, governance handoff, observability, and
@@ -66,7 +68,8 @@ governance approval evidence. The builder requires reviewed deployment
 context, complete failure-source, repair route, lifecycle-status,
 handoff-target, and metric coverage where applicable, auditor-roster and
 failure-bundle digest bindings, governance handoff digest bindings, auditor
-minimum counts, route, event-lag, and repair-latency threshold facts,
+minimum counts, reviewed auditor names matching that count, route, event-lag,
+and repair-latency threshold facts,
 config-backed governance metadata, reviewed policy-digest input for
 governance handoff and approval evidence, and
 validates every generated artifact through
@@ -424,6 +427,9 @@ those values as `valid_policy_digests`, and governance approval artifacts must
 carry a matching `policy_digest_hex`. Signed auditor API, worker lifecycle, and
 event stream artifacts must also keep `route_count` equal to the unique
 canonical `routes[].name` inventory and reject duplicate route entries.
+Auditor-roster artifacts also bind `auditor_count` to the unique canonical
+`auditors[].name` inventory and reject duplicate auditor entries before
+promotion can report ready.
 Its collection planner exposes those exact required payload fields through
 `--dry-run` and validates the schema-closed collection plan, required kinds,
 thresholds, external evidence map, evidence contract, and command steps before

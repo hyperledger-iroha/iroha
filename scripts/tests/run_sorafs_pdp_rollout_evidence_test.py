@@ -113,6 +113,18 @@ def test_dry_run_prints_complete_pdp_rollout_plan(tmp_path: Path, capsys) -> Non
         in plan["evidence_contract"]["proof_generation"]["required_payload_fields"]
     )
     assert (
+        "providers"
+        in plan["evidence_contract"]["proof_generation"]["required_payload_fields"]
+    )
+    assert (
+        "challenges"
+        in plan["evidence_contract"]["proof_generation"]["required_payload_fields"]
+    )
+    assert (
+        "proofs"
+        in plan["evidence_contract"]["proof_generation"]["required_payload_fields"]
+    )
+    assert (
         "validation_bundle_digest_hex"
         in plan["evidence_contract"]["validator_replay"]["required_payload_fields"]
     )

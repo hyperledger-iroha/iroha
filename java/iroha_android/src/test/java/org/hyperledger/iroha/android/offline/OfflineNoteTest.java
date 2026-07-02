@@ -1671,6 +1671,16 @@ public final class OfflineNoteTest {
     assertThrows(
         () -> OfflineNotePaymentTokenCodec.decodeText(text + "="),
         "padded payment token text should reject");
+    final String nonCanonicalPaymentText = OfflineNotePaymentTokenCodec.TEXT_PREFIX + "AB";
+    assertTrue(
+        OfflineBearerCashTextCodec.payloadKind(nonCanonicalPaymentText) == null,
+        "payment payload kind should reject non-canonical base64url");
+    assertThrows(
+        () -> OfflineNotePaymentTokenCodec.decodeText(nonCanonicalPaymentText),
+        "non-canonical payment token text should reject");
+    assertThrows(
+        () -> OfflineBearerCashTextCodec.decodePaymentText(nonCanonicalPaymentText),
+        "Bearer Cash payment text wrapper should reject non-canonical base64url");
 
     final List<byte[]> frames =
         OfflineNotePaymentTokenCodec.encodeQrFrameBytes(
@@ -1852,6 +1862,17 @@ public final class OfflineNoteTest {
     assertThrows(
         () -> OfflineNoteReceiveRequestCodec.decodeText(text + "="),
         "padded receive request text should reject");
+    final String nonCanonicalReceiveRequestText =
+        OfflineNoteReceiveRequestCodec.TEXT_PREFIX + "AB";
+    assertTrue(
+        OfflineBearerCashTextCodec.payloadKind(nonCanonicalReceiveRequestText) == null,
+        "receive request payload kind should reject non-canonical base64url");
+    assertThrows(
+        () -> OfflineNoteReceiveRequestCodec.decodeText(nonCanonicalReceiveRequestText),
+        "non-canonical receive request text should reject");
+    assertThrows(
+        () -> OfflineBearerCashTextCodec.decodeReceiveRequestText(nonCanonicalReceiveRequestText),
+        "Bearer Cash receive request text wrapper should reject non-canonical base64url");
 
     final List<byte[]> frames =
         OfflineNoteReceiveRequestCodec.encodeQrFrameBytes(
@@ -1924,6 +1945,16 @@ public final class OfflineNoteTest {
     assertThrows(
         () -> OfflineNoteReceiptAckCodec.decodeText(text + "="),
         "padded receipt ACK text should reject");
+    final String nonCanonicalAckText = OfflineNoteReceiptAckCodec.TEXT_PREFIX + "AB";
+    assertTrue(
+        OfflineBearerCashTextCodec.payloadKind(nonCanonicalAckText) == null,
+        "receipt ACK payload kind should reject non-canonical base64url");
+    assertThrows(
+        () -> OfflineNoteReceiptAckCodec.decodeText(nonCanonicalAckText),
+        "non-canonical receipt ACK text should reject");
+    assertThrows(
+        () -> OfflineBearerCashTextCodec.decodeAckText(nonCanonicalAckText),
+        "Bearer Cash receipt ACK text wrapper should reject non-canonical base64url");
 
     final List<byte[]> frames =
         OfflineNoteReceiptAckCodec.encodeQrFrameBytes(ack, new OfflineQrStream.Options(180, 2));
@@ -3072,7 +3103,7 @@ public final class OfflineNoteTest {
                 + "\"extra\":true}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] challengeContentTypeDowngrade =
-        ("{\"kind\":\"challenge\",\"payload\":\"YQ\","
+        ("{\"kind\":\"receive_request\",\"payload\":\"YQ\","
                 + "\"contentType\":\"application/vnd.iroha.offline.receipt-ack+norito\","
                 + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
             .getBytes(StandardCharsets.UTF_8);
@@ -3081,7 +3112,12 @@ public final class OfflineNoteTest {
                 + "\"contentType\":\"application/vnd.iroha.offline.receive-request+norito\"}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] paddedPayload =
-        ("{\"kind\":\"challenge\",\"payload\":\"YQ==\","
+        ("{\"kind\":\"receive_request\",\"payload\":\"YQ==\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-request+norito\","
+                + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] nonCanonicalPayload =
+        ("{\"kind\":\"receive_request\",\"payload\":\"AB\","
                 + "\"contentType\":\"application/vnd.iroha.offline.receive-request+norito\","
                 + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
             .getBytes(StandardCharsets.UTF_8);
@@ -3097,19 +3133,22 @@ public final class OfflineNoteTest {
     assertThrows(
         () -> OfflineNoteNearbyEnvelope.decode(paddedPayload),
         "padded nearby envelope payload should fail");
+    assertThrows(
+        () -> OfflineNoteNearbyEnvelope.decode(nonCanonicalPayload),
+        "non-canonical nearby envelope payload should fail");
     final byte[] topLevelArray = "[]".getBytes(StandardCharsets.UTF_8);
     final byte[] invalidBase64Payload =
-        ("{\"kind\":\"challenge\",\"payload\":\"!!!!\","
+        ("{\"kind\":\"receive_request\",\"payload\":\"!!!!\","
                 + "\"contentType\":\"application/vnd.iroha.offline.receive-request+norito\","
                 + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] badPairingObject =
-        ("{\"kind\":\"challenge\",\"payload\":\"YQ\","
+        ("{\"kind\":\"receive_request\",\"payload\":\"YQ\","
                 + "\"contentType\":\"application/vnd.iroha.offline.receive-request+norito\","
                 + "\"pairingChallenge\":{\"assetName\":1}}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] smuggledPairingObject =
-        ("{\"kind\":\"challenge\",\"payload\":\"YQ\","
+        ("{\"kind\":\"receive_request\",\"payload\":\"YQ\","
                 + "\"contentType\":\"application/vnd.iroha.offline.receive-request+norito\","
                 + "\"pairingChallenge\":{\"assetName\":\"nearby_pairing_bird\",\"extra\":true}}")
             .getBytes(StandardCharsets.UTF_8);
@@ -3910,7 +3949,8 @@ public final class OfflineNoteTest {
         certificateJson,
         "device_proof.operation is not supported");
 
-    for (final String invalidPlatform : List.of("ios-appattest", "android-keymint ", "Android")) {
+    for (final String invalidPlatform :
+        List.of("ios-appattest", "android-keymint", "android-keymint ", "Android")) {
       proof = deviceProofJson();
       proof.put("platform", invalidPlatform);
       assertToriiIssuerClientRejectsDeviceProof(

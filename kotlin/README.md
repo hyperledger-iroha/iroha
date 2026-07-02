@@ -150,11 +150,16 @@ public `RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1` domain, plus
 chain/asset and final-root/current-note binding.
 `KagemushaInstructionArchives` wraps a typed `KagemushaTransfer` or
 `RedeemKagemushaRecursive` instruction archive, builds a single archived
-instruction transaction payload, or derives the redeem instruction from a
-native recursive redeem request before constructing that payload. These helpers
-require valid Norito archives, reject empty, malformed, tampered, or wrong-type
-instruction archives, and keep recursive redeem derivation inside the native
-bridge.
+instruction transaction payload, derives the initial `KagemushaTransfer` top-up
+instruction from a native recursive spend init request archive, or derives the
+redeem instruction from a native recursive redeem request before constructing
+that payload. These helpers require valid Norito archives, reject empty,
+malformed, tampered, or wrong-type instruction archives, and keep recursive
+top-up/redeem derivation inside the native bridge. The recursive redeem
+derivation inside the native bridge remains unchanged; top-up derivation
+consumes the init request archive, not the init result bundle alone, because
+the request carries the checked hop proof, verifier records, and Pallas opening
+metadata needed for validation.
 Use
 `canRedeemWitnessless(circuitId, hopCount)` or
 `requiresLineageWitnessForRedeem(circuitId, hopCount)` before online redeem

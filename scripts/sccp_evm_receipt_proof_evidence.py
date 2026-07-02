@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from html import unescape as html_unescape
 from pathlib import Path
@@ -146,6 +148,63 @@ def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[st
     return decoded
 
 
+def _normalize_evm_rpc_url(rpc_url: str) -> str:
+    if (
+        not isinstance(rpc_url, str)
+        or rpc_url != rpc_url.strip()
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in rpc_url)
+    ):
+        raise ValueError("--rpc-url must be an exact http(s) URL")
+    parsed = urllib.parse.urlparse(rpc_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("--rpc-url must be an http(s) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("--rpc-url must not include credentials")
+    if parsed.params or parsed.query or parsed.fragment:
+        raise ValueError("--rpc-url must not include params, query, or fragment")
+    host = parsed.hostname
+    if host is None:
+        raise ValueError("--rpc-url must be an http(s) URL")
+    if parsed.scheme == "http" and not _evm_rpc_host_is_loopback(host):
+        raise ValueError("--rpc-url must use HTTPS unless it is loopback HTTP")
+    if parsed.scheme == "https" and _evm_rpc_host_is_non_public_dns(host):
+        raise ValueError("--rpc-url HTTPS host must use public DNS")
+    return rpc_url
+
+
+def _evm_rpc_host_is_loopback(host: str) -> bool:
+    normalized = host.strip("[]").lower()
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return normalized == "localhost" or normalized.endswith(".localhost")
+
+
+def _evm_rpc_host_is_non_public_dns(host: str) -> bool:
+    normalized = host.strip("[]").lower()
+    try:
+        ipaddress.ip_address(normalized)
+    except ValueError:
+        pass
+    else:
+        return True
+    labels = normalized.split(".")
+    return (
+        _evm_rpc_host_is_loopback(normalized)
+        or normalized.endswith(".local")
+        or "." not in normalized
+        or any(
+            label == ""
+            or not all(ch.isascii() for ch in label)
+            or not label[0].isalnum()
+            or not label[-1].isalnum()
+            or len(label) > 63
+            or any(not (ch.isalnum() or ch == "-") for ch in label)
+            for label in labels
+        )
+    )
+
+
 def _json_rpc(
     rpc_url: str,
     method: str,
@@ -154,6 +213,7 @@ def _json_rpc(
     opener: Urlopen,
     timeout: float,
 ) -> Any:
+    rpc_url = _normalize_evm_rpc_url(rpc_url)
     request = urllib.request.Request(
         rpc_url,
         data=json.dumps(
@@ -962,7 +1022,7 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
         return fallback
     if _decoded_cli_error_text_issue(text):
         return fallback
-    normalized_text = _decoded_public_blocker_text(text).lower()
+    normalized_text = _decoded_public_blocker_text(text).casefold()
     if any(marker in normalized_text for marker in SENSITIVE_CLI_ERROR_MARKERS):
         return fallback
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):

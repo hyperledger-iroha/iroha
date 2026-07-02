@@ -109,6 +109,10 @@ def test_dry_run_prints_complete_por_rollout_plan(tmp_path: Path, capsys) -> Non
         in plan["evidence_contract"]["randomness"]["required_payload_fields"]
     )
     assert (
+        "providers"
+        in plan["evidence_contract"]["randomness"]["required_payload_fields"]
+    )
+    assert (
         "scheduler_runtime_enabled"
         in plan["evidence_contract"]["scheduler_runtime"]["required_payload_fields"]
     )

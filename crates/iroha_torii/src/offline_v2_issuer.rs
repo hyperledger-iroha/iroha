@@ -2331,46 +2331,7 @@ fn decode_signature_base64(
 }
 
 fn checked_ed25519_signature_from_bytes(signature: &[u8]) -> Result<Signature, ()> {
-    validate_ed25519_signature_r(signature)?;
-    Signature::try_from_bytes(signature).map_err(|_| ())
-}
-
-fn validate_ed25519_signature_r(signature: &[u8]) -> Result<(), ()> {
-    if signature.len() != ed25519_dalek::SIGNATURE_LENGTH {
-        return Err(());
-    }
-    let r_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = signature
-        .get(..ed25519_dalek::PUBLIC_KEY_LENGTH)
-        .ok_or(())?
-        .try_into()
-        .map_err(|_| ())?;
-    if !ed25519_compressed_y_is_canonical(&r_bytes) {
-        return Err(());
-    }
-    let r_point = ed25519_dalek::VerifyingKey::from_bytes(&r_bytes).map_err(|_| ())?;
-    if r_point.is_weak() {
-        return Err(());
-    }
-    Ok(())
-}
-
-fn ed25519_compressed_y_is_canonical(bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]) -> bool {
-    const ED25519_FIELD_MODULUS_LE: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
-        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0x7f,
-    ];
-
-    let mut y = *bytes;
-    y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
-    for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
-        match y[idx].cmp(&ED25519_FIELD_MODULUS_LE[idx]) {
-            std::cmp::Ordering::Less => return true,
-            std::cmp::Ordering::Greater => return false,
-            std::cmp::Ordering::Equal => {}
-        }
-    }
-    false
+    iroha_crypto::ed25519_parse_signature(signature).map_err(|_| ())
 }
 
 fn build_settlement(

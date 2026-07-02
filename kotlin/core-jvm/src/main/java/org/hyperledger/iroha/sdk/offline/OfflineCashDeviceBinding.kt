@@ -12,7 +12,7 @@ class OfflineCashDeviceBinding(
     val iosEnvironment: String? = null,
 ) {
     init {
-        require(platform == "ios" || platform == "android" || platform == "android-keymint") {
+        require(platform == "ios" || platform == "android") {
             "platform must be a supported first-release value"
         }
         require(attestationKeyId.isExactNonEmptyProtocolString()) {

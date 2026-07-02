@@ -62,6 +62,10 @@ REQUIRED_C_SYMBOLS = (
     "connect_norito_kagemusha_recursive_spend_redeem",
 )
 
+ADDITIVE_ABI15_C_SYMBOLS = (
+    "connect_norito_kagemusha_recursive_spend_topup",
+)
+
 REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS = (
     "connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
     "connect_norito_kagemusha_verify_recursive_compact_payment_token",
@@ -4398,8 +4402,9 @@ def check_c_bridge(texts, errors):
         header,
         r"int32_t\s+(connect_norito_kagemusha_recursive_spend_[a-z0-9_]+)\s*\(",
     )
-    require_same_set(rust_exports, REQUIRED_C_SYMBOLS, "Rust C recursive Kagemusha exports", errors)
-    require_same_set(header_exports, REQUIRED_C_SYMBOLS, "C header recursive Kagemusha declarations", errors)
+    required_current_c_symbols = REQUIRED_C_SYMBOLS + ADDITIVE_ABI15_C_SYMBOLS
+    require_same_set(rust_exports, required_current_c_symbols, "Rust C recursive Kagemusha exports", errors)
+    require_same_set(header_exports, required_current_c_symbols, "C header recursive Kagemusha declarations", errors)
     rust_record_exports = names_from_matches(
         rust,
         r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
@@ -4477,7 +4482,7 @@ def check_c_bridge(texts, errors):
     require_regex(
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
-        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*13\s*;",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*15\s*;",
         "C native bridge ABI version",
         errors,
     )
@@ -10360,6 +10365,7 @@ def check_kotlin_offline_wallet_device_binding_alias_strictness(texts, errors):
         "data class OfflineDeviceBinding",
         "data class OfflineAttestationReceipt",
         (
+            "require(isSupportedFirstReleaseDevicePlatform(platform))",
             "require(devicePublicKey == null)",
             "require(appAttestPublicKeyBase64 == null)",
         ),
@@ -10372,6 +10378,7 @@ def check_kotlin_offline_wallet_device_binding_alias_strictness(texts, errors):
         (
             "offlineDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
             'for (retiredKey in listOf("device_public_key", "app_attest_public_key_base64"))',
+            'for (invalidPlatform in listOf("android-keymint", "ios-appattest", "ios-app-attest", "android-keymint ", "Android"))',
             "Json.decodeFromString<OfflineDeviceBinding>(json)",
             '"$retiredKey is retired; use assertion_public_key"',
         ),
@@ -10391,7 +10398,7 @@ def check_kotlin_offline_wallet_attestation_payload_strictness(texts, errors):
             '@SerialName("assertion_usage_count_limit") val assertionUsageCountLimit: Int? = null',
             "data class OfflineDeviceProof",
             "private fun expectedAssertionUsageCountLimit(platform: String): Int?",
-            "private fun isSupportedFirstReleasePlatform(platform: String): Boolean",
+            "private fun isSupportedFirstReleaseDevicePlatform(platform: String): Boolean",
             "private fun String.isExactNonEmptyProtocolString(): Boolean",
         ),
         "Kotlin offline wallet attestation payload strictness source",
@@ -10427,7 +10434,7 @@ def check_kotlin_offline_wallet_attestation_payload_strictness(texts, errors):
         "data class OfflineDeviceProof",
         "data class OfflineSpendAuthorization",
         (
-            "require(isSupportedFirstReleasePlatform(platform))",
+            "require(isSupportedFirstReleaseDevicePlatform(platform))",
             "require(attestationKeyId.isExactNonEmptyProtocolString())",
             "require(challengeHashHex.isLowerHex32())",
             'requireCanonicalNonEmptyBase64(assertionBase64, "assertion_base64")',
@@ -10443,6 +10450,8 @@ def check_kotlin_offline_wallet_attestation_payload_strictness(texts, errors):
             "attestationReceiptRejectsNonCanonicalProfileAndEncodingFields",
             "deviceProofRejectsNonCanonicalPlatformHashAndAssertion",
             "OfflineNoteV2.IOS_APP_ATTEST_PLATFORM",
+            'assertEquals("android", deviceProof().platform)',
+            'for (invalidPlatform in listOf("android-keymint", "ios-appattest", "ios-app-attest", "android-keymint ", "Android"))',
             '"version must be 1"',
             '"account_id must be an exact non-empty string"',
             '"assertion_usage_count_limit must be 1"',
@@ -13625,6 +13634,15 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
         "Android Java retired Offline Note issuer exact platform profile source",
         errors,
     )
+    require_block_not_regex(
+        texts,
+        android_source,
+        "private static boolean isSupportedDeviceProofPlatform",
+        "private URI resolvePath",
+        r"ANDROID_KEYMINT_PLATFORM",
+        "Android Java retired Offline Note issuer device proof platform source",
+        errors,
+    )
     require(
         re.search(
             r"public CompletableFuture<OfflineNoteIssueResponse> issueNote\(\s*"
@@ -13660,6 +13678,7 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
             '"deviceId must be exact non-empty text"',
             '"offlinePublicKey must be exact non-empty text"',
             '"device_binding.attestation_key_id must be exact non-empty text"',
+            'List.of("ios-appattest", "android-keymint", "android-keymint ", "Android")',
             'currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"))',
             'List.of("apple-appattest-counter", "android-keymint-ecdsa-p256-usage-limit")',
             'List.of("ecdsa-p256-sha256", "ed25519")',
@@ -24025,6 +24044,7 @@ def check_swift(texts, errors):
         errors,
     )
     require_contains(texts, bridge, REQUIRED_C_SYMBOLS, "Swift C symbol loader", errors)
+    require_contains(texts, bridge, ADDITIVE_ABI15_C_SYMBOLS, "Swift ABI-15 top-up C symbol loader", errors)
     require_contains(
         texts,
         bridge,
@@ -40185,9 +40205,9 @@ if mode == "--negative-control-kotlin-offline-wallet-attestation-payload-strictn
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
-            "require(isSupportedFirstReleasePlatform(platform))",
-            "check(isSupportedFirstReleasePlatform(platform))",
-            "Kotlin offline wallet device proof strictness source block missing require(isSupportedFirstReleasePlatform(platform))",
+            "require(isSupportedFirstReleaseDevicePlatform(platform))",
+            "check(isSupportedFirstReleaseDevicePlatform(platform))",
+            "Kotlin offline wallet device proof strictness source block missing require(isSupportedFirstReleaseDevicePlatform(platform))",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
@@ -71088,11 +71108,11 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     target = "crates/connect_norito_bridge/src/lib.rs"
     original = mutated[target]
     updated = original.replace(
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;",
         "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;",
         1,
     )
-    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;" in updated:
+    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;" in updated:
         raise SystemExit("negative control failed: unable to mutate native C bridge ABI version")
     mutated[target] = updated
     try:
@@ -71100,7 +71120,7 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*13\s*;",
+            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*15\s*;",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:

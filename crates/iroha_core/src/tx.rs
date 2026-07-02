@@ -5894,8 +5894,22 @@ pub(crate) fn enforce_fraud_policy(
                 ValidationFail::NotPermitted("fraud assessment signature must be 64 bytes".into()),
             ));
         }
-        let signature =
-            iroha_crypto::Signature::try_from_bytes(signature_bytes).map_err(|err| {
+        let signature_parse_rejection = |err: String| {
+            #[cfg(feature = "telemetry")]
+            if let Some(ctx) = fraud_ctx.as_ref() {
+                ctx.record_invalid("attestation_signature");
+                ctx.record_attestation(attester_label, "signature_parse");
+            }
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                "fraud assessment signature is malformed: {err}"
+            )))
+        };
+        let signature = match attester_algorithm {
+            iroha_crypto::Algorithm::Ed25519 => {
+                iroha_crypto::ed25519_parse_signature(signature_bytes)
+                    .map_err(|err| signature_parse_rejection(err.to_string()))?
+            }
+            _ => iroha_crypto::Signature::try_from_bytes(signature_bytes).map_err(|err| {
                 #[cfg(feature = "telemetry")]
                 if let Some(ctx) = fraud_ctx.as_ref() {
                     ctx.record_invalid("attestation_signature");
@@ -5904,7 +5918,8 @@ pub(crate) fn enforce_fraud_policy(
                 TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
                     "fraud assessment signature is malformed: {err}"
                 )))
-            })?;
+            })?,
+        };
         let typed = iroha_crypto::SignatureOf::<FraudAssessment>::from_signature(signature);
         typed.verify(&attester.public_key, &unsigned).map_err(|_| {
             #[cfg(feature = "telemetry")]
@@ -8659,6 +8674,60 @@ pub mod tests {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
                 assert!(
                     reason.contains("signature payload must not be all zero"),
+                    "unexpected rejection reason: {reason}"
+                );
+            }
+            other => panic!("expected Validation::NotPermitted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fraud_policy_rejects_noncanonical_ed25519_attestation_signature_r_before_backend() {
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let attester =
+            checked_fixture_keypair(b"fraud-attester-ed25519".to_vec(), Algorithm::Ed25519);
+        let unsigned = FraudAssessment::new(
+            Vec::new(),
+            iroha_data_model::fraud::types::FraudAssessmentParts {
+                query_id: [0xFA; 32],
+                engine_id: "risk-engine-eu".to_owned(),
+                risk_score_bps: 650,
+                confidence_bps: 9_000,
+                decision: iroha_data_model::fraud::types::AssessmentDecision::Allow,
+                generated_at_ms: 1,
+                signature: None,
+            },
+        );
+        let valid_signature = checked_signature_of(attester.private_key(), &unsigned);
+        let mut signature_bytes = valid_signature.payload().to_vec();
+        signature_bytes[..NONCANONICAL_R.len()].copy_from_slice(&NONCANONICAL_R);
+        let mut assessment = unsigned;
+        assessment.signature = Some(signature_bytes);
+        let metadata = fraud_metadata_with_assessment(&assessment);
+        let cfg = iroha_config::parameters::actual::FraudMonitoring {
+            enabled: true,
+            required_minimum_band: Some(iroha_config::parameters::actual::FraudRiskBand::Medium),
+            attesters: vec![iroha_config::parameters::actual::FraudAttester {
+                engine_id: "risk-engine-eu".to_owned(),
+                public_key: attester.public_key().clone(),
+            }],
+            ..Default::default()
+        };
+        let catalog = DataSpaceCatalog::default();
+        let assignment = single_lane_assignment(&catalog);
+
+        let err = super::enforce_fraud_policy(&cfg, &metadata, None, &assignment)
+            .expect_err("noncanonical Ed25519 attestation signature R must be rejected");
+
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
+                assert!(
+                    reason.contains("signature is malformed"),
                     "unexpected rejection reason: {reason}"
                 );
             }

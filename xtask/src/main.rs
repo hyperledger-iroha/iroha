@@ -10241,7 +10241,7 @@ fn verify_manifest_signature(
         .map_err(|err| format!("invalid manifest public key hex: {err}"))?;
     let sig_bytes = hex::decode(&signature.signature_hex)
         .map_err(|err| format!("invalid manifest signature hex: {err}"))?;
-    let sig = Signature::try_from_bytes(&sig_bytes)
+    let sig = iroha_crypto::ed25519_parse_signature(&sig_bytes)
         .map_err(|err| format!("invalid manifest signature material: {err}"))?;
     sig.verify(&public_key, payload)
         .map_err(|err| format!("manifest signature verification failed: {err}").into())
@@ -10690,9 +10690,48 @@ mod openapi_tests {
             .expect_err("allow-unsigned must not bypass invalid signatures");
         let message = err.to_string();
         assert!(
-            message.contains("manifest signature verification failed"),
-            "expected signature verification failure, got {message}"
+            message.contains("invalid manifest signature material"),
+            "expected signature material rejection, got {message}"
         );
+    }
+
+    #[test]
+    fn openapi_signature_envelope_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let tmp = tempdir().expect("tempdir");
+        let key_path = tmp.path().join("key.hex");
+        fs::write(&key_path, hex::encode([0x67u8; 32])).expect("write key");
+        let payload = b"{\"ok\":true}";
+        let signature = sign_manifest_payload(payload, &key_path).expect("sign payload");
+        verify_manifest_signature(&signature, payload).expect("valid signature verifies");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = signature.clone();
+            let mut signature_bytes =
+                hex::decode(&malformed.signature_hex).expect("decode signature hex");
+            signature_bytes[..32].copy_from_slice(&replacement_r);
+            malformed.signature_hex = hex::encode(signature_bytes);
+
+            let err = verify_manifest_signature(&malformed, payload)
+                .expect_err("malformed Ed25519 R must fail admission");
+            let message = err.to_string();
+            assert!(
+                message.contains("invalid manifest signature material"),
+                "unexpected {label} R error: {message}"
+            );
+        }
     }
 
     #[test]

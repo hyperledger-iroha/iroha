@@ -22,6 +22,7 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun exposesStableModesAndCircuitIds() {
         assertEquals(6, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+        assertEquals(15, KagemushaRecursiveSpendProver.TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(
             "kagemusha-recursive-aggregation-v1",
             KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -1546,6 +1547,9 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.appendSpend(null)
         }
         assertIllegalArgumentContains("requestArchive must not be empty") {
+            KagemushaRecursiveSpendProver.topUpSpend(null)
+        }
+        assertIllegalArgumentContains("requestArchive must not be empty") {
             KagemushaRecursiveSpendProver.transitionProfileInit(null)
         }
         assertIllegalArgumentContains("requestArchive must not be empty") {
@@ -1790,6 +1794,9 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.appendSpend(ByteArray(0))
         }
         assertIllegalArgumentContains("requestArchive must not be empty") {
+            KagemushaRecursiveSpendProver.topUpSpend(ByteArray(0))
+        }
+        assertIllegalArgumentContains("requestArchive must not be empty") {
             KagemushaRecursiveSpendProver.transitionProfileInit(ByteArray(0))
         }
         assertIllegalArgumentContains("requestArchive must not be empty") {
@@ -1876,6 +1883,7 @@ class KagemushaRecursiveSpendProverTest {
         for (entrypoint in listOf(
             KagemushaRecursiveSpendProver::initSpend,
             KagemushaRecursiveSpendProver::appendSpend,
+            KagemushaRecursiveSpendProver::topUpSpend,
             KagemushaRecursiveSpendProver::transitionProfileInit,
             KagemushaRecursiveSpendProver::transitionProfileAppend,
             KagemushaRecursiveSpendProver::verifySpend,

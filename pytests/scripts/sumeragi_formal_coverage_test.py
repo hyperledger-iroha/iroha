@@ -955,6 +955,132 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
         "Exactness and correctness-envelope conjunct references must resolve to zero-arity",
         f"Sumeragi formal README {readme} is missing required text: "
         "Transitive exactness predicate chains must also resolve through zero-arity",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Every top-level Sumeragi property checked by the deep/TLC-fast configs must be reachable",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "from `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope` through zero-arity",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "operator references",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Every non-TypeInvariant top-level Sumeragi invariant checked by the deep/TLC-fast configs must be reachable",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "from `SumeragiConsensusCoreStateMatchesEnvelope` through zero-arity",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "The consensus-core aggregate proof roots must keep their exact direct conjunct contracts",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "The correctness root composes `TypeInvariant`, `SumeragiConsensusCoreAlwaysMatchesExactness`,",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`, and `EventuallyCommit` directly",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "The state+temporal, exactness, and fast roots keep their documented direct conjuncts",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Every direct conjunct of `SumeragiConsensusCoreStateMatchesEnvelope` must be checked",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "as a top-level deep/TLC-fast `INVARIANT`",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`SumeragiConsensusCoreStateMatchesEnvelope` must keep the documented state direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Every direct conjunct of `SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope` must be checked",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "as a top-level deep/TLC-fast `PROPERTY`",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Every direct conjunct of `RbcLifecycleAlwaysMatchesEndToEndEnvelope` must be checked",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Nested RBC lifecycle aggregate conjuncts use the same top-level `PROPERTY` coverage rule",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "First-level RBC lifecycle aggregate conjuncts use the same top-level `PROPERTY` coverage rule",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "RBC progress, corruption repair, chunk/ready/deliver, delivery-entry, and delivered-state roots stay decomposed",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Reachable aggregate temporal property roots recursively use the same top-level `PROPERTY` coverage rule",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Finalized certificate retention names the Byzantine commit-vote closure property directly",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Root coverage checks require each selected deep/TLC-fast CFG to carry every protected conjunct independently",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Correctness-root reachability requires the root property in every selected deep/TLC-fast CFG",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Correctness-root direct TypeInvariant stays a top-level `INVARIANT` in every selected deep/TLC-fast CFG",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Correctness-root direct temporal obligations stay top-level `PROPERTY` checks in every selected deep/TLC-fast CFG",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`EventuallyCommit` must keep the direct `[] (gst => <> committed)` liveness shape with exact lowercase state-variable names",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`CommitNeverRevoked` must keep the direct `[] (committed => [] committed)` finality-latch monotonicity shape with exact lowercase state-variable names",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Finality `AlwaysMatches` temporal wrappers must keep direct `[]` shapes over their matching zero-arity predicates",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`TimeoutTickGateNeverBypassesStalledProgress` must keep the direct `[] TimeoutTickGateMatchesStalledProgress` timeout-gate wrapper shape",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Pre-commit handoff `Never`/`Always` predicate wrappers must keep direct `[] Predicate` shapes over their documented zero-arity predicates",
+        f"Sumeragi formal README {readme} is missing required text: "
+        '`CommittedPhaseNeverLeaves` must keep the direct `[] (phase = "Committed" => [] (phase = "Committed"))` phase permanence shape',
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Timeout-recovery action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "Pre-commit handoff action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`Committed*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcDeliveredFinality*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcDeliveredEvidenceNeverRegresses` and `RbcDeliveredPending*` lifecycle action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcDeliveredPendingSpecStep*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcDeliveryEntry*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcDeliveryEntryCommitEvidenceBranch*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`DeliveredPendingCompleteWaitState*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`PendingProtocolStepsNeverChangeGst` must keep the direct `[] [PendingProtocolStepsPreserveGst]_vars` GST-preservation action-wrapper shape",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`CommittedGstNeverEnablesActions` must keep the direct `[] CommittedGstDisablesEveryAction` terminal action-disable shape",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`CommittedStateAlwaysMatchesTerminalEnvelope` must keep the documented terminal-state direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`PostFinalityStateAlwaysMatchesStabilityEnvelope` must keep the documented post-finality stability direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`TimeoutRecoveryAlwaysMatchesViewChangeEnvelope` must keep the documented timeout-recovery direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope` must keep the documented certified-commit direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope` must keep the documented pre-commit handoff direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`CommitVoteHandoffAlwaysMatchesFinalityEnvelope` must keep the documented commit-vote handoff direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope` must keep the documented finalized-certificate retention direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope` must keep the documented RBC delivered-finality direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope` must keep the documented RBC delivered-state lifecycle direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope` must keep the documented RBC delivered-pending handoff direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope` must keep the documented delivered-pending complete wait-state direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope` must keep the documented RBC delivery-entry outcome direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope` must keep the documented RBC delivery-entry continuation direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcLifecycleAlwaysMatchesEndToEndEnvelope` must keep the documented RBC lifecycle direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcCorruptionRepairAlwaysMatchesFaultEnvelope` must keep the documented RBC corruption-repair direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope` must keep the documented RBC chunk/ready/deliver availability direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope` must keep the documented RBC progress-mutation direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcProgressMutationAlwaysMatchesLocalClassification` must keep the documented RBC progress local-classification direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope` must keep the documented RBC startup-boundary direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcProgressStateEvidenceAlwaysMatchesEnvelope` must keep the documented RBC progress-state evidence direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`RbcLiveEvidenceCausalityAlwaysMatchesEnvelope` must keep the documented RBC live-evidence causality direct conjunct contract",
+        f"Sumeragi formal README {readme} is missing required text: "
+        "`SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope` must keep the documented end-to-end safety direct conjunct contract",
     ]
 
 
@@ -2872,6 +2998,3866 @@ def test_top_level_cfg_check_parity_errors_rejects_check_kind_drift(
     assert module.top_level_cfg_check_parity_errors(deep_cfg, tlc_cfg) == [
         f"top-level check EventuallyCommit is PROPERTY in {deep_cfg} "
         f"but INVARIANT in {tlc_cfg}"
+    ]
+
+
+def test_cfg_property_root_reachability_errors_accepts_connected_graph(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "Root ==",
+                "  /\\ Branch",
+                "Branch ==",
+                "  /\\ Leaf",
+                "Leaf ==",
+                "  TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "PROPERTY Root",
+                "PROPERTY Branch",
+                "PROPERTY Leaf",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_property_root_reachability_errors(
+            tla,
+            (cfg,),
+            root_property="Root",
+        )
+        == []
+    )
+
+
+def test_cfg_property_root_reachability_errors_rejects_one_cfg_missing_root(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    deep_cfg = tmp_path / "Deep.cfg"
+    tlc_cfg = tmp_path / "Tlc.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "Root ==",
+                "  /\\ Branch",
+                "Branch ==",
+                "  TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    deep_cfg.write_text(
+        "\n".join(
+            [
+                "PROPERTY Root",
+                "PROPERTY Branch",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tlc_cfg.write_text("PROPERTY Branch\n", encoding="utf-8")
+
+    assert module.cfg_property_root_reachability_errors(
+        tla,
+        (deep_cfg, tlc_cfg),
+        root_property="Root",
+    ) == [
+        f"{tla} root property Root is not checked as a top-level PROPERTY by {tlc_cfg}"
+    ]
+
+
+def test_cfg_property_root_reachability_errors_rejects_disconnected_property(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "Root ==",
+                "  /\\ Branch",
+                "Branch ==",
+                "  TRUE",
+                "Disconnected ==",
+                "  TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "PROPERTY Root",
+                "PROPERTY Branch",
+                "PROPERTY Disconnected",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_property_root_reachability_errors(
+        tla,
+        (cfg,),
+        root_property="Root",
+    ) == [
+        f"{cfg}:3 checks PROPERTY Disconnected, but it is not reachable "
+        "from root property Root through zero-arity TLA operator references"
+    ]
+
+
+def test_cfg_state_invariant_root_reachability_errors_accepts_connected_graph(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "StateRoot ==",
+                "  /\\ BranchInvariant",
+                "BranchInvariant ==",
+                "  /\\ LeafInvariant",
+                "LeafInvariant ==",
+                "  TRUE",
+                "TypeInvariant ==",
+                "  TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INVARIANT TypeInvariant",
+                "INVARIANT BranchInvariant",
+                "INVARIANT LeafInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_state_invariant_root_reachability_errors(
+            tla,
+            (cfg,),
+            root_invariant="StateRoot",
+        )
+        == []
+    )
+
+
+def test_cfg_state_invariant_root_reachability_errors_rejects_disconnected_graph(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "StateRoot ==",
+                "  /\\ BranchInvariant",
+                "BranchInvariant ==",
+                "  TRUE",
+                "DisconnectedInvariant ==",
+                "  TRUE",
+                "TypeInvariant ==",
+                "  TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INVARIANT TypeInvariant",
+                "INVARIANT BranchInvariant",
+                "INVARIANT DisconnectedInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_state_invariant_root_reachability_errors(
+        tla,
+        (cfg,),
+        root_invariant="StateRoot",
+    ) == [
+        f"{cfg}:3 checks INVARIANT DisconnectedInvariant, but it is not "
+        "reachable from state invariant root StateRoot through zero-arity TLA "
+        "operator references"
+    ]
+
+
+def test_consensus_core_root_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope == [] EventuallyCommit",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope ==",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "EventuallyCommit == [] committed",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "SumeragiConsensusCoreFastCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.consensus_core_root_conjunct_contract_errors(tla) == []
+
+
+def test_consensus_core_root_cfg_check_contract_errors_accepts_expected_roles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreAlwaysMatchesExactness == TRUE",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] safe",
+                "EventuallyCommit == [] committed",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "PROPERTY EventuallyCommit",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.consensus_core_root_cfg_check_contract_errors(
+            tla,
+            (cfg,),
+        )
+        == []
+    )
+
+
+def test_consensus_core_root_cfg_check_contract_errors_rejects_missing_role(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreAlwaysMatchesExactness == TRUE",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] safe",
+                "EventuallyCommit == [] committed",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.consensus_core_root_cfg_check_contract_errors(
+        tla,
+        (cfg,),
+    ) == [
+        f"{tla}:6 defines SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, "
+        "but direct conjunct EventuallyCommit is not checked as a top-level "
+        f"PROPERTY by {cfg}"
+    ]
+
+
+def test_consensus_core_root_cfg_check_contract_errors_rejects_kind_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreAlwaysMatchesExactness == TRUE",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] safe",
+                "EventuallyCommit == [] committed",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "INVARIANT EventuallyCommit",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.consensus_core_root_cfg_check_contract_errors(
+        tla,
+        (cfg,),
+    ) == [
+        f"{tla}:6 defines SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, "
+        "but direct conjunct EventuallyCommit is checked as INVARIANT by "
+        f"{cfg}; expected PROPERTY"
+    ]
+
+
+def sumeragi_temporal_shape_contract_lines(
+    *,
+    commit_never_revoked_body: str = "[] (committed => [] committed)",
+    committed_phase_never_leaves_body: str = (
+        '[] (phase = "Committed" => [] (phase = "Committed"))'
+    ),
+    wrapper_bodies: dict[str, str] | None = None,
+    action_wrapper_bodies: dict[str, str] | None = None,
+) -> list[str]:
+    wrappers = {
+        "TimeoutTickGateNeverBypassesStalledProgress": "[] TimeoutTickGateMatchesStalledProgress",
+        "ViewQuorumEvidenceNeverDiverges": "[] ViewEvidenceMatchesActiveView",
+        "ViewEvidenceWitnessNeverTargetsZeroOrNewView": "[] ViewEvidenceWitnessRequiresNonzeroActiveView",
+        "NewViewQuorumHandoffNeverStalls": "[] NewViewPhaseBelowQuorum",
+        "LiveNewViewVotesNeverLeakPastHandoff": "[] LiveNewViewVotesStayInHandoff",
+        "HonestProposeGateNeverBypassesHandoffEvidence": "[] HonestProposeGateMatchesHandoffEvidence",
+        "NewViewVoteGateNeverBypassesFreshViewEvidence": "[] NewViewVoteGateMatchesFreshViewEvidence",
+        "NewViewVoteQuorumGateNeverBypassesNextEvidence": "[] NewViewVoteQuorumGateMatchesNextEvidence",
+        "NewViewVotePendingGateNeverBypassesMissingNextEvidence": "[] NewViewVotePendingGateMatchesMissingNextEvidence",
+        "ViewEvidenceNeverPartial": "[] ViewEvidenceIsCompleteOrEmpty",
+        "PreCommitVotesNeverCarryAcrossViews": "[] PreCommitPhasesHaveNoCommitVotes",
+        "PrePrepareVotesNeverCarryAcrossViews": "[] PrePreparePhasesHaveNoPrepareVotes",
+        "LivePrepareVotesNeverBypassPrepareHandoff": "[] LivePrepareVotesStayInHandoff",
+        "PrepareVoteGateNeverBypassesProposalEvidence": "[] PrepareVoteGateMatchesProposalEvidence",
+        "PrepareVoteQuorumGateNeverBypassesNextEvidence": "[] PrepareVoteQuorumGateMatchesNextEvidence",
+        "PrepareVotePendingGateNeverBypassesMissingNextEvidence": "[] PrepareVotePendingGateMatchesMissingNextEvidence",
+        "CommittedPhaseAlwaysMatchesFinality": "[] CommittedPhaseMatchesFinality",
+        "CommitCertificateAlwaysMatchesFinality": "[] CommitCertificateMatchesFinality",
+        "LiveCommitGateAlwaysMatchesFinality": "[] LiveCommitGateMatchesFinality",
+        "LiveCommitGateRbcEvidenceAlwaysMatches": "[] LiveCommitGateRbcEvidenceMatches",
+        "CommittedGstNeverEnablesActions": "[] CommittedGstDisablesEveryAction",
+    }
+    if wrapper_bodies is not None:
+        wrappers.update(wrapper_bodies)
+    action_wrappers = {
+        "PendingProtocolStepsNeverChangeGst": "PendingProtocolStepsPreserveGst",
+        "TimeoutTickStepAlwaysStartsFreshNewView": "TimeoutTickStepStartsFreshNewView",
+        "TimeoutTickStepNeverPreemptsProgress": "TimeoutTickStepNeverPreemptsProgressStep",
+        "TimeoutTickStepAlwaysClearsCommitVoteGates": "TimeoutTickStepClearsCommitVoteGates",
+        "TimeoutTickStepAlwaysStartsNewViewVoteHandoff": "TimeoutTickStepStartsNewViewVoteHandoff",
+        "TimeoutTickStepAlwaysPreservesRbcEvidence": "TimeoutTickStepPreservesRbcEvidence",
+        "ViewAdvanceOnlyComesFromTimeout": "ViewAdvanceOnlyComesFromTimeoutStep",
+        "LiveProgressResetOnlyByTimeout": "LiveProgressResetOnlyByTimeoutStep",
+        "ViewEvidenceOnlyChangesByQuorumOrTimeout": "ViewEvidenceChangesOnlyByQuorumOrTimeoutStep",
+        "NewViewVotesOnlyChangeByVoteOrReset": "NewViewVotesChangeOnlyByVoteOrResetStep",
+        "PrepareVotesOnlyChangeByVoteOrTimeout": "PrepareVotesChangeOnlyByVoteOrTimeoutStep",
+        "CommitVoteCountersOnlyChangeByVoteOrTimeout": "CommitVoteCountersChangeOnlyByVoteOrTimeoutStep",
+        "PhaseOnlyChangesByProtocol": "PhaseOnlyChangesByProtocolStep",
+        "PreparePhaseEntryOnlyByProposal": "PreparePhaseEntryOnlyByProposalStep",
+        "CommitVotePhaseEntryOnlyByPrepareQuorum": "CommitVotePhaseEntryOnlyByPrepareQuorumStep",
+        "ProposePhaseEntryOnlyByNewViewQuorum": "ProposePhaseEntryOnlyByNewViewQuorumStep",
+        "NewViewPhaseEntryOnlyByTimeout": "NewViewPhaseEntryOnlyByTimeoutStep",
+        "HonestProposeStepAlwaysStartsPrepareAndRbc": "HonestProposeStepStartsPrepareAndRbc",
+        "HonestProposeStepAlwaysStartsPrepareVoteHandoff": "HonestProposeStepStartsPrepareVoteHandoff",
+        "NewViewVoteQuorumStepAlwaysInstallsViewEvidence": "NewViewVoteQuorumStepInstallsViewEvidence",
+        "NewViewVoteQuorumStepAlwaysStartsProposalHandoff": "NewViewVoteQuorumStepStartsProposalHandoff",
+        "NewViewVotePendingStepNeverInstallsViewEvidence": "NewViewVotePendingStepPreservesPreProposalArtifacts",
+        "PrepareVoteQuorumStepAlwaysEntersCommitVote": "PrepareVoteQuorumStepEntersCommitVote",
+        "PrepareVoteQuorumStepAlwaysStartsCommitVoteHandoff": "PrepareVoteQuorumStepStartsCommitVoteHandoff",
+        "PrepareVotePendingStepNeverMutatesCommitArtifacts": "PrepareVotePendingStepPreservesPreCommitArtifacts",
+        "PrepareVotePendingStepAlwaysKeepsPrepareVoteHandoff": "PrepareVotePendingStepKeepsPrepareVoteHandoff",
+        "CommittedConsensusStateNeverChanges": "CommittedConsensusStateStableStep",
+        "CommittedOnlyGstObservationCanChange": "CommittedOnlyGstObservationCanMoveStep",
+        "CommittedPreGstOnlyGstElapsedCanMove": "CommittedPreGstOnlyGstElapsedCanMoveStep",
+        "CommittedPreGstNextOnlyGstElapsed": "CommittedPreGstNextOnlyGstElapsedStep",
+        "CommittedPreGstSpecStepStuttersOrObservesGst": "CommittedPreGstSpecStepStuttersOrObservesGstStep",
+        "CommittedGstStateNeverChanges": "CommittedGstStateStableStep",
+        "CommittedGstOnlyAllowsStuttering": "CommittedGstRejectsNextStep",
+        "CommittedGstSpecStepOnlyStutters": "CommittedGstSpecStepOnlyStuttersStep",
+        "CommittedSpecNonStutteringOnlyObservesGst": "CommittedSpecNonStutteringOnlyObservesGstStep",
+        "CommittedSpecStepStuttersOrObservesGst": "CommittedSpecStepStuttersOrObservesGstStep",
+        "CommittedSpecStepPreservesFinalityStack": "CommittedSpecStepPreservesFinalityStackStep",
+        "CommittedSpecStepOnlyChangesGstFlag": "CommittedSpecStepOnlyChangesGstFlagStep",
+        "CommittedSpecStepNeverRunsProtocolActions": "CommittedSpecStepNeverRunsProtocolActionsStep",
+        "CommittedSpecStepKeepsProgressActionsQuiescent": "CommittedSpecStepKeepsProgressActionsQuiescentStep",
+        "CommittedSpecStepPreservesBudgetedRbcEvidence": "CommittedSpecStepPreservesBudgetedRbcEvidenceStep",
+        "RbcDeliveredFinalityOnlyComesFromCommitVote": "RbcDeliveredFinalityOnlyByCommitVoteStep",
+        "RbcDeliveredFinalityAlwaysCompletesCommittedDelivery": "RbcDeliveredFinalityStepCompletesCommittedDelivery",
+        "RbcDeliveredFinalityAlwaysCommitsCurrentView": "RbcDeliveredFinalityCommitsCurrentViewStep",
+        "RbcDeliveredFinalityOnlyLeavesGstElapsedGate": "RbcDeliveredFinalityLeavesOnlyGstElapsedGateStep",
+        "RbcDeliveredFinalityAlwaysInstallsCommitCertificateWitnesses": "RbcDeliveredFinalityInstallsCommitCertificateWitnessesStep",
+        "RbcDeliveredFinalityAlwaysMatchesCommitCertificateWitnessChange": "RbcDeliveredFinalityMatchesCommitCertificateWitnessChangeStep",
+        "RbcDeliveredFinalityAlwaysMatchesCommitViewWitnessChange": "RbcDeliveredFinalityMatchesCommitViewWitnessChangeStep",
+        "RbcDeliveredFinalityAlwaysMatchesLiveCommitGateCrossing": "RbcDeliveredFinalityMatchesLiveCommitGateCrossingStep",
+        "RbcDeliveredFinalityAlwaysDisablesProgressAfterCommittedDelivery": "RbcDeliveredFinalityDisablesProgressAfterCommittedDeliveryStep",
+        "RbcDeliveredFinalityAlwaysMatchesCertifiedSourceStack": "RbcDeliveredFinalityMatchesCertifiedSourceStackStep",
+        "RbcDeliveredFinalityAlwaysInstallsFinalityCertificateStack": "RbcDeliveredFinalityInstallsFinalityCertificateStackStep",
+        "RbcDeliveredFinalityAlwaysMatchesCommittedPhaseEntry": "RbcDeliveredFinalityMatchesCommittedPhaseEntryStep",
+        "RbcDeliveredFinalityAlwaysMatchesCommitArtifactsChange": "RbcDeliveredFinalityMatchesCommitArtifactsChangeStep",
+        "RbcDeliveredFinalityAlwaysCouplesLatchAndCommitArtifacts": "RbcDeliveredFinalityCouplesLatchAndCommitArtifactsStep",
+        "RbcDeliveredFinalityAlwaysRecordsExactCommitVoteWitnesses": "RbcDeliveredFinalityRecordsExactCommitVoteWitnessesStep",
+        "RbcDeliveredFinalityAlwaysPreservesDeliveredRbcEvidence": "RbcDeliveredFinalityPreservesDeliveredRbcEvidenceStep",
+        "RbcDeliveredFinalityAlwaysPreservesViewPrepareHandoffEvidence": "RbcDeliveredFinalityPreservesViewPrepareHandoffEvidenceStep",
+        "RbcDeliveredFinalityAlwaysHasExactProtocolFrame": "RbcDeliveredFinalityHasExactProtocolFrameStep",
+        "RbcDeliveredFinalityAlwaysHasExactCommitVoteActionFrame": "RbcDeliveredFinalityHasExactCommitVoteActionFrameStep",
+        "RbcDeliveredFinalityAlwaysInstallsCommittedPostStateInvariants": "RbcDeliveredFinalityInstallsCommittedPostStateInvariantsStep",
+        "RbcDeliveredFinalityAlwaysSplitsPostStateGate": "RbcDeliveredFinalityPostStateGateSplitStep",
+        "RbcDeliveredFinalityPreGstPostStateOnlyLeavesGstElapsed": "RbcDeliveredFinalityPreGstPostStateLeavesOnlyGstElapsedStep",
+        "RbcDeliveredFinalityPostGstPostStateIsTerminal": "RbcDeliveredFinalityPostGstPostStateIsTerminalStep",
+        "RbcDeliveredEvidenceNeverRegresses": "RbcDeliveredEvidenceStableStep",
+        "RbcDeliveredPendingHonestCommitVoteAlwaysKeepsWaitState": "RbcDeliveredPendingHonestCommitVoteStepKeepsWaitState",
+        "RbcDeliveredPendingByzantineCommitVoteAlwaysKeepsWaitState": "RbcDeliveredPendingByzantineCommitVoteStepKeepsWaitState",
+        "RbcDeliveredPendingHonestCommitVoteAlwaysCompletesFinality": "RbcDeliveredPendingHonestCommitVoteStepCompletesFinality",
+        "RbcDeliveredPendingByzantineCommitVoteAlwaysCompletesFinality": "RbcDeliveredPendingByzantineCommitVoteStepCompletesFinality",
+        "RbcDeliveredPendingPrepareVoteAlwaysKeepsWaitState": "RbcDeliveredPendingPrepareVoteStepKeepsWaitState",
+        "RbcDeliveredPendingPrepareVoteAlwaysStartsCommitVoteWaitState": "RbcDeliveredPendingPrepareVoteStepStartsCommitVoteWaitState",
+        "RbcDeliveredPendingTimeoutAlwaysStartsNewViewWaitState": "RbcDeliveredPendingTimeoutStepStartsNewViewWaitState",
+        "RbcDeliveredPendingNewViewVoteAlwaysKeepsWaitState": "RbcDeliveredPendingNewViewVoteStepKeepsWaitState",
+        "RbcDeliveredPendingNewViewVoteAlwaysStartsProposalWaitState": "RbcDeliveredPendingNewViewVoteStepStartsProposalWaitState",
+        "RbcDeliveredPendingHonestProposeAlwaysStartsPrepareWaitState": "RbcDeliveredPendingHonestProposeStepStartsPrepareWaitState",
+        "RbcDeliveredPendingGstElapsedAlwaysKeepsWaitState": "RbcDeliveredPendingGstElapsedStepKeepsWaitState",
+        "RbcDeliveredPendingNextAlwaysCoveredByHandoffs": "RbcDeliveredPendingNextStepCoveredByHandoffs",
+        "RbcDeliveredPendingSpecStepAlwaysStuttersOrTakesCoveredHandoff": "RbcDeliveredPendingSpecStepStuttersOrTakesCoveredHandoffStep",
+        "RbcDeliveredPendingSpecStepAlwaysEndsInFinalityOrWaitState": "RbcDeliveredPendingSpecStepEndsInFinalityOrWaitStateStep",
+        "RbcDeliveredPendingSpecStepAlwaysPreservesDeliveredRbcEvidence": "RbcDeliveredPendingSpecStepPreservesDeliveredRbcEvidenceStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesCommitArtifactsOutcome": "RbcDeliveredPendingSpecStepCommitArtifactsMatchOutcomeStep",
+        "RbcDeliveredPendingSpecStepAlwaysChangesGstOnlyByElapsed": "RbcDeliveredPendingSpecStepGstChangesOnlyByElapsedStep",
+        "RbcDeliveredPendingSpecStepAlwaysChangesViewOnlyByTimeout": "RbcDeliveredPendingSpecStepViewChangesOnlyByTimeoutStep",
+        "RbcDeliveredPendingSpecStepAlwaysChangesViewEvidenceOnlyByNewViewOrTimeout": "RbcDeliveredPendingSpecStepViewEvidenceChangesOnlyByNewViewOrTimeoutStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesVoteCounterHandoff": "RbcDeliveredPendingSpecStepVoteCountersMatchHandoffStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesPostGateHandoff": "RbcDeliveredPendingSpecStepPostGatesMatchHandoffStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesTimerGateHandoff": "RbcDeliveredPendingSpecStepTimerGatesMatchHandoffStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesFinalitySource": "RbcDeliveredPendingSpecStepFinalitySourceMatchesCommitVoteStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityWitnessFrame": "RbcDeliveredPendingSpecStepFinalityWitnessFrameStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityStackOutcome": "RbcDeliveredPendingSpecStepFinalityStackMatchesOutcomeStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityGateOutcome": "RbcDeliveredPendingSpecStepFinalityGateOutcomeStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityQuorumOutcome": "RbcDeliveredPendingSpecStepFinalityQuorumOutcomeStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesNonFinalHandoffPhaseShape": "RbcDeliveredPendingSpecStepNonFinalHandoffPhaseShapeStep",
+        "RbcDeliveredPendingSpecStepAlwaysClosesActionSurface": "RbcDeliveredPendingSpecStepActionSurfaceClosedStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesPhaseChangeAction": "RbcDeliveredPendingSpecStepPhaseChangeMatchesActionStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesCounterChangeAction": "RbcDeliveredPendingSpecStepCounterChangesMatchActionStep",
+        "RbcDeliveredPendingSpecStepAlwaysHasExclusiveActionSource": "RbcDeliveredPendingSpecStepActionSourcesExclusiveStep",
+        "RbcDeliveredPendingSpecStepAlwaysPreservesActionSurfaceOnStutter": "RbcDeliveredPendingSpecStepStutterPreservesActionSurfaceStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesCommitArtifactChangeSource": "RbcDeliveredPendingSpecStepCommitArtifactChangeMatchesSourceStep",
+        "RbcDeliveredPendingSpecStepAlwaysInstallsCertifiedDeliveryOnCommitArtifactChange": "RbcDeliveredPendingSpecStepCommitArtifactChangeInstallsCertifiedDeliveryStep",
+        "RbcDeliveredPendingSpecStepAlwaysInstallsExactSourceCertifiedDeliveryOnCommitArtifactChange": "RbcDeliveredPendingSpecStepCommitArtifactChangeExactSourceCertifiedDeliveryStep",
+        "RbcDeliveredPendingSpecStepAlwaysKeepsNonFinalHandoffOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsStayNonFinalHandoffStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesNonFinalSourceOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsMatchNonFinalSourceStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesCounterFootprintOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsCounterFootprintStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesPhaseGateFootprintOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsPhaseGateFootprintStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesTimerFootprintOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsTimerFootprintStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesViewFootprintOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsViewFootprintStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityFootprintOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsFinalityFootprintStep",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesRbcSurfaceOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsRbcSurfaceStep",
+        "RbcDeliveredPendingSpecStepAlwaysClosesCompleteWaitStateOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsCompleteWaitStateStep",
+        "RbcDeliveryEntryOnlyByDeliver": "RbcDeliveryEntryOnlyByDeliverStep",
+        "RbcDeliveryEntryAlwaysMatchesReadyQuorumExitAndCommitBranch": "RbcDeliveryEntryMatchesReadyQuorumExitAndCommitBranchStep",
+        "RbcDeliveryEntryFinalityAlwaysCompletesCommittedDelivery": "RbcDeliveryEntryFinalityCompletesCommittedDeliveryStep",
+        "RbcDeliveryEntryPendingAlwaysInstallsCompleteWaitState": "RbcDeliveryEntryPendingInstallsCompleteWaitStateStep",
+        "RbcDeliveryEntryAlwaysCompletesFinalityOrWaitState": "RbcDeliveryEntryCompletesFinalityOrWaitStateStep",
+        "RbcDeliveryEntryAlwaysMatchesCommitArtifactOutcome": "RbcDeliveryEntryCommitArtifactsMatchOutcomeStep",
+        "RbcDeliveryEntryAlwaysMatchesPostGateSurfaceOutcome": "RbcDeliveryEntryPostGateSurfaceMatchesOutcomeStep",
+        "RbcDeliveryEntryAlwaysMatchesConsensusFrameOutcome": "RbcDeliveryEntryConsensusFrameMatchesOutcomeStep",
+        "RbcDeliveryEntryFinalityAlwaysMatchesCertifiedSourceStack": "RbcDeliveryEntryFinalityMatchesCertifiedSourceStackStep",
+        "RbcDeliveryEntryFinalityAlwaysInstallsCommittedPostStateInvariants": "RbcDeliveryEntryFinalityInstallsCommittedPostStateInvariantsStep",
+        "RbcDeliveryEntryFinalityAlwaysSplitsPostStateGate": "RbcDeliveryEntryFinalityPostStateGateSplitStep",
+        "RbcDeliveryEntryFinalityPreGstPostStateOnlyLeavesGstElapsed": "RbcDeliveryEntryFinalityPreGstPostStateLeavesOnlyGstElapsedStep",
+        "RbcDeliveryEntryFinalityPostGstPostStateIsTerminal": "RbcDeliveryEntryFinalityPostGstPostStateIsTerminalStep",
+        "RbcDeliveryEntryPendingAlwaysMatchesNonFinalWaitSurface": "RbcDeliveryEntryPendingMatchesNonFinalWaitSurfaceStep",
+        "RbcDeliveryEntryPendingAlwaysSplitsPostStateTimerGate": "RbcDeliveryEntryPendingPostStateTimerGateSplitStep",
+        "RbcDeliveryEntryPendingPreGstPostStateAlwaysKeepsWaitTimers": "RbcDeliveryEntryPendingPreGstPostStateKeepsWaitTimersStep",
+        "RbcDeliveryEntryPendingPostGstPostStateAlwaysTracksProgressTimeout": "RbcDeliveryEntryPendingPostGstPostStateTimeoutTracksProgressStep",
+        "RbcDeliveryEntryPendingAlwaysInstallsDeliveredWaitPredicate": "RbcDeliveryEntryPendingInstallsDeliveredWaitPredicateStep",
+        "RbcDeliveryEntryPendingAlwaysOpensDeliveredPendingContinuationSurface": "RbcDeliveryEntryPendingOpensDeliveredPendingContinuationSurfaceStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysOpensExactContinuation": "RbcDeliveryEntryCommitEvidenceBranchOpensExactContinuationStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExclusiveOutcome": "RbcDeliveryEntryCommitEvidenceBranchMatchesExclusiveOutcomeStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExclusiveGateOutcome": "RbcDeliveryEntryCommitEvidenceBranchMatchesExclusiveGateOutcomeStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExactConsensusFrame": "RbcDeliveryEntryCommitEvidenceBranchMatchesExactConsensusFrameStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExactActionSource": "RbcDeliveryEntryCommitEvidenceBranchMatchesExactActionSourceStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCertifiedOrPendingStack": "RbcDeliveryEntryCommitEvidenceBranchMatchesCertifiedOrPendingStackStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExactWitnessSurface": "RbcDeliveryEntryCommitEvidenceBranchMatchesExactWitnessSurfaceStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesLiveCommitGateCrossing": "RbcDeliveryEntryCommitEvidenceBranchMatchesLiveCommitGateCrossingStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationMode": "RbcDeliveryEntryCommitEvidenceBranchMatchesContinuationModeStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesViewHandoffSurface": "RbcDeliveryEntryCommitEvidenceBranchMatchesViewHandoffSurfaceStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesDeliveredEvidenceSurface": "RbcDeliveryEntryCommitEvidenceBranchMatchesDeliveredEvidenceSurfaceStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesGstTimerSurface": "RbcDeliveryEntryCommitEvidenceBranchMatchesGstTimerSurfaceStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesProgressActionSurface": "RbcDeliveryEntryCommitEvidenceBranchMatchesProgressActionSurfaceStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesVoteBudgetSurface": "RbcDeliveryEntryCommitEvidenceBranchMatchesVoteBudgetSurfaceStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesThresholdClassifier": "RbcDeliveryEntryCommitEvidenceBranchMatchesThresholdClassifierStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPendingCommitVoteProgressSplit": "RbcDeliveryEntryCommitEvidenceBranchMatchesPendingCommitVoteProgressSplitStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPendingNonCommitVoteProgressSplit": "RbcDeliveryEntryCommitEvidenceBranchMatchesPendingNonCommitVoteProgressSplitStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPendingProgressPartition": "RbcDeliveryEntryCommitEvidenceBranchMatchesPendingProgressPartitionStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPostStateClassifier": "RbcDeliveryEntryCommitEvidenceBranchMatchesPostStateClassifierStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCertificateProgressDisjointness": "RbcDeliveryEntryCommitEvidenceBranchMatchesCertificateProgressDisjointnessStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesActionFamilyClassifier": "RbcDeliveryEntryCommitEvidenceBranchMatchesActionFamilyClassifierStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesByzantineCommitVoteBoundary": "RbcDeliveryEntryCommitEvidenceBranchMatchesByzantineCommitVoteBoundaryStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesResidualGatePartition": "RbcDeliveryEntryCommitEvidenceBranchMatchesResidualGatePartitionStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCompleteHandoff": "RbcDeliveryEntryCommitEvidenceBranchMatchesCompleteHandoffStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsContinuationState": "RbcDeliveryEntryCommitEvidenceBranchSeedsContinuationStateStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingActionSurface": "RbcDeliveryEntryCommitEvidenceBranchSeedsPendingActionSurfaceStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingTimerSurface": "RbcDeliveryEntryCommitEvidenceBranchSeedsPendingTimerSurfaceStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingCounterFrame": "RbcDeliveryEntryCommitEvidenceBranchSeedsPendingCounterFrameStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingCompleteWaitState": "RbcDeliveryEntryCommitEvidenceBranchSeedsPendingCompleteWaitStateStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysHandsOffToDeliveredPendingWaitState": "RbcDeliveryEntryCommitEvidenceBranchHandsOffToDeliveredPendingWaitStateStep",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCompleteContinuation": "RbcDeliveryEntryCommitEvidenceBranchMatchesCompleteContinuationStep",
+        "DeliveredPendingCompleteWaitStateSpecStepAlwaysCloses": "DeliveredPendingCompleteWaitStateSpecStepClosesStep",
+        "DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysSplits": "DeliveredPendingCompleteWaitStateCommitVoteStepSplitsStep",
+        "DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysPreservesWaitState": "DeliveredPendingCompleteWaitStateCommitVoteStepPreservesWaitStateStep",
+        "DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysCompletesFinality": "DeliveredPendingCompleteWaitStateCommitVoteStepCompletesFinalityStep",
+        "DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysMatchesCertifiedCommitEnvelope": "DeliveredPendingCompleteWaitStateCommitVoteStepMatchesCertifiedCommitEnvelopeStep",
+        "DeliveredPendingCompleteWaitStatePrepareVoteStepAlwaysSplits": "DeliveredPendingCompleteWaitStatePrepareVoteStepSplitsStep",
+        "DeliveredPendingCompleteWaitStateTimeoutStepAlwaysStartsNewView": "DeliveredPendingCompleteWaitStateTimeoutStepStartsNewViewStep",
+        "DeliveredPendingCompleteWaitStateNewViewVoteStepAlwaysSplits": "DeliveredPendingCompleteWaitStateNewViewVoteStepSplitsStep",
+        "DeliveredPendingCompleteWaitStateHonestProposeStepAlwaysStartsPrepare": "DeliveredPendingCompleteWaitStateHonestProposeStepStartsPrepareStep",
+        "DeliveredPendingCompleteWaitStateGstElapsedStepAlwaysKeepsWaitState": "DeliveredPendingCompleteWaitStateGstElapsedStepKeepsWaitStateStep",
+        "DeliveredPendingCompleteWaitStateNextStepAlwaysMatchesNamedActionBranch": "DeliveredPendingCompleteWaitStateNextStepMatchesNamedActionBranchStep",
+        "DeliveredPendingCompleteWaitStateStutterStepAlwaysKeepsWaitState": "DeliveredPendingCompleteWaitStateStutterStepKeepsWaitStateStep",
+        "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteBranchClassifier": "DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteBranchClassifierStep",
+        "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCommittedCertifiedEnvelope": "DeliveredPendingCompleteWaitStateSpecStepCommittedOutcomeMatchesCertifiedEnvelopeStep",
+        "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesNonCommittedWaitEnvelope": "DeliveredPendingCompleteWaitStateSpecStepNonCommittedOutcomeMatchesWaitEnvelopeStep",
+        "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteOutcomeEnvelope": "DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteOutcomeEnvelopeStep",
+    }
+    action_bodies = {
+        operator: f"[] [{action}]_vars"
+        for operator, action in action_wrappers.items()
+    }
+    if action_wrapper_bodies is not None:
+        action_bodies.update(action_wrapper_bodies)
+    lines = [
+        "---- MODULE Sumeragi ----",
+        f"CommitNeverRevoked == {commit_never_revoked_body}",
+        f"CommittedPhaseNeverLeaves == {committed_phase_never_leaves_body}",
+        "CommittedPhaseMatchesFinality == TRUE",
+        "CommitCertificateMatchesFinality == TRUE",
+        "LiveCommitGateMatchesFinality == TRUE",
+        "LiveCommitGateRbcEvidenceMatches == TRUE",
+        "CommittedGstDisablesEveryAction == TRUE",
+        "TimeoutTickGateMatchesStalledProgress == TRUE",
+        "ViewEvidenceMatchesActiveView == TRUE",
+        "ViewEvidenceWitnessRequiresNonzeroActiveView == TRUE",
+        "NewViewPhaseBelowQuorum == TRUE",
+        "LiveNewViewVotesStayInHandoff == TRUE",
+        "HonestProposeGateMatchesHandoffEvidence == TRUE",
+        "NewViewVoteGateMatchesFreshViewEvidence == TRUE",
+        "NewViewVoteQuorumGateMatchesNextEvidence == TRUE",
+        "NewViewVotePendingGateMatchesMissingNextEvidence == TRUE",
+        "ViewEvidenceIsCompleteOrEmpty == TRUE",
+        "PreCommitPhasesHaveNoCommitVotes == TRUE",
+        "PrePreparePhasesHaveNoPrepareVotes == TRUE",
+        "LivePrepareVotesStayInHandoff == TRUE",
+        "PrepareVoteGateMatchesProposalEvidence == TRUE",
+        "PrepareVoteQuorumGateMatchesNextEvidence == TRUE",
+        "PrepareVotePendingGateMatchesMissingNextEvidence == TRUE",
+        f"CommittedPhaseAlwaysMatchesFinality == {wrappers['CommittedPhaseAlwaysMatchesFinality']}",
+        f"CommitCertificateAlwaysMatchesFinality == {wrappers['CommitCertificateAlwaysMatchesFinality']}",
+        f"LiveCommitGateAlwaysMatchesFinality == {wrappers['LiveCommitGateAlwaysMatchesFinality']}",
+        f"LiveCommitGateRbcEvidenceAlwaysMatches == {wrappers['LiveCommitGateRbcEvidenceAlwaysMatches']}",
+        f"CommittedGstNeverEnablesActions == {wrappers['CommittedGstNeverEnablesActions']}",
+        f"TimeoutTickGateNeverBypassesStalledProgress == {wrappers['TimeoutTickGateNeverBypassesStalledProgress']}",
+        f"ViewQuorumEvidenceNeverDiverges == {wrappers['ViewQuorumEvidenceNeverDiverges']}",
+        f"ViewEvidenceWitnessNeverTargetsZeroOrNewView == {wrappers['ViewEvidenceWitnessNeverTargetsZeroOrNewView']}",
+        f"NewViewQuorumHandoffNeverStalls == {wrappers['NewViewQuorumHandoffNeverStalls']}",
+        f"LiveNewViewVotesNeverLeakPastHandoff == {wrappers['LiveNewViewVotesNeverLeakPastHandoff']}",
+        f"HonestProposeGateNeverBypassesHandoffEvidence == {wrappers['HonestProposeGateNeverBypassesHandoffEvidence']}",
+        f"NewViewVoteGateNeverBypassesFreshViewEvidence == {wrappers['NewViewVoteGateNeverBypassesFreshViewEvidence']}",
+        f"NewViewVoteQuorumGateNeverBypassesNextEvidence == {wrappers['NewViewVoteQuorumGateNeverBypassesNextEvidence']}",
+        f"NewViewVotePendingGateNeverBypassesMissingNextEvidence == {wrappers['NewViewVotePendingGateNeverBypassesMissingNextEvidence']}",
+        f"ViewEvidenceNeverPartial == {wrappers['ViewEvidenceNeverPartial']}",
+        f"PreCommitVotesNeverCarryAcrossViews == {wrappers['PreCommitVotesNeverCarryAcrossViews']}",
+        f"PrePrepareVotesNeverCarryAcrossViews == {wrappers['PrePrepareVotesNeverCarryAcrossViews']}",
+        f"LivePrepareVotesNeverBypassPrepareHandoff == {wrappers['LivePrepareVotesNeverBypassPrepareHandoff']}",
+        f"PrepareVoteGateNeverBypassesProposalEvidence == {wrappers['PrepareVoteGateNeverBypassesProposalEvidence']}",
+        f"PrepareVoteQuorumGateNeverBypassesNextEvidence == {wrappers['PrepareVoteQuorumGateNeverBypassesNextEvidence']}",
+        f"PrepareVotePendingGateNeverBypassesMissingNextEvidence == {wrappers['PrepareVotePendingGateNeverBypassesMissingNextEvidence']}",
+    ]
+    for operator, action in action_wrappers.items():
+        lines.append(f"{action} == TRUE")
+        lines.append(f"{operator} == {action_bodies[operator]}")
+    lines.append("====")
+    return lines
+
+
+def test_sumeragi_temporal_shape_contract_errors_accepts_protected_temporal_shapes(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(
+        "\n".join(sumeragi_temporal_shape_contract_lines()),
+        encoding="utf-8",
+    )
+
+    assert module.sumeragi_temporal_shape_contract_errors(tla) == []
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_commit_never_revoked_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        ("missing_inner_always", "[] (committed => committed)"),
+        ("wrong_antecedent", "[] (finalized => [] committed)"),
+        ("wrong_target", "[] (committed => [] finalized)"),
+        ("case_drift", "[] (Committed => [] committed)"),
+    )
+    for case_name, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            commit_never_revoked_body=body,
+        )
+        tla.write_text(
+            "\n".join(lines),
+            encoding="utf-8",
+        )
+        line = lines.index(f"CommitNeverRevoked == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines CommitNeverRevoked, but it does not keep the "
+            "direct [] (committed => [] committed) finality-latch "
+            "monotonicity shape with exact lowercase state-variable names"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_committed_phase_never_leaves_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        ("missing_inner_always", '[] (phase = "Committed" => phase = "Committed")'),
+        ("wrong_phase_variable", '[] (status = "Committed" => [] (phase = "Committed"))'),
+        ("wrong_phase_literal", '[] (phase = "Committed" => [] (phase = "Prepared"))'),
+        ("case_drift", '[] (Phase = "Committed" => [] (phase = "Committed"))'),
+    )
+    for case_name, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            committed_phase_never_leaves_body=body,
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"CommittedPhaseNeverLeaves == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines CommittedPhaseNeverLeaves, but it does "
+            'not keep the direct [] (phase = "Committed" => [] '
+            '(phase = "Committed")) phase permanence shape'
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_committed_action_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        (
+            "missing_always",
+            "CommittedConsensusStateNeverChanges",
+            "CommittedConsensusStateStableStep",
+            "[CommittedConsensusStateStableStep]_vars",
+        ),
+        (
+            "wrong_action",
+            "CommittedPreGstNextOnlyGstElapsed",
+            "CommittedPreGstNextOnlyGstElapsedStep",
+            "[] [CommittedPreGstOnlyGstElapsedCanMoveStep]_vars",
+        ),
+        (
+            "wrong_subscript",
+            "CommittedGstOnlyAllowsStuttering",
+            "CommittedGstRejectsNextStep",
+            "[] [CommittedGstRejectsNextStep]_state",
+        ),
+        (
+            "predicate_wrapper",
+            "CommittedSpecStepOnlyChangesGstFlag",
+            "CommittedSpecStepOnlyChangesGstFlagStep",
+            "[] CommittedSpecStepOnlyChangesGstFlagStep",
+        ),
+        (
+            "case_drift",
+            "CommittedSpecStepKeepsProgressActionsQuiescent",
+            "CommittedSpecStepKeepsProgressActionsQuiescentStep",
+            "[] [committedSpecStepKeepsProgressActionsQuiescentStep]_vars",
+        ),
+    )
+    for case_name, operator, action, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            action_wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] [{action}]_vars action-wrapper shape"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_timeout_recovery_action_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        (
+            "missing_always",
+            "TimeoutTickStepAlwaysStartsFreshNewView",
+            "TimeoutTickStepStartsFreshNewView",
+            "[TimeoutTickStepStartsFreshNewView]_vars",
+        ),
+        (
+            "wrong_action",
+            "TimeoutTickStepAlwaysPreservesRbcEvidence",
+            "TimeoutTickStepPreservesRbcEvidence",
+            "[] [TimeoutTickStepStartsNewViewVoteHandoff]_vars",
+        ),
+        (
+            "wrong_subscript",
+            "ViewEvidenceOnlyChangesByQuorumOrTimeout",
+            "ViewEvidenceChangesOnlyByQuorumOrTimeoutStep",
+            "[] [ViewEvidenceChangesOnlyByQuorumOrTimeoutStep]_state",
+        ),
+    )
+    for case_name, operator, action, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            action_wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] [{action}]_vars action-wrapper shape"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_pre_commit_handoff_action_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        (
+            "missing_always",
+            "PreparePhaseEntryOnlyByProposal",
+            "PreparePhaseEntryOnlyByProposalStep",
+            "[PreparePhaseEntryOnlyByProposalStep]_vars",
+        ),
+        (
+            "wrong_action",
+            "NewViewVoteQuorumStepAlwaysStartsProposalHandoff",
+            "NewViewVoteQuorumStepStartsProposalHandoff",
+            "[] [NewViewVoteQuorumStepInstallsViewEvidence]_vars",
+        ),
+        (
+            "wrong_subscript",
+            "PrepareVotePendingStepAlwaysKeepsPrepareVoteHandoff",
+            "PrepareVotePendingStepKeepsPrepareVoteHandoff",
+            "[] [PrepareVotePendingStepKeepsPrepareVoteHandoff]_state",
+        ),
+    )
+    for case_name, operator, action, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            action_wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] [{action}]_vars action-wrapper shape"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_pending_gst_action_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        (
+            "missing_always",
+            "[PendingProtocolStepsPreserveGst]_vars",
+        ),
+        (
+            "wrong_action",
+            "[] [CommittedSpecStepPreservesFinalityStackStep]_vars",
+        ),
+        (
+            "wrong_subscript",
+            "[] [PendingProtocolStepsPreserveGst]_state",
+        ),
+    )
+    operator = "PendingProtocolStepsNeverChangeGst"
+    action = "PendingProtocolStepsPreserveGst"
+    for case_name, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            action_wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] [{action}]_vars action-wrapper shape"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_rbc_delivered_finality_action_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        (
+            "missing_always",
+            "RbcDeliveredFinalityOnlyComesFromCommitVote",
+            "RbcDeliveredFinalityOnlyByCommitVoteStep",
+            "[RbcDeliveredFinalityOnlyByCommitVoteStep]_vars",
+        ),
+        (
+            "wrong_action",
+            "RbcDeliveredFinalityAlwaysMatchesCertifiedSourceStack",
+            "RbcDeliveredFinalityMatchesCertifiedSourceStackStep",
+            "[] [RbcDeliveredFinalityInstallsFinalityCertificateStackStep]_vars",
+        ),
+        (
+            "wrong_subscript",
+            "RbcDeliveredFinalityPostGstPostStateIsTerminal",
+            "RbcDeliveredFinalityPostGstPostStateIsTerminalStep",
+            "[] [RbcDeliveredFinalityPostGstPostStateIsTerminalStep]_state",
+        ),
+    )
+    for case_name, operator, action, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            action_wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] [{action}]_vars action-wrapper shape"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_rbc_delivered_lifecycle_action_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        (
+            "missing_always",
+            "RbcDeliveredEvidenceNeverRegresses",
+            "RbcDeliveredEvidenceStableStep",
+            "[RbcDeliveredEvidenceStableStep]_vars",
+        ),
+        (
+            "wrong_action",
+            "RbcDeliveredPendingHonestCommitVoteAlwaysKeepsWaitState",
+            "RbcDeliveredPendingHonestCommitVoteStepKeepsWaitState",
+            "[] [RbcDeliveredPendingHonestCommitVoteStepCompletesFinality]_vars",
+        ),
+        (
+            "wrong_subscript",
+            "RbcDeliveredPendingNextAlwaysCoveredByHandoffs",
+            "RbcDeliveredPendingNextStepCoveredByHandoffs",
+            "[] [RbcDeliveredPendingNextStepCoveredByHandoffs]_state",
+        ),
+    )
+    for case_name, operator, action, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            action_wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] [{action}]_vars action-wrapper shape"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_delivered_pending_wait_state_action_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        (
+            "missing_always",
+            "DeliveredPendingCompleteWaitStateSpecStepAlwaysCloses",
+            "DeliveredPendingCompleteWaitStateSpecStepClosesStep",
+            "[DeliveredPendingCompleteWaitStateSpecStepClosesStep]_vars",
+        ),
+        (
+            "wrong_action",
+            "DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysSplits",
+            "DeliveredPendingCompleteWaitStateCommitVoteStepSplitsStep",
+            "[] [DeliveredPendingCompleteWaitStatePrepareVoteStepSplitsStep]_vars",
+        ),
+        (
+            "wrong_subscript",
+            "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteOutcomeEnvelope",
+            "DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteOutcomeEnvelopeStep",
+            "[] [DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteOutcomeEnvelopeStep]_state",
+        ),
+    )
+    for case_name, operator, action, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            action_wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] [{action}]_vars action-wrapper shape"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_rbc_delivered_pending_spec_step_action_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        (
+            "missing_always",
+            "RbcDeliveredPendingSpecStepAlwaysStuttersOrTakesCoveredHandoff",
+            "RbcDeliveredPendingSpecStepStuttersOrTakesCoveredHandoffStep",
+            "[RbcDeliveredPendingSpecStepStuttersOrTakesCoveredHandoffStep]_vars",
+        ),
+        (
+            "wrong_action",
+            "RbcDeliveredPendingSpecStepAlwaysMatchesPostGateHandoff",
+            "RbcDeliveredPendingSpecStepPostGatesMatchHandoffStep",
+            "[] [RbcDeliveredPendingSpecStepTimerGatesMatchHandoffStep]_vars",
+        ),
+        (
+            "wrong_subscript",
+            "RbcDeliveredPendingSpecStepAlwaysClosesCompleteWaitStateOnStableCommitArtifacts",
+            "RbcDeliveredPendingSpecStepStableCommitArtifactsCompleteWaitStateStep",
+            "[] [RbcDeliveredPendingSpecStepStableCommitArtifactsCompleteWaitStateStep]_state",
+        ),
+    )
+    for case_name, operator, action, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            action_wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] [{action}]_vars action-wrapper shape"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_rbc_delivery_entry_action_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        (
+            "missing_always",
+            "RbcDeliveryEntryOnlyByDeliver",
+            "RbcDeliveryEntryOnlyByDeliverStep",
+            "[RbcDeliveryEntryOnlyByDeliverStep]_vars",
+        ),
+        (
+            "wrong_action",
+            "RbcDeliveryEntryAlwaysMatchesPostGateSurfaceOutcome",
+            "RbcDeliveryEntryPostGateSurfaceMatchesOutcomeStep",
+            "[] [RbcDeliveryEntryConsensusFrameMatchesOutcomeStep]_vars",
+        ),
+        (
+            "wrong_subscript",
+            "RbcDeliveryEntryPendingAlwaysOpensDeliveredPendingContinuationSurface",
+            "RbcDeliveryEntryPendingOpensDeliveredPendingContinuationSurfaceStep",
+            "[] [RbcDeliveryEntryPendingOpensDeliveredPendingContinuationSurfaceStep]_state",
+        ),
+    )
+    for case_name, operator, action, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            action_wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] [{action}]_vars action-wrapper shape"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_rbc_delivery_entry_continuation_action_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        (
+            "missing_always",
+            "RbcDeliveryEntryCommitEvidenceBranchAlwaysOpensExactContinuation",
+            "RbcDeliveryEntryCommitEvidenceBranchOpensExactContinuationStep",
+            "[RbcDeliveryEntryCommitEvidenceBranchOpensExactContinuationStep]_vars",
+        ),
+        (
+            "wrong_action",
+            "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesViewHandoffSurface",
+            "RbcDeliveryEntryCommitEvidenceBranchMatchesViewHandoffSurfaceStep",
+            "[] [RbcDeliveryEntryCommitEvidenceBranchMatchesDeliveredEvidenceSurfaceStep]_vars",
+        ),
+        (
+            "wrong_subscript",
+            "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCompleteContinuation",
+            "RbcDeliveryEntryCommitEvidenceBranchMatchesCompleteContinuationStep",
+            "[] [RbcDeliveryEntryCommitEvidenceBranchMatchesCompleteContinuationStep]_state",
+        ),
+    )
+    for case_name, operator, action, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            action_wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] [{action}]_vars action-wrapper shape"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_missing_committed_action_step(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    missing_action = "CommittedGstRejectsNextStep"
+    operator = "CommittedGstOnlyAllowsStuttering"
+    lines = [
+        line
+        for line in sumeragi_temporal_shape_contract_lines()
+        if line != f"{missing_action} == TRUE"
+    ]
+    tla.write_text("\n".join(lines), encoding="utf-8")
+
+    assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+        f"{tla} defines temporal theorem {operator}, but matching action "
+        f"step {missing_action} is not defined"
+    ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_missing_rbc_delivered_finality_action_step(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    missing_action = "RbcDeliveredFinalityMatchesCommitArtifactsChangeStep"
+    operator = "RbcDeliveredFinalityAlwaysMatchesCommitArtifactsChange"
+    lines = [
+        line
+        for line in sumeragi_temporal_shape_contract_lines()
+        if line != f"{missing_action} == TRUE"
+    ]
+    tla.write_text("\n".join(lines), encoding="utf-8")
+
+    assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+        f"{tla} defines temporal theorem {operator}, but matching action "
+        f"step {missing_action} is not defined"
+    ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_missing_rbc_delivered_lifecycle_action_step(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    missing_action = "RbcDeliveredPendingTimeoutStepStartsNewViewWaitState"
+    operator = "RbcDeliveredPendingTimeoutAlwaysStartsNewViewWaitState"
+    lines = [
+        line
+        for line in sumeragi_temporal_shape_contract_lines()
+        if line != f"{missing_action} == TRUE"
+    ]
+    tla.write_text("\n".join(lines), encoding="utf-8")
+
+    assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+        f"{tla} defines temporal theorem {operator}, but matching action "
+        f"step {missing_action} is not defined"
+    ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_missing_rbc_delivery_entry_continuation_action_step(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    missing_action = "RbcDeliveryEntryCommitEvidenceBranchMatchesVoteBudgetSurfaceStep"
+    operator = "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesVoteBudgetSurface"
+    lines = [
+        line
+        for line in sumeragi_temporal_shape_contract_lines()
+        if line != f"{missing_action} == TRUE"
+    ]
+    tla.write_text("\n".join(lines), encoding="utf-8")
+
+    assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+        f"{tla} defines temporal theorem {operator}, but matching action "
+        f"step {missing_action} is not defined"
+    ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_missing_rbc_delivery_entry_action_step(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    missing_action = "RbcDeliveryEntryPendingInstallsCompleteWaitStateStep"
+    operator = "RbcDeliveryEntryPendingAlwaysInstallsCompleteWaitState"
+    lines = [
+        line
+        for line in sumeragi_temporal_shape_contract_lines()
+        if line != f"{missing_action} == TRUE"
+    ]
+    tla.write_text("\n".join(lines), encoding="utf-8")
+
+    assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+        f"{tla} defines temporal theorem {operator}, but matching action "
+        f"step {missing_action} is not defined"
+    ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_missing_rbc_delivered_pending_spec_step_action_step(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    missing_action = "RbcDeliveredPendingSpecStepStableCommitArtifactsRbcSurfaceStep"
+    operator = "RbcDeliveredPendingSpecStepAlwaysMatchesRbcSurfaceOnStableCommitArtifacts"
+    lines = [
+        line
+        for line in sumeragi_temporal_shape_contract_lines()
+        if line != f"{missing_action} == TRUE"
+    ]
+    tla.write_text("\n".join(lines), encoding="utf-8")
+
+    assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+        f"{tla} defines temporal theorem {operator}, but matching action "
+        f"step {missing_action} is not defined"
+    ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_missing_delivered_pending_wait_state_action_step(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    missing_action = "DeliveredPendingCompleteWaitStateStutterStepKeepsWaitStateStep"
+    operator = "DeliveredPendingCompleteWaitStateStutterStepAlwaysKeepsWaitState"
+    lines = [
+        line
+        for line in sumeragi_temporal_shape_contract_lines()
+        if line != f"{missing_action} == TRUE"
+    ]
+    tla.write_text("\n".join(lines), encoding="utf-8")
+
+    assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+        f"{tla} defines temporal theorem {operator}, but matching action "
+        f"step {missing_action} is not defined"
+    ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_always_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        (
+            "missing_always",
+            "CommittedPhaseAlwaysMatchesFinality",
+            "CommittedPhaseMatchesFinality",
+            "CommittedPhaseMatchesFinality",
+        ),
+        (
+            "wrong_target",
+            "CommitCertificateAlwaysMatchesFinality",
+            "CommitCertificateMatchesFinality",
+            "[] LiveCommitGateMatchesFinality",
+        ),
+        (
+            "case_drift",
+            "LiveCommitGateRbcEvidenceAlwaysMatches",
+            "LiveCommitGateRbcEvidenceMatches",
+            "[] liveCommitGateRbcEvidenceMatches",
+        ),
+        (
+            "terminal_disable_wrong_target",
+            "CommittedGstNeverEnablesActions",
+            "CommittedGstDisablesEveryAction",
+            "[] CommittedGstRejectsNextStep",
+        ),
+    )
+    for case_name, operator, predicate, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] {predicate} wrapper shape"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_timeout_gate_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    operator = "TimeoutTickGateNeverBypassesStalledProgress"
+    predicate = "TimeoutTickGateMatchesStalledProgress"
+    cases = (
+        ("missing_always", predicate),
+        ("wrong_target", "[] TimeoutTickStepStartsFreshNewView"),
+        ("case_drift", "[] timeoutTickGateMatchesStalledProgress"),
+    )
+    for case_name, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] {predicate} wrapper shape"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_pre_commit_handoff_predicate_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        (
+            "missing_always",
+            "ViewQuorumEvidenceNeverDiverges",
+            "ViewEvidenceMatchesActiveView",
+            "ViewEvidenceMatchesActiveView",
+        ),
+        (
+            "wrong_target",
+            "HonestProposeGateNeverBypassesHandoffEvidence",
+            "HonestProposeGateMatchesHandoffEvidence",
+            "[] NewViewVoteGateMatchesFreshViewEvidence",
+        ),
+        (
+            "case_drift",
+            "PrepareVotePendingGateNeverBypassesMissingNextEvidence",
+            "PrepareVotePendingGateMatchesMissingNextEvidence",
+            "[] prepareVotePendingGateMatchesMissingNextEvidence",
+        ),
+    )
+    for case_name, operator, predicate, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        lines = sumeragi_temporal_shape_contract_lines(
+            wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] {predicate} wrapper shape"
+        ]
+
+
+def test_state_invariant_root_cfg_coverage_errors_accepts_checked_conjuncts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "StateRoot ==",
+                "  /\\ CheckedA",
+                "  /\\ CheckedB",
+                "CheckedA == TRUE",
+                "CheckedB == TRUE",
+                "TypeInvariant == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INVARIANT TypeInvariant",
+                "INVARIANT CheckedA",
+                "INVARIANT CheckedB",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.state_invariant_root_cfg_coverage_errors(
+            tla,
+            (cfg,),
+            root_invariant="StateRoot",
+        )
+        == []
+    )
+
+
+def test_state_invariant_root_cfg_coverage_errors_rejects_missing_cfg_check(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "StateRoot ==",
+                "  /\\ CheckedA",
+                "  /\\ MissingFromCfg",
+                "CheckedA == TRUE",
+                "MissingFromCfg == TRUE",
+                "TypeInvariant == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INVARIANT TypeInvariant",
+                "INVARIANT CheckedA",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.state_invariant_root_cfg_coverage_errors(
+        tla,
+        (cfg,),
+        root_invariant="StateRoot",
+    ) == [
+        f"{tla}:2 defines StateRoot, but direct state invariant conjunct(s) "
+        f"MissingFromCfg are not checked as top-level INVARIANT entries by {cfg}"
+    ]
+
+
+def test_state_invariant_root_cfg_coverage_errors_rejects_one_cfg_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    deep_cfg = tmp_path / "Deep.cfg"
+    tlc_cfg = tmp_path / "Tlc.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "StateRoot ==",
+                "  /\\ CheckedA",
+                "  /\\ CheckedB",
+                "CheckedA == TRUE",
+                "CheckedB == TRUE",
+                "TypeInvariant == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    deep_cfg.write_text(
+        "\n".join(
+            [
+                "INVARIANT TypeInvariant",
+                "INVARIANT CheckedA",
+                "INVARIANT CheckedB",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tlc_cfg.write_text(
+        "\n".join(
+            [
+                "INVARIANT TypeInvariant",
+                "INVARIANT CheckedA",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.state_invariant_root_cfg_coverage_errors(
+        tla,
+        (deep_cfg, tlc_cfg),
+        root_invariant="StateRoot",
+    ) == [
+        f"{tla}:2 defines StateRoot, but direct state invariant conjunct(s) "
+        f"CheckedB are not checked as top-level INVARIANT entries by {tlc_cfg}"
+    ]
+
+
+def test_state_invariant_root_cfg_coverage_errors_rejects_non_named_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "StateRoot ==",
+                "  /\\ CheckedA",
+                "  /\\ x = y",
+                "CheckedA == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text("INVARIANT CheckedA\n", encoding="utf-8")
+
+    assert module.state_invariant_root_cfg_coverage_errors(
+        tla,
+        (cfg,),
+        root_invariant="StateRoot",
+    ) == [
+        f"{tla}:2 defines StateRoot, but contains direct non-named state "
+        "invariant conjunct x = y; compose named zero-arity state predicates "
+        "directly"
+    ]
+
+
+def test_temporal_property_root_cfg_coverage_errors_accepts_checked_conjuncts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "TemporalRoot ==",
+                "  /\\ CheckedA",
+                "  /\\ CheckedB",
+                "CheckedA == [] safe_a",
+                "CheckedB == [] safe_b",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "PROPERTY TemporalRoot",
+                "PROPERTY CheckedA",
+                "PROPERTY CheckedB",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.temporal_property_root_cfg_coverage_errors(
+            tla,
+            (cfg,),
+            root_properties=("TemporalRoot",),
+        )
+        == []
+    )
+
+
+def test_temporal_property_root_cfg_coverage_errors_rejects_missing_cfg_check(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "TemporalRoot ==",
+                "  /\\ CheckedA",
+                "  /\\ MissingFromCfg",
+                "CheckedA == [] safe_a",
+                "MissingFromCfg == [] safe_b",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "PROPERTY TemporalRoot",
+                "PROPERTY CheckedA",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.temporal_property_root_cfg_coverage_errors(
+        tla,
+        (cfg,),
+        root_properties=("TemporalRoot",),
+    ) == [
+        f"{tla}:2 defines TemporalRoot, but direct temporal property "
+        "conjunct(s) MissingFromCfg are not checked as top-level PROPERTY "
+        f"entries by {cfg}"
+    ]
+
+
+def test_temporal_property_root_cfg_coverage_errors_rejects_one_cfg_missing_root(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    deep_cfg = tmp_path / "Deep.cfg"
+    tlc_cfg = tmp_path / "Tlc.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "TemporalRoot ==",
+                "  /\\ CheckedA",
+                "CheckedA == [] safe_a",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    deep_cfg.write_text(
+        "\n".join(
+            [
+                "PROPERTY TemporalRoot",
+                "PROPERTY CheckedA",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tlc_cfg.write_text("PROPERTY CheckedA\n", encoding="utf-8")
+
+    assert module.temporal_property_root_cfg_coverage_errors(
+        tla,
+        (deep_cfg, tlc_cfg),
+        root_properties=("TemporalRoot",),
+    ) == [
+        f"{tla}:2 defines temporal property root TemporalRoot, but the root "
+        f"is not checked as a top-level PROPERTY by {tlc_cfg}"
+    ]
+
+
+def test_temporal_property_root_cfg_coverage_errors_rejects_one_cfg_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    deep_cfg = tmp_path / "Deep.cfg"
+    tlc_cfg = tmp_path / "Tlc.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "TemporalRoot ==",
+                "  /\\ CheckedA",
+                "  /\\ CheckedB",
+                "CheckedA == [] safe_a",
+                "CheckedB == [] safe_b",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    deep_cfg.write_text(
+        "\n".join(
+            [
+                "PROPERTY TemporalRoot",
+                "PROPERTY CheckedA",
+                "PROPERTY CheckedB",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tlc_cfg.write_text(
+        "\n".join(
+            [
+                "PROPERTY TemporalRoot",
+                "PROPERTY CheckedA",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.temporal_property_root_cfg_coverage_errors(
+        tla,
+        (deep_cfg, tlc_cfg),
+        root_properties=("TemporalRoot",),
+    ) == [
+        f"{tla}:2 defines TemporalRoot, but direct temporal property "
+        "conjunct(s) CheckedB are not checked as top-level PROPERTY entries by "
+        f"{tlc_cfg}"
+    ]
+
+
+def test_temporal_property_root_cfg_coverage_errors_rejects_non_named_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "TemporalRoot ==",
+                "  /\\ CheckedA",
+                "  /\\ [] safe_b",
+                "CheckedA == [] safe_a",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "PROPERTY TemporalRoot",
+                "PROPERTY CheckedA",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.temporal_property_root_cfg_coverage_errors(
+        tla,
+        (cfg,),
+        root_properties=("TemporalRoot",),
+    ) == [
+        f"{tla}:2 defines TemporalRoot, but contains direct non-named "
+        "temporal property conjunct [] safe_b; compose named zero-arity "
+        "temporal predicates directly"
+    ]
+
+
+def test_temporal_property_root_cfg_coverage_errors_checks_multiple_roots(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "TemporalRoot ==",
+                "  /\\ CheckedA",
+                "NestedRoot ==",
+                "  /\\ MissingNested",
+                "CheckedA == [] safe_a",
+                "MissingNested == [] safe_b",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "PROPERTY TemporalRoot",
+                "PROPERTY NestedRoot",
+                "PROPERTY CheckedA",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.temporal_property_root_cfg_coverage_errors(
+        tla,
+        (cfg,),
+        root_properties=("TemporalRoot", "NestedRoot"),
+    ) == [
+        f"{tla}:4 defines NestedRoot, but direct temporal property "
+        "conjunct(s) MissingNested are not checked as top-level PROPERTY "
+        f"entries by {cfg}"
+    ]
+
+
+def test_temporal_property_root_cfg_coverage_errors_recurses_into_checked_aggregates(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "TemporalRoot ==",
+                "  /\\ NestedRoot",
+                "NestedRoot ==",
+                "  /\\ CheckedNested",
+                "  /\\ MissingNested",
+                "CheckedNested == [] safe_a",
+                "MissingNested == [] safe_b",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "PROPERTY TemporalRoot",
+                "PROPERTY NestedRoot",
+                "PROPERTY CheckedNested",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.temporal_property_root_cfg_coverage_errors(
+        tla,
+        (cfg,),
+        root_properties=("TemporalRoot",),
+    ) == [
+        f"{tla}:4 defines NestedRoot, but direct temporal property "
+        "conjunct(s) MissingNested are not checked as top-level PROPERTY "
+        f"entries by {cfg}"
+    ]
+
+
+def test_temporal_property_root_cfg_coverage_defaults_include_first_level_rbc_roots() -> None:
+    module = load_coverage_module()
+
+    for root in (
+        "RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope",
+        "RbcCorruptionRepairAlwaysMatchesFaultEnvelope",
+        "RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope",
+        "RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope",
+        "RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope",
+    ):
+        assert root in module.SUMERAGI_TEMPORAL_PROPERTY_ROOTS_REQUIRING_CFG_COVERAGE
+
+
+def test_consensus_core_root_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "Root ==",
+                "  /\\ A",
+                "A == TRUE",
+                "B == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.consensus_core_root_conjunct_contract_errors(
+        tla,
+        {"Root": ("A", "B")},
+    ) == [f"{tla}:2 defines Root, but is missing required direct conjunct(s) B"]
+
+
+def test_consensus_core_root_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "Root ==",
+                "  /\\ A",
+                "  /\\ C",
+                "A == TRUE",
+                "C == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.consensus_core_root_conjunct_contract_errors(
+        tla,
+        {"Root": ("A",)},
+    ) == [
+        f"{tla}:2 defines Root, but contains unexpected direct conjunct(s) C; "
+        "keep consensus-core aggregate proof roots on the documented conjunct "
+        "contract"
+    ]
+
+
+def test_state_matches_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_STATE_MATCHES_ENVELOPE_CONJUNCT_CONTRACTS[
+        "SumeragiConsensusCoreStateMatchesEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "SumeragiConsensusCoreStateMatchesEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.state_matches_envelope_conjunct_contract_errors(tla) == []
+
+
+def test_state_matches_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_STATE_MATCHES_ENVELOPE_CONJUNCT_CONTRACTS[
+        "SumeragiConsensusCoreStateMatchesEnvelope"
+    ]
+    missing = "LiveReadyVotesStayInRbcHandoff"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "SumeragiConsensusCoreStateMatchesEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.state_matches_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines SumeragiConsensusCoreStateMatchesEnvelope, but is "
+        f"missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_state_matches_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_STATE_MATCHES_ENVELOPE_CONJUNCT_CONTRACTS[
+        "SumeragiConsensusCoreStateMatchesEnvelope"
+    ]
+    unexpected = "DetachedStateSafetyClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "SumeragiConsensusCoreStateMatchesEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.state_matches_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines SumeragiConsensusCoreStateMatchesEnvelope, but "
+        f"contains unexpected direct conjunct(s) {unexpected}; keep "
+        "state-safety aggregate proof envelope on the documented conjunct "
+        "contract"
+    ]
+
+
+def test_committed_terminal_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_COMMITTED_TERMINAL_ENVELOPE_CONJUNCT_CONTRACTS[
+        "CommittedStateAlwaysMatchesTerminalEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "CommittedStateAlwaysMatchesTerminalEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.committed_terminal_envelope_conjunct_contract_errors(tla) == []
+
+
+def test_committed_terminal_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_COMMITTED_TERMINAL_ENVELOPE_CONJUNCT_CONTRACTS[
+        "CommittedStateAlwaysMatchesTerminalEnvelope"
+    ]
+    missing = "CommittedSpecStepPreservesBudgetedRbcEvidence"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "CommittedStateAlwaysMatchesTerminalEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.committed_terminal_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines CommittedStateAlwaysMatchesTerminalEnvelope, but "
+        f"is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_committed_terminal_envelope_conjunct_contract_errors_rejects_duplicate_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_COMMITTED_TERMINAL_ENVELOPE_CONJUNCT_CONTRACTS[
+        "CommittedStateAlwaysMatchesTerminalEnvelope"
+    ]
+    duplicate = "CommitNeverRevoked"
+    tla.write_text(
+        "\n".join(
+            [
+                "CommittedStateAlwaysMatchesTerminalEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {duplicate}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.committed_terminal_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines CommittedStateAlwaysMatchesTerminalEnvelope, but "
+        f"repeats direct conjunct(s) {duplicate}; each committed "
+        "terminal-state obligation must be counted once"
+    ]
+
+
+def test_committed_terminal_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_COMMITTED_TERMINAL_ENVELOPE_CONJUNCT_CONTRACTS[
+        "CommittedStateAlwaysMatchesTerminalEnvelope"
+    ]
+    unexpected = "DetachedTerminalClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "CommittedStateAlwaysMatchesTerminalEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.committed_terminal_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines CommittedStateAlwaysMatchesTerminalEnvelope, but "
+        f"contains unexpected direct conjunct(s) {unexpected}; keep committed "
+        "terminal-state aggregate proof envelope on the documented conjunct "
+        "contract"
+    ]
+
+
+def test_end_to_end_safety_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_END_TO_END_SAFETY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.end_to_end_safety_envelope_conjunct_contract_errors(tla) == []
+
+
+def test_end_to_end_safety_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_END_TO_END_SAFETY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope"
+    ]
+    missing = "RbcLifecycleAlwaysMatchesEndToEndEnvelope"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.end_to_end_safety_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_end_to_end_safety_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_END_TO_END_SAFETY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope"
+    ]
+    unexpected = "DetachedEndToEndSafetyClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.end_to_end_safety_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "end-to-end safety aggregate proof envelope on the documented conjunct "
+        "contract"
+    ]
+
+
+def test_post_finality_stability_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_POST_FINALITY_STABILITY_ENVELOPE_CONJUNCT_CONTRACTS[
+            "PostFinalityStateAlwaysMatchesStabilityEnvelope"
+        ]
+    )
+    tla.write_text(
+        "\n".join(
+            [
+                "PostFinalityStateAlwaysMatchesStabilityEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.post_finality_stability_envelope_conjunct_contract_errors(tla) == []
+
+
+def test_post_finality_stability_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_POST_FINALITY_STABILITY_ENVELOPE_CONJUNCT_CONTRACTS[
+            "PostFinalityStateAlwaysMatchesStabilityEnvelope"
+        ]
+    )
+    missing = "CommitEvidenceNeverRegresses"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "PostFinalityStateAlwaysMatchesStabilityEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.post_finality_stability_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines PostFinalityStateAlwaysMatchesStabilityEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_post_finality_stability_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_POST_FINALITY_STABILITY_ENVELOPE_CONJUNCT_CONTRACTS[
+            "PostFinalityStateAlwaysMatchesStabilityEnvelope"
+        ]
+    )
+    unexpected = "DetachedPostFinalityClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "PostFinalityStateAlwaysMatchesStabilityEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.post_finality_stability_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines PostFinalityStateAlwaysMatchesStabilityEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "post-finality stability aggregate proof envelope on the documented "
+        "conjunct contract"
+    ]
+
+
+def test_timeout_recovery_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_TIMEOUT_RECOVERY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "TimeoutRecoveryAlwaysMatchesViewChangeEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "TimeoutRecoveryAlwaysMatchesViewChangeEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.timeout_recovery_envelope_conjunct_contract_errors(tla) == []
+
+
+def test_timeout_recovery_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_TIMEOUT_RECOVERY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "TimeoutRecoveryAlwaysMatchesViewChangeEnvelope"
+    ]
+    missing = "TimeoutTickStepAlwaysPreservesRbcEvidence"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "TimeoutRecoveryAlwaysMatchesViewChangeEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.timeout_recovery_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines TimeoutRecoveryAlwaysMatchesViewChangeEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_timeout_recovery_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_TIMEOUT_RECOVERY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "TimeoutRecoveryAlwaysMatchesViewChangeEnvelope"
+    ]
+    unexpected = "DetachedTimeoutRecoveryClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "TimeoutRecoveryAlwaysMatchesViewChangeEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.timeout_recovery_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines TimeoutRecoveryAlwaysMatchesViewChangeEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "timeout-recovery aggregate proof envelope on the documented conjunct "
+        "contract"
+    ]
+
+
+def test_finality_installation_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_FINALITY_INSTALLATION_ENVELOPE_CONJUNCT_CONTRACTS[
+        "FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.finality_installation_envelope_conjunct_contract_errors(tla) == []
+
+
+def test_finality_installation_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_FINALITY_INSTALLATION_ENVELOPE_CONJUNCT_CONTRACTS[
+        "FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope"
+    ]
+    missing = "FinalitySourceActionAlwaysInstallsCommitViewWitness"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.finality_installation_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_finality_installation_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_FINALITY_INSTALLATION_ENVELOPE_CONJUNCT_CONTRACTS[
+        "FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope"
+    ]
+    unexpected = "DetachedCertifiedCommitClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.finality_installation_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "certified-commit installation aggregate proof envelope on the "
+        "documented conjunct contract"
+    ]
+
+
+def test_pre_commit_handoff_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_PRE_COMMIT_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS[
+        "PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.pre_commit_handoff_envelope_conjunct_contract_errors(tla) == []
+
+
+def test_pre_commit_handoff_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_PRE_COMMIT_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS[
+        "PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope"
+    ]
+    missing = "PrepareVotePendingStepAlwaysKeepsPrepareVoteHandoff"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.pre_commit_handoff_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_pre_commit_handoff_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_PRE_COMMIT_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS[
+        "PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope"
+    ]
+    unexpected = "DetachedPreCommitHandoffClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.pre_commit_handoff_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "pre-commit handoff aggregate proof envelope on the documented "
+        "conjunct contract"
+    ]
+
+
+def test_commit_vote_handoff_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_COMMIT_VOTE_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS[
+        "CommitVoteHandoffAlwaysMatchesFinalityEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "CommitVoteHandoffAlwaysMatchesFinalityEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.commit_vote_handoff_envelope_conjunct_contract_errors(tla) == []
+
+
+def test_commit_vote_handoff_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_COMMIT_VOTE_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS[
+        "CommitVoteHandoffAlwaysMatchesFinalityEnvelope"
+    ]
+    missing = "PreFinalityCommitArtifactsNeverAppear"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "CommitVoteHandoffAlwaysMatchesFinalityEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.commit_vote_handoff_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines CommitVoteHandoffAlwaysMatchesFinalityEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_commit_vote_handoff_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_COMMIT_VOTE_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS[
+        "CommitVoteHandoffAlwaysMatchesFinalityEnvelope"
+    ]
+    unexpected = "DetachedCommitVoteClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "CommitVoteHandoffAlwaysMatchesFinalityEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.commit_vote_handoff_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines CommitVoteHandoffAlwaysMatchesFinalityEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "commit-vote handoff aggregate proof envelope on the documented "
+        "conjunct contract"
+    ]
+
+
+def test_finalized_certificate_retention_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_FINALIZED_CERTIFICATE_RETENTION_ENVELOPE_CONJUNCT_CONTRACTS[
+            "FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope"
+        ]
+    )
+    tla.write_text(
+        "\n".join(
+            [
+                "FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.finalized_certificate_retention_envelope_conjunct_contract_errors(
+            tla
+        )
+        == []
+    )
+
+
+def test_finalized_certificate_retention_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_FINALIZED_CERTIFICATE_RETENTION_ENVELOPE_CONJUNCT_CONTRACTS[
+            "FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope"
+        ]
+    )
+    missing = "ByzantineCommitVoteNeverReenabledAfterCommit"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.finalized_certificate_retention_envelope_conjunct_contract_errors(
+        tla
+    ) == [
+        f"{tla}:2 defines FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_finalized_certificate_retention_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_FINALIZED_CERTIFICATE_RETENTION_ENVELOPE_CONJUNCT_CONTRACTS[
+            "FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope"
+        ]
+    )
+    unexpected = "DetachedRetentionClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.finalized_certificate_retention_envelope_conjunct_contract_errors(
+        tla
+    ) == [
+        f"{tla}:2 defines FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "finalized certificate retention aggregate proof envelope on the "
+        "documented conjunct contract"
+    ]
+
+
+def test_rbc_delivered_finality_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_DELIVERED_FINALITY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_delivered_finality_envelope_conjunct_contract_errors(tla) == []
+
+
+def test_rbc_delivered_finality_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_DELIVERED_FINALITY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope"
+    ]
+    missing = "RbcDeliveredFinalityAlwaysPreservesDeliveredRbcEvidence"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_delivered_finality_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_rbc_delivered_finality_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_DELIVERED_FINALITY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope"
+    ]
+    unexpected = "DetachedRbcDeliveredFinalityClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_delivered_finality_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "RBC delivered-finality aggregate proof envelope on the documented "
+        "conjunct contract"
+    ]
+
+
+def test_rbc_delivered_state_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_DELIVERED_STATE_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_delivered_state_envelope_conjunct_contract_errors(tla) == []
+
+
+def test_rbc_delivered_state_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_DELIVERED_STATE_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope"
+    ]
+    missing = "RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_delivered_state_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_rbc_delivered_state_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_DELIVERED_STATE_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope"
+    ]
+    unexpected = "DetachedDeliveredLifecycleClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_delivered_state_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "RBC delivered-state lifecycle aggregate proof envelope on the "
+        "documented conjunct contract"
+    ]
+
+
+def test_rbc_delivered_pending_handoff_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_DELIVERED_PENDING_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope"
+        ]
+    )
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.rbc_delivered_pending_handoff_envelope_conjunct_contract_errors(tla)
+        == []
+    )
+
+
+def test_rbc_delivered_pending_handoff_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_DELIVERED_PENDING_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope"
+        ]
+    )
+    missing = (
+        "RbcDeliveredPendingSpecStepAlwaysClosesCompleteWaitStateOnStableCommitArtifacts"
+    )
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_delivered_pending_handoff_envelope_conjunct_contract_errors(
+        tla
+    ) == [
+        f"{tla}:2 defines RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_rbc_delivered_pending_handoff_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_DELIVERED_PENDING_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope"
+        ]
+    )
+    unexpected = "DetachedDeliveredPendingHandoffClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_delivered_pending_handoff_envelope_conjunct_contract_errors(
+        tla
+    ) == [
+        f"{tla}:2 defines RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "RBC delivered-pending handoff aggregate proof envelope on the documented "
+        "conjunct contract"
+    ]
+
+
+def test_delivered_pending_complete_wait_state_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_DELIVERED_PENDING_COMPLETE_WAIT_STATE_ENVELOPE_CONJUNCT_CONTRACTS[
+        "DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.delivered_pending_complete_wait_state_envelope_conjunct_contract_errors(
+            tla
+        )
+        == []
+    )
+
+
+def test_delivered_pending_complete_wait_state_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_DELIVERED_PENDING_COMPLETE_WAIT_STATE_ENVELOPE_CONJUNCT_CONTRACTS[
+        "DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope"
+    ]
+    missing = (
+        "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteOutcomeEnvelope"
+    )
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.delivered_pending_complete_wait_state_envelope_conjunct_contract_errors(
+            tla
+        )
+        == [
+            f"{tla}:2 defines DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope, "
+            f"but is missing required direct conjunct(s) {missing}"
+        ]
+    )
+
+
+def test_delivered_pending_complete_wait_state_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_DELIVERED_PENDING_COMPLETE_WAIT_STATE_ENVELOPE_CONJUNCT_CONTRACTS[
+        "DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope"
+    ]
+    unexpected = "DetachedDeliveredPendingCompleteWaitStateClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.delivered_pending_complete_wait_state_envelope_conjunct_contract_errors(
+            tla
+        )
+        == [
+            f"{tla}:2 defines DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope, "
+            f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+            "delivered-pending complete wait-state aggregate proof envelope on "
+            "the documented conjunct contract"
+        ]
+    )
+
+
+def test_rbc_delivery_entry_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_DELIVERY_ENTRY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_delivery_entry_envelope_conjunct_contract_errors(tla) == []
+
+
+def test_rbc_delivery_entry_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_DELIVERY_ENTRY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope"
+    ]
+    missing = "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_delivery_entry_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_rbc_delivery_entry_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_DELIVERY_ENTRY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope"
+    ]
+    unexpected = "DetachedRbcDeliveryEntryClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_delivery_entry_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "RBC delivery-entry outcome aggregate proof envelope on the documented "
+        "conjunct contract"
+    ]
+
+
+def test_rbc_delivery_entry_continuation_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_DELIVERY_ENTRY_CONTINUATION_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope"
+        ]
+    )
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.rbc_delivery_entry_continuation_envelope_conjunct_contract_errors(
+            tla
+        )
+        == []
+    )
+
+
+def test_rbc_delivery_entry_continuation_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_DELIVERY_ENTRY_CONTINUATION_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope"
+        ]
+    )
+    missing = "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCompleteContinuation"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.rbc_delivery_entry_continuation_envelope_conjunct_contract_errors(
+            tla
+        )
+        == [
+            f"{tla}:2 defines RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope, "
+            f"but is missing required direct conjunct(s) {missing}"
+        ]
+    )
+
+
+def test_rbc_delivery_entry_continuation_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_DELIVERY_ENTRY_CONTINUATION_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope"
+        ]
+    )
+    unexpected = "DetachedRbcDeliveryEntryContinuationClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.rbc_delivery_entry_continuation_envelope_conjunct_contract_errors(
+            tla
+        )
+        == [
+            f"{tla}:2 defines RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope, "
+            f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+            "RBC delivery-entry continuation aggregate proof envelope on the "
+            "documented conjunct contract"
+        ]
+    )
+
+
+def test_rbc_lifecycle_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_LIFECYCLE_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcLifecycleAlwaysMatchesEndToEndEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcLifecycleAlwaysMatchesEndToEndEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_lifecycle_envelope_conjunct_contract_errors(tla) == []
+
+
+def test_rbc_lifecycle_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_LIFECYCLE_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcLifecycleAlwaysMatchesEndToEndEnvelope"
+    ]
+    missing = "RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcLifecycleAlwaysMatchesEndToEndEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_lifecycle_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcLifecycleAlwaysMatchesEndToEndEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_rbc_lifecycle_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_LIFECYCLE_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcLifecycleAlwaysMatchesEndToEndEnvelope"
+    ]
+    unexpected = "DetachedRbcLifecycleClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcLifecycleAlwaysMatchesEndToEndEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_lifecycle_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcLifecycleAlwaysMatchesEndToEndEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "RBC lifecycle aggregate proof envelope on the documented conjunct "
+        "contract"
+    ]
+
+
+def test_rbc_corruption_repair_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_CORRUPTION_REPAIR_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcCorruptionRepairAlwaysMatchesFaultEnvelope"
+        ]
+    )
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcCorruptionRepairAlwaysMatchesFaultEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.rbc_corruption_repair_envelope_conjunct_contract_errors(tla) == []
+    )
+
+
+def test_rbc_corruption_repair_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_CORRUPTION_REPAIR_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcCorruptionRepairAlwaysMatchesFaultEnvelope"
+        ]
+    )
+    missing = "RbcCorruptedInitRepairAlwaysResetsEvidence"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcCorruptionRepairAlwaysMatchesFaultEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_corruption_repair_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcCorruptionRepairAlwaysMatchesFaultEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_rbc_corruption_repair_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_CORRUPTION_REPAIR_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcCorruptionRepairAlwaysMatchesFaultEnvelope"
+        ]
+    )
+    unexpected = "DetachedRbcCorruptionRepairClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcCorruptionRepairAlwaysMatchesFaultEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_corruption_repair_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcCorruptionRepairAlwaysMatchesFaultEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "RBC corruption-repair aggregate proof envelope on the documented "
+        "conjunct contract"
+    ]
+
+
+def test_rbc_chunk_ready_deliver_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_CHUNK_READY_DELIVER_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope"
+        ]
+    )
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.rbc_chunk_ready_deliver_envelope_conjunct_contract_errors(tla)
+        == []
+    )
+
+
+def test_rbc_chunk_ready_deliver_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_CHUNK_READY_DELIVER_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope"
+        ]
+    )
+    missing = "RbcDeliverPendingStepAlwaysKeepsDeliveredEvidenceWithoutFinality"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_chunk_ready_deliver_envelope_conjunct_contract_errors(
+        tla
+    ) == [
+        f"{tla}:2 defines RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_rbc_chunk_ready_deliver_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_CHUNK_READY_DELIVER_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope"
+        ]
+    )
+    unexpected = "DetachedRbcChunkReadyDeliverClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_chunk_ready_deliver_envelope_conjunct_contract_errors(
+        tla
+    ) == [
+        f"{tla}:2 defines RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "RBC chunk/ready/deliver availability aggregate proof envelope on the "
+        "documented conjunct contract"
+    ]
+
+
+def test_rbc_progress_mutation_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_PROGRESS_MUTATION_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.rbc_progress_mutation_envelope_conjunct_contract_errors(tla) == []
+    )
+
+
+def test_rbc_progress_mutation_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_PROGRESS_MUTATION_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope"
+    ]
+    missing = "LiveReadyVotesNeverBypassRbcHandoff"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_progress_mutation_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_rbc_progress_mutation_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_PROGRESS_MUTATION_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope"
+    ]
+    unexpected = "DetachedRbcProgressMutationClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_progress_mutation_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "RBC progress-mutation aggregate proof envelope on the documented "
+        "conjunct contract"
+    ]
+
+
+def test_rbc_progress_local_classification_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_PROGRESS_LOCAL_CLASSIFICATION_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcProgressMutationAlwaysMatchesLocalClassification"
+        ]
+    )
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcProgressMutationAlwaysMatchesLocalClassification ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.rbc_progress_local_classification_envelope_conjunct_contract_errors(
+            tla
+        )
+        == []
+    )
+
+
+def test_rbc_progress_local_classification_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_PROGRESS_LOCAL_CLASSIFICATION_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcProgressMutationAlwaysMatchesLocalClassification"
+        ]
+    )
+    missing = "RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcProgressMutationAlwaysMatchesLocalClassification ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_progress_local_classification_envelope_conjunct_contract_errors(
+        tla
+    ) == [
+        f"{tla}:2 defines RbcProgressMutationAlwaysMatchesLocalClassification, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_rbc_progress_local_classification_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_PROGRESS_LOCAL_CLASSIFICATION_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcProgressMutationAlwaysMatchesLocalClassification"
+        ]
+    )
+    unexpected = "DetachedRbcProgressLocalClassificationClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcProgressMutationAlwaysMatchesLocalClassification ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_progress_local_classification_envelope_conjunct_contract_errors(
+        tla
+    ) == [
+        f"{tla}:2 defines RbcProgressMutationAlwaysMatchesLocalClassification, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "RBC progress local-classification aggregate proof envelope on the "
+        "documented conjunct contract"
+    ]
+
+
+def test_rbc_startup_boundary_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_STARTUP_BOUNDARY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope"
+    ]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_startup_boundary_envelope_conjunct_contract_errors(tla) == []
+
+
+def test_rbc_startup_boundary_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_STARTUP_BOUNDARY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope"
+    ]
+    missing = "RbcWithheldEntryOnlyByStutteringFromWithheld"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_startup_boundary_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_rbc_startup_boundary_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_RBC_STARTUP_BOUNDARY_ENVELOPE_CONJUNCT_CONTRACTS[
+        "RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope"
+    ]
+    unexpected = "DetachedRbcStartupBoundaryClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_startup_boundary_envelope_conjunct_contract_errors(tla) == [
+        f"{tla}:2 defines RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "RBC startup-boundary aggregate proof envelope on the documented "
+        "conjunct contract"
+    ]
+
+
+def test_rbc_progress_state_evidence_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_PROGRESS_STATE_EVIDENCE_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcProgressStateEvidenceAlwaysMatchesEnvelope"
+        ]
+    )
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcProgressStateEvidenceAlwaysMatchesEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.rbc_progress_state_evidence_envelope_conjunct_contract_errors(tla)
+        == []
+    )
+
+
+def test_rbc_progress_state_evidence_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_PROGRESS_STATE_EVIDENCE_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcProgressStateEvidenceAlwaysMatchesEnvelope"
+        ]
+    )
+    missing = "RbcLiveEvidenceCausalityAlwaysMatchesEnvelope"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcProgressStateEvidenceAlwaysMatchesEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_progress_state_evidence_envelope_conjunct_contract_errors(
+        tla
+    ) == [
+        f"{tla}:2 defines RbcProgressStateEvidenceAlwaysMatchesEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_rbc_progress_state_evidence_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_PROGRESS_STATE_EVIDENCE_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcProgressStateEvidenceAlwaysMatchesEnvelope"
+        ]
+    )
+    unexpected = "DetachedRbcProgressStateEvidenceClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcProgressStateEvidenceAlwaysMatchesEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_progress_state_evidence_envelope_conjunct_contract_errors(
+        tla
+    ) == [
+        f"{tla}:2 defines RbcProgressStateEvidenceAlwaysMatchesEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "RBC progress-state evidence aggregate proof envelope on the documented "
+        "conjunct contract"
+    ]
+
+
+def test_rbc_live_evidence_causality_envelope_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_LIVE_EVIDENCE_CAUSALITY_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcLiveEvidenceCausalityAlwaysMatchesEnvelope"
+        ]
+    )
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcLiveEvidenceCausalityAlwaysMatchesEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.rbc_live_evidence_causality_envelope_conjunct_contract_errors(tla)
+        == []
+    )
+
+
+def test_rbc_live_evidence_causality_envelope_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_LIVE_EVIDENCE_CAUSALITY_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcLiveEvidenceCausalityAlwaysMatchesEnvelope"
+        ]
+    )
+    missing = "RbcReadyQuorumEvidenceNeverLeavesQuorumOrCorruptedHandoff"
+    kept_conjuncts = [conjunct for conjunct in conjuncts if conjunct != missing]
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcLiveEvidenceCausalityAlwaysMatchesEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in kept_conjuncts),
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_live_evidence_causality_envelope_conjunct_contract_errors(
+        tla
+    ) == [
+        f"{tla}:2 defines RbcLiveEvidenceCausalityAlwaysMatchesEnvelope, "
+        f"but is missing required direct conjunct(s) {missing}"
+    ]
+
+
+def test_rbc_live_evidence_causality_envelope_conjunct_contract_errors_rejects_unexpected_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = (
+        module.SUMERAGI_RBC_LIVE_EVIDENCE_CAUSALITY_ENVELOPE_CONJUNCT_CONTRACTS[
+            "RbcLiveEvidenceCausalityAlwaysMatchesEnvelope"
+        ]
+    )
+    unexpected = "DetachedRbcLiveEvidenceClaim"
+    tla.write_text(
+        "\n".join(
+            [
+                "RbcLiveEvidenceCausalityAlwaysMatchesEnvelope ==",
+                *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                f"  /\\ {unexpected}",
+                *(f"{conjunct} == TRUE" for conjunct in conjuncts),
+                f"{unexpected} == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.rbc_live_evidence_causality_envelope_conjunct_contract_errors(
+        tla
+    ) == [
+        f"{tla}:2 defines RbcLiveEvidenceCausalityAlwaysMatchesEnvelope, "
+        f"but contains unexpected direct conjunct(s) {unexpected}; keep "
+        "RBC live-evidence causality aggregate proof envelope on the documented "
+        "conjunct contract"
     ]
 
 
@@ -16693,7 +20679,7 @@ def test_cfg_correctness_envelope_shape_errors_accepts_top_level_temporal_extras
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17168,7 +21154,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_control_flow_t
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalControlFlowHelper",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17229,7 +21215,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_control_fl
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalControlFlowHelper",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17290,7 +21276,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_nested_control_flow_tempo
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalNestedControlFlow",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17350,7 +21336,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_nested_enabled_control_fl
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalNestedEnabledControlFlow",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17413,7 +21399,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_let_alias_control_flow_te
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalLetAliasControlFlow",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17477,7 +21463,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_let_alias_result_wrapper_
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalLetAliasResultWrapperControlFlow",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17540,7 +21526,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_let_alias_unary_temporal_
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalLetAliasUnaryControlFlow",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17599,7 +21585,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_let_alias_
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] (LET selected == TemporalConcrete IN selected)",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17658,7 +21644,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_unary_temporal
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope ==",
                 "  /\\ TemporalWrapper",
                 "  /\\ OtherTemporal",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17718,7 +21704,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_let_alias_reference_tempo
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalLetAliasReference",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17786,7 +21772,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_boolean_compos
                     "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                     "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                     "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalBooleanWrapper",
-                    "EventuallyCommit == [] (Gst => <> Committed)",
+                    "EventuallyCommit == [] (gst => <> committed)",
                     "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                     "  /\\ TypeInvariant",
                     "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17845,7 +21831,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_literal_gated_negated_tem
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalBooleanWrapper",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17906,7 +21892,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_nested_temporal_helper_bo
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalNestedWrapper",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -17991,6 +21977,268 @@ def test_cfg_correctness_envelope_shape_errors_allows_concrete_boolean_formula_t
     assert module.cfg_correctness_envelope_shape_errors(
         "fast", tla, cfg, "TLC"
     ) == []
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_eventually_commit_without_eventuality(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
+                "EventuallyCommit == [] (gst => committed)",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        f"allowlisted temporal conjunct EventuallyCommit at {tla}:9 does "
+        "not contain the direct [] (gst => <> committed) liveness shape; "
+        "EventuallyCommit must preserve the post-GST commit liveness obligation"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_eventually_commit_wrong_eventuality_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
+                "EventuallyCommit == [] (gst => <> recovered)",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        f"allowlisted temporal conjunct EventuallyCommit at {tla}:9 does "
+        "not contain the direct [] (gst => <> committed) liveness shape; "
+        "EventuallyCommit must preserve the post-GST commit liveness obligation"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_eventually_commit_without_post_gst_guard(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
+                "EventuallyCommit == [] <> committed",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        f"allowlisted temporal conjunct EventuallyCommit at {tla}:9 does "
+        "not contain the direct [] (gst => <> committed) liveness shape; "
+        "EventuallyCommit must preserve the post-GST commit liveness obligation"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_eventually_commit_wrong_post_gst_guard(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
+                "EventuallyCommit == [] (ready => <> committed)",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "fast", tla, cfg, "TLC"
+    ) == [
+        f"fast: TLC cfg {cfg}:4 references correctness envelope "
+        "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+        f"allowlisted temporal conjunct EventuallyCommit at {tla}:9 does "
+        "not contain the direct [] (gst => <> committed) liveness shape; "
+        "EventuallyCommit must preserve the post-GST commit liveness obligation"
+    ]
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_eventually_commit_case_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        ("uppercase_gst", "[] (Gst => <> committed)"),
+        ("uppercase_committed", "[] (gst => <> Committed)"),
+    )
+    for case_name, eventually_commit_body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        cfg = case_dir / "Sumeragi_tlc_fast.cfg"
+        tla.write_text(
+            "\n".join(
+                [
+                    "---- MODULE Sumeragi ----",
+                    "Init == TRUE",
+                    "Next == TRUE",
+                    "TypeInvariant == TRUE",
+                    "SumeragiConsensusCoreStateMatchesEnvelope == checked = ready",
+                    "SumeragiConsensusCoreAlwaysMatchesExactness ==",
+                    "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
+                    "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
+                    f"EventuallyCommit == {eventually_commit_body}",
+                    "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                    "  /\\ TypeInvariant",
+                    "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                    "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                    "  /\\ EventuallyCommit",
+                    "====",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        cfg.write_text(
+            "\n".join(
+                [
+                    "INIT Init",
+                    "NEXT Next",
+                    "INVARIANT TypeInvariant",
+                    "PROPERTY SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        assert module.cfg_correctness_envelope_shape_errors(
+            "fast", tla, cfg, "TLC"
+        ) == [
+            f"fast: TLC cfg {cfg}:4 references correctness envelope "
+            "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, but "
+            f"allowlisted temporal conjunct EventuallyCommit at {tla}:9 does "
+            "not contain the direct [] (gst => <> committed) liveness shape; "
+            "EventuallyCommit must preserve the post-GST commit liveness obligation"
+        ]
 
 
 def test_cfg_correctness_envelope_shape_errors_rejects_literal_temporal_extra(
@@ -18370,7 +22618,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_temporal_extra
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateSafetyEnvelope",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -18427,7 +22675,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_parameterized_temporal_he
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] (SumeragiConsensusCoreStateMatchesEnvelope /\\ SumeragiConsensusCoreStateSafetyEnvelope)",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -18510,7 +22758,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_parameterized_temporal_he
                     "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                     "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == "
                     f"{temporal_body}",
-                    "EventuallyCommit == [] (Gst => <> Committed)",
+                    "EventuallyCommit == [] (gst => <> committed)",
                     "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                     "  /\\ TypeInvariant",
                     "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -18557,7 +22805,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_parameterized_temporal_he
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == "
                 "[] SumeragiConsensusCoreStateSafetyEnvelope(ready = checked)",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -18615,7 +22863,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_parameterized_
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] (SumeragiConsensusCoreStateMatchesEnvelope <=> SumeragiConsensusCoreTemporalCallHelper)",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -18784,7 +23032,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_quantified_undefined_temp
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "QuantifiedTemporalLeaf == \\A c \\in Cases: MissingTemporalHelper",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] QuantifiedTemporalLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -18842,7 +23090,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_existential_quantified_te
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "ExistentialTemporalLeaf == \\E c \\in Cases: Predicate(c)",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] ExistentialTemporalLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -18900,7 +23148,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_existential_quantified_te
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] (ConcreteTemporal /\\ \\E c \\in Cases: Predicate(c))",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -19084,7 +23332,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_vacuous_quantified_tempor
                     "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                     f"VacuousTemporalLeaf == {formula}",
                     "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] VacuousTemporalLeaf",
-                    "EventuallyCommit == [] (Gst => <> Committed)",
+                    "EventuallyCommit == [] (gst => <> committed)",
                     "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                     "  /\\ TypeInvariant",
                     "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -19132,7 +23380,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_duplicate_bound_quantifie
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "DuplicateBoundTemporalLeaf == \\A c, c \\in Cases: ConcreteTemporalPredicate(c)",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] DuplicateBoundTemporalLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -19191,7 +23439,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_static_wrapped_quantified
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "StaticWrappedTemporalLeaf == SUBSET (\\A c \\in Cases: Predicate(c))",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] StaticWrappedTemporalLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -19249,7 +23497,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_structured_quantified_tem
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "StructuredTemporalLeaf == [Field |-> \\A c \\in Cases: Predicate(c)]",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] StructuredTemporalLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -19307,7 +23555,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_structured_control_flow_t
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "StructuredTemporalLeaf == [Field |-> IF Ready THEN ConcreteTemporal ELSE FallbackTemporal]",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] StructuredTemporalLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -19366,7 +23614,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unused_bound_quantified_t
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "UnusedBoundTemporalLeaf == \\A c \\in Cases, d \\in Other: ConcreteTemporalPredicate(c)",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] UnusedBoundTemporalLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -19425,7 +23673,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_control_flow_quantified_t
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "ControlFlowTemporalLeaf == \\A c \\in Cases: IF c = c THEN Predicate(c) ELSE Predicate(c)",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] ControlFlowTemporalLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -19483,7 +23731,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_nontransparent_let_quanti
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "NonTransparentLetTemporalLeaf == \\A c \\in Cases: LET local(x) == TRUE IN local(c)",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] NonTransparentLetTemporalLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -19542,7 +23790,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_negated_quantified_tempor
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "NegatedQuantifiedTemporalLeaf == ~(\\A c \\in Cases: Predicate(c))",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] NegatedQuantifiedTemporalLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -19601,7 +23849,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_let_alias_negated_quantif
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "LetAliasNegatedQuantifiedTemporalLeaf == LET selected == \\A c \\in Cases: Predicate(c) IN ~selected",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] LetAliasNegatedQuantifiedTemporalLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -19659,7 +23907,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_negated_qu
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] (~(\\A c \\in Cases: Predicate(c)))",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -19774,7 +24022,7 @@ def test_cfg_correctness_envelope_shape_errors_allows_uppercase_temporal_formula
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -20333,7 +24581,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_structured_literal_tempor
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "StructuredTemporalLeaf == [Field |-> LiteralLeaf]",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] StructuredTemporalLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -20394,7 +24642,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_vacuous_tempor
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalWrapper",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -20453,7 +24701,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_static_if_lite
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalWrapper",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -20510,7 +24758,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_constant_relat
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalWrapper",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -20568,7 +24816,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_transitive_unary_temporal
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalWrapper",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -20626,7 +24874,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_negated_transitive_vacuou
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalNegatedWrapper",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -20684,7 +24932,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_single_conjunct_temporal_
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalWrapper",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -20742,7 +24990,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_unary_temporal_single_con
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalWrapper",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -20800,7 +25048,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_literal_gated_single_conj
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalWrapper",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -20858,7 +25106,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_literal_gated_zero_arity_
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalWrapper",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -20915,7 +25163,7 @@ def test_cfg_correctness_envelope_shape_errors_allows_direct_formula_temporal_he
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalFormulaLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -20962,7 +25210,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_let_alias_temporal_litera
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalLetLiteral",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -21018,7 +25266,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_self_equality_temporal_he
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalSelfEqualityLeaf",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -21095,7 +25343,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_self_inequality_temporal_
                     "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                     "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                     "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] TemporalSelfInequalityLeaf",
-                    "EventuallyCommit == [] (Gst => <> Committed)",
+                    "EventuallyCommit == [] (gst => <> committed)",
                     "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                     "  /\\ TypeInvariant",
                     "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -21140,7 +25388,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_stale_temporal_allowlist(
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  /\\ SumeragiConsensusCoreStateMatchesEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateMatchesEnvelope",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
@@ -21188,7 +25436,7 @@ def test_cfg_correctness_envelope_shape_errors_rejects_top_level_direct_alias_ex
                 "SumeragiConsensusCoreAlwaysMatchesExactness ==",
                 "  SumeragiConsensusCoreStateSafetyEnvelope",
                 "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] SumeragiConsensusCoreStateSafetyEnvelope",
-                "EventuallyCommit == [] (Gst => <> Committed)",
+                "EventuallyCommit == [] (gst => <> committed)",
                 "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
                 "  /\\ TypeInvariant",
                 "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",

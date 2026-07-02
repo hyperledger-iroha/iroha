@@ -365,6 +365,21 @@ import {
   sccpPayloadHash,
 } from "../src/sccp.js";
 
+function canonicalSignatureBase64Fixture() {
+  return Buffer.alloc(64, 0x01).toString("base64");
+}
+
+function noncanonicalStandardBase64PadBitAlias(encoded) {
+  assert.equal(encoded.endsWith("=="), true);
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const chars = [...encoded];
+  const index = chars.length - 3;
+  const value = alphabet.indexOf(chars[index]);
+  assert.notEqual(value, -1);
+  chars[index] = alphabet[value ^ 0x01];
+  return chars.join("");
+}
+
 const HEX32_A = `0x${"aa".repeat(32)}`;
 const HEX32_B = `0x${"bb".repeat(32)}`;
 const HEX32_C = `0x${"cc".repeat(32)}`;
@@ -8464,10 +8479,11 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   const evmSubmissionForSubmit = buildEvmSccpSubmission({
     proofResult: wrapEvmSccpProofResult(evmSubmitProofBytes, evmRequest),
   });
+  const signatureB64 = canonicalSignatureBase64Fixture();
   const evmSubmitPayload = buildEvmSccpBridgeProofSubmitPayload({
     authority: "alice@sora",
     publicKeyHex: "ed0123",
-    signatureB64: "sig",
+    signatureB64,
     messageBundle: evmMessageBundle,
     submission: evmSubmissionForSubmit,
     destinationBinding: evmBinding,
@@ -8476,7 +8492,7 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   assert.equal(Object.isFrozen(evmSubmitPayload), true);
   assert.equal(evmSubmitPayload.authority, "alice@sora");
   assert.equal(evmSubmitPayload.public_key_hex, "ed0123");
-  assert.equal(evmSubmitPayload.signature_b64, "sig");
+  assert.equal(evmSubmitPayload.signature_b64, signatureB64);
   assert.equal(evmSubmitPayload.network_id_hex, evmBinding.networkId);
   assert.equal(
     evmSubmitPayload.verifier_address_hex,
@@ -8500,6 +8516,24 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
     evmSubmitPayload.proof_bytes_hex,
     `0x${Array.from(evmSubmitProofBytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`,
   );
+  for (const badSignatureB64 of [
+    ` ${signatureB64} `,
+    signatureB64.replace(/=+$/u, ""),
+    noncanonicalStandardBase64PadBitAlias(signatureB64),
+  ]) {
+    assert.throws(
+      () =>
+        buildEvmSccpBridgeProofSubmitPayload({
+          authority: "alice@sora",
+          publicKeyHex: "ed0123",
+          signatureB64: badSignatureB64,
+          messageBundle: evmMessageBundle,
+          submission: evmSubmissionForSubmit,
+          destinationBinding: evmBinding,
+        }),
+      /canonical base64/,
+    );
+  }
   assert.throws(
     () =>
       buildEvmSccpBridgeProofSubmitPayload({

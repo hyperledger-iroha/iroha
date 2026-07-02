@@ -13,7 +13,9 @@ use iroha_config::{
     parameters::{actual::Snapshot as Config, defaults},
     snapshot::Mode,
 };
-use iroha_crypto::{CompactMerkleProof, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature};
+use iroha_crypto::{
+    Algorithm, CompactMerkleProof, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature,
+};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -44,7 +46,9 @@ use crate::{
     query::store::LiveQueryStoreHandle,
     state::{
         SnapshotNoritoBlob, SnapshotPublicLaneRewardClaim, SnapshotSpaceDirectoryManifestSet,
-        State, deserialize::KuraSeed, storage_transactions::TransactionsBlockError,
+        State, deserialize::KuraSeed, public_lane_reward_record_matches_key,
+        public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
+        storage_transactions::TransactionsBlockError,
     },
 };
 
@@ -62,24 +66,30 @@ fn serialize_state_snapshot(
         .world
         .public_lane_validators
         .iter()
-        .map(|(_key, value)| SnapshotNoritoBlob {
-            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        .filter_map(|(key, value)| {
+            public_lane_validator_record_matches_key(key, value).then(|| SnapshotNoritoBlob {
+                encoded_hex: hex::encode(NoritoEncode::encode(value)),
+            })
         })
         .collect();
     let public_lane_stake_shares: Vec<_> = view
         .world
         .public_lane_stake_shares
         .iter()
-        .map(|(_key, value)| SnapshotNoritoBlob {
-            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        .filter_map(|(key, value)| {
+            public_lane_stake_share_matches_key(key, value).then(|| SnapshotNoritoBlob {
+                encoded_hex: hex::encode(NoritoEncode::encode(value)),
+            })
         })
         .collect();
     let public_lane_rewards: Vec<_> = view
         .world
         .public_lane_rewards
         .iter()
-        .map(|(_key, value)| SnapshotNoritoBlob {
-            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        .filter_map(|(key, value)| {
+            public_lane_reward_record_matches_key(key, value).then(|| SnapshotNoritoBlob {
+                encoded_hex: hex::encode(NoritoEncode::encode(value)),
+            })
         })
         .collect();
     let public_lane_reward_claims: Vec<_> = view
@@ -778,8 +788,15 @@ fn verify_signature_hex(
 ) -> Result<(), TryReadError> {
     let signature_bytes = hex::decode(signature_hex)
         .map_err(|_| TryReadError::SignatureMalformed(signature_hex.to_owned()))?;
-    let signature = Signature::try_from_bytes(&signature_bytes)
-        .map_err(|_| TryReadError::SignatureMalformed(signature_hex.to_owned()))?;
+    let algorithm = verification_key.try_algorithm().map_err(|err| {
+        TryReadError::SignatureInvalid(format!("invalid verification key: {err}"))
+    })?;
+    let signature = match algorithm {
+        Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(&signature_bytes)
+            .map_err(|_| TryReadError::SignatureMalformed(signature_hex.to_owned()))?,
+        _ => Signature::try_from_bytes(&signature_bytes)
+            .map_err(|_| TryReadError::SignatureMalformed(signature_hex.to_owned()))?,
+    };
     signature
         .verify(verification_key, digest)
         .map_err(|err| TryReadError::SignatureInvalid(err.to_string()))
@@ -2114,6 +2131,11 @@ mod tests {
 
     const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
     const TEST_CHAIN_ID: &str = "test-chain";
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
 
     fn checked_seeded_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], algorithm)
@@ -2931,6 +2953,41 @@ mod tests {
             StateTelemetry::default(),
         ) else {
             panic!("snapshot with all-zero signature should be rejected")
+        };
+
+        assert!(matches!(error, TryReadError::SignatureMalformed(_)));
+    }
+
+    #[test]
+    async fn snapshot_read_rejects_noncanonical_ed25519_signature_r_before_verification() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = checked_random_snapshot_keypair();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
+        let signature_hex = std::fs::read_to_string(store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME))
+            .expect("snapshot signature");
+        let mut signature_bytes = hex::decode(signature_hex.trim()).expect("signature hex");
+        signature_bytes[..NONCANONICAL_ED25519_R.len()].copy_from_slice(&NONCANONICAL_ED25519_R);
+        std::fs::write(
+            store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
+            hex::encode(signature_bytes),
+        )
+        .expect("replace snapshot signature");
+
+        let Err(error) = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        ) else {
+            panic!("snapshot with noncanonical Ed25519 signature R should be rejected")
         };
 
         assert!(matches!(error, TryReadError::SignatureMalformed(_)));

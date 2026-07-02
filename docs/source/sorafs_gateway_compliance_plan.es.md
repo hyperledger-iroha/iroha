@@ -4,11 +4,12 @@ direction: ltr
 source: docs/source/sorafs_gateway_compliance_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 87d3d990d2565b7407f575fc69a5d591a58fcd014c64c90c700359e62a551d13
-source_last_modified: "2026-07-01T20:43:11.223106+00:00"
+source_hash: 68c0625dd44cff9b9a5dd0868875b9aff060e70746bf49e45b01a61e53c4f7f2
+source_last_modified: "2026-07-02T10:51:00.284611+00:00"
 translation_last_reviewed: 2026-07-02
 title: Gateway Compliance, Moderation & Transparency
 summary: SFM-4 implementation status for gateway denylist enforcement, GAR policy, proof tokens, honey-audit evidence, and remaining compliance services.
+source_mtime: 2026-07-02T10:51:00.284611+00:00
 ---
 
 # Gateway Compliance, Moderation & Transparency
@@ -65,17 +66,37 @@ gateway compliance can be marked ready.
   artifacts must match that promoted policy digest before promotion. Bundle and
   policy mismatches are recorded on the offending artifact in the JSON summary
   before required-kind validity is reported.
+  Feed-promotion artifacts also bind `gateway_ack_count` and
+  `denylist_entry_count` to the unique canonical `gateways[].name` and
+  `denylist_entries[].name` inventories and reject duplicate gateway
+  acknowledgement or denylist-entry entries before promotion can report ready.
+  Controller-runtime artifacts also bind `external_feed_count`,
+  `fetched_feed_count`, `normalized_feed_count`, and `signed_feed_count` to the
+  unique canonical `feeds[].name` inventory and reject duplicate feed entries
+  before promotion can report ready.
+  Moderation-toggle artifacts also bind `toggle_count` and
+  `approved_toggle_count` to the unique canonical `toggles[].name` inventory and
+  reject duplicate toggle entries before promotion can report ready.
+  Gateway-reload artifacts also bind `reload_ack_count` to the unique canonical
+  `gateways[].name` inventory and reject duplicate gateway acknowledgement
+  entries before promotion can report ready.
   Enforcement-probe artifacts also bind `route_count` and `passed_route_count`
   to the unique canonical `routes[].name` inventory and reject duplicate route
   entries before promotion can report ready.
+  Honey-audit artifacts also bind `honey_probe_count` to the unique canonical
+  `probes[].name` inventory and reject duplicate probe entries before promotion
+  can report ready.
 - `scripts/build_sorafs_gateway_compliance_canary.py` is a payload-free
   controller-runtime and moderation-toggle canary builder. It turns reviewed
   deployment facts into checked JSON artifacts, fixes `config_source` to
   `iroha_config`, requires every positive controller or moderation-toggle claim
-  through explicit `--verified-claim` inputs, forces raw-feed, toggle-payload,
-  and response-body inclusion flags to `false`, validates the generated payload
-  through the SFM-4 rollout gate contract before writing, and writes the canary
-  atomically without following output symlinks.
+  through explicit `--verified-claim` inputs, requires reviewed controller
+  `--feed` names whose unique inventory matches `--feed-count`, forces raw-feed,
+  requires reviewed moderation `--toggle` names whose unique inventory matches
+  `--toggle-count`, forces raw-feed, toggle-payload, and response-body inclusion
+  flags to `false`, validates the generated payload through the SFM-4 rollout
+  gate contract before writing, and writes the canary atomically without
+  following output symlinks.
 - `ci/check_sorafs_gateway_denylist.sh` guards the denylist bundle tooling.
 
 ## Operator Commands

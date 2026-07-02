@@ -2,15 +2,13 @@
 lang: my
 direction: ltr
 source: docs/source/sorafs_hedging_plan.md
-status: needs-update
+status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b5438f9d20918e05ba0c9e75e9d87b81b5d99607295735e3246fa00b09c24bda
-source_last_modified: "2026-07-01T21:34:37.224063+00:00"
+source_hash: 4d41b7132642d1025e0566398ea92aae654f2cc0aac5a1c19e9febae0e07f43e
+source_last_modified: "2026-07-02T08:57:47.791466+00:00"
 translation_last_reviewed: 2026-07-02
-title: SoraFS XOR Hedging & Billing
-summary: SFM-5 target architecture and current gap status for XOR price feeds, hedging, billing statements, risk controls, and rollout.
+source_mtime: 2026-07-02T08:57:47.791466+00:00
 ---
-
 # SoraFS XOR Hedging & Billing
 
 ## Status
@@ -36,21 +34,31 @@ reference-price, billing-cycle, statement-publication, reconciliation,
 metrics/alert, native-bridge-release, and governance-approval artifacts, rejects
 payload-bearing evidence including common camel-case or hyphenated secret-key
 spellings, and requires at least two distinct successful staged billing cycles
-before reporting `ready`. Billing-cycle evidence must bind each cycle to a
-valid reference-price decision id from the same rollout bundle and carry only
+before reporting `ready`. Feed-collector and reference-price artifacts also
+bind `feed_count` to the unique canonical `feeds[].name` inventory, require
+`accepted_feed_count` to equal `feed_count`, and reject duplicate feed entries
+before promotion can report ready. Billing-cycle evidence must bind each cycle
+to a valid reference-price decision id from the same rollout bundle and carry only
 payload-free line-item roots, statement-bundle digests,
 reconciliation digests, and per-statement digest arrays whose length matches
 the signed statement count, plus `policy_digest_hex` for the billing policy
-that priced the staged cycle. Statement-publication, reconciliation,
+    that priced the staged cycle. Billing-cycle artifacts also bind
+    `statement_count` to the unique canonical `statements[].name` inventory and
+    `line_item_count` to the unique canonical `line_items[].name` inventory,
+    rejecting duplicate statement or line-item entries before promotion can report
+    ready.
+Statement-publication, reconciliation,
 metrics/alert, and governance-approval evidence must also carry the same
 `statement_bundle_digest_hex`/`reconciliation_digest_hex` tuple as a valid
 staged billing cycle in the same rollout bundle, and governance approval
 `policy_digest_hex` must match a valid billing-cycle policy digest.
 Statement-publication artifacts also bind `route_count` to the unique canonical
 `routes[].name` inventory and reject duplicate route entries before promotion
-can report ready. Reconciliation artifacts also bind `source_count` to the
-unique canonical `sources[].name` inventory and reject duplicate source entries
-before promotion can report ready. Native-bridge release artifacts also bind
+    can report ready. Reconciliation artifacts also bind `source_count` to the
+    unique canonical `sources[].name` inventory and `line_item_count` to the
+    unique canonical `line_items[].name` inventory, rejecting duplicate source or
+    line-item entries before promotion can report ready. Native-bridge release
+    artifacts also bind
 `artifact_count` to the unique canonical `artifacts[].id` inventory and reject
 duplicate artifact entries before promotion can report ready. This
 prevents promotion packets from mixing statement publication, reconciliation,
@@ -77,14 +85,18 @@ canary artifacts before promotion can pass.
 for feed collector, reference price, billing cycle, statement publication,
 reconciliation, metrics/alerts, native-bridge release, and governance approval
 evidence. It takes reviewed deployment facts, requires every positive proof
-claim and required route/source/metric coverage explicitly, forces raw feed,
-statement, financial-record, response-body, and debug-artifact inclusion flags
-to `false`, rejects duplicate `--artifact` ids for native-bridge release
+    claim and required feed/line-item/route/source/metric coverage explicitly, forces raw
+feed, statement, financial-record, response-body, and debug-artifact inclusion
+flags to `false`, rejects duplicate `--artifact` ids for native-bridge release
 canaries, rejects ungoverned hedge-execution enablement, validates each
 generated artifact through the hedging/billing rollout gate, and writes
 atomically without following output symlinks. Billing-cycle and
-governance-approval canaries require reviewed `--policy-digest-hex` input so
-locally generated evidence exercises the same policy-bound promotion path. The
+governance-approval canaries require reviewed `--policy-digest-hex` input, and
+    billing-cycle canaries require reviewed `--statement` labels whose unique
+    inventory matches `--statement-digest-hex`, and billing-cycle plus
+    reconciliation canaries require reviewed `--line-item` labels whose unique
+    inventory matches `--line-item-count` before locally generated evidence
+    exercises the same policy-bound promotion path. The
 builder is an evidence
 packaging aid; it does not replace the missing collector service, daemonized
 pricing/exposure engine, billing aggregator, statement publisher, runtime API,
@@ -246,7 +258,13 @@ Required before rollout:
   least two distinct staged billing cycles whose reference-decision ids match a
   valid reference-price artifact in the same evidence bundle. The same
   promotion contract now requires staged billing-cycle `policy_digest_hex`
-  values to anchor governance approval. The collection
+  values to anchor governance approval and binds `statement_count` to reviewed
+  `statements[].name` inventory and `line_item_count` to reviewed
+  `line_items[].name` inventory. Feed canaries also bind `feed_count` to
+  reviewed `feeds[].name` inventory and require `accepted_feed_count` to match.
+  Reconciliation canaries bind both `source_count` to reviewed `sources[].name`
+  inventory and `line_item_count` to reviewed `line_items[].name` inventory.
+  The collection
   planner's dry-run JSON includes the checker-backed `evidence_contract` map so operators can
   inspect the exact required fields for each requested evidence kind before
   collecting or submitting live billing artifacts. For reviewed local canary

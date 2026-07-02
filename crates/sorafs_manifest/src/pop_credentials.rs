@@ -1170,6 +1170,16 @@ fn validate_text_list(
 mod tests {
     use super::*;
 
+    const SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn digest(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
@@ -1371,6 +1381,29 @@ mod tests {
             PopCredentialValidationError::SignatureVerification { reason }
                 if reason.contains("all zero")
         ));
+    }
+
+    #[test]
+    fn credential_signature_rejects_malformed_ed25519_signature_r() {
+        for (label, replacement_r, expected_reason) in [
+            ("small-order", SMALL_ORDER_R, "small-order"),
+            ("noncanonical", NONCANONICAL_R, "not a canonical"),
+        ] {
+            let (mut credential, _root, _revocations) = signed_material();
+            credential.issuer_signature.signature[..PUBLIC_KEY_LENGTH]
+                .copy_from_slice(&replacement_r);
+
+            let err = verify_pop_credential_signature_v1(&credential)
+                .expect_err("malformed POP credential signature R must be rejected");
+            assert!(
+                matches!(
+                    &err,
+                    PopCredentialValidationError::SignatureVerification { reason }
+                        if reason.contains(expected_reason)
+                ),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

@@ -951,7 +951,15 @@ fn process_trust_records(
     let mut newly_trusted = BTreeSet::new();
     for SignedPeerTrust { info, signature } in trust {
         let payload = PeersGossiper::trust_payload(&info);
-        let invalid_signature = Signature::try_from_bytes(&signature).map_or(true, |sig| {
+        let signature = if matches!(
+            from_peer.id().public_key().try_algorithm(),
+            Ok(iroha_crypto::Algorithm::Ed25519)
+        ) {
+            iroha_crypto::ed25519_parse_signature(&signature).ok()
+        } else {
+            Signature::try_from_bytes(&signature).ok()
+        };
+        let invalid_signature = signature.map_or(true, |sig| {
             sig.verify(from_peer.id().public_key(), &payload).is_err()
         });
         if invalid_signature {
@@ -1855,6 +1863,78 @@ mod tests {
         );
         assert!(outcome.newly_trusted.is_empty());
         assert!(trust_book.score(from_peer.id(), now) <= -2);
+    }
+
+    #[test]
+    fn trust_gossip_penalizes_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let kp_sender = checked_seed_keypair(&[18, 19, 20, 21]);
+        let kp_reported = checked_seed_keypair(&[22, 23, 24, 25]);
+        let from_peer = Peer::new(
+            "127.0.0.1:9002".parse().expect("addr"),
+            kp_sender.public_key().clone(),
+        );
+        let reported_peer = Peer::new(
+            "127.0.0.1:9003".parse().expect("addr"),
+            kp_reported.public_key().clone(),
+        );
+        let info = PeerTrustInfo {
+            peer_id: reported_peer.id().clone(),
+            trusted: true,
+            score: 1,
+        };
+        let valid_signature = signed_trust_payload(&kp_sender, &info);
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed_signature = valid_signature.clone();
+            malformed_signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let trust = vec![SignedPeerTrust {
+                info: info.clone(),
+                signature: malformed_signature,
+            }];
+            let now = Instant::now();
+            let mut trust_book = TrustBook::new(
+                Duration::from_millis(0),
+                TrustPenalties {
+                    bad_gossip: 4,
+                    unknown_peer: 3,
+                },
+                -2,
+            );
+            trust_book.seed([from_peer.id().clone()], now);
+
+            let outcome = process_trust_records(
+                trust,
+                &from_peer,
+                false,
+                &BTreeSet::from([reported_peer.id().clone()]),
+                &BTreeSet::from([from_peer.id().clone()]),
+                &mut trust_book,
+                now,
+            );
+
+            assert!(
+                outcome.drop_sender,
+                "{label} Ed25519 trust signature R must drop the sender"
+            );
+            assert!(outcome.newly_trusted.is_empty());
+            assert!(
+                trust_book.score(from_peer.id(), now) <= -2,
+                "{label} Ed25519 trust signature R must penalize the sender"
+            );
+        }
     }
 
     #[test]

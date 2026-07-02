@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.offline
 
+import java.util.Base64
+
 typealias OfflineBearerCashWallet = OfflineNoteWallet
 typealias OfflineBearerCashNote = OfflineNoteWalletNote
 typealias OfflineBearerCashReceiveRequestV1 = OfflineNoteReceiveRequest
@@ -194,10 +196,20 @@ object OfflineBearerCashTextCodec {
     private fun hasExactUnpaddedBase64UrlPayload(text: String, prefix: String): Boolean {
         if (!text.startsWith(prefix)) return false
         val payload = text.substring(prefix.length)
-        return payload.isNotEmpty() &&
-            payload.trim() == payload &&
-            !payload.contains("=") &&
-            payload.all(::isBase64UrlCharacter)
+        if (
+            payload.isEmpty() ||
+            payload.trim() != payload ||
+            payload.contains("=") ||
+            !payload.all(::isBase64UrlCharacter)
+        ) {
+            return false
+        }
+        return try {
+            val decoded = Base64.getUrlDecoder().decode(payload)
+            Base64.getUrlEncoder().withoutPadding().encodeToString(decoded) == payload
+        } catch (_: IllegalArgumentException) {
+            false
+        }
     }
 
     private fun isBase64UrlCharacter(value: Char): Boolean =

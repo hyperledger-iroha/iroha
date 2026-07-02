@@ -114,6 +114,10 @@ def deposit_lifecycle(*, authz: bool = True) -> dict:
         "passed_route_count": len(routes),
         "routes": routes,
         "deposit_probe_count": 2,
+        "deposit_probes": [
+            {"name": "deposit-probe-00", "confirmed": True},
+            {"name": "deposit-probe-01", "confirmed": True},
+        ],
         "confirmed_deposit_count": 2,
         "payer_auth_enforced": True,
         "participant_status_gate_enforced": True,
@@ -180,7 +184,15 @@ def settlement_submitter() -> dict:
         "generated_at_unix": GENERATED_AT,
         "config_digest_hex": DIGEST,
         "configured_signer_count": 2,
+        "signers": [
+            {"name": "submitter-signer-00"},
+            {"name": "submitter-signer-01"},
+        ],
         "queued_step_count": 2,
+        "steps": [
+            {"name": "settlement-step-00", "submitted": True},
+            {"name": "settlement-step-01", "submitted": True},
+        ],
         "submitted_step_count": 2,
         "receipt_published": True,
         "required_authority_matched": True,
@@ -223,8 +235,19 @@ def governance_dag_publication() -> dict:
         "generated_at_unix": GENERATED_AT,
         "config_digest_hex": DIGEST,
         "report_count": 2,
+        "reports": [
+            {"name": "appeal-finance-report-00"},
+            {"name": "appeal-finance-report-01"},
+        ],
         "weekly_rollup_count": 1,
+        "weekly_rollups": [
+            {"name": "appeal-finance-weekly-rollup-00"},
+        ],
         "settlement_receipt_count": 2,
+        "settlement_receipts": [
+            {"name": "appeal-finance-settlement-receipt-00"},
+            {"name": "appeal-finance-settlement-receipt-01"},
+        ],
         "payload_kinds": [
             "appeal_finance_report",
             "appeal_finance_weekly_rollup",
@@ -274,14 +297,22 @@ def dashboard_metrics(*, generated_at: int = GENERATED_AT, include_all_metrics: 
 
 
 def multi_peer_reconciliation(*, peer_count: int = 4) -> dict:
+    peers = [{"name": f"peer-{index:02d}"} for index in range(peer_count)]
+    validators = [{"name": f"validator-{index:02d}"} for index in range(peer_count)]
     return with_context({
         "schema": "sorafs.appeal_finance.multi_peer_reconciliation_canary.v1",
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
         "config_digest_hex": DIGEST,
         "peer_count": peer_count,
+        "peers": peers,
         "validator_count": peer_count,
+        "validators": validators,
         "case_count": 2,
+        "cases": [
+            {"name": "appeal-finance-case-00", "reconciled": True},
+            {"name": "appeal-finance-case-01", "reconciled": True},
+        ],
         "deposit_posted": True,
         "decision_ingested": True,
         "settlement_submitted": True,
@@ -478,6 +509,330 @@ def test_routes_must_not_duplicate_for_route_artifacts(tmp_path: Path) -> None:
         assert "route_count must match unique routes count" in artifact["errors"]
 
 
+def test_deposit_probe_count_must_match_unique_probes(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = deposit_lifecycle()
+    payload["deposit_probe_count"] += 1
+    write_json(tmp_path / "deposit-lifecycle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["deposit_lifecycle"]["artifacts"][0]
+    assert "deposit_probe_count must match unique deposit_probes count" in artifact[
+        "errors"
+    ]
+
+
+def test_deposit_probes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = deposit_lifecycle()
+    payload["deposit_probes"].append(dict(payload["deposit_probes"][0]))
+    payload["deposit_probe_count"] = len(payload["deposit_probes"])
+    payload["confirmed_deposit_count"] = len(payload["deposit_probes"])
+    write_json(tmp_path / "deposit-lifecycle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["deposit_lifecycle"]["artifacts"][0]
+    assert "deposit_probes must not contain duplicate values" in artifact["errors"]
+    assert "deposit_probe_count must match unique deposit_probes count" in artifact[
+        "errors"
+    ]
+
+
+def test_confirmed_deposit_count_must_match_probe_partition(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = deposit_lifecycle()
+    payload["deposit_probes"][0]["confirmed"] = False
+    write_json(tmp_path / "deposit-lifecycle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["deposit_lifecycle"]["artifacts"][0]
+    assert (
+        "confirmed_deposit_count must match confirmed deposit probes count"
+        in artifact["errors"]
+    )
+
+
+def test_deposit_probe_confirmation_must_be_boolean(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = deposit_lifecycle()
+    payload["deposit_probes"][0]["confirmed"] = "yes"
+    write_json(tmp_path / "deposit-lifecycle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["deposit_lifecycle"]["artifacts"][0]
+    assert "deposit_probes[0].confirmed must be a boolean" in artifact["errors"]
+
+
+def test_quote_api_classes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = quote_api()
+    payload["classes"].append("content")
+    payload["quote_count"] = 10
+    payload["passed_quote_count"] = 10
+    write_json(tmp_path / "quote-api.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["quote_api"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "classes must not contain duplicate values" in artifact["errors"]
+    assert "quote_count must equal unique classes * urgencies count" in artifact["errors"]
+
+
+def test_quote_api_quote_count_must_match_dimension_product(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = quote_api()
+    payload["classes"].append("policy")
+    write_json(tmp_path / "quote-api.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["quote_api"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "quote_count must equal unique classes * urgencies count" in artifact["errors"]
+
+
+def test_settlement_outcomes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_execution()
+    payload["outcomes"].append("uphold")
+    payload["settlement_probe_count"] = len(payload["outcomes"])
+    write_json(tmp_path / "settlement-execution.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_execution"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "outcomes must not contain duplicate values" in artifact["errors"]
+    assert "settlement_probe_count must match unique outcomes count" in artifact["errors"]
+
+
+def test_settlement_probe_count_must_match_unique_outcomes(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_execution()
+    payload["outcomes"].append("remand")
+    write_json(tmp_path / "settlement-execution.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_execution"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "settlement_probe_count must match unique outcomes count" in artifact["errors"]
+
+
+def test_settlement_reconciliation_statuses_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_execution()
+    payload["reconciliation_statuses"].append("settled")
+    write_json(tmp_path / "settlement-execution.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_execution"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "reconciliation_statuses must not contain duplicate values"
+        in artifact["errors"]
+    )
+
+
+def test_settlement_submitter_signer_count_must_match_unique_signers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_submitter()
+    payload["configured_signer_count"] += 1
+    write_json(tmp_path / "settlement-submitter.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_submitter"]["artifacts"][0]
+    assert "configured_signer_count must match unique signers count" in artifact[
+        "errors"
+    ]
+
+
+def test_settlement_submitter_signers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_submitter()
+    payload["signers"].append(dict(payload["signers"][0]))
+    payload["configured_signer_count"] = len(payload["signers"])
+    write_json(tmp_path / "settlement-submitter.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_submitter"]["artifacts"][0]
+    assert "signers must not contain duplicate values" in artifact["errors"]
+    assert "configured_signer_count must match unique signers count" in artifact[
+        "errors"
+    ]
+
+
+def test_settlement_submitter_queued_step_count_must_match_unique_steps(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_submitter()
+    payload["queued_step_count"] += 1
+    write_json(tmp_path / "settlement-submitter.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_submitter"]["artifacts"][0]
+    assert "queued_step_count must match unique steps count" in artifact["errors"]
+
+
+def test_settlement_submitter_steps_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_submitter()
+    payload["steps"].append(dict(payload["steps"][0]))
+    payload["queued_step_count"] = len(payload["steps"])
+    payload["submitted_step_count"] = len(payload["steps"])
+    write_json(tmp_path / "settlement-submitter.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_submitter"]["artifacts"][0]
+    assert "steps must not contain duplicate values" in artifact["errors"]
+    assert "queued_step_count must match unique steps count" in artifact["errors"]
+
+
+def test_settlement_submitter_submitted_step_count_must_match_partition(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_submitter()
+    payload["steps"][0]["submitted"] = False
+    write_json(tmp_path / "settlement-submitter.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_submitter"]["artifacts"][0]
+    assert "submitted_step_count must match submitted steps count" in artifact[
+        "errors"
+    ]
+
+
+def test_settlement_submitter_step_submission_must_be_boolean(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_submitter()
+    payload["steps"][0]["submitted"] = "yes"
+    write_json(tmp_path / "settlement-submitter.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_submitter"]["artifacts"][0]
+    assert "steps[0].submitted must be a boolean" in artifact["errors"]
+
+
+def test_governance_dag_report_count_must_match_unique_reports(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_dag_publication()
+    payload["report_count"] += 1
+    write_json(tmp_path / "governance-dag-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_dag_publication"]["artifacts"][0]
+    assert "report_count must match unique reports count" in artifact["errors"]
+
+
+def test_governance_dag_reports_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_dag_publication()
+    payload["reports"].append(dict(payload["reports"][0]))
+    payload["report_count"] = len(payload["reports"])
+    write_json(tmp_path / "governance-dag-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_dag_publication"]["artifacts"][0]
+    assert "reports must not contain duplicate values" in artifact["errors"]
+    assert "report_count must match unique reports count" in artifact["errors"]
+
+
+def test_governance_dag_weekly_rollup_count_must_match_unique_rollups(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_dag_publication()
+    payload["weekly_rollup_count"] += 1
+    write_json(tmp_path / "governance-dag-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_dag_publication"]["artifacts"][0]
+    assert (
+        "weekly_rollup_count must match unique weekly_rollups count"
+        in artifact["errors"]
+    )
+
+
+def test_governance_dag_settlement_receipt_count_must_match_unique_receipts(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_dag_publication()
+    payload["settlement_receipt_count"] += 1
+    write_json(tmp_path / "governance-dag-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_dag_publication"]["artifacts"][0]
+    assert (
+        "settlement_receipt_count must match unique settlement_receipts count"
+        in artifact["errors"]
+    )
+
+
 def test_pricing_config_requires_policy_digest(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = pricing_config()
@@ -605,6 +960,128 @@ def test_multi_peer_count_below_minimum_fails(tmp_path: Path) -> None:
     )
 
     assert run_gate(tmp_path) == 1
+
+
+def test_multi_peer_peer_count_must_match_unique_peers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_peer_reconciliation()
+    payload["peer_count"] += 1
+    write_json(tmp_path / "multi-peer-reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_peer_reconciliation"]["artifacts"][0]
+    assert "peer_count must match unique peers count" in artifact["errors"]
+
+
+def test_multi_peer_peers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_peer_reconciliation()
+    payload["peers"].append(dict(payload["peers"][0]))
+    payload["peer_count"] = len(payload["peers"])
+    write_json(tmp_path / "multi-peer-reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_peer_reconciliation"]["artifacts"][0]
+    assert "peers must not contain duplicate values" in artifact["errors"]
+    assert "peer_count must match unique peers count" in artifact["errors"]
+
+
+def test_multi_peer_validator_count_must_match_unique_validators(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_peer_reconciliation()
+    payload["validator_count"] += 1
+    write_json(tmp_path / "multi-peer-reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_peer_reconciliation"]["artifacts"][0]
+    assert "validator_count must match unique validators count" in artifact["errors"]
+
+
+def test_multi_peer_validators_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_peer_reconciliation()
+    payload["validators"].append(dict(payload["validators"][0]))
+    payload["validator_count"] = len(payload["validators"])
+    write_json(tmp_path / "multi-peer-reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_peer_reconciliation"]["artifacts"][0]
+    assert "validators must not contain duplicate values" in artifact["errors"]
+    assert "validator_count must match unique validators count" in artifact["errors"]
+
+
+def test_multi_peer_case_count_must_match_unique_cases(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_peer_reconciliation()
+    payload["case_count"] += 1
+    write_json(tmp_path / "multi-peer-reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_peer_reconciliation"]["artifacts"][0]
+    assert "case_count must match unique cases count" in artifact["errors"]
+
+
+def test_multi_peer_cases_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_peer_reconciliation()
+    payload["cases"].append(dict(payload["cases"][0]))
+    payload["case_count"] = len(payload["cases"])
+    write_json(tmp_path / "multi-peer-reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_peer_reconciliation"]["artifacts"][0]
+    assert "cases must not contain duplicate values" in artifact["errors"]
+    assert "case_count must match unique cases count" in artifact["errors"]
+
+
+def test_multi_peer_reconciled_case_count_must_match_inventory(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_peer_reconciliation()
+    payload["cases"][0]["reconciled"] = False
+    write_json(tmp_path / "multi-peer-reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_peer_reconciliation"]["artifacts"][0]
+    assert "case_count must match reconciled cases count" in artifact["errors"]
+
+
+def test_multi_peer_case_reconciled_must_be_boolean(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_peer_reconciliation()
+    payload["cases"][0]["reconciled"] = "yes"
+    write_json(tmp_path / "multi-peer-reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_peer_reconciliation"]["artifacts"][0]
+    assert "cases[0].reconciled must be a boolean" in artifact["errors"]
 
 
 def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:

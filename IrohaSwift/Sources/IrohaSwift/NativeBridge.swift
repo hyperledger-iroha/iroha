@@ -623,6 +623,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var bridgeStatus: NoritoBridgeLoader.ValidationStatus
     #if canImport(Darwin)
     private let chainDiscriminantLock = NSRecursiveLock()
+    private typealias LoadedBridgeAbiVersionFn = @convention(c) () -> UInt32
     #endif
 
     private func throwOnStatus(_ status: Int32) throws {
@@ -649,6 +650,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     #if canImport(Darwin)
+    private static func loadedBridgeAbiVersion(in handle: UnsafeMutableRawPointer?) -> UInt32? {
+        guard let handle,
+              let symbol = dlsym(handle, "connect_norito_bridge_abi_version") else {
+            return nil
+        }
+        let function = unsafeBitCast(symbol, to: LoadedBridgeAbiVersionFn.self)
+        return function()
+    }
+
     static func copyKagemushaNativeArchiveOutput(
         pointer: UnsafeMutablePointer<UInt8>?,
         length: CUnsignedLong,
@@ -2042,6 +2052,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     ) -> Int32
 
     private var bridgeHandle: UnsafeMutableRawPointer? = nil
+    private var loadedBridgeAbiVersion: UInt32? = nil
     private var encodeTransferFn: EncodeTransferFn? = nil
     private var encodeTransferWithFeeSponsorFn: EncodeTransferWithFeeSponsorFn? = nil
     private var encodeTransferWithAlgFn: EncodeTransferWithAlgFn? = nil
@@ -2172,6 +2183,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var kagemushaBuildPreviousProofOpenEnvelopesArchiveFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendInitFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendAppendFn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaRecursiveSpendTopUpFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendTransitionProfileInitFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendTransitionProfileAppendFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendLineageAppendBoundaryFn: KagemushaRecursiveSpendArchiveFn? = nil
@@ -2192,6 +2204,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var kagemushaRecursiveSpendCompactProjectionNativeProbeOk = false
     private var kagemushaRecursiveSpendCompactProjectionVerifierNativeProbeOk = false
     private var kagemushaRecursiveSpendNativeProbeOk = false
+    private var kagemushaRecursiveSpendTopUpNativeProbeOk = false
     private var encodeIssueOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
     private var encodeRedeemOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
     private var encodeAuditOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
@@ -2202,6 +2215,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeDefundOfflineNoteWithMetadataFn: EncodeDefundOfflineNoteTxWithMetadataFn? = nil
 #else
     private let bridgeHandle: Any? = nil
+    private let loadedBridgeAbiVersion: UInt32? = nil
     private let encodeTransferFn: Any? = nil
     private let encodeTransferWithAlgFn: Any? = nil
     private let encodeMintFn: Any? = nil
@@ -2325,6 +2339,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let kagemushaBuildPreviousProofOpenEnvelopesArchiveFn: Any? = nil
     private let kagemushaRecursiveSpendInitFn: Any? = nil
     private let kagemushaRecursiveSpendAppendFn: Any? = nil
+    private let kagemushaRecursiveSpendTopUpFn: Any? = nil
     private let kagemushaRecursiveSpendTransitionProfileInitFn: Any? = nil
     private let kagemushaRecursiveSpendTransitionProfileAppendFn: Any? = nil
     private let kagemushaRecursiveSpendLineageAppendBoundaryFn: Any? = nil
@@ -2343,6 +2358,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let kagemushaRecursiveSpendCompactProjectionNativeProbeOk = false
     private let kagemushaRecursiveSpendCompactProjectionVerifierNativeProbeOk = false
     private let kagemushaRecursiveSpendNativeProbeOk = false
+    private let kagemushaRecursiveSpendTopUpNativeProbeOk = false
     private let encodeIssueOfflineNoteFn: Any? = nil
     private let encodeRedeemOfflineNoteFn: Any? = nil
     private let encodeAuditOfflineNoteFn: Any? = nil
@@ -2393,6 +2409,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if IROHASWIFT_BRIDGE_PRESENT
         let abiVersion = connect_norito_bridge_abi_version()
         guard NoritoBridgeLoader.isSupportedBridgeAbiVersion(abiVersion) else {
+            self.loadedBridgeAbiVersion = nil
             NSLog(
                 "[NoritoNativeBridge] statically linked transfer bridge ABI mismatch expected=%u actual=%u",
                 NoritoBridgeLoader.expectedBridgeAbiVersion,
@@ -2400,6 +2417,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             )
             return
         }
+        self.loadedBridgeAbiVersion = abiVersion
 
         self.encodeTransferFn = connect_norito_encode_transfer_signed_transaction
         self.encodeTransferWithFeeSponsorFn = connect_norito_encode_transfer_signed_transaction_with_fee_sponsor
@@ -2562,6 +2580,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         } else {
             self.kagemushaRecursiveSpendAppendFn = nil
         }
+        if let kagemushaRecursiveSpendTopUpSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_recursive_spend_topup")
+        }) {
+            self.kagemushaRecursiveSpendTopUpFn = unsafeBitCast(
+                kagemushaRecursiveSpendTopUpSymbol,
+                to: KagemushaRecursiveSpendArchiveFn.self
+            )
+        } else {
+            self.kagemushaRecursiveSpendTopUpFn = nil
+        }
         if let kagemushaRecursiveSpendTransitionProfileInitSymbol = staticHandle.flatMap({
             dlsym($0, "connect_norito_kagemusha_recursive_spend_transition_profile_init")
         }) {
@@ -2723,6 +2751,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let handle = loadResult.0
         self.bridgeStatus = loadResult.1
         self.bridgeHandle = handle
+        self.loadedBridgeAbiVersion = Self.loadedBridgeAbiVersion(in: handle)
         if let handle,
            let encodeSymbol = dlsym(handle, "connect_norito_encode_transfer_signed_transaction"),
            let freeSymbol = dlsym(handle, "connect_norito_free") {
@@ -3426,6 +3455,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.kagemushaRecursiveSpendAppendFn = nil
             }
+            if let kagemushaRecursiveSpendTopUpSymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_recursive_spend_topup"
+            ) {
+                self.kagemushaRecursiveSpendTopUpFn = unsafeBitCast(
+                    kagemushaRecursiveSpendTopUpSymbol,
+                    to: KagemushaRecursiveSpendArchiveFn.self
+                )
+            } else {
+                self.kagemushaRecursiveSpendTopUpFn = nil
+            }
             if let kagemushaRecursiveSpendTransitionProfileInitSymbol = dlsym(
                 handle,
                 "connect_norito_kagemusha_recursive_spend_transition_profile_init"
@@ -3661,6 +3701,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.kagemushaBuildPreviousProofOpenEnvelopesArchiveFn = nil
             self.kagemushaRecursiveSpendInitFn = nil
             self.kagemushaRecursiveSpendAppendFn = nil
+            self.kagemushaRecursiveSpendTopUpFn = nil
             self.kagemushaRecursiveSpendTransitionProfileInitFn = nil
             self.kagemushaRecursiveSpendTransitionProfileAppendFn = nil
             self.kagemushaRecursiveSpendLineageAppendBoundaryFn = nil
@@ -3851,6 +3892,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         recursiveSpendOk = probeKagemushaArchiveFunction(kagemushaRecursiveSpendVerifyFn) && recursiveSpendOk
         recursiveSpendOk = probeKagemushaArchiveFunction(kagemushaRecursiveSpendRedeemFn) && recursiveSpendOk
         kagemushaRecursiveSpendNativeProbeOk = recursiveSpendOk
+        kagemushaRecursiveSpendTopUpNativeProbeOk =
+            probeKagemushaArchiveFunction(kagemushaRecursiveSpendTopUpFn)
     }
 
     private func probeKagemushaArchiveFunction(_ function: KagemushaRecursiveSpendArchiveFn?) -> Bool {
@@ -4355,6 +4398,18 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             && kagemushaRecursiveSpendRedeemFn != nil
             && freeFn != nil
             && kagemushaRecursiveSpendNativeProbeOk
+        #else
+        return false
+        #endif
+    }
+
+    public var isKagemushaRecursiveSpendTopUpAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return isKagemushaRecursiveSpendAvailable
+            && loadedBridgeAbiVersion.map { $0 >= KagemushaRecursiveSpendProver.topUpRequiredNativeBridgeAbiVersion } == true
+            && kagemushaRecursiveSpendTopUpFn != nil
+            && kagemushaRecursiveSpendTopUpNativeProbeOk
         #else
         return false
         #endif
@@ -7839,6 +7894,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             requestArchive: requestArchive,
             bundleArchive: bundleArchive,
             function: kagemushaRecursiveSpendLineageWitnessAppendResultFn
+        )
+    }
+
+    func kagemushaRecursiveSpendTopUp(requestArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: requestArchive,
+            function: kagemushaRecursiveSpendTopUpFn
         )
     }
 

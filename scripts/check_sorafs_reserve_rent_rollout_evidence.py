@@ -522,6 +522,31 @@ def validate_policy_config(payload: dict[str, Any], errors: list[str]) -> None:
     require_false(payload, "policy_payload_included", errors)
 
 
+def unique_scalar_inventory_count(
+    payload: dict[str, Any],
+    field: str,
+    errors: list[str],
+) -> int:
+    """Return the unique scalar labels for a rollout inventory field."""
+
+    items = payload.get(field)
+    if not isinstance(items, list):
+        return 0
+    labels: list[str] = []
+    malformed = False
+    for item in items:
+        if not isinstance(item, str) or not item or item.strip() != item:
+            malformed = True
+            continue
+        labels.append(item)
+    if malformed:
+        return 0
+    unique_labels = set(labels)
+    if len(unique_labels) != len(labels):
+        errors.append(f"{field} must not contain duplicate values")
+    return len(unique_labels)
+
+
 def validate_quote_matrix(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "matrix_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
@@ -536,6 +561,16 @@ def validate_quote_matrix(payload: dict[str, Any], errors: list[str]) -> None:
     require_string_coverage(payload, "storage_classes", "", REQUIRED_STORAGE_CLASSES, errors)
     require_string_coverage(payload, "tiers", "", REQUIRED_TIERS, errors)
     require_string_coverage(payload, "durations", "", REQUIRED_DURATIONS, errors)
+    storage_class_count = unique_scalar_inventory_count(payload, "storage_classes", errors)
+    tier_count = unique_scalar_inventory_count(payload, "tiers", errors)
+    duration_count = unique_scalar_inventory_count(payload, "durations", errors)
+    if scenario_count and storage_class_count and tier_count and duration_count:
+        expected_scenarios = storage_class_count * tier_count * duration_count
+        if scenario_count != expected_scenarios:
+            errors.append(
+                "scenario_count must equal unique storage_classes * tiers * "
+                "durations count"
+            )
     require_false(payload, "quote_payloads_included", errors)
 
 

@@ -6,6 +6,7 @@ from html import unescape as html_unescape
 import re
 import unicodedata
 from pathlib import Path
+from urllib.parse import quote as url_quote
 from urllib.parse import unquote as url_unquote
 
 
@@ -376,17 +377,26 @@ def _decoded_retired_network_match_is_allowed(
 
 def _decode_retired_network_surface_text(text: str) -> str:
     decoded = text
-    for _html_pass in range(3):
-        next_decoded = html_unescape(decoded)
-        if next_decoded == decoded:
-            break
-        decoded = next_decoded
-    for _ in range(3):
-        next_decoded = url_unquote(decoded)
+    for _decode_pass in range(max(1, len(text))):
+        next_decoded = url_unquote(html_unescape(decoded))
         if next_decoded == decoded:
             break
         decoded = next_decoded
     return decoded
+
+
+def deep_html_entity_text(value: str, *, layers: int = 5) -> str:
+    encoded = value
+    for _ in range(layers):
+        encoded = encoded.replace("&", "&amp;")
+    return encoded
+
+
+def deep_url_percent_text(value: str, *, layers: int = 5) -> str:
+    encoded = value
+    for _ in range(layers):
+        encoded = url_quote(encoded, safe="")
+    return encoded
 
 
 def _normalize_retired_network_confusables(text: str) -> str:
@@ -546,6 +556,33 @@ def test_retired_network_patterns_catch_html_entity_obfuscation_examples() -> No
         ) == []
 
 
+def test_retired_network_patterns_catch_deep_html_entity_obfuscation_examples() -> None:
+    deeply_encoded_family = "".join(
+        (
+            "Sub",
+            deep_html_entity_text("&#115;"),
+            "trate",
+            "/",
+            "Pol",
+            deep_html_entity_text("&#107;"),
+            "adot",
+        )
+    )
+    deeply_encoded_runtime = "".join(
+        ("sp", deep_html_entity_text("&#95;"), _RUNTIME)
+    )
+    adversarial_examples = (
+        f"operator added {deeply_encoded_family} relayer support",
+        f"operator added {deeply_encoded_family} route manifest",
+        f"operator added {deeply_encoded_runtime} proof codec",
+    )
+
+    for index, text in enumerate(adversarial_examples):
+        assert _decoded_retired_network_surface_violations(
+            Path(f"deep-html-adversarial-{index}.md"), text
+        )
+
+
 def test_retired_network_patterns_catch_url_percent_obfuscation_examples() -> None:
     encoded_family = "".join(
         ("Sub", "%73", "trate", "%2f", "Pol", "%6b", "adot")
@@ -578,6 +615,23 @@ def test_retired_network_patterns_catch_url_percent_obfuscation_examples() -> No
         assert _decoded_retired_network_surface_violations(
             Path(f"percent-approved-{index}.md"), text
         ) == []
+
+
+def test_retired_network_patterns_catch_deep_url_percent_obfuscation_examples() -> None:
+    deeply_encoded_family = deep_url_percent_text(
+        "".join(("Sub", "%73", "trate", "%2f", "Pol", "%6b", "adot"))
+    )
+    deeply_encoded_runtime = deep_url_percent_text("".join(("sp", "%5f", _RUNTIME)))
+    adversarial_examples = (
+        f"operator added {deeply_encoded_family} relayer support",
+        f"operator added {deeply_encoded_family} route manifest",
+        f"operator added {deeply_encoded_runtime} proof codec",
+    )
+
+    for index, text in enumerate(adversarial_examples):
+        assert _decoded_retired_network_surface_violations(
+            Path(f"deep-percent-adversarial-{index}.md"), text
+        )
 
 
 def test_retired_network_patterns_catch_unicode_confusable_obfuscation_examples() -> None:

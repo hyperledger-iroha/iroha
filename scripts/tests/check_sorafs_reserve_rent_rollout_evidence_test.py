@@ -392,6 +392,41 @@ def test_missing_signed_routes_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_quote_matrix_dimensions_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = quote_matrix()
+    payload["storage_classes"].append("hot")
+    write_json(tmp_path / "quote-matrix.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["quote_matrix"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "storage_classes must not contain duplicate values" in artifact["errors"]
+
+
+def test_quote_matrix_scenario_count_must_match_dimension_product(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = quote_matrix()
+    payload["storage_classes"].append("cold")
+    write_json(tmp_path / "quote-matrix.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["quote_matrix"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "scenario_count must equal unique storage_classes * tiers * durations count"
+        in artifact["errors"]
+    )
+
+
 def test_route_count_must_match_unique_routes_for_route_artifacts(
     tmp_path: Path,
 ) -> None:

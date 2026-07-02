@@ -88,11 +88,19 @@ def proof_generation(
     proof_latency_ms: int = 1_000,
 ) -> dict:
     payload = base("sorafs.pdp.proof_generation_canary.v1")
+    providers = [{"name": f"provider-{index:02d}"} for index in range(provider_count)]
+    challenges = [
+        {"name": f"challenge-{index:02d}"} for index in range(challenge_count)
+    ]
+    proofs = [{"name": f"proof-{index:02d}"} for index in range(proof_count)]
     payload.update(
         {
             "provider_count": provider_count,
+            "providers": providers,
             "challenge_count": challenge_count,
+            "challenges": challenges,
             "proof_count": proof_count,
+            "proofs": proofs,
             "provider_signatures_verified": True,
             "manifest_binding_verified": True,
             "commitment_binding_verified": True,
@@ -320,11 +328,107 @@ def test_proof_generation_requires_minimum_provider_count(tmp_path: Path) -> Non
     assert run_gate(tmp_path) == 1
 
 
+def test_proof_generation_provider_count_must_match_unique_providers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["provider_count"] += 1
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert "provider_count must match unique providers count" in artifact["errors"]
+
+
+def test_proof_generation_providers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["providers"].append(dict(payload["providers"][0]))
+    payload["provider_count"] = len(payload["providers"])
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert "providers must not contain duplicate values" in artifact["errors"]
+    assert "provider_count must match unique providers count" in artifact["errors"]
+
+
+def test_proof_generation_challenge_count_must_match_unique_challenges(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["challenge_count"] += 1
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert "challenge_count must match unique challenges count" in artifact["errors"]
+
+
+def test_proof_generation_challenges_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["challenges"].append(dict(payload["challenges"][0]))
+    payload["challenge_count"] = len(payload["challenges"])
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert "challenges must not contain duplicate values" in artifact["errors"]
+    assert "challenge_count must match unique challenges count" in artifact["errors"]
+
+
 def test_proof_generation_requires_minimum_proof_count(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "proof-generation.json", proof_generation(proof_count=2))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_proof_generation_proof_count_must_match_unique_proofs(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["proof_count"] += 1
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert "proof_count must match unique proofs count" in artifact["errors"]
+
+
+def test_proof_generation_proofs_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["proofs"].append(dict(payload["proofs"][0]))
+    payload["proof_count"] = len(payload["proofs"])
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert "proofs must not contain duplicate values" in artifact["errors"]
+    assert "proof_count must match unique proofs count" in artifact["errors"]
 
 
 def test_proof_latency_above_threshold_fails(tmp_path: Path) -> None:

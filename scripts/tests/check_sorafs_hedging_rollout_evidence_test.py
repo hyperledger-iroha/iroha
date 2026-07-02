@@ -46,6 +46,11 @@ def feed_collector(*, lag: int = 60) -> dict:
         "status": "passed",
         "feed_count": 3,
         "accepted_feed_count": 3,
+        "feeds": [
+            {"name": "feed-primary"},
+            {"name": "feed-secondary"},
+            {"name": "feed-tertiary"},
+        ],
         "primary_feed_present": True,
         "secondary_feed_present": True,
         "rejected_feed_count": 0,
@@ -66,6 +71,11 @@ def reference_price(*, divergence_bps: int = 50) -> dict:
         "reference_price_micro_usd": 4_200_000,
         "feed_count": 3,
         "accepted_feed_count": 3,
+        "feeds": [
+            {"name": "feed-primary"},
+            {"name": "feed-secondary"},
+            {"name": "feed-tertiary"},
+        ],
         "rejected_feed_count": 0,
         "stale_feed_count": 0,
         "divergence_bps": divergence_bps,
@@ -85,7 +95,9 @@ def billing_cycle(cycle_id: str, cycle_index: int, *, generated_at: int = GENERA
         "generated_at_unix": generated_at,
         "statement_count": 2,
         "signed_statement_count": 2,
+        "statements": [{"name": "statement-00"}, {"name": "statement-01"}],
         "line_item_count": 5,
+        "line_items": [{"name": f"line-{index:02d}"} for index in range(5)],
         "total_micro_xor": 10_000,
         "total_usd_micro": 42_000,
         "reference_price_bound": True,
@@ -140,6 +152,7 @@ def reconciliation(*, mismatch_count: int = 0) -> dict:
             {"name": "governance-penalties"},
         ],
         "line_item_count": 5,
+        "line_items": [{"name": f"line-{index:02d}"} for index in range(5)],
         "reconciled_line_item_count": 5,
         "mismatch_count": mismatch_count,
         "unmatched_event_count": 0,
@@ -305,6 +318,86 @@ def test_reference_price_divergence_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "reference-price.json", reference_price(divergence_bps=2_000))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_feed_collector_feed_count_must_match_unique_feeds(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_collector()
+    payload["feed_count"] += 1
+    payload["accepted_feed_count"] = payload["feed_count"]
+    write_json(tmp_path / "feed-collector.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["feed_collector"]["artifacts"][0]
+    assert "feed_count must match unique feeds count" in artifact["errors"]
+
+
+def test_feed_collector_feeds_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_collector()
+    payload["feeds"].append(dict(payload["feeds"][0]))
+    payload["feed_count"] = len(payload["feeds"])
+    payload["accepted_feed_count"] = len(payload["feeds"])
+    write_json(tmp_path / "feed-collector.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["feed_collector"]["artifacts"][0]
+    assert "feeds must not contain duplicate values" in artifact["errors"]
+    assert "feed_count must match unique feeds count" in artifact["errors"]
+
+
+def test_reference_price_feed_count_must_match_unique_feeds(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reference_price()
+    payload["feed_count"] += 1
+    payload["accepted_feed_count"] = payload["feed_count"]
+    write_json(tmp_path / "reference-price.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reference_price"]["artifacts"][0]
+    assert "feed_count must match unique feeds count" in artifact["errors"]
+
+
+def test_reference_price_feeds_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reference_price()
+    payload["feeds"].append(dict(payload["feeds"][0]))
+    payload["feed_count"] = len(payload["feeds"])
+    payload["accepted_feed_count"] = len(payload["feeds"])
+    write_json(tmp_path / "reference-price.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reference_price"]["artifacts"][0]
+    assert "feeds must not contain duplicate values" in artifact["errors"]
+    assert "feed_count must match unique feeds count" in artifact["errors"]
+
+
+def test_reference_price_accepted_feed_count_must_equal_feed_count(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reference_price()
+    payload["accepted_feed_count"] -= 1
+    write_json(tmp_path / "reference-price.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reference_price"]["artifacts"][0]
+    assert "accepted_feed_count must equal feed_count" in artifact["errors"]
 
 
 def test_sensitive_statement_body_fails(tmp_path: Path) -> None:
@@ -610,6 +703,90 @@ def test_billing_cycle_statement_digest_count_must_match(tmp_path: Path) -> None
     assert run_gate(tmp_path) == 1
 
 
+def test_billing_cycle_statement_count_must_match_unique_statements(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = billing_cycle("cycle-1", 1)
+    payload["statement_count"] += 1
+    payload["signed_statement_count"] = payload["statement_count"]
+    payload["statement_digests_hex"].append("34" * 32)
+    write_json(tmp_path / "billing-cycle-1.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = next(
+        artifact
+        for artifact in result["required"]["billing_cycle"]["artifacts"]
+        if artifact["fingerprint"]["cycle_id"] == "cycle-1"
+    )
+    assert "statement_count must match unique statements count" in artifact["errors"]
+
+
+def test_billing_cycle_statements_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = billing_cycle("cycle-1", 1)
+    payload["statements"].append(dict(payload["statements"][0]))
+    payload["statement_count"] = len(payload["statements"])
+    payload["signed_statement_count"] = len(payload["statements"])
+    payload["statement_digests_hex"].append("34" * 32)
+    write_json(tmp_path / "billing-cycle-1.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = next(
+        artifact
+        for artifact in result["required"]["billing_cycle"]["artifacts"]
+        if artifact["fingerprint"]["cycle_id"] == "cycle-1"
+    )
+    assert "statements must not contain duplicate values" in artifact["errors"]
+    assert "statement_count must match unique statements count" in artifact["errors"]
+
+
+def test_billing_cycle_line_item_count_must_match_unique_line_items(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = billing_cycle("cycle-1", 1)
+    payload["line_item_count"] += 1
+    write_json(tmp_path / "billing-cycle-1.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = next(
+        artifact
+        for artifact in result["required"]["billing_cycle"]["artifacts"]
+        if artifact["fingerprint"]["cycle_id"] == "cycle-1"
+    )
+    assert "line_item_count must match unique line_items count" in artifact["errors"]
+
+
+def test_billing_cycle_line_items_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = billing_cycle("cycle-1", 1)
+    payload["line_items"].append(dict(payload["line_items"][0]))
+    payload["line_item_count"] = len(payload["line_items"])
+    write_json(tmp_path / "billing-cycle-1.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = next(
+        artifact
+        for artifact in result["required"]["billing_cycle"]["artifacts"]
+        if artifact["fingerprint"]["cycle_id"] == "cycle-1"
+    )
+    assert "line_items must not contain duplicate values" in artifact["errors"]
+    assert "line_item_count must match unique line_items count" in artifact["errors"]
+
+
 def test_reconciliation_mismatch_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "reconciliation.json", reconciliation(mismatch_count=1))
@@ -662,6 +839,40 @@ def test_reconciliation_sources_must_not_duplicate(tmp_path: Path) -> None:
     artifact = payload["required"]["reconciliation"]["artifacts"][0]
     assert "sources must not contain duplicate values" in artifact["errors"]
     assert "source_count must match unique sources count" in artifact["errors"]
+
+
+def test_reconciliation_line_item_count_must_match_unique_line_items(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["line_item_count"] += 1
+    payload["reconciled_line_item_count"] = payload["line_item_count"]
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reconciliation"]["artifacts"][0]
+    assert "line_item_count must match unique line_items count" in artifact["errors"]
+
+
+def test_reconciliation_line_items_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["line_items"].append(dict(payload["line_items"][0]))
+    payload["line_item_count"] = len(payload["line_items"])
+    payload["reconciled_line_item_count"] = payload["line_item_count"]
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reconciliation"]["artifacts"][0]
+    assert "line_items must not contain duplicate values" in artifact["errors"]
+    assert "line_item_count must match unique line_items count" in artifact["errors"]
 
 
 def test_metrics_critical_alert_fails(tmp_path: Path) -> None:

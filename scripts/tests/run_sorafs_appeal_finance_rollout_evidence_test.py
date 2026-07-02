@@ -124,8 +124,20 @@ def test_dry_run_prints_complete_appeal_finance_rollout_plan(
         in plan["evidence_contract"]["deposit_lifecycle"]["required_payload_fields"]
     )
     assert (
+        "deposit_probes"
+        in plan["evidence_contract"]["deposit_lifecycle"]["required_payload_fields"]
+    )
+    assert (
         "settlement_probe_count"
         in plan["evidence_contract"]["settlement_execution"]["required_payload_fields"]
+    )
+    assert (
+        "signers"
+        in plan["evidence_contract"]["settlement_submitter"]["required_payload_fields"]
+    )
+    assert (
+        "steps"
+        in plan["evidence_contract"]["settlement_submitter"]["required_payload_fields"]
     )
     assert (
         "runtime_signed_dag_verified"
@@ -134,7 +146,43 @@ def test_dry_run_prints_complete_appeal_finance_rollout_plan(
         ]
     )
     assert (
+        "reports"
+        in plan["evidence_contract"]["governance_dag_publication"][
+            "required_payload_fields"
+        ]
+    )
+    assert (
+        "weekly_rollups"
+        in plan["evidence_contract"]["governance_dag_publication"][
+            "required_payload_fields"
+        ]
+    )
+    assert (
+        "settlement_receipts"
+        in plan["evidence_contract"]["governance_dag_publication"][
+            "required_payload_fields"
+        ]
+    )
+    assert (
         "qc_quorum_satisfied"
+        in plan["evidence_contract"]["multi_peer_reconciliation"][
+            "required_payload_fields"
+        ]
+    )
+    assert (
+        "peers"
+        in plan["evidence_contract"]["multi_peer_reconciliation"][
+            "required_payload_fields"
+        ]
+    )
+    assert (
+        "validators"
+        in plan["evidence_contract"]["multi_peer_reconciliation"][
+            "required_payload_fields"
+        ]
+    )
+    assert (
+        "cases"
         in plan["evidence_contract"]["multi_peer_reconciliation"][
             "required_payload_fields"
         ]

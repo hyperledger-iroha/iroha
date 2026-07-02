@@ -106,6 +106,10 @@ def test_dry_run_prints_complete_repair_rollout_plan(tmp_path: Path, capsys) -> 
         in plan["evidence_contract"]["auditor_roster"]["required_payload_fields"]
     )
     assert (
+        "auditors"
+        in plan["evidence_contract"]["auditor_roster"]["required_payload_fields"]
+    )
+    assert (
         "evidence_bundle_digest_hex"
         in plan["evidence_contract"]["failure_capture"]["required_payload_fields"]
     )

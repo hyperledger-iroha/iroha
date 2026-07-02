@@ -296,6 +296,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "routes",
         "case_count",
         "accepted_case_count",
+        "cases",
         "appellant_auth_enforced",
         "proof_token_verified",
         "deposit_confirmation_bound",
@@ -312,6 +313,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "roster_hash_hex",
         "sortition_seed_hex",
         "panel_size",
+        "jurors",
         "quorum",
         "pop_snapshot_bound",
         "juror_eligibility_verified",
@@ -325,6 +327,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "roster_hash_hex",
         "session_count",
         "attested_session_count",
+        "sessions",
         "attested_viewer_enabled",
         "role_scoped_manifest_verified",
         "short_lived_urls_verified",
@@ -383,7 +386,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "roster_hash_hex",
         "notification_count",
         "delivered_notification_count",
+        "notifications",
         "juror_count",
+        "jurors",
         "dedup_keys_verified",
         "transport_canary_passed",
         "retry_policy_verified",
@@ -400,7 +405,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "routes",
         "panel_size",
         "commit_count",
+        "commits",
         "reveal_count",
+        "reveals",
         "commit_auth_bound_to_juror",
         "reveal_auth_bound_to_juror",
         "quorum_satisfied",
@@ -444,6 +451,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "roster_hash_hex",
         "tally_digest_hex",
         "settlement_count",
+        "settlements",
         "appeal_finance_report_published",
         "settlement_receipt_published",
         "treasury_reconciliation_passed",
@@ -472,8 +480,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "tally_digest_hex",
         "policy_digest_hex",
         "peer_count",
+        "peers",
         "validator_count",
+        "validators",
         "case_count",
+        "cases",
         "appeal_submission_verified",
         "juror_selection_verified",
         "evidence_access_verified",
@@ -638,7 +649,25 @@ def validate_appeal_intake(
     validate_fresh(payload, errors, options)
     require_hex(payload, "case_digest_hex", HEX64_LEN, errors)
     validate_route_inventory(payload, REQUIRED_INTAKE_ROUTES, errors)
-    require_count_equal(payload, "case_count", "accepted_case_count", errors)
+    case_count = require_count_equal(payload, "case_count", "accepted_case_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "cases",
+        "case_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    accepted_case_count = 0
+    for index, record in require_object_array(payload, "cases", errors):
+        require_string(record, "name", errors)
+        accepted = record.get("accepted")
+        if not isinstance(accepted, bool):
+            errors.append(f"cases[{index}].accepted must be a boolean")
+        elif accepted:
+            accepted_case_count += 1
+    if isinstance(case_count, int) and case_count != accepted_case_count:
+        errors.append("accepted_case_count must match accepted cases count")
     require_bool_true(payload, "appellant_auth_enforced", errors)
     require_bool_true(payload, "proof_token_verified", errors)
     require_bool_true(payload, "deposit_confirmation_bound", errors)
@@ -666,6 +695,24 @@ def validate_sortition_roster(
         options.min_panel_size,
         errors,
     )
+    require_string_inventory_count_match(
+        payload,
+        "jurors",
+        "panel_size",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    eligible_juror_count = 0
+    for index, record in require_object_array(payload, "jurors", errors):
+        require_string(record, "name", errors)
+        eligible = record.get("eligible")
+        if not isinstance(eligible, bool):
+            errors.append(f"jurors[{index}].eligible must be a boolean")
+        elif eligible:
+            eligible_juror_count += 1
+    if panel_size and panel_size != eligible_juror_count:
+        errors.append("panel_size must match eligible jurors count")
     quorum = require_positive_int(payload, "quorum", errors)
     if panel_size:
         require_maximum_value(
@@ -691,6 +738,28 @@ def validate_evidence_viewer(
     require_hex(payload, "case_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "roster_hash_hex", HEX64_LEN, errors)
     session_count = require_count_equal(payload, "session_count", "attested_session_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "sessions",
+        "session_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    attested_session_count = 0
+    logged_session_count = 0
+    for index, record in require_object_array(payload, "sessions", errors):
+        require_string(record, "name", errors)
+        attested = record.get("attested")
+        if not isinstance(attested, bool):
+            errors.append(f"sessions[{index}].attested must be a boolean")
+        elif attested:
+            attested_session_count += 1
+        logged = record.get("logged")
+        if not isinstance(logged, bool):
+            errors.append(f"sessions[{index}].logged must be a boolean")
+        elif logged:
+            logged_session_count += 1
     require_bool_true(payload, "attested_viewer_enabled", errors)
     require_bool_true(payload, "role_scoped_manifest_verified", errors)
     require_bool_true(payload, "short_lived_urls_verified", errors)
@@ -725,6 +794,16 @@ def validate_evidence_viewer(
         "session_count",
         errors,
     )
+    if (
+        isinstance(session_count, int)
+        and session_count != attested_session_count
+    ):
+        errors.append("attested_session_count must match attested sessions count")
+    if (
+        isinstance(session_count, int)
+        and session_count != logged_session_count
+    ):
+        errors.append("logged_session_count must match logged sessions count")
     require_string_coverage(payload, "roles_tested", "", REQUIRED_VIEWER_ROLES, errors)
     require_string_coverage(
         payload,
@@ -786,8 +865,52 @@ def validate_juror_notifications(
     validate_fresh(payload, errors, options)
     require_hex(payload, "case_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "roster_hash_hex", HEX64_LEN, errors)
-    require_count_equal(payload, "notification_count", "delivered_notification_count", errors)
-    require_positive_int(payload, "juror_count", errors)
+    notification_count = require_count_equal(
+        payload,
+        "notification_count",
+        "delivered_notification_count",
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "notifications",
+        "notification_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    delivered_notification_count = 0
+    for index, record in require_object_array(payload, "notifications", errors):
+        require_string(record, "name", errors)
+        delivered = record.get("delivered")
+        if not isinstance(delivered, bool):
+            errors.append(f"notifications[{index}].delivered must be a boolean")
+        elif delivered:
+            delivered_notification_count += 1
+    juror_count = require_positive_int(payload, "juror_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "jurors",
+        "juror_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "jurors", errors):
+        require_string(record, "name", errors)
+    if (
+        isinstance(notification_count, int)
+        and notification_count != delivered_notification_count
+    ):
+        errors.append(
+            "delivered_notification_count must match delivered notifications count"
+        )
+    if (
+        isinstance(juror_count, int)
+        and isinstance(notification_count, int)
+        and juror_count > notification_count
+    ):
+        errors.append("juror_count must be <= notification_count")
     require_bool_true(payload, "dedup_keys_verified", errors)
     require_bool_true(payload, "transport_canary_passed", errors)
     require_bool_true(payload, "retry_policy_verified", errors)
@@ -811,8 +934,30 @@ def validate_commit_reveal(
         options.min_panel_size,
         errors,
     )
-    require_positive_int(payload, "commit_count", errors)
-    require_positive_int(payload, "reveal_count", errors)
+    commit_count = require_positive_int(payload, "commit_count", errors)
+    reveal_count = require_positive_int(payload, "reveal_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "commits",
+        "commit_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "commits", errors):
+        require_string(record, "name", errors)
+    require_string_inventory_count_match(
+        payload,
+        "reveals",
+        "reveal_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "reveals", errors):
+        require_string(record, "name", errors)
+    if commit_count > 0 and reveal_count > 0 and reveal_count > commit_count:
+        errors.append("reveal_count must be <= commit_count")
     require_bool_true(payload, "commit_auth_bound_to_juror", errors)
     require_bool_true(payload, "reveal_auth_bound_to_juror", errors)
     require_bool_true(payload, "quorum_satisfied", errors)
@@ -877,6 +1022,16 @@ def validate_settlement_integration(
     require_hex(payload, "roster_hash_hex", HEX64_LEN, errors)
     require_hex(payload, "tally_digest_hex", HEX64_LEN, errors)
     require_positive_int(payload, "settlement_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "settlements",
+        "settlement_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "settlements", errors):
+        require_string(record, "name", errors)
     require_bool_true(payload, "appeal_finance_report_published", errors)
     require_bool_true(payload, "settlement_receipt_published", errors)
     require_bool_true(payload, "treasury_reconciliation_passed", errors)
@@ -921,8 +1076,46 @@ def validate_e2e_panel(
     require_hex(payload, "tally_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
     require_minimum_int(payload, "peer_count", options.min_peers, errors)
+    require_string_inventory_count_match(
+        payload,
+        "peers",
+        "peer_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "peers", errors):
+        require_string(record, "name", errors)
     require_minimum_int(payload, "validator_count", options.min_peers, errors)
-    require_positive_int(payload, "case_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "validators",
+        "validator_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "validators", errors):
+        require_string(record, "name", errors)
+    case_count = require_positive_int(payload, "case_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "cases",
+        "case_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    passed_case_count = 0
+    for index, record in require_object_array(payload, "cases", errors):
+        require_string(record, "name", errors)
+        passed = record.get("passed")
+        if not isinstance(passed, bool):
+            errors.append(f"cases[{index}].passed must be a boolean")
+        elif passed:
+            passed_case_count += 1
+    if case_count > 0 and case_count != passed_case_count:
+        errors.append("case_count must match passed cases count")
     require_bool_true(payload, "appeal_submission_verified", errors)
     require_bool_true(payload, "juror_selection_verified", errors)
     require_bool_true(payload, "evidence_access_verified", errors)

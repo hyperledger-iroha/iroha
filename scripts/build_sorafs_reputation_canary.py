@@ -8,6 +8,7 @@ import json
 import os
 import secrets
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +90,35 @@ def validate_canonical_string(value: str | None, *, label: str, errors: list[str
         errors.append(f"{label} must be a non-empty canonical string")
 
 
+def split_csv_values(values: Sequence[str]) -> list[str]:
+    """Split repeated comma-separated CLI values into canonical strings."""
+
+    items: list[str] = []
+    for value in values:
+        for item in value.split(","):
+            stripped = item.strip()
+            if stripped:
+                items.append(stripped)
+    return items
+
+
+def validate_provider_inventory(args: argparse.Namespace, errors: list[str]) -> None:
+    """Validate reviewed provider names and bind them to provider_count."""
+
+    provider_names = split_csv_values(args.provider_name)
+    if not provider_names:
+        errors.append("--provider-name is required")
+    for name in provider_names:
+        validate_canonical_string(name, label="--provider-name", errors=errors)
+    if len(set(provider_names)) != len(provider_names):
+        errors.append("--provider-name must not contain duplicates")
+    if args.provider_count != len(set(provider_names)):
+        errors.append(
+            "--provider-count must match the number of unique --provider-name values"
+        )
+    args.providers = provider_names
+
+
 def common_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build fields shared by reputation canary payloads."""
 
@@ -110,6 +140,15 @@ def snapshot_fields(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def provider_rows(args: argparse.Namespace) -> list[dict[str, str]]:
+    """Return payload-free provider inventory rows for count-bearing canaries."""
+
+    providers = getattr(args, "providers", None)
+    if providers is None:
+        providers = split_csv_values(args.provider_name)
+    return [{"name": name} for name in providers]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free reputation rollout canary payload."""
 
@@ -120,6 +159,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "status": "accepted",
                 "provider_count": args.provider_count,
+                "providers": provider_rows(args),
             }
         )
     elif args.kind == "provider":
@@ -161,6 +201,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "valid": True,
                 "proof_verified": True,
                 "provider_count": args.provider_count,
+                "providers": provider_rows(args),
                 "provider_id": args.provider_id,
                 "provider_score_bps": args.provider_score_bps,
             }
@@ -171,6 +212,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "status": "passed",
                 "metrics_scrape_success": True,
                 "provider_count": args.provider_count,
+                "providers": provider_rows(args),
                 "snapshot_age_seconds": args.snapshot_age_seconds,
                 "ingest_lag_seconds": args.ingest_lag_seconds,
                 "response_bodies_included": False,
@@ -195,6 +237,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "routing_weight_changed": True,
                 "incentive_score_consumed": True,
                 "provider_count": args.provider_count,
+                "providers": provider_rows(args),
                 "raw_provider_records_included": False,
             }
         )
@@ -225,6 +268,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     validate_hex(args.snapshot_id_hex, option="--snapshot-id-hex", length=HEX32_LEN, errors=errors)
     validate_hex(args.merkle_root_hex, option="--merkle-root-hex", length=HEX64_LEN, errors=errors)
     validate_thresholds(args, errors)
+    validate_provider_inventory(args, errors)
     if args.provider_score_bps > 10_000:
         errors.append("--provider-score-bps must be <= 10000")
     if args.kind == "provider":
@@ -354,6 +398,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--merkle-root-hex", required=True)
     parser.add_argument("--provider-id", default="provider-a")
     parser.add_argument("--provider-count", type=positive_int_arg, default=2)
+    parser.add_argument("--provider-name", action="append", default=[])
     parser.add_argument("--provider-score-bps", type=non_negative_int_arg, default=9400)
     parser.add_argument("--leaf-index", type=positive_int_arg, default=1)
     parser.add_argument("--sibling-hex", action="append", default=[])

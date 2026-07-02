@@ -105,6 +105,14 @@ def test_dry_run_prints_complete_potr_rollout_plan(tmp_path: Path, capsys) -> No
         in plan["evidence_contract"]["multi_provider_probe"]["required_payload_fields"]
     )
     assert (
+        "providers"
+        in plan["evidence_contract"]["multi_provider_probe"]["required_payload_fields"]
+    )
+    assert (
+        "receipts"
+        in plan["evidence_contract"]["multi_provider_probe"]["required_payload_fields"]
+    )
+    assert (
         "ml_dsa_provider_signature_verified"
         in plan["evidence_contract"]["receipt_validation"]["required_payload_fields"]
     )

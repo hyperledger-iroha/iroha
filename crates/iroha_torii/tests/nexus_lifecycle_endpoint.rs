@@ -207,6 +207,29 @@ fn seed_invalid_autoscale_lane_with_height(harness: &NexusHarness, lane_id: Lane
     );
 }
 
+fn seed_autoscale_lane_queue_capacity(harness: &NexusHarness, lane_id: LaneId, teu_capacity: u64) {
+    let mut nexus = harness.state.nexus.write();
+    let mut lanes = nexus.lane_catalog.lanes().to_vec();
+    let lane = lanes
+        .iter_mut()
+        .find(|lane| lane.id == lane_id)
+        .expect("seeded autoscale lane must be present");
+    lane.metadata.insert(
+        "scheduler.teu_capacity".to_owned(),
+        teu_capacity.to_string(),
+    );
+    nexus.lane_catalog =
+        LaneCatalog::new(nexus.lane_catalog.lane_count(), lanes).expect("valid lane catalog");
+    nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+}
+
+fn refresh_queue_from_state(harness: &NexusHarness) {
+    let nexus = harness.state.nexus_snapshot();
+    let view = harness.state.view();
+    harness.queue.reconfigure_nexus(&nexus, &view, None);
+}
+
 fn seed_autoscale_lane(
     harness: &NexusHarness,
     lane_id: LaneId,
@@ -560,7 +583,10 @@ async fn nexus_lifecycle_rejects_non_node_operator_key_without_mutating_catalog_
 #[tokio::test]
 async fn nexus_lifecycle_rejects_when_disabled() {
     let harness = build_app(false);
-    let body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let lane_id = LaneId::new(1);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let before_limits = harness.queue.queue_limits().for_lane(lane_id);
+    let body = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"202020"}}],"retire":[]}"#;
     let req = fixtures::operator_signed_request(
         &harness.key_pair,
         Request::builder()
@@ -573,6 +599,16 @@ async fn nexus_lifecycle_rejects_when_disabled() {
     );
     let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "disabled Nexus lifecycle rejection must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        before_limits,
+        "disabled Nexus lifecycle rejection must not refresh queue limits from rejected metadata"
+    );
 }
 
 #[tokio::test]
@@ -581,15 +617,18 @@ async fn nexus_lifecycle_rejects_duplicate_additions_without_mutating_catalog() 
 
     for (body, expected_message) in [
         (
-            r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}},{"id":1,"dataspace_id":0,"alias":"gamma","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#,
+            r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"212121"}},{"id":1,"dataspace_id":0,"alias":"gamma","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"222222"}}],"retire":[]}"#,
             "duplicate lane id 1",
         ),
         (
-            r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}},{"id":2,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#,
+            r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"232323"}},{"id":2,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"242424"}}],"retire":[]}"#,
             "duplicate lane alias beta",
         ),
     ] {
         let harness = build_app(true);
+        let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+        let lane_one_limits = harness.queue.queue_limits().for_lane(LaneId::new(1));
+        let lane_two_limits = harness.queue.queue_limits().for_lane(LaneId::new(2));
         let resp = post_lifecycle(&harness, body).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -600,6 +639,21 @@ async fn nexus_lifecycle_rejects_duplicate_additions_without_mutating_catalog() 
             payload.message.contains(expected_message),
             "expected error message to contain {expected_message:?}, got {:?}",
             payload.message
+        );
+        assert_eq!(
+            harness.state.nexus_snapshot().lane_catalog,
+            before_catalog,
+            "duplicate-addition rejection must not mutate the committed lane catalog"
+        );
+        assert_eq!(
+            harness.queue.queue_limits().for_lane(LaneId::new(1)),
+            lane_one_limits,
+            "duplicate-addition rejection must not refresh lane 1 limits from rejected metadata"
+        );
+        assert_eq!(
+            harness.queue.queue_limits().for_lane(LaneId::new(2)),
+            lane_two_limits,
+            "duplicate-addition rejection must not refresh lane 2 limits from rejected metadata"
         );
 
         let valid_resp = post_lifecycle(&harness, valid_add).await;
@@ -613,6 +667,8 @@ async fn nexus_lifecycle_rejects_duplicate_additions_without_mutating_catalog() 
 #[tokio::test]
 async fn nexus_lifecycle_rejects_unknown_retire_without_mutating_catalog() {
     let harness = build_app(true);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let before_limits = harness.queue.queue_limits().for_lane(LaneId::new(9));
     let body = r#"{"additions":[],"retire":[9]}"#;
 
     let resp = post_lifecycle(&harness, body).await;
@@ -624,6 +680,16 @@ async fn nexus_lifecycle_rejects_unknown_retire_without_mutating_catalog() {
         payload.message.contains("cannot retire unknown lane 9"),
         "expected unknown-retire error, got {:?}",
         payload.message
+    );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "unknown-retire rejection must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(LaneId::new(9)),
+        before_limits,
+        "unknown-retire rejection must not refresh queue limits"
     );
 
     let valid_add = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
@@ -638,6 +704,7 @@ async fn nexus_lifecycle_rejects_unknown_retire_without_mutating_catalog() {
 async fn nexus_lifecycle_rejects_default_lane_retire_without_mutating_catalog() {
     let harness = build_app(true);
     let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let before_limits = harness.queue.queue_limits().for_lane(LaneId::SINGLE);
     let body = r#"{"additions":[],"retire":[0]}"#;
 
     let resp = post_lifecycle(&harness, body).await;
@@ -655,6 +722,11 @@ async fn nexus_lifecycle_rejects_default_lane_retire_without_mutating_catalog() 
         before_catalog,
         "rejected default-lane retire plan must not mutate the committed lane catalog"
     );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(LaneId::SINGLE),
+        before_limits,
+        "rejected default-lane retire plan must not refresh queue limits"
+    );
 
     let valid_add = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
     let valid_resp = post_lifecycle(&harness, valid_add).await;
@@ -667,10 +739,17 @@ async fn nexus_lifecycle_rejects_default_lane_retire_without_mutating_catalog() 
 #[tokio::test]
 async fn nexus_lifecycle_rejects_duplicate_retires_without_mutating_catalog() {
     let harness = build_app(true);
-    let valid_add = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let lane_id = LaneId::new(1);
+    let fallback_limits = harness.queue.queue_limits().for_lane(lane_id);
+    let valid_add = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"252525"}}],"retire":[]}"#;
     let add_resp = post_lifecycle(&harness, valid_add).await;
     assert_eq!(add_resp.status(), StatusCode::ACCEPTED);
     let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        252_525,
+        "setup must install lane-specific queue limits before duplicate-retire rejection"
+    );
 
     let duplicate_retire = r#"{"additions":[],"retire":[1,1]}"#;
     let resp = post_lifecycle(&harness, duplicate_retire).await;
@@ -688,6 +767,11 @@ async fn nexus_lifecycle_rejects_duplicate_retires_without_mutating_catalog() {
         before_catalog,
         "rejected duplicate-retire plan must not mutate the committed lane catalog"
     );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        252_525,
+        "rejected duplicate-retire plan must not refresh cached queue limits"
+    );
 
     let valid_retire = r#"{"additions":[],"retire":[1]}"#;
     let valid_resp = post_lifecycle(&harness, valid_retire).await;
@@ -695,12 +779,20 @@ async fn nexus_lifecycle_rejects_duplicate_retires_without_mutating_catalog() {
     let bytes = valid_resp.into_body().collect().await.unwrap().to_bytes();
     let payload = decode_norito_json(&bytes);
     assert_eq!(payload["lane_count"].as_u64(), Some(1));
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        fallback_limits,
+        "accepted retire after duplicate-retire rejection must clear lane-specific queue limits"
+    );
 }
 
 #[tokio::test]
 async fn nexus_lifecycle_rejects_unknown_dataspace_without_mutating_catalog() {
     let harness = build_app(true);
-    let body = r#"{"additions":[{"id":1,"dataspace_id":42,"alias":"unknown-dataspace","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let lane_id = LaneId::new(1);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let before_limits = harness.queue.queue_limits().for_lane(lane_id);
+    let body = r#"{"additions":[{"id":1,"dataspace_id":42,"alias":"unknown-dataspace","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"262626"}}],"retire":[]}"#;
 
     let resp = post_lifecycle(&harness, body).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -713,6 +805,16 @@ async fn nexus_lifecycle_rejects_unknown_dataspace_without_mutating_catalog() {
             .contains("lane lifecycle plan references unknown dataspace 42"),
         "expected unknown-dataspace error, got {:?}",
         payload.message
+    );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "unknown-dataspace rejection must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        before_limits,
+        "unknown-dataspace rejection must not refresh queue limits from rejected metadata"
     );
 
     let valid_add = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
@@ -727,7 +829,8 @@ async fn nexus_lifecycle_rejects_unknown_dataspace_without_mutating_catalog() {
 async fn nexus_lifecycle_rejects_same_plan_default_lane_replacement_without_mutating_catalog() {
     let harness = build_app(true);
     let before_catalog = harness.state.nexus_snapshot().lane_catalog;
-    let body = r#"{"additions":[{"id":0,"dataspace_id":0,"alias":"fresh-default-route","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[0]}"#;
+    let before_limits = harness.queue.queue_limits().for_lane(LaneId::SINGLE);
+    let body = r#"{"additions":[{"id":0,"dataspace_id":0,"alias":"fresh-default-route","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"272727"}}],"retire":[0]}"#;
 
     let resp = post_lifecycle(&harness, body).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -746,6 +849,11 @@ async fn nexus_lifecycle_rejects_same_plan_default_lane_replacement_without_muta
         before_catalog,
         "rejected default-route replacement must not mutate the committed lane catalog"
     );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(LaneId::SINGLE),
+        before_limits,
+        "rejected default-route replacement must not refresh queue limits from rejected metadata"
+    );
 
     let valid_add = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"beta","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
     let valid_resp = post_lifecycle(&harness, valid_add).await;
@@ -760,7 +868,10 @@ async fn nexus_lifecycle_rejects_reserved_autoscale_metadata() {
     let harness = build_app_with_nexus(true, |nexus| {
         nexus.autoscale.enabled = true;
     });
-    let rejected = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"spoofed-autoscale-owner","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"autoscale.managed":"false"}}],"retire":[]}"#;
+    let lane_id = LaneId::new(8);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let before_limits = harness.queue.queue_limits().for_lane(lane_id);
+    let rejected = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"spoofed-autoscale-owner","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"autoscale.managed":"false","scheduler.teu_capacity":"818181"}}],"retire":[]}"#;
 
     let resp = post_lifecycle(&harness, rejected).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -774,8 +885,18 @@ async fn nexus_lifecycle_rejects_reserved_autoscale_metadata() {
         "expected reserved autoscale metadata error, got {:?}",
         payload.message
     );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "reserved autoscale metadata rejection must not mutate the committed catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        before_limits,
+        "reserved autoscale metadata rejection must not refresh queue limits from rejected metadata"
+    );
 
-    let rejected_created_height = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"spoofed-autoscale-created-height","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"autoscale.created_height":"42"}}],"retire":[]}"#;
+    let rejected_created_height = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"spoofed-autoscale-created-height","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"autoscale.created_height":"42","scheduler.teu_capacity":"828282"}}],"retire":[]}"#;
     let resp = post_lifecycle(&harness, rejected_created_height).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -788,8 +909,18 @@ async fn nexus_lifecycle_rejects_reserved_autoscale_metadata() {
         "expected reserved autoscale created-height error, got {:?}",
         payload.message
     );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "reserved autoscale created-height rejection must not mutate the committed catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        before_limits,
+        "reserved autoscale created-height rejection must not refresh queue limits from rejected metadata"
+    );
 
-    let rejected_valid_spoof = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"elastic-lane-8","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"autoscale.managed":"true","autoscale.created_height":"42"}}],"retire":[]}"#;
+    let rejected_valid_spoof = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"elastic-lane-8","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"autoscale.managed":"true","autoscale.created_height":"42","scheduler.teu_capacity":"838383"}}],"retire":[]}"#;
     let resp = post_lifecycle(&harness, rejected_valid_spoof).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
@@ -801,6 +932,16 @@ async fn nexus_lifecycle_rejects_reserved_autoscale_metadata() {
             .contains("lane 8 uses reserved autoscale metadata"),
         "expected reserved autoscale valid-spoof error, got {:?}",
         payload.message
+    );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "reserved autoscale valid-spoof rejection must not mutate the committed catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        before_limits,
+        "reserved autoscale valid-spoof rejection must not refresh queue limits from rejected metadata"
     );
 
     let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
@@ -816,7 +957,16 @@ async fn nexus_lifecycle_rejects_manual_retire_of_valid_autoscale_lane() {
     let harness = build_app_with_nexus(true, |nexus| {
         nexus.autoscale.enabled = true;
     });
-    seed_valid_autoscale_lane(&harness, LaneId::new(1), 2);
+    let lane_id = LaneId::new(1);
+    seed_valid_autoscale_lane(&harness, lane_id, 2);
+    seed_autoscale_lane_queue_capacity(&harness, lane_id, 456_789);
+    refresh_queue_from_state(&harness);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        456_789,
+        "setup must install active autoscale lane-specific capacity before retire rejection"
+    );
 
     let rejected = r#"{"additions":[],"retire":[1]}"#;
     let resp = post_lifecycle(&harness, rejected).await;
@@ -830,6 +980,16 @@ async fn nexus_lifecycle_rejects_manual_retire_of_valid_autoscale_lane() {
             .contains("lane 1 uses reserved autoscale metadata"),
         "expected reserved autoscale metadata error, got {:?}",
         payload.message
+    );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "manual retire rejection for an active autoscale lane must not mutate the committed catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        456_789,
+        "manual retire rejection for an active autoscale lane must not refresh cached queue limits"
     );
 
     let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
@@ -845,7 +1005,10 @@ async fn nexus_lifecycle_rejects_manual_lane_inside_active_autoscale_range() {
     let harness = build_app_with_nexus(true, |nexus| {
         nexus.autoscale.enabled = true;
     });
-    let rejected = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"manual-elastic-range","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let lane_id = LaneId::new(1);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let before_limits = harness.queue.queue_limits().for_lane(lane_id);
+    let rejected = r#"{"additions":[{"id":1,"dataspace_id":0,"alias":"manual-elastic-range","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"scheduler.teu_capacity":"848484"}}],"retire":[]}"#;
 
     let resp = post_lifecycle(&harness, rejected).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -858,6 +1021,16 @@ async fn nexus_lifecycle_rejects_manual_lane_inside_active_autoscale_range() {
             .contains("reserved autoscale elastic lane id range [1, 8)"),
         "expected reserved range error, got {:?}",
         payload.message
+    );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "reserved autoscale range rejection must not mutate the committed catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        before_limits,
+        "reserved autoscale range rejection must not refresh queue limits from rejected metadata"
     );
 
     let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
@@ -873,7 +1046,17 @@ async fn nexus_lifecycle_allows_repair_retire_of_invalid_autoscale_lane() {
     let harness = build_app_with_nexus(true, |nexus| {
         nexus.autoscale.enabled = true;
     });
-    seed_invalid_autoscale_lane_with_height(&harness, LaneId::new(1), "0");
+    let lane_id = LaneId::new(1);
+    let fallback_limits = harness.queue.queue_limits().for_lane(lane_id);
+    seed_invalid_autoscale_lane_with_height(&harness, lane_id, "0");
+    seed_autoscale_lane_queue_capacity(&harness, lane_id, 111_222);
+    refresh_queue_from_state(&harness);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        111_222,
+        "setup must install invalid autoscale lane-specific capacity before repair"
+    );
 
     let unrelated = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-before-repair","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
     let resp = post_lifecycle(&harness, unrelated).await;
@@ -888,6 +1071,16 @@ async fn nexus_lifecycle_allows_repair_retire_of_invalid_autoscale_lane() {
         "expected invalid autoscale metadata error, got {:?}",
         payload.message
     );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "rejected invalid autoscale plan must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        111_222,
+        "rejected invalid autoscale plan must not refresh cached queue limits"
+    );
 
     let repair = r#"{"additions":[],"retire":[1]}"#;
     let resp = post_lifecycle(&harness, repair).await;
@@ -895,6 +1088,21 @@ async fn nexus_lifecycle_allows_repair_retire_of_invalid_autoscale_lane() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let payload = decode_norito_json(&bytes);
     assert_eq!(payload["lane_count"].as_u64(), Some(1));
+    assert!(
+        harness
+            .state
+            .nexus_snapshot()
+            .lane_catalog
+            .lanes()
+            .iter()
+            .all(|lane| lane.id != lane_id),
+        "repair-retire must remove the invalid autoscale lane from the committed catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        fallback_limits,
+        "repair-retire must clear invalid autoscale lane-specific queue limits"
+    );
 
     let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
     let resp = post_lifecycle(&harness, accepted).await;
@@ -909,12 +1117,22 @@ async fn nexus_lifecycle_allows_repair_retire_of_future_created_autoscale_lane()
     let harness = build_app_with_nexus(true, |nexus| {
         nexus.autoscale.enabled = true;
     });
+    let lane_id = LaneId::new(1);
+    let fallback_limits = harness.queue.queue_limits().for_lane(lane_id);
     seed_autoscale_lane(
         &harness,
-        LaneId::new(1),
+        lane_id,
         DataSpaceId::UNIVERSAL,
         "42".to_owned(),
         true,
+    );
+    seed_autoscale_lane_queue_capacity(&harness, lane_id, 321_123);
+    refresh_queue_from_state(&harness);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        321_123,
+        "setup must install a stale lane-specific capacity before repair"
     );
 
     let unrelated = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-before-repair","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
@@ -930,6 +1148,16 @@ async fn nexus_lifecycle_allows_repair_retire_of_future_created_autoscale_lane()
         "expected future-created autoscale metadata error, got {:?}",
         payload.message
     );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "rejected future-created autoscale plan must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        321_123,
+        "rejected future-created autoscale plan must not refresh cached queue limits"
+    );
 
     let repair = r#"{"additions":[],"retire":[1]}"#;
     let resp = post_lifecycle(&harness, repair).await;
@@ -937,6 +1165,21 @@ async fn nexus_lifecycle_allows_repair_retire_of_future_created_autoscale_lane()
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let payload = decode_norito_json(&bytes);
     assert_eq!(payload["lane_count"].as_u64(), Some(1));
+    assert!(
+        harness
+            .state
+            .nexus_snapshot()
+            .lane_catalog
+            .lanes()
+            .iter()
+            .all(|lane| lane.id != lane_id),
+        "repair-retire must remove the future-created autoscale lane from the committed catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        fallback_limits,
+        "repair-retire must clear stale lane-specific queue limits"
+    );
 
     let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
     let resp = post_lifecycle(&harness, accepted).await;
@@ -951,7 +1194,17 @@ async fn nexus_lifecycle_allows_repair_retire_of_out_of_range_autoscale_lane() {
     let harness = build_app_with_nexus(true, |nexus| {
         nexus.autoscale.enabled = true;
     });
-    seed_valid_autoscale_lane(&harness, LaneId::new(8), 2);
+    let lane_id = LaneId::new(8);
+    let fallback_limits = harness.queue.queue_limits().for_lane(lane_id);
+    seed_valid_autoscale_lane(&harness, lane_id, 2);
+    seed_autoscale_lane_queue_capacity(&harness, lane_id, 222_333);
+    refresh_queue_from_state(&harness);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        222_333,
+        "setup must install out-of-range autoscale lane-specific capacity before repair"
+    );
 
     let unrelated = r#"{"additions":[{"id":9,"dataspace_id":0,"alias":"outside-range-before-repair","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
     let resp = post_lifecycle(&harness, unrelated).await;
@@ -966,6 +1219,16 @@ async fn nexus_lifecycle_allows_repair_retire_of_out_of_range_autoscale_lane() {
         "expected out-of-range autoscale metadata error, got {:?}",
         payload.message
     );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "rejected out-of-range autoscale plan must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        222_333,
+        "rejected out-of-range autoscale plan must not refresh cached queue limits"
+    );
 
     let repair = r#"{"additions":[],"retire":[8]}"#;
     let resp = post_lifecycle(&harness, repair).await;
@@ -973,6 +1236,21 @@ async fn nexus_lifecycle_allows_repair_retire_of_out_of_range_autoscale_lane() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let payload = decode_norito_json(&bytes);
     assert_eq!(payload["lane_count"].as_u64(), Some(1));
+    assert!(
+        harness
+            .state
+            .nexus_snapshot()
+            .lane_catalog
+            .lanes()
+            .iter()
+            .all(|lane| lane.id != lane_id),
+        "repair-retire must remove the out-of-range autoscale lane from the committed catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        fallback_limits,
+        "repair-retire must clear out-of-range autoscale lane-specific queue limits"
+    );
 
     let accepted = r#"{"additions":[{"id":9,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
     let resp = post_lifecycle(&harness, accepted).await;
@@ -988,7 +1266,17 @@ async fn nexus_lifecycle_allows_repair_retire_of_off_default_autoscale_lane() {
         nexus.autoscale.enabled = true;
     });
     let off_default_dataspace = DataSpaceId::new(9);
-    seed_valid_autoscale_lane_in_dataspace(&harness, LaneId::new(1), off_default_dataspace, 2);
+    let lane_id = LaneId::new(1);
+    let fallback_limits = harness.queue.queue_limits().for_lane(lane_id);
+    seed_valid_autoscale_lane_in_dataspace(&harness, lane_id, off_default_dataspace, 2);
+    seed_autoscale_lane_queue_capacity(&harness, lane_id, 333_444);
+    refresh_queue_from_state(&harness);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        333_444,
+        "setup must install off-default autoscale lane-specific capacity before repair"
+    );
 
     let unrelated = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-before-repair","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
     let resp = post_lifecycle(&harness, unrelated).await;
@@ -1003,6 +1291,16 @@ async fn nexus_lifecycle_allows_repair_retire_of_off_default_autoscale_lane() {
         "expected off-default autoscale ownership error, got {:?}",
         payload.message
     );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "rejected off-default autoscale plan must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        333_444,
+        "rejected off-default autoscale plan must not refresh cached queue limits"
+    );
 
     let repair = r#"{"additions":[],"retire":[1]}"#;
     let resp = post_lifecycle(&harness, repair).await;
@@ -1010,6 +1308,21 @@ async fn nexus_lifecycle_allows_repair_retire_of_off_default_autoscale_lane() {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let payload = decode_norito_json(&bytes);
     assert_eq!(payload["lane_count"].as_u64(), Some(1));
+    assert!(
+        harness
+            .state
+            .nexus_snapshot()
+            .lane_catalog
+            .lanes()
+            .iter()
+            .all(|lane| lane.id != lane_id),
+        "repair-retire must remove the off-default autoscale lane from the committed catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        fallback_limits,
+        "repair-retire must clear off-default autoscale lane-specific queue limits"
+    );
 
     let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
     let resp = post_lifecycle(&harness, accepted).await;
@@ -1024,7 +1337,17 @@ async fn nexus_lifecycle_allows_repair_retire_of_disabled_autoscale_owned_lane()
     let harness = build_app_with_nexus(true, |nexus| {
         nexus.autoscale.enabled = false;
     });
-    seed_valid_autoscale_lane_with_autoscale(&harness, LaneId::new(1), 2, false);
+    let lane_id = LaneId::new(1);
+    let fallback_limits = harness.queue.queue_limits().for_lane(lane_id);
+    seed_valid_autoscale_lane_with_autoscale(&harness, lane_id, 2, false);
+    seed_autoscale_lane_queue_capacity(&harness, lane_id, 444_555);
+    refresh_queue_from_state(&harness);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        444_555,
+        "setup must install disabled-autoscale lane-specific capacity before repair"
+    );
 
     let unrelated = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-before-repair","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
     let resp = post_lifecycle(&harness, unrelated).await;
@@ -1039,6 +1362,16 @@ async fn nexus_lifecycle_allows_repair_retire_of_disabled_autoscale_owned_lane()
         "expected disabled autoscale ownership error, got {:?}",
         payload.message
     );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "rejected disabled-autoscale plan must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id).teu_capacity,
+        444_555,
+        "rejected disabled-autoscale plan must not refresh cached queue limits"
+    );
 
     let repair = r#"{"additions":[],"retire":[1]}"#;
     let resp = post_lifecycle(&harness, repair).await;
@@ -1046,6 +1379,21 @@ async fn nexus_lifecycle_allows_repair_retire_of_disabled_autoscale_owned_lane()
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let payload = decode_norito_json(&bytes);
     assert_eq!(payload["lane_count"].as_u64(), Some(1));
+    assert!(
+        harness
+            .state
+            .nexus_snapshot()
+            .lane_catalog
+            .lanes()
+            .iter()
+            .all(|lane| lane.id != lane_id),
+        "repair-retire must remove the disabled-autoscale lane from the committed catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        fallback_limits,
+        "repair-retire must clear disabled-autoscale lane-specific queue limits"
+    );
 
     let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
     let resp = post_lifecycle(&harness, accepted).await;

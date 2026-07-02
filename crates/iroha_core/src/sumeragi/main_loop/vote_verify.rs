@@ -148,6 +148,17 @@ fn prepared_slots_for_indices<'a, T>(
         .collect()
 }
 
+fn parse_vote_signature_for_algorithm(
+    algorithm: Algorithm,
+    payload: &[u8],
+) -> Result<Signature, VoteSignatureError> {
+    match algorithm {
+        Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(payload)
+            .map_err(|_| VoteSignatureError::SignatureInvalid),
+        _ => Signature::try_from_bytes(payload).map_err(|_| VoteSignatureError::SignatureInvalid),
+    }
+}
+
 /// Spawn vote signature verification workers.
 pub(super) fn spawn_vote_verify_workers(
     wake_tx: Option<mpsc::SyncSender<()>>,
@@ -259,8 +270,10 @@ pub(super) fn spawn_vote_verify_workers(
                 }
 
                 let verify_single = |prepared: &PreparedVote| {
-                    let signature = Signature::try_from_bytes(&prepared.work.vote.bls_sig)
-                        .map_err(|_| VoteSignatureError::SignatureInvalid)?;
+                    let signature = parse_vote_signature_for_algorithm(
+                        prepared.algorithm,
+                        &prepared.work.vote.bls_sig,
+                    )?;
                     signature
                         .verify(&prepared.public_key, &prepared.preimage)
                         .map_err(|_| VoteSignatureError::SignatureInvalid)
@@ -755,6 +768,20 @@ mod tests {
                 .expect("sign checked vote verification fixture")
         }
 
+        const SMALL_ORDER_ED25519_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+
+        fn signature_payload_with_malformed_ed25519_r(
+            key_pair: &KeyPair,
+            message: &[u8],
+        ) -> Vec<u8> {
+            let mut signature = checked_signature(key_pair, message).payload().to_vec();
+            signature[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+            signature
+        }
+
         #[test]
         fn vote_verify_uses_multi_message_batch_for_distinct_preimages() {
             reset_vote_verify_batch_metrics_for_tests();
@@ -873,6 +900,78 @@ mod tests {
             work_tx
                 .send(VoteVerifyWork {
                     id: 7,
+                    key,
+                    vote,
+                    signature_topology: topology,
+                    pops: Arc::new(BTreeMap::new()),
+                    chain_id,
+                    mode_tag: super::PERMISSIONED_TAG,
+                })
+                .expect("send vote verify work");
+            drop(work_tx);
+
+            let result = handle
+                .result_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("vote verify result");
+            assert!(matches!(
+                result.signature_result,
+                Err(VoteSignatureError::SignatureInvalid)
+            ));
+
+            drop(handle.work_txs);
+            for join in handle.join_handles {
+                if let Err(err) = join.join() {
+                    panic!("vote verify worker panicked: {err:?}");
+                }
+            }
+        }
+
+        #[test]
+        fn vote_verify_rejects_malformed_ed25519_signature_r() {
+            let handle = spawn_vote_verify_workers(None, 1, 1, 1);
+            let work_tx = handle.work_txs[0].clone();
+
+            let signer = checked_seed_keypair(
+                b"ed25519-vote-malformed-r-signer".to_vec(),
+                Algorithm::Ed25519,
+            );
+            let topology = Arc::new(super::network_topology::Topology::new(vec![PeerId::from(
+                signer.public_key().clone(),
+            )]));
+            let chain_id: ChainId = "vote-malformed-r-test".parse().expect("chain id");
+            let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0x43; Hash::LENGTH],
+            ));
+            let mut vote = crate::sumeragi::consensus::Vote {
+                phase: crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+                post_state_root: Hash::prehashed([1u8; Hash::LENGTH]),
+                height: 1,
+                view: 0,
+                epoch: 0,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
+                highest_qc: None,
+                signer: 0,
+                bls_sig: Vec::new(),
+            };
+            let preimage = crate::sumeragi::consensus::vote_preimage(
+                &chain_id,
+                super::PERMISSIONED_TAG,
+                &vote,
+            );
+            vote.bls_sig = signature_payload_with_malformed_ed25519_r(&signer, &preimage);
+            assert!(
+                parse_vote_signature_for_algorithm(Algorithm::Ed25519, &vote.bls_sig).is_err(),
+                "Ed25519 vote parser must reject malformed R before backend verification"
+            );
+            let key = VoteVerifyKey::from_vote(&vote);
+
+            work_tx
+                .send(VoteVerifyWork {
+                    id: 10,
                     key,
                     vote,
                     signature_topology: topology,

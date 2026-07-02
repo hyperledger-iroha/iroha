@@ -185,6 +185,15 @@ def load_helper(script_name):
     return module
 
 
+def test_lane_cli_error_detail_normalizes_decoded_text_with_casefold():
+    required_marker = "normalized_text = _decoded_public_blocker_text(text).casefold()"
+    stale_marker = "normalized_text = _decoded_public_blocker_text(text).lower()"
+    for script_name, _fallback in LANE_CLI_HELPERS:
+        source = (SCRIPT_DIR / script_name).read_text(encoding="utf-8")
+        assert required_marker in source, script_name
+        assert stale_marker not in source, script_name
+
+
 def test_lane_cli_error_detail_redacts_decoded_sensitive_messages():
     for script_name, fallback in LANE_CLI_HELPERS:
         module = load_helper(script_name)

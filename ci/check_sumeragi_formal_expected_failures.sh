@@ -4316,6 +4316,15 @@ bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-bug-allows-queue-
 bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-bug-allows-queue-allows-hard-with-pacing
 bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-bug-allows-queue-ignores-queue-pacing
 bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-bug-allows-queue-ignores-consensus-pacing
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-ignore-nexus-disabled
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-ignore-inactive-route
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-ignore-recorded-filter
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-include-unsigned-candidate
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-include-preflight-reject
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-skip-ordered-preflight
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-skip-stable-root-check
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-root-from-raw-candidates
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-root-omits-committable
 bash scripts/formal/sumeragi_apalache.sh proposal-defer-warning-bug-first-suppressed
 bash scripts/formal/sumeragi_apalache.sh proposal-defer-warning-bug-within-cooldown-logs
 bash scripts/formal/sumeragi_apalache.sh proposal-defer-warning-bug-cooldown-boundary-suppressed

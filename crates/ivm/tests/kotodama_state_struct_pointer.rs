@@ -31,6 +31,15 @@ fn encode_account_id_pointer(id: &str) -> Vec<u8> {
     encode_pointer_tlv(PointerType::NoritoBytes, raw)
 }
 
+fn encode_account_id_pointer_in_blob(id: &str) -> Vec<u8> {
+    let parsed = parse_account_id_literal(id);
+    let raw = encode_pointer_tlv(
+        PointerType::AccountId,
+        to_bytes(&parsed).expect("encode id"),
+    );
+    encode_pointer_tlv(PointerType::Blob, raw)
+}
+
 fn encode_account_id_pointer_without_inner_hash(id: &str) -> Vec<u8> {
     use iroha_crypto::Hash as IrohaHash;
 
@@ -77,6 +86,29 @@ fn pointer_from_norito_syscall_returns_pointer() {
     let tlv = vm
         .memory
         .validate_tlv(out_ptr)
+        .expect("returned pointer TLV");
+    assert_eq!(tlv.type_id, PointerType::AccountId);
+}
+
+#[test]
+fn pointer_from_norito_accepts_blob_carrier_for_public_blob_parameters() {
+    const OWNER_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    let pointer_bytes = encode_account_id_pointer_in_blob(OWNER_ID);
+
+    let mut vm = IVM::new(u64::MAX);
+    let ptr = vm
+        .alloc_input_tlv(&pointer_bytes)
+        .expect("write pointer into INPUT region");
+    vm.set_register(10, ptr);
+    vm.set_register(11, PointerType::AccountId as u64);
+
+    let mut host = CoreHost::new();
+    host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm)
+        .expect("pointer_from_norito syscall succeeds");
+
+    let tlv = vm
+        .memory
+        .validate_tlv(vm.register(10))
         .expect("returned pointer TLV");
     assert_eq!(tlv.type_id, PointerType::AccountId);
 }

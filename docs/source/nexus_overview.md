@@ -80,7 +80,7 @@ Each lane declares:
 
 - **Deep dive specification:** `docs/source/nexus.md`
 - **Lane geometry & storage layout:** `docs/source/nexus_lanes.md`
-- **Transition plan & placeholder routing:** `docs/source/nexus_transition_notes.md`
+- **Transition plan & lifecycle routing:** `docs/source/nexus_transition_notes.md`
 - **Operator onboarding walkthrough:** `docs/source/sora_nexus_operator_onboarding.md`
 - **CBDC lane policy & settlement plan:** `docs/source/cbdc_lane_playbook.md`
 - **Telemetry remediation & dashboard map:** `docs/source/nexus_telemetry_remediation_plan.md`

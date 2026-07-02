@@ -61,11 +61,8 @@ pub(crate) fn checked_ed25519_signature_from_bytes(
     if !ed25519_compressed_y_is_canonical(&r_bytes) {
         return Err("signature R is not a canonical Ed25519 point".to_owned());
     }
-    let r_point = ed25519_dalek::VerifyingKey::from_bytes(&r_bytes)
-        .map_err(|err| format!("signature R is not a canonical Ed25519 point: {err}"))?;
-    if r_point.is_weak() {
-        return Err("signature R is small-order (weak); rejected".to_owned());
-    }
+    iroha_crypto::ed25519_parse_signature(signature)
+        .map_err(|err| format!("signature R is small-order (weak); rejected: {err}"))?;
     Ok(ed25519_dalek::Signature::from_bytes(signature))
 }
 
