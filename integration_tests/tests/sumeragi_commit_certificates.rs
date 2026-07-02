@@ -25,7 +25,7 @@ use iroha::data_model::{
 use iroha_core::sumeragi::{consensus::qc_signer_count, network_topology::commit_quorum_from_len};
 use iroha_primitives::numeric::{Numeric, NumericSpec};
 use iroha_test_network::{
-    NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
+    NetworkBuilder, NetworkPeer, genesis_factory_with_post_topology, init_instruction_registry,
 };
 use iroha_test_samples::ALICE_ID;
 use norito::json;
@@ -154,19 +154,23 @@ async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
         let client = network.client();
         let baseline = client.get_status()?.blocks_non_empty;
         client.submit_blocking(Log::new(Level::INFO, "commit cert quorum".to_string()))?;
-        let status = client.get_status()?;
-        ensure!(
-            status.blocks_non_empty >= baseline.saturating_add(1),
-            "expected non-empty block to commit"
-        );
+        let status =
+            wait_for_non_empty_blocks(&client, baseline.saturating_add(1), COMMIT_CERT_TIMEOUT)
+                .await?
+                .ok_or_else(|| eyre!("timed out waiting for non-empty commit certificate block"))?;
         let expected_height = status.blocks;
         let required = commit_quorum_from_len(network.peers().len());
         let http = integration_tests::http::client();
         let torii_urls = network.torii_urls();
-        let metrics_url = client
-            .torii_url
-            .join("metrics")
-            .wrap_err("compose metrics URL")?;
+        let metrics_urls: Vec<_> = network
+            .torii_urls()
+            .iter()
+            .map(|torii| {
+                reqwest::Url::parse(torii)
+                    .and_then(|url| url.join("metrics"))
+                    .wrap_err_with(|| format!("compose metrics URL for {torii}"))
+            })
+            .collect::<Result<_>>()?;
         wait_for_commit_certificate_quorum(
             &http,
             &torii_urls,
@@ -175,8 +179,8 @@ async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
             network.peers().len(),
         )
         .await?;
-        wait_for_commit_quorum_status(&client, expected_height, required).await?;
-        wait_for_commit_vote_metrics(&http, &metrics_url, required).await?;
+        wait_for_commit_quorum_status(network.peers(), expected_height, required).await?;
+        wait_for_commit_vote_metrics(&http, &metrics_urls, required).await?;
         Ok(())
     }
     .await;
@@ -225,11 +229,12 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
         let client = submit_peer.client();
         let baseline = client.get_status()?.blocks_non_empty;
         client.submit_blocking(Log::new(Level::INFO, "block sync commit cert".to_string()))?;
-        let status = client.get_status()?;
-        ensure!(
-            status.blocks_non_empty >= baseline.saturating_add(1),
-            "expected non-empty block to commit"
-        );
+        let status =
+            wait_for_non_empty_blocks(&client, baseline.saturating_add(1), COMMIT_CERT_TIMEOUT)
+                .await?
+                .ok_or_else(|| {
+                    eyre!("timed out waiting for non-empty block before peer restart")
+                })?;
         let expected_height = status.blocks;
 
         restart_peer
@@ -506,34 +511,36 @@ async fn fetch_commit_certificates(
 }
 
 async fn wait_for_commit_quorum_status(
-    client: &iroha::client::Client,
+    peers: &[NetworkPeer],
     expected_height: u64,
     required: usize,
 ) -> Result<()> {
     let deadline = Instant::now() + COMMIT_CERT_TIMEOUT;
     let required_u64 = u64::try_from(required).unwrap_or(u64::MAX);
-    let mut last: Option<iroha::data_model::block::consensus::SumeragiCommitQuorumStatus> = None;
-    let mut last_err: Option<String> = None;
+    let mut last = Vec::new();
     loop {
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "timed out waiting for commit quorum status at height {expected_height}; last={last:?}; last_err={last_err:?}"
+                "timed out waiting for commit quorum status at height {expected_height}; last={last:?}"
             ));
         }
-        match client.get_sumeragi_status() {
-            Ok(status) => {
-                let quorum = status.commit_quorum;
-                last = Some(quorum);
-                if quorum.height >= expected_height
-                    && quorum.signatures_required >= required_u64
-                    && quorum.signatures_present >= required_u64
-                    && quorum.signatures_counted >= required_u64
-                {
-                    return Ok(());
+        last.clear();
+        for (idx, peer) in peers.iter().enumerate() {
+            match peer.client().get_sumeragi_status() {
+                Ok(status) => {
+                    let quorum = status.commit_quorum;
+                    last.push(format!("peer#{idx}({}): {quorum:?}", peer.mnemonic()));
+                    if quorum.height >= expected_height
+                        && quorum.signatures_required >= required_u64
+                        && quorum.signatures_present >= required_u64
+                        && quorum.signatures_counted >= required_u64
+                    {
+                        return Ok(());
+                    }
                 }
-            }
-            Err(err) => {
-                last_err = Some(format!("{err:?}"));
+                Err(err) => {
+                    last.push(format!("peer#{idx}({}): err={err:?}", peer.mnemonic()));
+                }
             }
         }
         sleep(COMMIT_CERT_POLL).await;
@@ -542,32 +549,73 @@ async fn wait_for_commit_quorum_status(
 
 async fn wait_for_commit_vote_metrics(
     http: &reqwest::Client,
-    metrics_url: &reqwest::Url,
+    metrics_urls: &[reqwest::Url],
     required: usize,
 ) -> Result<()> {
     let deadline = Instant::now() + COMMIT_CERT_TIMEOUT;
-    let required_f64 = f64::from(u32::try_from(required).unwrap_or(u32::MAX));
+    let mut last = Vec::new();
     loop {
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "timed out waiting for commit vote metrics (required >= {required})"
+                "timed out waiting for commit vote metrics (required >= {required}); last={last:?}"
             ));
         }
-        if let Ok(reader) = fetch_metrics(http, metrics_url).await {
-            let present = reader.get_optional("sumeragi_commit_signatures_present");
-            let counted = reader.get_optional("sumeragi_commit_signatures_counted");
-            let required_metric = reader.get_optional("sumeragi_commit_signatures_required");
-            if let (Some(present), Some(counted), Some(required_metric)) =
-                (present, counted, required_metric)
-                && present >= required_f64
-                && counted >= required_f64
-                && required_metric >= required_f64
-            {
-                return Ok(());
+        last.clear();
+        for metrics_url in metrics_urls {
+            match fetch_metrics(http, metrics_url).await {
+                Ok(reader) => {
+                    let present = reader.get_optional("sumeragi_commit_signatures_present");
+                    let counted = reader.get_optional("sumeragi_commit_signatures_counted");
+                    let required_metric =
+                        reader.get_optional("sumeragi_commit_signatures_required");
+                    if commit_vote_metrics_reached(present, counted, required_metric, required) {
+                        return Ok(());
+                    }
+                    last.push(format!(
+                        "{} present={present:?} counted={counted:?} required={required_metric:?}",
+                        metrics_url
+                    ));
+                }
+                Err(err) => {
+                    last.push(format!("{metrics_url}: {err:?}"));
+                }
             }
         }
         sleep(COMMIT_CERT_POLL).await;
     }
+}
+
+fn commit_vote_metrics_reached(
+    present: Option<f64>,
+    counted: Option<f64>,
+    required_metric: Option<f64>,
+    required: usize,
+) -> bool {
+    let required_f64 = f64::from(u32::try_from(required).unwrap_or(u32::MAX));
+    matches!(
+        (present, counted, required_metric),
+        (Some(present), Some(counted), Some(required_metric))
+            if present >= required_f64
+                && counted >= required_f64
+                && required_metric >= required_f64
+    )
+}
+
+#[test]
+fn commit_vote_metrics_reached_requires_all_quorum_metrics() {
+    assert!(commit_vote_metrics_reached(
+        Some(3.0),
+        Some(3.0),
+        Some(3.0),
+        3
+    ));
+    assert!(!commit_vote_metrics_reached(
+        Some(3.0),
+        Some(2.0),
+        Some(3.0),
+        3
+    ));
+    assert!(!commit_vote_metrics_reached(Some(3.0), None, Some(3.0), 3));
 }
 
 async fn fetch_metrics(

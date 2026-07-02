@@ -17,7 +17,7 @@ use base64::{Engine as _, engine::general_purpose as b64gp};
 use blake3::hash as blake3_hash;
 use iroha_crypto::{
     Algorithm, EcdsaSecp256k1Sha256, Error as CryptoError, Hash, KeyGenOption, KeyPair, PrivateKey,
-    PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
+    PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature, ed25519_parse_signature,
     kex::KeyExchangeScheme,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
 };
@@ -3884,7 +3884,7 @@ fn parse_identifier_receipt_signature(value: Option<&JsonValue>) -> BridgeResult
         .and_then(JsonValue::as_str)
         .ok_or(BridgeError::IdentifierReceipt)?;
     let signature_bytes = decode_identifier_receipt_hex(signature_hex)?;
-    Signature::try_from_bytes(&signature_bytes).map_err(|_| BridgeError::IdentifierReceipt)
+    ed25519_parse_signature(&signature_bytes).map_err(|_| BridgeError::IdentifierReceipt)
 }
 
 fn parse_identifier_receipt_payload_value(
@@ -4344,9 +4344,9 @@ pub unsafe extern "C" fn connect_norito_verify_detached(
         let message = unsafe { slice::from_raw_parts(message_ptr, message_len as usize) };
         let signature_bytes =
             unsafe { slice::from_raw_parts(signature_ptr, signature_len as usize) };
-        let signature = match Signature::try_from_bytes(signature_bytes) {
-            Ok(signature) => signature,
-            Err(_) => return Ok(()),
+        let signature = match connect_signature_from_algorithm_bytes(algorithm, signature_bytes) {
+            Some(signature) => signature,
+            None => return Ok(()),
         };
         match signature.verify(&public_key, message) {
             Ok(()) => {
@@ -4736,9 +4736,14 @@ fn build_confidential_encrypted_payload(
     Ok(payload)
 }
 
-fn decode_hex_array<const N: usize>(hex_str: &str) -> BridgeResult<[u8; N]> {
-    let body = hex_str.trim().trim_start_matches("0x");
-    let bytes = hex::decode(body).map_err(|_| BridgeError::ProofAttachment)?;
+fn decode_exact_lower_hex_array<const N: usize>(hex_str: &str) -> BridgeResult<[u8; N]> {
+    if hex_str.len() != N * 2
+        || !hex_str.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || hex_str.bytes().any(|byte| byte.is_ascii_uppercase())
+    {
+        return Err(BridgeError::ProofAttachment);
+    }
+    let bytes = hex::decode(hex_str).map_err(|_| BridgeError::ProofAttachment)?;
     if bytes.len() != N {
         return Err(BridgeError::ProofAttachment);
     }
@@ -4849,10 +4854,15 @@ fn parse_proof_attachment_value(value: &JsonValue) -> BridgeResult<ProofAttachme
 
     let mut attachment = attachment;
     if let Some(commit_hex) = value.get("vk_commitment_hex").and_then(JsonValue::as_str) {
-        attachment.vk_commitment = Some(decode_hex_array(commit_hex)?);
+        attachment.vk_commitment = Some(decode_exact_lower_hex_array(commit_hex)?);
     }
-    if let Some(envelope_hex) = value.get("envelope_hash_hex").and_then(JsonValue::as_str) {
-        attachment.envelope_hash = Some(decode_hex_array(envelope_hex)?);
+    let envelope_hex = value
+        .get("envelope_hash_hex")
+        .and_then(JsonValue::as_str)
+        .ok_or(BridgeError::ProofAttachment)?;
+    attachment.envelope_hash = Some(decode_exact_lower_hex_array(envelope_hex)?);
+    if attachment.structural_error().is_some() {
+        return Err(BridgeError::ProofAttachment);
     }
     Ok(attachment)
 }
@@ -5367,11 +5377,17 @@ fn connect_wallet_signature_from_algorithm_bytes(
     algorithm: Algorithm,
     signature: &[u8],
 ) -> Option<proto::WalletSignatureV1> {
+    connect_signature_from_algorithm_bytes(algorithm, signature)
+        .map(|signature| proto::WalletSignatureV1::new(algorithm, signature))
+}
+
+fn connect_signature_from_algorithm_bytes(
+    algorithm: Algorithm,
+    signature: &[u8],
+) -> Option<Signature> {
     match algorithm {
-        Algorithm::Ed25519 => proto::WalletSignatureV1::from_ed25519_bytes(signature),
-        _ => Signature::try_from_bytes(signature)
-            .ok()
-            .map(|signature| proto::WalletSignatureV1::new(algorithm, signature)),
+        Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(signature).ok(),
+        _ => Signature::try_from_bytes(signature).ok(),
     }
 }
 
@@ -17982,6 +17998,17 @@ mod accel_tests {
         CString::new(s).expect("valid cstring")
     }
 
+    fn proof_bytes_hash_hex(bytes: &[u8]) -> String {
+        let hash: [u8; Hash::LENGTH] = Hash::new(bytes).into();
+        hex::encode(hash)
+    }
+
+    fn proof_attachment_json(backend: &str, proof_b64: &str, envelope_hash_hex: &str) -> String {
+        format!(
+            r#"{{"backend":"{backend}","proof_b64":"{proof_b64}","vk_ref":{{"backend":"{backend}","name":"vk1"}},"envelope_hash_hex":"{envelope_hash_hex}"}}"#
+        )
+    }
+
     fn chain_guard() -> std::sync::MutexGuard<'static, ()> {
         super::test_support::chain_discriminant_guard()
     }
@@ -19316,9 +19343,8 @@ mod accel_tests {
         let asset_definition = asset_definition_cstring("bank", "usd");
         let inputs = [0x11_u8; 32];
         let outputs = [0x22_u8; 32];
-        let proof = cstring(
-            r#"{"backend":"groth16","proof_b64":"AA==","vk_ref":{"backend":"groth16","name":"vk1"}}"#,
-        );
+        let proof_json = proof_attachment_json("groth16", "AA==", &proof_bytes_hash_hex(&[0_u8]));
+        let proof = cstring(&proof_json);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
         let mut out_signed_len: c_ulong = 0;
         let mut out_hash = [0u8; 32];
@@ -19371,10 +19397,8 @@ mod accel_tests {
         let destination = authority.clone();
         let input = [0x11_u8; 32];
         let output = [0x22_u8; 32];
-        let proof = parse_proof_attachment_from_json_slice(
-            br#"{"backend":"groth16","proof_b64":"AA==","vk_ref":{"backend":"groth16","name":"vk1"}}"#,
-        )
-        .expect("proof");
+        let proof_json = proof_attachment_json("groth16", "AA==", &proof_bytes_hash_hex(&[0_u8]));
+        let proof = parse_proof_attachment_from_json_slice(proof_json.as_bytes()).expect("proof");
 
         let (signed_bytes, hash_bytes) =
             encode_asset_transaction(chain_id, authority, 1, None, private_key, || {
@@ -19658,6 +19682,75 @@ mod accel_tests {
                 .expect_err("legacy inline verifying-key field rejected");
             assert!(matches!(err, BridgeError::ProofAttachment));
         }
+    }
+
+    #[test]
+    fn proof_attachment_json_accepts_matching_envelope_hash() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        let json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
+        let value: JsonValue = norito::json::from_str(&json).expect("json");
+        let attachment =
+            parse_proof_attachment_value(&value).expect("matching envelope hash should parse");
+        assert_eq!(attachment.envelope_hash, Some(Hash::new(&[0_u8]).into()));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_missing_envelope_hash() {
+        let value: JsonValue = norito::json::from_str(
+            r#"{"backend":"halo2/ipa","proof_b64":"AA==","vk_ref":{"backend":"halo2/ipa","name":"vk1"}}"#,
+        )
+        .expect("json");
+        let err =
+            parse_proof_attachment_value(&value).expect_err("envelope_hash_hex must be present");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_forged_envelope_hash() {
+        let forged_hash = hex::encode([0x11_u8; 32]);
+        let json = proof_attachment_json("halo2/ipa", "AA==", &forged_hash);
+        let value: JsonValue = norito::json::from_str(&json).expect("json");
+        let err = parse_proof_attachment_value(&value)
+            .expect_err("envelope_hash_hex must match proof bytes");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_noncanonical_envelope_hash_hex() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        for noncanonical in [
+            envelope_hash_hex.to_uppercase(),
+            format!("0x{envelope_hash_hex}"),
+            format!(" {envelope_hash_hex}"),
+        ] {
+            let json = proof_attachment_json("halo2/ipa", "AA==", &noncanonical);
+            let value: JsonValue = norito::json::from_str(&json).expect("json");
+            let err = parse_proof_attachment_value(&value)
+                .expect_err("envelope_hash_hex must be exact lowercase hex");
+            assert!(matches!(err, BridgeError::ProofAttachment));
+        }
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_zero_vk_commitment() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[0_u8]);
+        let mut json = proof_attachment_json("halo2/ipa", "AA==", &envelope_hash_hex);
+        json.insert_str(
+            json.len() - 1,
+            r#","vk_commitment_hex":"0000000000000000000000000000000000000000000000000000000000000000""#,
+        );
+        let value: JsonValue = norito::json::from_str(&json).expect("json");
+        let err = parse_proof_attachment_value(&value).expect_err("zero vk commitment must reject");
+        assert!(matches!(err, BridgeError::ProofAttachment));
+    }
+
+    #[test]
+    fn proof_attachment_json_rejects_empty_proof_bytes() {
+        let envelope_hash_hex = proof_bytes_hash_hex(&[]);
+        let json = proof_attachment_json("halo2/ipa", "", &envelope_hash_hex);
+        let value: JsonValue = norito::json::from_str(&json).expect("json");
+        let err = parse_proof_attachment_value(&value).expect_err("empty proof bytes must reject");
+        assert!(matches!(err, BridgeError::ProofAttachment));
     }
 
     #[test]
@@ -21752,9 +21845,9 @@ fn java_verify_detached_bytes(
         .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
     let public_key = PublicKey::from_bytes(algorithm, public_key)
         .map_err(|_| "invalid public key bytes".to_string())?;
-    let signature = match Signature::try_from_bytes(signature) {
-        Ok(signature) => signature,
-        Err(_) => return Ok(false),
+    let signature = match connect_signature_from_algorithm_bytes(algorithm, signature) {
+        Some(signature) => signature,
+        None => return Ok(false),
     };
     match signature.verify(&public_key, message) {
         Ok(()) => Ok(true),
@@ -32297,6 +32390,17 @@ mod tests {
             .expect("generate checked identifier receipt Ed25519 fixture keypair")
     }
 
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     #[test]
     fn identifier_receipt_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_identifier_receipt_ed25519_key_fixture();
@@ -32356,8 +32460,12 @@ mod tests {
         }
     }
 
-    fn sample_identifier_signature_hex() -> String {
-        "ab".repeat(64)
+    fn sample_identifier_signature_hex(payload: &IdentifierResolutionReceiptPayload) -> String {
+        let signer = KeyPair::try_from_seed(vec![0x49; 32], Algorithm::Ed25519)
+            .expect("derive canonical identifier receipt attestation signer");
+        let signature = SignatureOf::try_new(signer.private_key(), payload)
+            .expect("sign canonical identifier receipt fixture payload");
+        hex::encode(signature.payload())
     }
 
     fn hex_hash(hash: Hash) -> String {
@@ -32508,7 +32616,7 @@ mod tests {
                 ("kind", JsonValue::from("signed")),
                 (
                     "signature",
-                    JsonValue::from(sample_identifier_signature_hex()),
+                    JsonValue::from(sample_identifier_signature_hex(payload)),
                 ),
             ]),
         )
@@ -32551,7 +32659,7 @@ mod tests {
         };
         assert_eq!(
             hex::encode(signature.payload()),
-            sample_identifier_signature_hex()
+            sample_identifier_signature_hex(&payload)
         );
     }
 
@@ -32564,6 +32672,33 @@ mod tests {
         let err = parse_identifier_receipt_value(value)
             .expect_err("all-zero identifier receipt signature must reject");
         assert!(matches!(err, BridgeError::IdentifierReceipt));
+    }
+
+    #[test]
+    fn parse_identifier_receipt_rejects_malformed_ed25519_signed_attestation_r() {
+        let payload = sample_identifier_receipt_payload();
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut signature_bytes =
+                hex::decode(sample_identifier_signature_hex(&payload)).expect("signature hex");
+            signature_bytes[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let mut value = sample_identifier_signed_receipt_json(&payload);
+            set_json_string_at_path(
+                &mut value,
+                &["attestation", "signature"],
+                hex::encode(signature_bytes),
+            );
+
+            let err = parse_identifier_receipt_value(value)
+                .expect_err("malformed Ed25519 identifier receipt signature R must reject");
+            assert!(
+                matches!(err, BridgeError::IdentifierReceipt),
+                "{label} signature R produced unexpected bridge error: {err:?}"
+            );
+        }
     }
 
     #[test]
@@ -32640,7 +32775,7 @@ mod tests {
             ),
             (
                 vec!["attestation", "signature"],
-                format!("{} ", sample_identifier_signature_hex()),
+                format!("{} ", sample_identifier_signature_hex(&payload)),
             ),
             (vec!["attestation", "kind"], " signed".to_owned()),
         ];
@@ -32727,7 +32862,9 @@ mod tests {
         let err = parse_identifier_receipt_value(json_object([
             (
                 "signature",
-                JsonValue::from(sample_identifier_signature_hex()),
+                JsonValue::from(sample_identifier_signature_hex(
+                    &sample_identifier_receipt_payload(),
+                )),
             ),
             ("signature_payload_hex", JsonValue::from("01020304A0")),
         ]))
@@ -32740,7 +32877,9 @@ mod tests {
         let err = parse_identifier_receipt_value(json_object([
             (
                 "signature",
-                JsonValue::from(sample_identifier_signature_hex()),
+                JsonValue::from(sample_identifier_signature_hex(
+                    &sample_identifier_receipt_payload(),
+                )),
             ),
             (
                 "signature_payload",
@@ -32761,7 +32900,7 @@ mod tests {
         let receipt = IdentifierResolutionReceipt {
             payload: payload.clone(),
             attestation: RamLfeReceiptAttestation::Signed(
-                Signature::from_hex(sample_identifier_signature_hex())
+                Signature::from_hex(sample_identifier_signature_hex(&payload))
                     .expect("valid signature hex"),
             ),
         };
@@ -32963,6 +33102,58 @@ mod tests {
     }
 
     #[test]
+    fn ffi_verify_detached_rejects_noncanonical_ed25519_signature_r() {
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let private = vec![0x11; 32];
+        let message = b"ffi-ed25519-malformed-r";
+        let mut pk_ptr: *mut c_uchar = ptr::null_mut();
+        let mut pk_len: c_ulong = 0;
+        let rc_pk = unsafe {
+            connect_norito_public_key_from_private(
+                Algorithm::Ed25519 as u8,
+                private.as_ptr(),
+                private.len() as c_ulong,
+                &mut pk_ptr,
+                &mut pk_len,
+            )
+        };
+        assert_eq!(rc_pk, 0, "public key derivation must succeed");
+        let public_key = unsafe { slice::from_raw_parts(pk_ptr, pk_len as usize).to_vec() };
+        connect_norito_free(pk_ptr);
+
+        let key_pair =
+            KeyPair::try_from_seed(private, Algorithm::Ed25519).expect("fixture keypair");
+        let mut signature = Signature::try_new(key_pair.private_key(), message)
+            .expect("fixture signature")
+            .payload()
+            .to_vec();
+        signature[..32].copy_from_slice(&NONCANONICAL_R);
+        let mut valid: c_uchar = 1;
+        let rc_verify = unsafe {
+            connect_norito_verify_detached(
+                Algorithm::Ed25519 as u8,
+                public_key.as_ptr(),
+                public_key.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut valid,
+            )
+        };
+
+        assert_eq!(
+            rc_verify, 0,
+            "verification call must stay fallible only for API errors"
+        );
+        assert_eq!(valid, 0, "noncanonical Ed25519 signature R must not verify");
+    }
+
+    #[test]
     fn ffi_sign_verify_secp256k1() {
         let mut private = [0u8; 32];
         private[31] = 1;
@@ -33026,6 +33217,33 @@ mod tests {
     }
 
     #[test]
+    fn java_detached_verify_helper_rejects_noncanonical_ed25519_signature_r() {
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let private = vec![0x21; 32];
+        let message = b"java-helper-detached-malformed-r";
+        let algorithm = Algorithm::Ed25519 as jni::sys::jint;
+        let public = java_public_key_from_private_bytes(algorithm, &private)
+            .expect("Java public-key helper derives key");
+        let key_pair =
+            KeyPair::try_from_seed(private, Algorithm::Ed25519).expect("fixture keypair");
+        let mut signature = Signature::try_new(key_pair.private_key(), message)
+            .expect("fixture signature")
+            .payload()
+            .to_vec();
+        signature[..32].copy_from_slice(&NONCANONICAL_R);
+
+        assert!(
+            !java_verify_detached_bytes(algorithm, &public, message, &signature)
+                .expect("Java verify helper runs"),
+            "noncanonical Ed25519 signature R must not verify"
+        );
+    }
+
+    #[test]
     fn encode_control_approve_ext_with_alg_rejects_all_zero_signature_material() {
         let sid = [0x11_u8; 32];
         let wallet_pk = [0x22_u8; 32];
@@ -33074,7 +33292,8 @@ mod tests {
         let wallet_pk = [0x22_u8; 32];
         let account = b"wallet-account";
         let algorithm = b"ed25519";
-        let key_pair = fixture_key_pair(0x62);
+        let key_pair =
+            KeyPair::try_from_seed(vec![0x62; 32], Algorithm::Ed25519).expect("fixture keypair");
         let mut signature = Signature::try_new(
             key_pair.private_key(),
             b"connect approve ext with alg malformed R",
@@ -33148,7 +33367,8 @@ mod tests {
             0xff, 0xff, 0xff, 0x7f,
         ];
         let algorithm = b"ed25519";
-        let key_pair = fixture_key_pair(0x63);
+        let key_pair =
+            KeyPair::try_from_seed(vec![0x63; 32], Algorithm::Ed25519).expect("fixture keypair");
         let mut signature = Signature::try_new(
             key_pair.private_key(),
             b"connect envelope sign result malformed R",

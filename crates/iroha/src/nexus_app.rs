@@ -7,7 +7,7 @@
 
 use std::{num::NonZeroU32, time::Duration};
 
-use iroha_crypto::{Algorithm, PublicKey, Signature};
+use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
     prelude::{AccountId, AssetId, ChainId, Metadata, Numeric, Transfer},
     transaction::{SignedTransaction, TransactionBuilder},
@@ -493,7 +493,7 @@ where
             )?;
         }
 
-        let signature = Signature::try_from_bytes(&signature_bytes)
+        let signature = iroha_crypto::ed25519_parse_signature(&signature_bytes)
             .map_err(|err| NexusAppError::InvalidSignature(err.to_string()))?;
         let signed = signable.builder.build_with_signature(signature);
         signed
@@ -1156,6 +1156,56 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(submitter.submitted_hashes.borrow().is_empty());
+    }
+
+    #[test]
+    fn nexus_app_rejects_malformed_ed25519_wallet_signature_r_before_submission() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let key_pair = checked_ed25519_keypair();
+        let account = AccountId::new(key_pair.public_key().clone());
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let submitter = FakeSubmitter::default();
+            let client = NexusAppClient::new(
+                NexusAppConfig {
+                    authority: Some(account.clone()),
+                    ..NexusAppConfig::new("test-chain".into())
+                },
+                UnsupportedConnectTransport,
+                submitter.clone(),
+            );
+            let draft = client
+                .build_transfer_draft(sample_input(account.clone()))
+                .expect("draft");
+            let mut signature = wallet_signature_for(&key_pair, &draft.signable);
+            signature.signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+
+            let error = match client.finalize_and_submit(
+                draft.signable,
+                signature,
+                NexusFinalizeOptions::default(),
+            ) {
+                Ok(_) => panic!("{label} Ed25519 wallet signature R must reject before submission"),
+                Err(error) => error,
+            };
+
+            assert_eq!(error.code(), "invalid_signature");
+            assert!(
+                submitter.submitted_hashes.borrow().is_empty(),
+                "{label} Ed25519 wallet signature R must not be submitted"
+            );
+        }
     }
 
     #[test]

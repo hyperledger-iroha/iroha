@@ -22,6 +22,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import check_android_device_lab_slot as device_lab  # noqa: E402
+import kagemusha_staged_resource_guard as resource_guard  # noqa: E402
 import kagemusha_lineage_proof_evidence as lineage_evidence  # noqa: E402
 import kagemusha_production_readiness as readiness  # noqa: E402
 
@@ -792,6 +793,9 @@ def validate_staged_run_report(
         "lineage_key_artifact_logs",
         "proof_log_path",
         "proof_log_size_bytes",
+        "max_rss_bytes",
+        "rss_limit_bytes",
+        "terminated_for_rss_limit",
     }
     extra_keys = sorted(set(document) - allowed_keys)
     if extra_keys:
@@ -803,6 +807,13 @@ def validate_staged_run_report(
         return [f"{label} is missing {missing_keys[0]}"]
     if document["schema"] != STAGED_RUN_REPORT_SCHEMA:
         return [f"{label} schema must be {STAGED_RUN_REPORT_SCHEMA}"]
+    resource_errors = resource_guard.validate_report_resource_fields(
+        document,
+        label,
+        require_not_terminated=True,
+    )
+    if resource_errors:
+        return resource_errors
     command_errors = _validate_report_command(
         document["command"],
         label,
@@ -952,6 +963,9 @@ def _validate_staged_execution_report(
         "log_path",
         "log_sha256",
         "log_size_bytes",
+        "max_rss_bytes",
+        "rss_limit_bytes",
+        "terminated_for_rss_limit",
     }
     extra_keys = sorted(set(document) - allowed_keys)
     if extra_keys:
@@ -965,6 +979,13 @@ def _validate_staged_execution_report(
         return [f"{label} schema must be {EXECUTION_REPORT_SCHEMA}"]
     if document["phase"] != expected_phase:
         return [f"{label} phase must be {expected_phase}"]
+    resource_errors = resource_guard.validate_report_resource_fields(
+        document,
+        label,
+        require_not_terminated=True,
+    )
+    if resource_errors:
+        return resource_errors
     command_errors = _validate_report_command(
         document["command"],
         label,

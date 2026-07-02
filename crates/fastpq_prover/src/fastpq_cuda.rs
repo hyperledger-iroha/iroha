@@ -910,8 +910,7 @@ pub fn fastpq_poseidon_hash_columns(
 }
 
 #[cfg(feature = "fastpq-gpu")]
-// TODO: Keep this low-level fused entry point parked until the high-level
-// scalar-equivalent batch+parent path has matching CUDA evidence.
+/// Validate and dispatch the low-level fused leaf-plus-parent Poseidon kernel.
 #[allow(dead_code)]
 pub fn fastpq_poseidon_hash_columns_fused(
     payloads: &[u64],

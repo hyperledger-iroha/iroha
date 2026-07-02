@@ -847,7 +847,7 @@ class HttpClientTransport(
             }
             payload["signer_account_id"] = normalizeNonBlank(request.signerAccountId, "signerAccountId")
             if (request.publicKeyHex != null) payload["public_key_hex"] = normalizeHex32(request.publicKeyHex, "publicKeyHex")
-            if (request.signatureB64 != null) payload["signature_b64"] = normalizeRequiredBase64Payload(request.signatureB64, "signatureB64")
+            if (request.signatureB64 != null) payload["signature_b64"] = normalizeRequiredExactBase64Payload(request.signatureB64, "signatureB64")
             if (request.creationTimeMs != null) {
                 require(request.creationTimeMs >= 0) { "creationTimeMs must be non-negative" }
                 payload["creation_time_ms"] = request.creationTimeMs
@@ -995,6 +995,20 @@ class HttpClientTransport(
             }
             require(decoded.isNotEmpty()) { "$field must not decode to empty bytes" }
             return normalized
+        }
+
+        @JvmStatic internal fun normalizeRequiredExactBase64Payload(value: String, field: String): String {
+            require(value.isNotEmpty() && value == value.trim()) { "$field must be exact standard-base64" }
+            val decoded = try {
+                Base64.getDecoder().decode(value)
+            } catch (ex: IllegalArgumentException) {
+                throw IllegalArgumentException("$field must be valid base64", ex)
+            }
+            require(decoded.isNotEmpty()) { "$field must not decode to empty bytes" }
+            require(Base64.getEncoder().encodeToString(decoded) == value) {
+                "$field must be exact standard-base64"
+            }
+            return value
         }
 
         @JvmStatic internal fun normalizeOptionalNonBlank(value: String?, field: String): String? = if (value == null) null else normalizeNonBlank(value, field)

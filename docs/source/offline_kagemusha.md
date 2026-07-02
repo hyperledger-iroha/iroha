@@ -493,7 +493,7 @@ level labels, and canonical lowercase challenge hex before producing or binding
 signed evidence. The Swift counterparty proof verifier applies the same
 canonical challenge-hash rule to offline device proofs: `challenge_hash_hex`
 must be exactly 64 lowercase hex characters, with no surrounding whitespace or
-case normalization, and Android legacy proof key ids must match the exact
+case normalization, and Android proof key ids must match the exact
 lowercase SHA-256 digest of the bound public key before signature verification
 runs. The Swift App Attest verifier also requires exact iOS team id, bundle id,
 and `production`/`development` environment strings, so case-changed or
@@ -696,6 +696,10 @@ secret-looking material before OpenSSL lookup, and private-key leaf metadata is
 checked before classifying missing, symlinked, non-regular, hardlinked, or
 unreadable key files. Trusted public-key leaf metadata follows the same
 missing, symlink, non-regular, hardlink, and unreadable-metadata shape checks.
+Trusted public keys and direct signing-helper private keys are capped at 64 KiB
+before OpenSSL lookup or signing, and trusted public-key marker scans read
+through an opened-file identity check plus a streamed byte cap instead of an
+unbounded path read.
 Missing local tooling cannot mask unsafe operator path inputs, and signature
 verification preserves key-path validation failures
 separately from private/public key mismatches. Temporary
@@ -707,7 +711,13 @@ read failures, or non-64-byte
 Ed25519 signature outputs as structured signer/verifier errors instead of
 tracebacks; signature output bytes are also read through opened-file identity
 binding and hardlink rejection, bounded to one byte beyond the 64-byte Ed25519
-shape, before the shape check. Lower-level direct symlink, hardlink, and regular-file artifact
+shape, before the shape check. All signer and verifier OpenSSL subprocesses
+strip inherited OpenSSL configuration, module, engine, trace, debug-memory, and
+`RANDFILE` environment variables plus `LD_PRELOAD`, `LD_LIBRARY_PATH`,
+`DYLD_INSERT_LIBRARIES`, and `DYLD_LIBRARY_PATH` before launch so
+operator-shell configuration or loader injection cannot change the production
+signing or verification boundary. Lower-level direct symlink, hardlink, and
+regular-file artifact
 validators reject secret-looking slot paths before traversing, stat-ing, or
 classifying slot artifacts. The symlink validator now reports unreadable
 slot-metadata, artifact-directory, and nested-artifact metadata before alias
@@ -1119,7 +1129,11 @@ child PATH, which prevents a stale `target/release/iroha` from silently
 shadowing a current release or debug binary while keeping the recorded command
 canonical. Secret-looking, control-character, surrounding-whitespace,
 backslash, and parent-segment path material is rejected before metadata reads or
-child PATH construction.
+child PATH construction. Before launching each child, the staged runner also
+removes `IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN` from the inherited
+environment even when no repo-local binary path is injected, so an operator
+shell cannot silently re-enable runtime lineage keygen while the recorded
+command remains canonical.
 Each init, append, and proof phase also writes
 a closed-schema execution report beside its log, recording the canonical
 command, phase, exit code, elapsed seconds, log byte count, and
@@ -1215,7 +1229,10 @@ specific current binary must take precedence over a stale repo-local release
 build; wrong-name, missing, non-regular, non-executable, symlinked, and
 symlinked-ancestor overrides plus secret-looking, control-character,
 surrounding-whitespace, backslash, and parent-segment path material are rejected
-before launch. It gives
+before launch. It also removes
+`IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN` from the child environment before
+spawning the keygen process even when no repo-local binary path is injected,
+matching the Reserved-lineage staged runner's runtime-keygen bypass scrub. It gives
 the child process direct ownership of the temporary
 `recursive-compact-key-artifacts.log` stdout/stderr target, flushes and fsyncs
 that log after child exit, installs it only after syncing the captured
@@ -1611,6 +1628,11 @@ The Android capture wrapper applies the same surrounding-whitespace component
 preflight to `--repo-root`, `--kotlin-dir`, `--raw-root`, `--slot-root`,
 summary-output paths, and the offline-wallet APK path before ADB preflight,
 Gradle, instrumentation, raw pulls, signer loading, or summary writes.
+The Android capture wrapper strips inherited `ANDROID_SERIAL` before ADB
+preflights and then sets it only from the explicit or auto-resolved capture
+serial, so stale operator-shell serial settings cannot redirect auto-selection,
+Gradle/install, instrumentation, raw-pull, report-render, assembly, or
+validation steps.
 The raw Android slot puller rejects padded components in `--out-root` and
 `--summary-out` before ADB queries, tar pulls, output-root creation, or summary
 writes.
@@ -2093,8 +2115,8 @@ recursive verifier scalar-projection digest. It also decodes the inner
 circuit id, a non-zero verifier-key hash, the recursive public-input schema,
 empty auxiliary metadata, and the accumulator-derived public instance columns.
 The reserved lineage profile requires those instance columns to come from a
-strict ZK1 no-trusted-setup inner proof envelope; pre-existing Halo2
-proof-envelope wrappers remain scoped to semantic v1 preverification and are
+strict ZK1 no-trusted-setup inner proof envelope. The generic Halo2
+proof-envelope parser is scoped to current semantic v1 preverification and is
 rejected under the lineage circuit id. Record-backed preverification additionally
 requires that the inline verifier-key envelope be a strict no-trusted-setup
 Halo2 IPA ZK1 key container: exactly one reserved-lineage `CID1`, exactly one
@@ -2204,6 +2226,12 @@ punctuation-bearing suffixes are rejected before STARK/FRI dispatch. Production
 STARK/FRI profile suffixes are limited to ASCII alphanumeric characters plus
 `-`, `_`, and `.`. The attachment
 backend, proof backend, and verifier-key reference backend must match exactly.
+CLI and Connect bridge proof-attachment JSON also require an explicit lowercase
+`envelope_hash_hex` that matches the proof bytes; neither path derives a
+fallback hash from the submitted proof payload. `vk_commitment_hex` and
+`envelope_hash_hex` are exact 32-byte lowercase hex strings, and malformed
+commitments, empty proof bytes, zero commitments, or mismatched envelope hashes
+fail before transaction construction.
 The attachment must also publish the asset-bound verifier-key commitment and a
 non-empty verifier-key id name; missing or empty
 trust-anchor metadata is rejected before envelope decoding. Chain-side transfer
@@ -2241,8 +2269,8 @@ dispatch. Pre-validation metadata helpers, including gas public-input metering
 and generic proof envelope metadata decoding, use the same non-production label
 gate before attempting to decode Halo2 envelopes.
 The `zk-preverify` block sidecar path records verified trace digests only. The
-background trace lane revalidates queued traces for diagnostics and future
-transparent IVM trace proving, but it does not emit mock proof artifacts.
+background trace lane revalidates queued traces for diagnostics and transparent
+IVM trace-proving readiness, but it does not emit mock proof artifacts.
 Torii-generated IVM proof attachments now carry the active verifier-key
 commitment that was checked while producing the proof, preserving the same
 trust-anchor metadata for downstream proof submission.
@@ -2309,9 +2337,10 @@ label in SDK-side Offline Note flows. Kotlin/JVM and Java Android also require
 Offline recursive verifier/proof backend metadata to match exact first-release
 strings at construction and reject padded metadata plus colon separators in
 verifier-key backend/name fields, matching the Swift validator surface. Wallet
-and redeem-planner draft bundles use the explicit
-unsupported `offline-note/draft-placeholder` backend until a real proof provider
-replaces them, so draft placeholders do not pass proof-binding validation.
+and redeem-planner draft bundles use the explicit unsupported
+`offline-note/draft-placeholder` backend as non-production fixtures; production
+request paths must provide real proof-provider output, and draft placeholders do
+not pass proof-binding validation.
 
 Compact multi-hop Kagemusha tokens now have a canonical folded public-input
 transcript in the Rust data model. Wallet/prover code folds bounded private hops
@@ -2354,7 +2383,7 @@ aggregation transcript digest before compact proof generation or verification.
 Each folded hop also carries a domain-separated Poseidon2 digest of the
 verifier-key backend and bytes used to verify that hop. This preserves the
 ordinary verifier-key commitment for host-side registry checks while giving
-future recursive verifier circuits a hash-friendly verifier-key binding. The
+recursive verifier circuits a hash-friendly verifier-key binding. The
 data-model proof-statement and verifier-key digest helpers reject unsupported or
 trusted-setup backend labels, non-empty proof-statement auxiliary bytes, and
 zero verifier-key hashes before deriving transcript material. They also require
@@ -2399,7 +2428,7 @@ transparent `OpenVerifyEnvelope`: Halo2 IPA hops bind their embedded instance co
 STARK/FRI hops bind the wrapper's public input columns. The digest preimage is
 publicly modeled as `KagemushaProofPublicInputsStatement` and hashed with the
 domain-separated `kagemusha_proof_public_inputs_statement_digest` helper, so
-wallets, SDKs, and future recursive circuits target the same Norito/Poseidon2
+wallets, SDKs, and recursive verifier circuits target the same Norito/Poseidon2
 layout. Missing or empty circuit ids, schema descriptors, instance columns, and
 verifier-key ids and bytes are rejected before transcript derivation. Halo2 IPA
 proof-statement extraction also requires the literal confidential-transfer-v2
@@ -3193,7 +3222,7 @@ literals also reject whitespace normalization before dispatch: exact raw hex
 and uppercase `UAID:` literals are canonicalized, but padded literals or
 `uaid:` values with padded hex portions fail before a Torii request is
 constructed.
-Kotlin/JVM and Android Java offline readiness parsers keep absent legacy
+Kotlin/JVM and Android Java offline readiness parsers keep absent
 optional booleans defaulting to `false`, but present optional fields such as
 `offline_note` and `offline_sync_optional` must be JSON booleans. Quoted or
 numeric optional readiness flags fail instead of being silently defaulted.
@@ -3277,6 +3306,14 @@ decode instead of being lowercased into stored note state. Its persisted integer
 fields (`version`, timestamps, and origin counters) must also be JSON integer
 numbers; quoted, fractional, or signed-64-overflow values fail instead of being
 coerced into trusted wallet-note state.
+C# wallet-note JSON follows the same first-release state policy: current
+state names must be exact, and uppercase or retired `spendPending`,
+`SPEND_PENDING`, `changePending`, and `CHANGE_PENDING` spellings fail instead
+of migrating to `spent` or `spendable`. It also keeps canonical numeric
+`amount` text and exact lowercase `note_commitment_hex` bound to the persisted
+record: signed, padded, over-precision, nonnumeric, uppercase, `0x`-prefixed,
+whitespace-padded, empty, odd-length, non-hex, or non-32-byte encodings fail
+before wallet state is restored.
 JavaScript/Node, Swift, Kotlin/JVM, Java Android, and Python multisig response
 parsers also reject padded, alias-shaped, or otherwise non-canonical returned
 `resolved_multisig_account_id` values before proposal or spec state is trusted
@@ -3620,7 +3657,7 @@ verifier also exposes canonical per-round transcript projections: after the
 caller has absorbed the polynomial-opening statement, the helper records the
 state before and after each `L || R` absorb, the derived `ipa.x` challenge, its
 inverse, and the post-challenge state used by the ordinary verifier. This gives
-the future recursive circuit a stable witness layout for label, statement, and
+the recursive circuit a stable witness layout for label, statement, and
 round-order binding without changing the transparent no-trusted-setup backend.
 The native-field side of IPA reduction now also has scalar and segment-vector
 fold gadgets for `b' = b_L*x^{-1} + b_R*x`; they keep `x` and `x^{-1}` private
@@ -3630,7 +3667,7 @@ inputs or outputs, and noncanonical scalar aliases. A companion multi-round
 `b`-vector reduction gadget folds an entire power-of-two public vector to the
 final public scalar while keeping intermediate vector layers private and
 canonical. Its round challenges and inverses are public circuit inputs linked
-to the private canonical decompositions, giving the future recursive verifier a
+to the private canonical decompositions, giving the recursive verifier a
 single checked path from the statement's `b` vector and externally projected
 Fiat-Shamir challenges to the proof's final `b` scalar. The native transparent
 IPA verifier now exposes the same deterministic `b`-reduction projection and
@@ -3862,7 +3899,7 @@ pins the full-width cost model: 532 scalar-mul terms, 45,220 naive window-table
 witnesses plus 45,220 duplicated selection-table witnesses, 723,520 naive point
 rows, and a transparent shared-table target of 532 table families with 361,760
 point rows and no trusted setup. Core now exposes the deterministic shared-table
-schedule for that target and a Poseidon2 schedule digest, so future compressed
+schedule for that target and a Poseidon2 schedule digest, so compressed
 recursive evidence can commit to exact table-family order and shifted-window
 ownership instead of relying only on prose counts. Core also exposes a concrete
 shared-table manifest that maps those 532 families to contiguous shared-row
@@ -3986,7 +4023,7 @@ verifier-slice open-envelope evidence are present; malformed or absent packaged
 keys fail closed and compact-first Rust/SDK selector surfaces remain pinned by
 the readiness guard without bypassing packaged-key evidence.
 The ignored MockProver
-cases remain deep synthesis stress coverage for future verifier-layout changes.
+cases remain deep synthesis stress coverage for verifier-layout regression checks.
 The routine Rust test suite also skips real Kagemusha folded-token, recursive
 aggregation, recursive-spend, and bridge success proof generators by default;
 those cases remain available as opt-in `--ignored --test-threads=1` runs so

@@ -3729,6 +3729,8 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-offline-doc-release-bundle-output-exactness",
     "--negative-control-offline-doc-verifier-profile-exactness",
     "--negative-control-compact-key-release-tooling",
+    "--negative-control-cli-proof-attachment-envelope-hash",
+    "--negative-control-connect-proof-attachment-envelope-hash",
     "--negative-control-compact-key-evidence",
     "--negative-control-compact-key-evidence-path-aliases",
     "--negative-control-localnet-lifecycle-evidence",
@@ -3765,6 +3767,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-compact-key-artifact-size-binding",
     "--negative-control-compact-key-evidence-json-size-limit",
     "--negative-control-compact-key-readiness-artifact-open-path-binding",
+    "--negative-control-lineage-placeholder-artifacts",
     "--negative-control-compact-key-placeholder-artifacts",
     "--negative-control-compact-key-generator-log-digest-binding",
     "--negative-control-compact-key-generator-log-size-limit",
@@ -3828,9 +3831,15 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-compact-key-staged-runner-temp-cleanup-sync-failure",
     "--negative-control-compact-key-staged-runner-child-log-file",
     "--negative-control-compact-key-staged-runner-supervisor-output-pipe",
+    "--negative-control-staged-runner-heavy-job-lock",
+    "--negative-control-staged-runner-rss-limit-termination",
+    "--negative-control-staged-runner-residual-process-group",
+    "--negative-control-staged-runner-existing-heavy-job-conflict",
+    "--negative-control-staged-runner-resource-report-fields",
     "--negative-control-staged-runner-relative-repo-root-child-path",
     "--negative-control-compact-key-staged-runner-execution-log-sha256",
     "--negative-control-compact-key-staged-runner-resume-replace-conflict",
+    "--negative-control-compact-key-staged-runner-resume-artifact-prefix",
     "--negative-control-doc-route",
     "--negative-control-evidence-helper-path-aliases",
     "--negative-control-json-duplicate-keys",
@@ -3978,8 +3987,14 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-lineage-proof-staged-runner-temp-cleanup-sync-failure",
     "--negative-control-lineage-proof-staged-runner-child-log-file",
     "--negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
+    "--negative-control-staged-runner-heavy-job-lock",
+    "--negative-control-staged-runner-rss-limit-termination",
+    "--negative-control-staged-runner-residual-process-group",
+    "--negative-control-staged-runner-existing-heavy-job-conflict",
+    "--negative-control-staged-runner-resource-report-fields",
     "--negative-control-lineage-proof-staged-runner-execution-log-sha256",
     "--negative-control-lineage-proof-staged-runner-resume-replace-conflict",
+    "--negative-control-lineage-proof-staged-runner-resume-artifact-content",
     "--negative-control-lineage-proof-log-exact",
     "--negative-control-lineage-proof-log-size-limit",
     "--negative-control-lineage-proof-log-is-file-preflight",
@@ -3999,6 +4014,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-compact-key-finalizer-execution-elapsed-binding",
     "--negative-control-compact-key-finalizer-execution-log-sha256",
     "--negative-control-compact-key-finalizer-private-permissions",
+    "--negative-control-staged-finalizer-rss-terminated-report",
     "--negative-control-compact-key-generator-log-binding",
     "--negative-control-compact-key-helper-output-private-permissions",
     "--negative-control-compact-key-staged-runner-heartbeat",
@@ -4036,10 +4052,12 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-release-bundle-section-empty-digests",
     "--negative-control-release-bundle-section-digest-distinct",
     "--negative-control-release-bundle-localnet-summary-hash-distinct",
+    "--negative-control-release-bundle-manifest-timestamp-bound",
     "--negative-control-workflow-negative-control-matrix",
     "--negative-control-workflow-negative-control-handler-duplicates",
     "--negative-control-workflow-negative-control-requirement-duplicates",
     "--negative-control-workflow-negative-control-duplicates",
+    "--negative-control-staged-resource-guard-workflow-path",
     "--negative-control-workflow",
     "--negative-control-lineage-proof-timestamp-raw",
     "--negative-control-lineage-proof-readiness-direct-hash-shape",
@@ -4075,6 +4093,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-attestation-status-exactness",
     "--negative-control-android-device-lab-attestation-result-slot-keymint-binding",
     "--negative-control-android-device-lab-capture-adb-preflight-call",
+    "--negative-control-android-device-lab-capture-android-serial-env-scrub",
     "--negative-control-android-device-lab-capture-non-disruptive-commands",
     "--negative-control-android-device-lab-command-gate-casefold",
     "--negative-control-android-device-lab-capture-adb-state-exactness",
@@ -4260,6 +4279,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-staged-bytes-hardlink-readback",
     "--negative-control-android-device-matrix",
     "--negative-control-android-signed-evidence-freshness-report",
+    "--negative-control-android-signed-evidence-freshness-matrix-coverage",
     "--negative-control-android-signed-evidence-timestamp-raw",
     "--negative-control-android-signed-evidence-summary-partial-identity",
     "--negative-control-android-signed-evidence-summary-partial-artifact-binding",
@@ -4275,6 +4295,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-metadata-artifact-size-limit",
     "--negative-control-android-device-lab-minimum-os",
     "--negative-control-android-device-lab-nonfinite-json-constants",
+    "--negative-control-android-device-lab-openssl-env-scrub",
     "--negative-control-android-device-lab-pending-queue-shape",
     "--negative-control-android-device-lab-pending-queue-closed-schema",
     "--negative-control-android-device-lab-pending-queue-empty-after-handoff",
@@ -4287,6 +4308,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-android-device-lab-private-key-regular-file-before-openssl",
     "--negative-control-android-device-lab-private-public-pair-preserves-key-path-errors",
     "--negative-control-android-device-lab-production-claim-binding",
+    "--negative-control-android-device-lab-signer-key-size-limit",
     "--negative-control-android-device-lab-public-key-file-metadata-failure",
     "--negative-control-android-device-lab-public-key-hardlink-metadata-failure",
     "--negative-control-android-device-lab-public-key-missing-before-openssl",
@@ -4517,6 +4539,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     "--negative-control-release-bundle-android-d2d-transcript-binding-shape",
     "--negative-control-release-bundle-android-root-default-wording",
     "--negative-control-release-bundle-summary-drift",
+    "--negative-control-release-bundle-manifest-timestamp-bound",
     "--negative-control-release-bundle-top-level-evidence-path",
     "--negative-control-release-bundle-top-level-evidence-binding",
     "--negative-control-release-bundle-abi7-fixture-manifest-digest-binding",
@@ -5264,6 +5287,16 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "ABI-7 compact key release tooling",
     ],
     [
+      "--negative-control-cli-proof-attachment-envelope-hash",
+      /envelope_hash_hex must be provided[\s\S]*?envelope_hash_hex may be omitted[\s\S]*?att\.structural_error\(\)[\s\S]*?None/u,
+      "CLI proof attachment envelope hash and structural gate",
+    ],
+    [
+      "--negative-control-connect-proof-attachment-envelope-hash",
+      /decode_exact_lower_hex_array[\s\S]*?decode_lenient_hex_array[\s\S]*?attachment\.structural_error\(\)\.is_some\(\)[\s\S]*?false/u,
+      "Connect bridge proof attachment envelope hash and structural gate",
+    ],
+    [
       "--negative-control-compact-key-evidence",
       /compact_key_evidence_missing[\s\S]*?compact_key_evidence_optional/u,
       "ABI-7 compact key evidence required packet",
@@ -5292,6 +5325,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-compact-key-readiness-artifact-open-path-binding",
       /expected_identity = \(expected_stat\.st_dev, expected_stat\.st_ino\)[\s\S]*?expected_identity = \(open_stat\.st_dev, open_stat\.st_ino\)/u,
       "ABI-7 recursive compact key readiness artifact open-path binding",
+    ],
+    [
+      "--negative-control-lineage-placeholder-artifacts",
+      /must be generated lineage material, not a placeholder fixture[\s\S]*?may use placeholder fixture material/u,
+      "Reserved-lineage placeholder artifact gate",
     ],
     [
       "--negative-control-compact-key-placeholder-artifacts",
@@ -5615,8 +5653,33 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-compact-key-staged-runner-supervisor-output-pipe",
-      /break\\n            except subprocess\.TimeoutExpired:[\s\S]*?sys\.stdout\.buffer\.write\(b\\"\\"\)[\s\S]*?break\\n            except subprocess\.TimeoutExpired:/u,
+      /scripts\/kagemusha_staged_resource_guard\.py[\s\S]*?process\.wait\(timeout=timeout\)[\s\S]*?process\.wait\(\)/u,
       "ABI-7 recursive compact key staged runner supervisor output pipe",
+    ],
+    [
+      "--negative-control-staged-runner-heavy-job-lock",
+      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?lock_context = resource_guard\.acquire_heavy_job_lock\(args\.resource_lock_file\)[\s\S]*?lock_context = contextlib\.nullcontext\(\)/u,
+      "Kagemusha staged runner heavy-job lock gate",
+    ],
+    [
+      "--negative-control-staged-runner-rss-limit-termination",
+      /scripts\/kagemusha_staged_resource_guard\.py[\s\S]*?if last_rss_bytes > max_rss_bytes:[\s\S]*?if False and last_rss_bytes > max_rss_bytes:/u,
+      "Kagemusha staged resource guard RSS termination gate",
+    ],
+    [
+      "--negative-control-staged-runner-residual-process-group",
+      /scripts\/kagemusha_staged_resource_guard\.py[\s\S]*?if residual_rss_bytes > 0:[\s\S]*?if False and residual_rss_bytes > 0:/u,
+      "Kagemusha staged resource guard residual process-group gate",
+    ],
+    [
+      "--negative-control-staged-runner-existing-heavy-job-conflict",
+      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?conflict_errors = resource_guard\.validate_no_conflicting_heavy_jobs\(\)[\s\S]*?conflict_errors = \[\]/u,
+      "Kagemusha staged runner existing heavy-job conflict gate",
+    ],
+    [
+      "--negative-control-staged-runner-resource-report-fields",
+      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?\*\*resource_summary\.report_fields\(\),[\s\S]*?"",/u,
+      "Kagemusha staged runner resource report fields gate",
     ],
     [
       "--negative-control-staged-runner-relative-repo-root-child-path",
@@ -5632,6 +5695,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-compact-key-staged-runner-resume-replace-conflict",
       /--replace and --resume-keygen cannot be combined[\s\S]*?--replace and --resume-keygen may be combined/u,
       "ABI-7 recursive compact key staged runner resume/replace conflict gate",
+    ],
+    [
+      "--negative-control-compact-key-staged-runner-resume-artifact-prefix",
+      /content_errors = readiness\.validate_compact_key_artifact_prefix\(prefix, artifact\)[\s\S]*?content_errors = \[\]/u,
+      "ABI-7 recursive compact key staged runner resume artifact-prefix gate",
     ],
     [
       "--negative-control-doc-route",
@@ -6550,7 +6618,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-lineage-proof-staged-runner-supervisor-output-pipe",
-      /break\\n            except subprocess\.TimeoutExpired:[\s\S]*?sys\.stdout\.buffer\.write\(b\\"\\"\)[\s\S]*?break\\n            except subprocess\.TimeoutExpired:/u,
+      /scripts\/kagemusha_staged_resource_guard\.py[\s\S]*?process\.wait\(timeout=timeout\)[\s\S]*?process\.wait\(\)/u,
       "Reserved-lineage proof staged runner supervisor output pipe",
     ],
     [
@@ -6562,6 +6630,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-lineage-proof-staged-runner-resume-replace-conflict",
       /--replace and --resume-key-artifacts cannot be combined[\s\S]*?--replace and --resume-key-artifacts may be combined/u,
       "Reserved-lineage proof staged runner resume/replace conflict gate",
+    ],
+    [
+      "--negative-control-lineage-proof-staged-runner-resume-artifact-content",
+      /return readiness\.validate_lineage_artifact_content\(path, artifact\)[\s\S]*?return \[\]/u,
+      "Reserved-lineage proof staged runner resume artifact-content gate",
     ],
     [
       "--negative-control-lineage-staged-elapsed-file-path-shape",
@@ -6637,6 +6710,16 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-workflow-negative-control-duplicates",
       /production-readiness negative-control workflow duplicate gate[\s\S]*?workflow_command \+ "\\n          " \+ workflow_command/u,
       "production-readiness negative-control workflow duplicate gate",
+    ],
+    [
+      "--negative-control-staged-finalizer-rss-terminated-report",
+      /kagemusha_finalize_lineage_proof_staged_run\.py[\s\S]*?kagemusha_finalize_recursive_compact_key_staged_run\.py[\s\S]*?require_not_terminated=True[\s\S]*?require_not_terminated=False/u,
+      "Kagemusha staged finalizer RSS-terminated report gate",
+    ],
+    [
+      "--negative-control-staged-resource-guard-workflow-path",
+      /staged resource guard workflow path[\s\S]*?scripts\/kagemusha_staged_resource_guard\.py/u,
+      "staged resource guard workflow path",
     ],
     [
       "--negative-control-lineage-proof-timestamp-raw",
@@ -6867,6 +6950,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-capture-adb-preflight-call",
       /errors = _run_adb_visibility_preflight_with_wait\(args, env=env, runner=runner\)[\s\S]*?errors = \[\]/u,
       "Android capture wrapper ADB visibility preflight call",
+    ],
+    [
+      "--negative-control-android-device-lab-capture-android-serial-env-scrub",
+      /env\.pop\(key, None\)[\s\S]*?env\.get\(key\)/u,
+      "Android capture wrapper inherited ANDROID_SERIAL scrub",
     ],
     [
       "--negative-control-android-device-lab-capture-non-disruptive-commands",
@@ -7799,6 +7887,11 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "Android signed-evidence freshness report binding",
     ],
     [
+      "--negative-control-android-signed-evidence-freshness-matrix-coverage",
+      /matrix_reports = \[[\s\S]*?_android_report_signed_evidence_is_fresh\([\s\S]*?matrix_reports = reports/u,
+      "Android signed-evidence freshness matrix coverage admission",
+    ],
+    [
       "--negative-control-android-signed-evidence-timestamp-raw",
       /SIGNED_AT_UTC_RE\.fullmatch\(signed_at_text\) is None[\s\S]*?SIGNED_AT_UTC_RE\.fullmatch\(signed_at_text\.strip\(\)\) is None/u,
       "Android signed-evidence report raw timestamp gate",
@@ -7905,7 +7998,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-android-device-lab-private-key-hardlink-metadata-failure",
-      /private_key_path\.stat\(\)\.st_nlink[\s\S]*?private key hardlink metadata could not be read[\s\S]*?private_key_path\.stat\(\)\.st_nlink/u,
+      /private_key_stat = private_key_path\.stat\(\)[\s\S]*?private key hardlink metadata could not be read[\s\S]*?private_key_stat = private_key_path\.stat\(\)/u,
       "Android device-lab private key hardlink metadata failure gate",
     ],
     [
@@ -7940,7 +8033,7 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-android-device-lab-public-key-hardlink-metadata-failure",
-      /public_key_path\.stat\(\)\.st_nlink[\s\S]*?\{label\} hardlink metadata could not be read[\s\S]*?public_key_path\.stat\(\)\.st_nlink/u,
+      /public_key_stat = public_key_path\.stat\(\)[\s\S]*?\{label\} hardlink metadata could not be read[\s\S]*?public_key_stat = public_key_path\.stat\(\)/u,
       "Android device-lab public key hardlink metadata failure gate",
     ],
     [
@@ -8147,6 +8240,16 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
       "--negative-control-android-device-lab-signature-verify-key-path-before-openssl",
       /_validate_public_key_path_shape\(public_key_path, errors=errors, label=label\)[\s\S]*?openssl = _require_openssl\(errors\)[\s\S]*?openssl = _require_openssl\(errors\)[\s\S]*?_validate_public_key_path_shape\(public_key_path, errors=errors, label=label\)/u,
       "Android device-lab signature verifier key path-before-OpenSSL gate",
+    ],
+    [
+      "--negative-control-android-device-lab-openssl-env-scrub",
+      /"LD_PRELOAD"[\s\S]*?"LD_PRELOAD_DISABLED"[\s\S]*?env\.pop\(key, None\)[\s\S]*?env\.get\(key\)[\s\S]*?env=device_lab\._openssl_child_env\(\),[\s\S]*?env=os\.environ\.copy\(\),/u,
+      "Android device-lab OpenSSL child environment scrub",
+    ],
+    [
+      "--negative-control-android-device-lab-signer-key-size-limit",
+      /public_key_stat\.st_size > MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES[\s\S]*?False and public_key_stat\.st_size > MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES[\s\S]*?private_key_stat\.st_size > device_lab\.MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES[\s\S]*?False and private_key_stat\.st_size > device_lab\.MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES/u,
+      "Android device-lab signer key size limit",
     ],
     [
       "--negative-control-android-device-lab-signer-key-path-whitespace",
@@ -9654,6 +9757,18 @@ test("Kagemusha staged runner negative controls pin heartbeat observability", ()
     expectedModes,
     "Kagemusha staged runner heartbeat guard",
   );
+  assertContainsAll(
+    readiness,
+    [
+      "scripts/kagemusha_staged_resource_guard.py",
+      "def run_with_resource_guard(",
+      "process.wait(timeout=timeout)",
+      "except subprocess.TimeoutExpired:",
+      "[kagemusha-staged-runner] {heartbeat_label} heartbeat ",
+      "[kagemusha-staged-runner] {heartbeat_label} rss-limit ",
+    ],
+    "production readiness guard must pin shared staged resource heartbeat loop",
+  );
   for (const mode of expectedModes) {
     assert.ok(
       readiness.includes(`ci/check_kagemusha_production_readiness.sh ${mode}`),
@@ -9665,12 +9780,12 @@ test("Kagemusha staged runner negative controls pin heartbeat observability", ()
   const branchSpecs = [
     [
       "--negative-control-lineage-proof-staged-runner-heartbeat",
-      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 300\.0[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 0\.0[\s\S]*?\[kagemusha-staged-runner\] lineage-proof heartbeat [\s\S]*?\[kagemusha-staged-runner\] lineage-proof quiet /u,
+      /kagemusha_run_lineage_proof_staged\.py[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 300\.0[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 0\.0[\s\S]*?kagemusha_staged_resource_guard\.py[\s\S]*?\[kagemusha-staged-runner\] \{heartbeat_label\} heartbeat [\s\S]*?\[kagemusha-staged-runner\] \{heartbeat_label\} quiet /u,
       "lineage staged runner heartbeat",
     ],
     [
       "--negative-control-compact-key-staged-runner-heartbeat",
-      /kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 300\.0[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 0\.0[\s\S]*?\[kagemusha-staged-runner\] compact-keygen heartbeat [\s\S]*?\[kagemusha-staged-runner\] compact-keygen quiet /u,
+      /kagemusha_run_recursive_compact_keygen_staged\.py[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 300\.0[\s\S]*?STAGED_COMMAND_HEARTBEAT_SECONDS = 0\.0[\s\S]*?kagemusha_staged_resource_guard\.py[\s\S]*?\[kagemusha-staged-runner\] \{heartbeat_label\} heartbeat [\s\S]*?\[kagemusha-staged-runner\] \{heartbeat_label\} quiet /u,
       "compact staged runner heartbeat",
     ],
   ];
@@ -10181,6 +10296,21 @@ test("recursive Kagemusha policy workflow and doc negative controls require exac
     /expected\s*=\s*\([\s\S]*docs\/source\/offline_kagemusha\.md contains stale retired-mode wording:[\s\S]*\+\s*label/u,
     "documentation retired-mode wording negative control must build exact per-label diagnostics",
   );
+  const roadmapAbiBranch = policyBranch("--negative-control-roadmap-abi-surface");
+  assertContainsAll(
+    roadmapAbiBranch,
+    [
+      "legacy `OfflineNotePaymentTokenEnvelope` Norito/text handoff",
+      "legacy `OfflineNoteReceiveRequestEnvelope` Norito/text handoff",
+      "legacy `OfflineNoteReceiptAckEnvelope` Norito/text handoff",
+      "classic Torii Offline middleware",
+      "roadmap.md contains stale Kagemusha first-release wording: legacy `OfflineNotePaymentTokenEnvelope` Norito/text handoff",
+      "roadmap.md contains stale Kagemusha first-release wording: legacy `OfflineNoteReceiveRequestEnvelope` Norito/text handoff",
+      "roadmap.md contains stale Kagemusha first-release wording: legacy `OfflineNoteReceiptAckEnvelope` Norito/text handoff",
+      "roadmap.md contains stale Kagemusha first-release wording: classic Torii Offline middleware",
+    ],
+    "roadmap ABI surface negative control must reject C# Offline Note handoff legacy wording",
+  );
 });
 
 test("recursive Kagemusha active marker scan covers workflow-backed and C# test surfaces", () => {
@@ -10217,9 +10347,12 @@ test("recursive Kagemusha active marker scan covers workflow-backed and C# test 
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
     "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs",
+    "scripts/kagemusha_staged_resource_guard.py",
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs",
   ];
   const genericContentSurfaces = [
     "Cargo.toml",
@@ -10275,8 +10408,13 @@ test("recursive Kagemusha active marker scan covers workflow-backed and C# test 
       "Android device-lab instrumentation active marker",
       "Android recursive spend instrumentation active marker",
       "payload benchmark active marker",
+      "staged resource guard script active marker",
       "C# recursive spend active marker",
+      "C# wallet-note strict-state active marker",
+      "C# wallet-note strict-state test active marker",
       "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+      "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs",
+      "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs",
       "generic content Python SDK active marker",
       "python/iroha_python/src/iroha_python/offline_cash.py",
       "roadmap late C# handoff scope",
@@ -15287,6 +15425,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-mobile-classic-offline-note-fixture-labels",
     "--negative-control-mobile-wallet-note-retired-state-migration",
     "--negative-control-swift-wallet-note-json-amount-exactness",
+    "--negative-control-csharp-wallet-note-json-exactness",
     "--negative-control-mobile-wallet-note-commitment-hex-exactness",
     "--negative-control-mobile-offline-note-draft-proof-replacement",
     "--negative-control-mobile-offline-note-wallet-input-cap",
@@ -15524,6 +15663,10 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     guard.indexOf('if mode == "--negative-control-swift-wallet-note-json-amount-exactness":'),
     guard.indexOf('if mode == "--negative-control-mobile-wallet-note-commitment-hex-exactness":'),
   );
+  const csharpWalletNoteJsonExactnessBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-csharp-wallet-note-json-exactness":'),
+    guard.indexOf('if mode == "--negative-control-mobile-wallet-note-commitment-hex-exactness":'),
+  );
   const mobileWalletNoteCommitmentHexExactnessBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-mobile-wallet-note-commitment-hex-exactness":'),
     guard.indexOf('if mode == "--negative-control-mobile-offline-note-draft-proof-replacement":'),
@@ -15567,13 +15710,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /def check_mobile_wallet_note_state_strictness\(texts, errors\):[\s\S]*?Swift Offline Note wallet-note state decoder retired aliases[\s\S]*?Android Java Offline Note wallet-note state decoder retired aliases[\s\S]*?Swift Offline Note wallet-note retired state rejection tests[\s\S]*?Android Java Offline Note wallet-note retired state rejection tests[\s\S]*?Offline Note wallet-note retired state README wording/u,
-    "SDK parity guard must pin wallet-note retired state rejection across mobile SDKs and docs",
+    /def check_mobile_wallet_note_state_strictness\(texts, errors\):[\s\S]*?Swift Offline Note wallet-note state decoder retired aliases[\s\S]*?Android Java Offline Note wallet-note state decoder retired aliases[\s\S]*?C# Offline Note wallet-note state decoder retired aliases[\s\S]*?Swift Offline Note wallet-note retired state rejection tests[\s\S]*?Android Java Offline Note wallet-note retired state rejection tests[\s\S]*?C# Offline Note wallet-note retired state rejection tests[\s\S]*?Offline Note wallet-note retired state README wording/u,
+    "SDK parity guard must pin wallet-note retired state rejection across mobile and C# SDKs plus docs",
   );
   assert.match(
     guard,
     /def check_swift_wallet_note_json_amount_exactness\(texts, errors\):[\s\S]*?Swift Offline Note wallet-note direct asset\/amount exactness source[\s\S]*?Swift Offline Note wallet-note JSON amount exactness source[\s\S]*?Swift Offline Note wallet-note JSON amount exactness tests[\s\S]*?--negative-control-swift-wallet-note-json-amount-exactness/u,
     "SDK parity guard must pin Swift wallet-note direct and JSON asset/amount exactness source and tests",
+  );
+  assert.match(
+    guard,
+    /def check_csharp_wallet_note_json_exactness\(texts, errors\):[\s\S]*?C# Offline Note wallet-note JSON exactness source[\s\S]*?C# Offline Note wallet-note JSON exactness tests[\s\S]*?csharp\/README\.md Offline Note wallet-note JSON exactness wording[\s\S]*?--negative-control-csharp-wallet-note-json-exactness/u,
+    "SDK parity guard must pin C# wallet-note JSON amount and commitment exactness source, tests, and README wording",
+  );
+  assertContainsAll(
+    guard,
+    [
+      'AssertRejects(JsonWith(encoded, "note_commitment_hex", " " + LowerHex(Fixed32(0x7b))));',
+      'AssertRejects(JsonWith(encoded, "note_commitment_hex", ""));',
+      'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7b))[..63]));',
+      'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7b))[..63] + "g"));',
+      'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Bytes(0x7d, 31))));',
+      'AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Bytes(0x7e, 33))));',
+    ],
+    "SDK parity guard must pin C# wallet-note malformed commitment hex adversarial vectors",
   );
   assert.match(
     guard,
@@ -15632,8 +15792,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /check_mobile_sccp_runner_coverage\(texts, errors\)[\s\S]*?check_mobile_retired_offline_note_issuers\(texts, errors\)[\s\S]*?check_mobile_retired_offline_note_submitters\(texts, errors\)[\s\S]*?check_swift_retired_offline_note_transaction_builders\(texts, errors\)[\s\S]*?check_bridge_retired_offline_note_transaction_builders\(texts, errors\)[\s\S]*?check_mobile_classic_offline_note_fixture_labels\(texts, errors\)[\s\S]*?check_mobile_wallet_note_state_strictness\(texts, errors\)[\s\S]*?check_swift_wallet_note_json_amount_exactness\(texts, errors\)[\s\S]*?check_mobile_offline_note_draft_proof_replacement\(texts, errors\)[\s\S]*?check_mobile_offline_note_wallet_input_cap\(texts, errors\)[\s\S]*?check_mobile_offline_note_wallet_positive_amounts\(texts, errors\)[\s\S]*?check_javascript_torii_runner_coverage\(texts, errors\)/u,
-    "SDK parity guard must run retired Offline Note issuer, submitter, Swift builder, bridge builder, fixture-label, wallet-note state, Swift wallet-note amount, draft-proof, input-cap, and positive-amount checks with the mobile coverage checks",
+    /check_mobile_sccp_runner_coverage\(texts, errors\)[\s\S]*?check_mobile_retired_offline_note_issuers\(texts, errors\)[\s\S]*?check_mobile_retired_offline_note_submitters\(texts, errors\)[\s\S]*?check_swift_retired_offline_note_transaction_builders\(texts, errors\)[\s\S]*?check_bridge_retired_offline_note_transaction_builders\(texts, errors\)[\s\S]*?check_mobile_classic_offline_note_fixture_labels\(texts, errors\)[\s\S]*?check_mobile_wallet_note_state_strictness\(texts, errors\)[\s\S]*?check_swift_wallet_note_json_amount_exactness\(texts, errors\)[\s\S]*?check_csharp_wallet_note_json_exactness\(texts, errors\)[\s\S]*?check_mobile_offline_note_draft_proof_replacement\(texts, errors\)[\s\S]*?check_mobile_offline_note_wallet_input_cap\(texts, errors\)[\s\S]*?check_mobile_offline_note_wallet_positive_amounts\(texts, errors\)[\s\S]*?check_javascript_torii_runner_coverage\(texts, errors\)/u,
+    "SDK parity guard must run retired Offline Note issuer, submitter, Swift builder, bridge builder, fixture-label, wallet-note state, Swift/C# wallet-note exactness, draft-proof, input-cap, and positive-amount checks with the mobile coverage checks",
   );
   assert.match(
     mobileRetiredOfflineNoteIssuersBranch,
@@ -15812,12 +15972,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     mobileWalletNoteRetiredStateMigrationBranch,
-    /Swift Offline Note wallet-note state decoder retired aliases[\s\S]*?Android Java Offline Note wallet-note state decoder retired aliases[\s\S]*?Swift Offline Note wallet-note retired state rejection tests[\s\S]*?Android Java Offline Note wallet-note retired state rejection tests[\s\S]*?IrohaSwift\/README\.md Offline Note wallet-note retired state README wording[\s\S]*?java\/iroha_android\/README\.md Offline Note wallet-note retired state README wording[\s\S]*?kotlin\/README\.md Offline Note wallet-note retired state README wording/u,
+    /Swift Offline Note wallet-note state decoder retired aliases[\s\S]*?Android Java Offline Note wallet-note state decoder retired aliases[\s\S]*?C# Offline Note wallet-note state decoder retired aliases[\s\S]*?Swift Offline Note wallet-note retired state rejection tests[\s\S]*?Android Java Offline Note wallet-note retired state rejection tests[\s\S]*?C# Offline Note wallet-note retired state rejection tests[\s\S]*?IrohaSwift\/README\.md Offline Note wallet-note retired state README wording[\s\S]*?java\/iroha_android\/README\.md Offline Note wallet-note retired state README wording[\s\S]*?kotlin\/README\.md Offline Note wallet-note retired state README wording[\s\S]*?csharp\/README\.md Offline Note wallet-note retired state README wording/u,
     "Mobile wallet-note retired state migration negative control must require exact source, test, and README diagnostics",
   );
   assert.match(
     mobileWalletNoteRetiredStateMigrationBranch,
-    /case "spendPending", "SPEND_PENDING"[\s\S]*?case "changePending", "CHANGE_PENDING"[\s\S]*?Arrays\.asList\("SPENDABLE"\)[\s\S]*?wallet-note state names are migrated to current states/u,
+    /case "spendPending", "SPEND_PENDING"[\s\S]*?case "changePending", "CHANGE_PENDING"[\s\S]*?OfflineNoteWalletNoteState\.Spent[\s\S]*?Arrays\.asList\("SPENDABLE"\)[\s\S]*?JsonCodecDecodesRetiredStateAliases[\s\S]*?wallet-note state names are migrated to current states/u,
     "Mobile wallet-note retired state migration negative control must reintroduce retired aliases and stale migration wording",
   );
   assert.match(
@@ -15839,6 +15999,21 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     swiftWalletNoteJsonAmountExactnessBranch,
     /finally:[\s\S]*?mutated\[target\]\s*=\s*current[\s\S]*?negative control rejected Swift wallet-note JSON amount exactness drift[\s\S]*?raise SystemExit\(0\)/u,
     "Swift wallet-note JSON amount exactness negative control must restore and only pass after detected drift",
+  );
+  assert.match(
+    csharpWalletNoteJsonExactnessBranch,
+    /source\s*=\s*"csharp\/src\/Hyperledger\.Iroha\.Sdk\/Offline\/OfflineNoteWalletNote\.cs"[\s\S]*?test\s*=\s*"csharp\/tests\/Hyperledger\.Iroha\.Sdk\.Tests\/OfflineNoteWalletNoteTests\.cs"[\s\S]*?readme\s*=\s*"csharp\/README\.md"[\s\S]*?mutations\s*=\s*\([\s\S]*?Amount = RequireCanonicalAmount\(amount\);[\s\S]*?Amount = amount;[\s\S]*?value\.StartsWith\("0x", StringComparison\.OrdinalIgnoreCase\)[\s\S]*?\|\| false[\s\S]*?!IsLowerHex\(value\)[\s\S]*?\|\| false[\s\S]*?WalletNoteAmountRejectsNonCanonicalNumericText[\s\S]*?WalletNoteAcceptsNonCanonicalNumericText[\s\S]*?LowerHex\(Fixed32\(0x7b\)\)\[\.\.63\] \+ "g"[\s\S]*?LowerHex\(Bytes\(0x7e, 33\)\)[\s\S]*?normalized amount text/u,
+    "C# wallet-note JSON exactness negative control must mutate amount, commitment hex, tests, and README wording",
+  );
+  assert.match(
+    csharpWalletNoteJsonExactnessBranch,
+    /C# Offline Note wallet-note JSON exactness source[\s\S]*?C# Offline Note wallet-note JSON exactness tests[\s\S]*?csharp\/README\.md Offline Note wallet-note JSON exactness wording/u,
+    "C# wallet-note JSON exactness negative control must require source, tests, and README diagnostics",
+  );
+  assert.match(
+    csharpWalletNoteJsonExactnessBranch,
+    /detect_negative_control\([\s\S]*?C# wallet-note JSON exactness drift[\s\S]*?raise SystemExit\(0\)/u,
+    "C# wallet-note JSON exactness negative control must use shared exact-diagnostic detection",
   );
   assert.match(
     guard,
@@ -17654,18 +17829,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*12\\s\*;[\s\S]*?C native bridge ABI version/u,
-    "SDK parity guard must pin the native C bridge ABI-12 advertisement",
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*13\\s\*;[\s\S]*?C native bridge ABI version/u,
+    "SDK parity guard must pin the native C bridge ABI-13 advertisement",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
-    /CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 10;/u,
-    "native C bridge ABI negative control must mutate ABI 12 back to the stale ABI 10 value",
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;/u,
+    "native C bridge ABI negative control must mutate ABI 13 back to the stale ABI 12 value",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
-    /expected_labels\s*=\s*\([\s\S]*?C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*12\\s\*;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
-    "native C bridge ABI negative control must require the exact ABI-12 diagnostic",
+    /expected_labels\s*=\s*\([\s\S]*?C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*13\\s\*;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "native C bridge ABI negative control must require the exact ABI-13 diagnostic",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
@@ -21174,7 +21349,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       "C# Pallas open-envelope malformed vector tests",
       "private static byte[] RequireValidPallasOpenEnvelopesArchive(",
       "private static int ReadPallasFixed32SequenceCount(",
-      "private static byte[] ReadRequiredPallasMetadataOption(",
+      "private static void ReadRequiredPallasMetadataOption(",
       "RecursiveSpendPallasOpenEnvelopePreflightRejectsMalformedVectorsBeforeLoadingNativeBridge",
       "spec.ParamsGSequencePayload = U64LE(5)",
       "spec.ProofRSequencePayload = U64LE(3)",
@@ -21537,10 +21712,20 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     /multi-profile[\s\S]*?single-profile[\s\S]*?single-record[\s\S]*?legacy single/u,
     "SDK README boundary negative control must mutate the plural lineage-record and first-release wording documentation",
   );
-  assert.doesNotMatch(
+  assert.match(
     sdkReadmeBoundaryBranch,
-    /csharp\/README\.md/u,
-    "SDK README boundary negative control must keep C# matrix-gated",
+    /if target != "csharp\/README\.md":[\s\S]*?multi-profile[\s\S]*?single-profile/u,
+    "SDK README boundary negative control must keep the plural lineage-record matrix non-C# only",
+  );
+  assertContainsAll(
+    sdkReadmeBoundaryBranch,
+    [
+      '"csharp/README.md"',
+      "Redeem request\\narchives may carry additional `lineage_verifier_records`",
+      "Newer redeem request\\narchives may carry additional `lineage_verifier_records`",
+      "C# SDK README first-release lineage-record compatibility wording",
+    ],
+    "SDK README boundary negative control must cover C# first-release lineage-record wording separately",
   );
   assert.match(
     sdkReadmeBoundaryBranch,
@@ -21607,7 +21792,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     sdkReadmeRetiredOfflineNoteWordingBranch,
-    /docs\/source\/offline_kagemusha\.md[\s\S]*?legacy data model[\s\S]*?classic proof generators and transaction builders fail closed[\s\S]*?IrohaSwift\/README\.md[\s\S]*?Classic note issue[\s\S]*?Classic Offline Note issuance[\s\S]*?models for fixture compatibility[\s\S]*?kotlin\/README\.md[\s\S]*?Classic note issue[\s\S]*?classic proof generation[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?historical model and fixture compatibility[\s\S]*?Offline V2 key-refill compatibility requests[\s\S]*?Classic Offline Note issue[\s\S]*?Classic note issue[\s\S]*?classic proof generation[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?Classic Offline Note issuance/u,
+    /docs\/source\/offline_kagemusha\.md[\s\S]*?legacy data model[\s\S]*?classic proof generators and transaction builders fail closed[\s\S]*?IrohaSwift\/README\.md[\s\S]*?Classic note issue[\s\S]*?Classic Offline Note issuance[\s\S]*?models for fixture compatibility[\s\S]*?kotlin\/README\.md[\s\S]*?Classic note issue[\s\S]*?classic proof generation[\s\S]*?java\/iroha_android\/README\.md[\s\S]*?historical model and fixture compatibility[\s\S]*?Offline V2 key-refill compatibility requests[\s\S]*?Classic Offline Note issue[\s\S]*?Classic note issue[\s\S]*?classic proof generation[\s\S]*?javascript\/iroha_js\/README\.md[\s\S]*?Classic Offline Note issuance[\s\S]*?python\/iroha_python\/README\.md[\s\S]*?Classic Offline Note issuance/u,
     "Retired Offline Note README wording negative control must mutate every stale wording family",
   );
   assert.match(
@@ -21894,7 +22079,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     offlineDocRedeemLineageSelectionBranch,
-    /Non-C# typed redeem request encoders use a[\s\S]*?different semantic-bundle rule[\s\S]*?The same non-C# plural record paths pin[\s\S]*?request-state[\s\S]*?copy caller-owned lists into unmodifiable[\s\S]*?request[\s\S]*?record refs also copy verifier-record archive[\s\S]*?reject lineage verifier records on all[\s\S]*?semantic final bundles before native dispatch[\s\S]*?single-record `lineage_verifier_record`[\s\S]*?legacy single `lineage_verifier_record`[\s\S]*?single-record `lineage_verifier_record` path[\s\S]*?legacy `lineage_verifier_record` single-record path/u,
+    /Non-C# typed redeem request encoders use a[\s\S]*?different semantic-bundle rule[\s\S]*?The same non-C# plural record paths pin[\s\S]*?request-state[\s\S]*?copy caller-owned lists into unmodifiable[\s\S]*?request[\s\S]*?record refs also copy verifier-record archive[\s\S]*?reject lineage verifier records on all[\s\S]*?semantic final bundles before native dispatch[\s\S]*?single-record `lineage_verifier_record`[\s\S]*?legacy single `lineage_verifier_record`[\s\S]*?current single-record field rather than an[\s\S]*?alternate decode route[\s\S]*?legacy `lineage_verifier_record` single-record path/u,
     "offline Kagemusha doc redeem lineage selection negative control must mutate the semantic-with-witness, ownership, first-release wording, and roadmap wording exceptions",
   );
   assert.match(
@@ -22592,8 +22777,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     csharpRecordBackedArchiveExactDiagnosticsBranch,
-    /C# recursive spend input Norito guard tests/u,
-    "C# record-backed archive exact diagnostics negative control must expect the input Norito guard",
+    /C# recursive compact prover malformed archive exact diagnostics/u,
+    "C# record-backed archive exact diagnostics negative control must expect the recursive compact prover archive guard",
   );
   assert.match(
     csharpRecordBackedArchiveExactDiagnosticsBranch,
@@ -30266,8 +30451,9 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   for (const requiredCsharpIdentifierReceiptTest of [
     "ResolveIdentifierAsyncRejectsPaddedSignatureReceiptFields",
     "ResolveIdentifierAsyncRejectsNonExactPolicyIdBeforeDispatch",
-    "ResolveIdentifierAsyncRejectsNonExactTopLevelPolicyId",
-    "ResolveIdentifierAsyncRejectsNonExactSignaturePayloadPolicyIds",
+    "ResolveIdentifierAsyncRejectsRetiredFlatReceiptEnvelope",
+    "ResolveIdentifierAsyncRejectsNonExactNestedPayloadPolicyId",
+    "ResolveIdentifierAsyncRejectsNonExactNestedPayloadPolicyIds",
     "ResolveIdentifierAsyncAcceptsExactProofAttestationReceipt",
     "ResolveIdentifierAsyncRejectsNonExactAttestationSelectors",
     "ResolveIdentifierAsyncAcceptsExactNestedReceiptPayloadFields",
@@ -30280,12 +30466,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     );
   }
   for (const requiredCsharpIdentifierReceiptField of [
-    "identifier resolve response.signature_payload.attestation.proof_b64",
-    "identifier resolve response.signature_payload.payload.policy_id",
-    "identifier resolve response.signature_payload.payload.execution.program_id",
-    "identifier resolve response.signature_payload.payload.account_id",
-    "identifier resolve response.signature_payload.payload.receipt_hash",
-    "identifier resolve response.signature_payload.payload.execution.executed_at_ms",
+    "identifier resolve response.attestation.proof_b64",
+    "identifier resolve response.payload.policy_id",
+    "identifier resolve response.payload.execution.program_id",
+    "identifier resolve response.payload.account_id",
+    "identifier resolve response.payload.receipt_hash",
+    "identifier resolve response.payload.execution.executed_at_ms",
     "identifier policies response.items[0].policy_id",
     "identifier policies response.items[0].resolver_public_key",
   ]) {

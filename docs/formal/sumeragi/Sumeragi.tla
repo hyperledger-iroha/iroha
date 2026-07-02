@@ -12212,6 +12212,9 @@ CommitRbcEvidenceNeverLost ==
 CommitProgressActionsNeverReenabled ==
   [] (committed => [] CommitDisablesProgressActions)
 
+ByzantineCommitVoteNeverReenabledAfterCommit ==
+  [] CommitDisablesByzantineCommitVote
+
 CommitEvidenceNeverDivergesFromVoteCounters ==
   [] (committed =>
         [] (/\ commitEvidenceVotes = commitVotesHonest + commitVotesByz
@@ -12244,7 +12247,7 @@ FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope ==
   /\ CommitHonestSupportNeverLost
   /\ CommitRbcEvidenceNeverLost
   /\ CommitProgressActionsNeverReenabled
-  /\ [] CommitDisablesByzantineCommitVote
+  /\ ByzantineCommitVoteNeverReenabledAfterCommit
   /\ CommitEvidenceNeverDivergesFromVoteCounters
   /\ StakeAccountingNeverDiverges
   /\ LiveStakeNeverExceedsRosterBudget

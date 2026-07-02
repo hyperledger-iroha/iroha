@@ -186,12 +186,23 @@ def test_live_ton_api_url_rejects_hidden_request_state():
     assert module._account_states_url(
         "https://toncenter.example/api/v3/accountStates"
     ) == "https://toncenter.example/api/v3/accountStates"
+    assert module._account_states_url("http://127.0.0.1:8080") == (
+        "http://127.0.0.1:8080/api/v3/accountStates"
+    )
 
     for api_url, expected_error in (
         ("https://token@toncenter.example", "credentials"),
         ("https://toncenter.example/root;param", "params, query, or fragment"),
         ("https://toncenter.example?api_key=secret", "params, query, or fragment"),
         ("https://toncenter.example#fragment", "params, query, or fragment"),
+        ("http://toncenter.example", "HTTPS unless it is loopback HTTP"),
+        ("https://localhost", "public DNS"),
+        ("https://127.0.0.1", "public DNS"),
+        ("https://toncenter", "public DNS"),
+        ("https://toncenter.local", "public DNS"),
+        ("https://bad_host.toncenter.example", "public DNS"),
+        (" https://toncenter.example", "exact http(s) URL"),
+        ("https://toncenter.example\nsecret", "exact http(s) URL"),
     ):
         try:
             module._account_states_url(api_url)

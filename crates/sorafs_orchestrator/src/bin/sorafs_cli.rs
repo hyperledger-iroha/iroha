@@ -4808,10 +4808,10 @@ fn moderation_registry_handle_stream(
         if request.len() > max_body_bytes.saturating_add(8192) {
             break;
         }
-        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request) {
-            if content_len > max_body_bytes || request.len() >= header_len + content_len {
-                break;
-            }
+        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request)
+            && (content_len > max_body_bytes || request.len() >= header_len + content_len)
+        {
+            break;
         }
     }
     let response = moderation_registry_http_response(service, &request, max_body_bytes);
@@ -5079,10 +5079,7 @@ fn moderation_registry_snapshot_response_json(
         .state
         .lock()
         .map_err(|_| "moderation model registry state lock poisoned".to_string())?;
-    Ok(moderation_registry_snapshot_json(
-        &state,
-        service.snapshot_limit,
-    )?)
+    moderation_registry_snapshot_json(&state, service.snapshot_limit)
 }
 
 fn moderation_registry_state_digest_hex(
@@ -7101,7 +7098,7 @@ fn moderation_committee_median_score(mut scores: Vec<u16>) -> u16 {
     if scores.len() % 2 == 1 {
         scores[mid]
     } else {
-        ((u32::from(scores[mid - 1]) + u32::from(scores[mid]) + 1) / 2) as u16
+        (u32::from(scores[mid - 1]) + u32::from(scores[mid])).div_ceil(2) as u16
     }
 }
 
@@ -7288,10 +7285,10 @@ fn moderation_committee_handle_stream(
         if request.len() > max_body_bytes.saturating_add(8192) {
             break;
         }
-        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request) {
-            if content_len > max_body_bytes || request.len() >= header_len + content_len {
-                break;
-            }
+        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request)
+            && (content_len > max_body_bytes || request.len() >= header_len + content_len)
+        {
+            break;
         }
     }
     let response = moderation_committee_http_response(service, &request, max_body_bytes);
@@ -8082,7 +8079,7 @@ impl moderation_runner_grpc::runner_server::Runner for ModerationRunnerGrpcHandl
     ) -> Result<tonic::Response<ModerationRunnerScreenResponse>, tonic::Status> {
         moderation_runner_screen_request_proto(&self.service, request.into_inner())
             .map(tonic::Response::new)
-            .map_err(|message| tonic::Status::invalid_argument(message))
+            .map_err(tonic::Status::invalid_argument)
     }
 }
 
@@ -8271,10 +8268,10 @@ fn moderation_runner_handle_stream(
         if request.len() > max_body_bytes.saturating_add(8192) {
             break;
         }
-        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request) {
-            if content_len > max_body_bytes || request.len() >= header_len + content_len {
-                break;
-            }
+        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request)
+            && (content_len > max_body_bytes || request.len() >= header_len + content_len)
+        {
+            break;
         }
     }
     let response = moderation_runner_http_response(service, &request, max_body_bytes);

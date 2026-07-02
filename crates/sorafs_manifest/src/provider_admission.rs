@@ -9,7 +9,7 @@
 //! incoming `ProviderAdvertV1` payloads.
 
 use blake3::Hasher;
-use iroha_crypto::{Algorithm, PublicKey, Signature};
+use iroha_crypto::{Algorithm, PublicKey};
 use norito::{
     core::Error as NoritoError,
     derive::{NoritoDeserialize, NoritoSerialize},
@@ -718,7 +718,7 @@ fn verify_council_signatures_over_digest(
                     reason: err.to_string(),
                 }
             })?;
-        let sig = Signature::try_from_bytes(&signature.signature).map_err(|err| {
+        let sig = iroha_crypto::ed25519_parse_signature(&signature.signature).map_err(|err| {
             ProviderAdmissionSignatureError::Verification {
                 signer: signature.signer,
                 reason: format!("invalid signature material: {err}"),

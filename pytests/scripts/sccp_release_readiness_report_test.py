@@ -47,6 +47,25 @@ class HostilePublicKey:
         return "secret-token-hostile-key"
 
 
+class HashCollisionPublicKey:
+    """Mapping key that must not be compared with public schema strings."""
+
+    def __init__(self, target: str) -> None:
+        self.target = target
+
+    def __hash__(self) -> int:
+        return hash(self.target)
+
+    def __eq__(self, other):
+        raise AssertionError("secret-token hostile __eq__")
+
+    def __str__(self):
+        raise AssertionError("secret-token hostile __str__")
+
+    def __repr__(self):
+        return "secret-token-collision-key"
+
+
 def skip_unless_system_temp_is_symlink() -> None:
     if not Path("/tmp").is_symlink():
         pytest.skip("/tmp is not a symlink on this platform")
@@ -6773,6 +6792,18 @@ def test_release_readiness_evidence_phase_requires_retired_network_surface_scan(
     ]
 
 
+def test_release_readiness_evidence_phase_requires_source_template_hash_guard() -> None:
+    """Readiness reports must prove the shared source-template denylist ran."""
+
+    report = load_report_module()
+    template_guard = "pytests/scripts/sccp_source_template_hashes_test.py"
+
+    assert template_guard in corridor_evidence_script_tests()
+    assert template_guard in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+        "evidence-scripts"
+    ]
+
+
 def test_release_readiness_verifier_reports_removed_retired_network_pipeline_doc_guard(
     tmp_path: Path,
 ) -> None:
@@ -7501,6 +7532,9 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         "SUMMARY_LIKE_RE",
         "ANSI_ESCAPE_PATTERN",
         "ASCII_CONTROL_CHARACTER_PATTERN",
+        "TRX_ATTRIBUTE_PERCENT_DECODE_MAX_ROUNDS = 8",
+        "for _round in range(TRX_ATTRIBUTE_PERCENT_DECODE_MAX_ROUNDS)",
+        "requires TRX XML metadata to avoid deeply nested percent encoding",
         "normalized_summary_line",
         'unicodedata.category(character) != "Cf"',
         "malformed_summary_lines",
@@ -7585,6 +7619,8 @@ def test_release_readiness_report_guards_release_corridor_phase_transcript_gate_
         "numeric-isexecuted-passed-result",
         "padded-isexecuted-passed-result",
         "control-isexecuted-passed-result",
+        "schema-known-deep-percent-sensitive-attribute",
+        "schema-known-excessive-percent-encoding",
     ):
         assert required_marker in inventory_markers
 
@@ -15049,6 +15085,18 @@ def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path
         in markdown
     )
     assert (
+        "TRX XML metadata percent decoding is bounded and fail-closed"
+        in markdown
+    )
+    assert (
+        "sensitive metadata hidden behind nested percent encoding"
+        in markdown
+    )
+    assert (
+        "values still percent-decodable after eight rounds remain forged evidence"
+        in markdown
+    )
+    assert (
         "Canonical `.NET` SCCP marker lines must use a single literal space "
         "after the colon"
     ) in markdown
@@ -15335,12 +15383,19 @@ def test_release_readiness_public_payload_redacts_hostile_mapping_keys(
     native_summary["sdk_artifacts"][0][HostilePublicKey()] = (
         "secret-token hostile sdk artifact"
     )
-    first_gate = next(iter(readiness["source_inventory"]))
     readiness["source_inventory"][HostilePublicKey()] = {
         "validation_status": "blocked",
         "validation_blockers": ["operator pending source inventory review"],
     }
-    readiness["source_inventory"][first_gate][HostilePublicKey()] = (
+    readiness["source_inventory"].pop("phase_evidence_source_gate", None)
+    readiness["source_inventory"][HashCollisionPublicKey("phase_evidence_source_gate")] = {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+    source_inventory_row = readiness["source_inventory"]["proof_request_bundle_gate"]
+    source_inventory_row.pop("validation_status", None)
+    source_inventory_row[HashCollisionPublicKey("validation_status")] = "passed"
+    source_inventory_row[HostilePublicKey()] = (
         "secret-token hostile source inventory"
     )
     readiness["user_prover_submission_surfaces"][0][HostilePublicKey()] = (
@@ -15366,9 +15421,16 @@ def test_release_readiness_public_payload_redacts_hostile_mapping_keys(
     assert "readiness report input_artifacts[0] contains malformed unknown field name" in blockers
     assert "readiness report corridor contains malformed unknown field name" in blockers
     assert "readiness report source_inventory contains malformed gate name" in blockers
+    assert (
+        "readiness report source_inventory["
+        in blockers
+        and "contains malformed unknown field name" in blockers
+    )
+    assert "missing field: validation_status" in blockers
     assert "secret-token" not in rendered
     assert "hostile" not in rendered
     assert "__str__" not in rendered
+    assert "__eq__" not in rendered
     assert "Traceback" not in rendered
 
 
@@ -18525,6 +18587,21 @@ def test_release_readiness_report_decodes_active_launch_blocker_domain_prefixes(
     assert other_root not in rendered
     assert other_lane not in rendered
     assert f"{prefix}{other_lane}" not in rendered
+
+
+def test_release_readiness_public_blocker_keys_casefold_decoded_text() -> None:
+    """Decoded public blocker keys must use casefold, not ASCII-only lowercasing."""
+
+    report = load_report_module()
+
+    assert (
+        report._canonical_public_blocker_key("Route%20Canary%20Stra%C3%9Fe")
+        == "route canary strasse"
+    )
+    assert (
+        report._decoded_sensitive_public_marker_text("API%20KEY%20Stra%C3%9Fe")
+        == "api key strasse"
+    )
 
 
 def test_release_readiness_report_blocks_malformed_native_prover_blockers(
@@ -22190,8 +22267,27 @@ def test_release_readiness_report_public_crypto_rejects_route_canary_transcript_
 
         assert (
             f"readiness report cryptographic_evidence[{target_index}] "
-            "route_canary hash role route_canary_evidence_hash must not reuse "
-            f"{transcript_field}"
+            f"route_canary hash role {transcript_field} must not reuse "
+            "route_canary_evidence_hash"
+        ) in errors, domain
+
+        rows = public_crypto_rows_for_all_domains(report)
+        target_index, target_row = next(
+            (index, row)
+            for index, row in enumerate(rows)
+            if row["domain"] == domain and row["chain"] == chain
+        )
+        route_call_data_hash = fixed_hex32(0x50 + domain)
+        target_row["route_canary_evidence_hash"] = route_call_data_hash
+        target_row["route_canary_call_data_sha256"] = route_call_data_hash
+
+        errors = report._public_cryptographic_evidence_errors(rows)
+
+        # Source-inventory marker: public crypto route-canary transcript replay rejects route_canary_call_data_sha256
+        assert (
+            f"readiness report cryptographic_evidence[{target_index}] "
+            "route_canary hash role route_canary_call_data_sha256 must not reuse "
+            "route_canary_evidence_hash"
         ) in errors, domain
 
 
@@ -22619,6 +22715,29 @@ def test_release_readiness_report_public_crypto_rejects_source_gate_transcript_r
             "source_adapter_gate hash role "
             f"source_adapter_gate_audit_hashes.{gate_field} must not reuse "
             "route_canary_message_id"
+        ) in errors, domain
+
+        rows = public_crypto_rows_for_all_domains(report)
+        target_index, target_row = next(
+            (index, row)
+            for index, row in enumerate(rows)
+            if row["domain"] == domain and row["chain"] == chain
+        )
+        route_call_data_hash = fixed_hex32(0x70 + domain)
+        target_row["route_canary_call_data_sha256"] = route_call_data_hash
+        target_row["source_adapter_gate_hash"] = route_call_data_hash
+        target_row["source_adapter_gate_audit_hashes"][gate_field] = (
+            route_call_data_hash
+        )
+
+        errors = report._public_cryptographic_evidence_errors(rows)
+
+        # Source-inventory marker: public crypto source-gate transcript replay rejects route_canary_call_data_sha256
+        assert (
+            f"readiness report cryptographic_evidence[{target_index}] "
+            "source_adapter_gate hash role "
+            f"source_adapter_gate_audit_hashes.{gate_field} must not reuse "
+            "route_canary_call_data_sha256"
         ) in errors, domain
 
 

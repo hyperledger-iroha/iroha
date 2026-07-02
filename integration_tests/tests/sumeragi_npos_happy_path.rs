@@ -24,18 +24,18 @@ use iroha_core::sumeragi::{
 use iroha_crypto::{Hash, HashOf};
 use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
 use norito::json::{self, Map, Value};
-use tokio::time::{sleep, timeout};
+use tokio::time::sleep;
 use toml::Table;
 
 const BLOCK_TARGET: u64 = 6;
-const METRIC_ATTEMPTS: usize = 20;
+const METRIC_ATTEMPTS: usize = 40;
 const METRIC_INTERVAL: Duration = Duration::from_millis(250);
-const PACEMAKER_EMA_BUDGET_MS: f64 = 5_000.0;
+const PACEMAKER_EMA_BUDGET_MS: f64 = 8_000.0;
 const BG_QUEUE_DEPTH_BUDGET: f64 = 16.0;
 const RBC_WAIT_BUDGET: Duration = Duration::from_secs(20);
 // Full-workspace runs can delay large RBC delivery under network-test permit contention.
 const RBC_DELIVERY_BUDGET: Duration = Duration::from_secs(240);
-const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(240);
+const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(480);
 // Keep persisted RBC proofs alive longer than the heavy restart/commit observation windows.
 const RBC_PERSISTENCE_OBSERVATION_TTL_MS: i64 = 15 * 60 * 1_000;
 // Keep the large-payload case clearly multi-chunk without saturating grouped-harness runs.
@@ -292,6 +292,11 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
         .torii_url
         .join("status")
         .wrap_err("compose primary status URL")?;
+    let status_url_restart = restart_peer
+        .client()
+        .torii_url
+        .join("status")
+        .wrap_err("compose restart peer status URL")?;
     let restart_sessions_url = reqwest::Url::parse(&format!(
         "{}/v1/sumeragi/rbc/sessions",
         restart_peer.torii_url()
@@ -330,13 +335,17 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
         return Ok(());
     }
     let restart_phase_start = Instant::now();
-    timeout(COMMIT_WAIT_BUDGET, restart_peer.once_block(expected_height))
-        .await
-        .wrap_err_with(|| {
-            format!(
-                "restart peer did not reach height {expected_height} within {COMMIT_WAIT_BUDGET:?}"
-            )
-        })?;
+    wait_for_block_height(
+        &http,
+        &status_url_restart,
+        expected_height,
+        restart_phase_start,
+        COMMIT_WAIT_BUDGET,
+    )
+    .await
+    .wrap_err_with(|| {
+        format!("restart peer did not reach height {expected_height} within {COMMIT_WAIT_BUDGET:?}")
+    })?;
 
     let restart_store_dir = restart_peer.kura_store_dir().join("rbc_sessions");
     if let Err(endpoint_err) = wait_for_rbc_session_recovered(

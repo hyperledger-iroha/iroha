@@ -23,6 +23,21 @@ import unicodedata
 
 EXPECTED_DIRS: tuple[str, ...] = ("telemetry", "attestation", "queue", "logs")
 OPTIONAL_EVIDENCE_DIRS: tuple[str, ...] = ("evidence", "handoff", "wallet")
+FORBIDDEN_OPENSSL_CHILD_ENV_KEYS: frozenset[str] = frozenset(
+    (
+        "OPENSSL_CONF",
+        "OPENSSL_CONF_INCLUDE",
+        "OPENSSL_MODULES",
+        "OPENSSL_ENGINES",
+        "OPENSSL_TRACE",
+        "OPENSSL_DEBUG_MEMORY",
+        "RANDFILE",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+    )
+)
 REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS: tuple[str, ...] = (
     "telemetry/telemetry.json",
     "telemetry/status.ndjson",
@@ -38,6 +53,7 @@ MAX_KAGEMUSHA_OFFLINE_WALLET_APK_BYTES = 64 * 1024 * 1024
 MAX_ANDROID_DEVICE_LAB_JSON_BYTES = 16 * 1024 * 1024
 KAGEMUSHA_OFFLINE_WALLET_APK_PATH = "evidence/offline-wallet-release.apk"
 MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES = 1024 * 1024
+MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES = 64 * 1024
 KAGEMUSHA_RUNTIME_LOG_COMPLETE_MARKER = "kagemusha device-lab run complete"
 KAGEMUSHA_TELEMETRY_SUITE = "kagemusha-device-lab"
 KAGEMUSHA_RUNTIME_LOG_FAILURE_MARKERS: tuple[str, ...] = (
@@ -3660,6 +3676,15 @@ def _require_openssl(errors: list[str]) -> str | None:
     return openssl
 
 
+def _openssl_child_env() -> dict[str, str]:
+    """Return an OpenSSL child environment without operator config overrides."""
+
+    env = os.environ.copy()
+    for key in FORBIDDEN_OPENSSL_CHILD_ENV_KEYS:
+        env.pop(key, None)
+    return env
+
+
 def _openssl_public_key_der(
     public_key_path: Path,
     *,
@@ -3668,10 +3693,12 @@ def _openssl_public_key_der(
 ) -> bytes | None:
     if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):
         return None
-    try:
-        public_key_bytes = public_key_path.read_bytes()
-    except OSError:
-        errors.append(f"{label} file could not be read")
+    public_key_bytes = _read_bounded_public_key_bytes(
+        public_key_path,
+        errors=errors,
+        label=label,
+    )
+    if public_key_bytes is None:
         return None
     if any(marker in public_key_bytes for marker in PRIVATE_KEY_PEM_MARKERS):
         errors.append(f"{label} must contain public key material, not a private key")
@@ -3694,6 +3721,7 @@ def _openssl_public_key_der(
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=_openssl_child_env(),
         )
     except subprocess.CalledProcessError:
         errors.append(f"{label} must be a valid OpenSSL public key")
@@ -3702,6 +3730,54 @@ def _openssl_public_key_der(
         errors.append(f"{label} OpenSSL public key command could not be run")
         return None
     return completed.stdout
+
+
+def _read_bounded_public_key_bytes(
+    public_key_path: Path,
+    *,
+    errors: list[str],
+    label: str,
+) -> bytes | None:
+    """Read public-key material with a race-aware byte cap before marker scans."""
+
+    try:
+        expected_stat = public_key_path.lstat()
+    except OSError:
+        errors.append(f"{label} file could not be read")
+        return None
+    expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+    chunks: list[bytes] = []
+    size = 0
+    try:
+        with public_key_path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = public_key_path.lstat()
+            if (
+                stat.S_ISLNK(path_stat.st_mode)
+                or (path_stat.st_dev, path_stat.st_ino) != expected_identity
+                or (open_stat.st_dev, open_stat.st_ino) != expected_identity
+            ):
+                errors.append(f"{label} changed while being read")
+                return None
+            if open_stat.st_size > MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES:
+                errors.append(
+                    f"{label} must be no more than "
+                    f"{MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES} bytes"
+                )
+                return None
+            while chunk := handle.read(8192):
+                chunks.append(chunk)
+                size += len(chunk)
+                if size > MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES:
+                    errors.append(
+                        f"{label} must be no more than "
+                        f"{MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES} bytes"
+                    )
+                    return None
+    except OSError:
+        errors.append(f"{label} file could not be read")
+        return None
+    return b"".join(chunks)
 
 
 def _validate_public_key_path_shape(
@@ -3754,12 +3830,18 @@ def _validate_public_key_path_shape(
         errors.append(f"{label} must be a regular file")
         return False
     try:
-        link_count = public_key_path.stat().st_nlink
+        public_key_stat = public_key_path.stat()
     except OSError:
         errors.append(f"{label} hardlink metadata could not be read")
         return False
-    if link_count > 1:
+    if public_key_stat.st_nlink > 1:
         errors.append(f"{label} must not be hardlinked")
+        return False
+    if public_key_stat.st_size > MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES:
+        errors.append(
+            f"{label} must be no more than "
+            f"{MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES} bytes"
+        )
         return False
     return True
 
@@ -4012,6 +4094,7 @@ def _verify_ed25519_signature(
                     ],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
+                    env=_openssl_child_env(),
                 )
             except OSError:
                 errors.append("signature verification command could not be run")

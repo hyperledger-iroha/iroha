@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -32,7 +33,7 @@ public final class BridgeProofSubmitRequest {
     this.authority = requireNonBlank(builder.authority, "authority");
     this.privateKey = builder.privateKey;
     this.publicKeyHex = normalizeOptional(builder.publicKeyHex);
-    this.signatureB64 = normalizeOptional(builder.signatureB64);
+    this.signatureB64 = normalizeOptionalExactBase64(builder.signatureB64, "signatureB64");
     this.burnBundle = immutableCopy(builder.burnBundle);
     this.messageBundle = immutableCopy(builder.messageBundle);
     this.networkIdHex = normalizeOptional(builder.networkIdHex);
@@ -265,6 +266,28 @@ public final class BridgeProofSubmitRequest {
     }
     final String trimmed = value.trim();
     return trimmed.isEmpty() ? null : trimmed;
+  }
+
+  private static String normalizeOptionalExactBase64(final String value, final String field) {
+    if (value == null) {
+      return null;
+    }
+    if (value.isEmpty() || !value.equals(value.trim())) {
+      throw new IllegalArgumentException(field + " must be exact standard-base64");
+    }
+    final byte[] decoded;
+    try {
+      decoded = Base64.getDecoder().decode(value);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(field + " must be valid base64", ex);
+    }
+    if (decoded.length == 0) {
+      throw new IllegalArgumentException(field + " must not decode to empty bytes");
+    }
+    if (!Base64.getEncoder().encodeToString(decoded).equals(value)) {
+      throw new IllegalArgumentException(field + " must be exact standard-base64");
+    }
+    return value;
   }
 
   private static void requireEvmSubmissionMatchesDestination(

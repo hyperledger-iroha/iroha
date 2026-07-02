@@ -638,7 +638,7 @@ fn verify_council_signature(signature: &Value, payload: &[u8]) -> Result<(), Fix
             signature_bytes.len()
         )));
     }
-    let signature = Signature::try_from_bytes(&signature_bytes).map_err(|err| {
+    let signature = iroha_crypto::ed25519_parse_signature(&signature_bytes).map_err(|err| {
         FixtureError::Invalid(format!("invalid council signature material: {err}"))
     })?;
     signature
@@ -727,5 +727,61 @@ mod tests {
                 if message.contains("payload") || message.contains("fixtures_digest")
         );
         assert!(matches_expected, "unexpected error: {err:?}");
+    }
+
+    #[test]
+    fn verify_council_envelope_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let bundle = generate_bundle();
+        verify_council_envelope(
+            &bundle.manifest,
+            bundle.chunk_digest_sha3_256,
+            &bundle.council_envelope,
+        )
+        .expect("valid council envelope verifies");
+        let envelope: Value =
+            json::from_slice(&bundle.council_envelope).expect("decode council envelope");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = envelope.clone();
+            let signature_entry = malformed
+                .get_mut("signatures")
+                .and_then(Value::as_array_mut)
+                .and_then(|signatures| signatures.first_mut())
+                .and_then(Value::as_object_mut)
+                .expect("signature entry");
+            let signature_hex = signature_entry
+                .get("signature")
+                .and_then(Value::as_str)
+                .expect("signature hex");
+            let mut signature_bytes = hex::decode(signature_hex).expect("decode signature hex");
+            signature_bytes[..32].copy_from_slice(&replacement_r);
+            signature_entry.insert(
+                "signature".to_owned(),
+                Value::String(hex::encode(signature_bytes)),
+            );
+            let encoded = json::to_vec(&malformed).expect("encode malformed envelope");
+
+            let err =
+                verify_council_envelope(&bundle.manifest, bundle.chunk_digest_sha3_256, &encoded)
+                    .expect_err("malformed Ed25519 R must fail admission");
+            let message = err.to_string();
+            assert!(
+                message.contains("invalid council signature material"),
+                "unexpected {label} R error: {message}"
+            );
+        }
     }
 }

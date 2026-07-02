@@ -4977,10 +4977,10 @@ pub fn vadd32(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
         return res;
     }
     #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::vadd32_cuda(&a, &b) {
-        if res.len() == 4 {
-            return [res[0], res[1], res[2], res[3]];
-        }
+    if let Some(res) = crate::cuda::vadd32_cuda(&a, &b)
+        && res.len() == 4
+    {
+        return [res[0], res[1], res[2], res[3]];
     }
     #[cfg(target_arch = "x86_64")]
     unsafe {
@@ -5040,17 +5040,17 @@ pub fn vadd64(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
             (b[0] as u64) | ((b[1] as u64) << 32),
             (b[2] as u64) | ((b[3] as u64) << 32),
         ];
-        if let Some(res) = crate::cuda::vadd64_cuda(&a64, &b64) {
-            if res.len() == 2 {
-                let r0 = res[0];
-                let r1 = res[1];
-                return [
-                    (r0 & 0xffff_ffff) as u32,
-                    (r0 >> 32) as u32,
-                    (r1 & 0xffff_ffff) as u32,
-                    (r1 >> 32) as u32,
-                ];
-            }
+        if let Some(res) = crate::cuda::vadd64_cuda(&a64, &b64)
+            && res.len() == 2
+        {
+            let r0 = res[0];
+            let r1 = res[1];
+            return [
+                (r0 & 0xffff_ffff) as u32,
+                (r0 >> 32) as u32,
+                (r1 & 0xffff_ffff) as u32,
+                (r1 >> 32) as u32,
+            ];
         }
     }
 
@@ -5114,10 +5114,10 @@ pub fn vand(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
         return res;
     }
     #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::vand_cuda(&a, &b) {
-        if res.len() == 4 {
-            return [res[0], res[1], res[2], res[3]];
-        }
+    if let Some(res) = crate::cuda::vand_cuda(&a, &b)
+        && res.len() == 4
+    {
+        return [res[0], res[1], res[2], res[3]];
     }
     #[cfg(target_arch = "x86_64")]
     unsafe {
@@ -5162,10 +5162,10 @@ pub fn vxor(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
         return res;
     }
     #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::vxor_cuda(&a, &b) {
-        if res.len() == 4 {
-            return [res[0], res[1], res[2], res[3]];
-        }
+    if let Some(res) = crate::cuda::vxor_cuda(&a, &b)
+        && res.len() == 4
+    {
+        return [res[0], res[1], res[2], res[3]];
     }
     #[cfg(target_arch = "x86_64")]
     unsafe {
@@ -5210,10 +5210,10 @@ pub fn vor(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
         return res;
     }
     #[cfg(feature = "cuda")]
-    if let Some(res) = crate::cuda::vor_cuda(&a, &b) {
-        if res.len() == 4 {
-            return [res[0], res[1], res[2], res[3]];
-        }
+    if let Some(res) = crate::cuda::vor_cuda(&a, &b)
+        && res.len() == 4
+    {
+        return [res[0], res[1], res[2], res[3]];
     }
     #[cfg(target_arch = "x86_64")]
     unsafe {

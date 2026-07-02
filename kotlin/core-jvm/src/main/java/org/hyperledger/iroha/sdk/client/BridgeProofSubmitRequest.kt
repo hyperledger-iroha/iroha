@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.util.Base64
 import org.hyperledger.iroha.sdk.sccp.EvmSccpSubmission
 import org.hyperledger.iroha.sdk.sccp.SccpSourceProofs
 import org.hyperledger.iroha.sdk.sccp.TronSccpSubmission
@@ -24,7 +25,7 @@ class BridgeProofSubmitRequest(
 ) {
     val authority: String = requireNonBlank(authority, "authority")
     val publicKeyHex: String? = normalizeOptional(publicKeyHex)
-    val signatureB64: String? = normalizeOptional(signatureB64)
+    val signatureB64: String? = normalizeOptionalExactBase64(signatureB64, "signatureB64")
     val burnBundle: Map<String, Any?>? = burnBundle?.toMap()
     val messageBundle: Map<String, Any?>? = messageBundle?.toMap()
     val networkIdHex: String? = normalizeOptional(networkIdHex)
@@ -268,6 +269,21 @@ private fun normalizeOptional(value: String?): String? {
     if (value == null) return null
     val trimmed = value.trim()
     return trimmed.ifEmpty { null }
+}
+
+private fun normalizeOptionalExactBase64(value: String?, field: String): String? {
+    if (value == null) return null
+    require(value.isNotEmpty() && value == value.trim()) { "$field must be exact standard-base64" }
+    val decoded = try {
+        Base64.getDecoder().decode(value)
+    } catch (ex: IllegalArgumentException) {
+        throw IllegalArgumentException("$field must be valid base64", ex)
+    }
+    require(decoded.isNotEmpty()) { "$field must not decode to empty bytes" }
+    require(Base64.getEncoder().encodeToString(decoded) == value) {
+        "$field must be exact standard-base64"
+    }
+    return value
 }
 
 private fun hexLower(bytes: ByteArray): String {

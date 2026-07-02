@@ -849,7 +849,7 @@ fn verify_council_signature(signature: &Value, payload: &[u8]) -> EyreResult<()>
             signature_bytes.len()
         ));
     }
-    let signature = Signature::try_from_bytes(&signature_bytes)
+    let signature = iroha_crypto::ed25519_parse_signature(&signature_bytes)
         .wrap_err("invalid council signature material")?;
     signature
         .verify(&public_key, payload)
@@ -1315,8 +1315,12 @@ pub fn verify_attestation_envelope(
     let signature_hex = attestation_str_field(attestation, "signature_hex")?;
     let signature_bytes =
         hex::decode(signature_hex).wrap_err("attestation signature is not valid hex")?;
-    let signature = Signature::try_from_bytes(&signature_bytes)
-        .wrap_err("invalid attestation signature material")?;
+    let signature = if matches!(algorithm, Algorithm::Ed25519) {
+        iroha_crypto::ed25519_parse_signature(&signature_bytes)
+    } else {
+        Signature::try_from_bytes(&signature_bytes).map_err(iroha_crypto::Error::from)
+    }
+    .wrap_err("invalid attestation signature material")?;
     signature
         .verify(&public_key, &report_json)
         .wrap_err("attestation signature did not verify")?;
@@ -1678,6 +1682,54 @@ fn council_envelope_signs_manifest_fixture() {
         "unexpected error: {err:?}"
     );
 
+    const SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+    for (label, replacement_r) in [
+        ("small-order", SMALL_ORDER_R),
+        ("noncanonical", NONCANONICAL_R),
+    ] {
+        let mut malformed: Value =
+            norito::json::from_slice(&bundle.council_envelope).expect("envelope json");
+        let signatures = malformed
+            .get_mut("signatures")
+            .and_then(Value::as_array_mut)
+            .expect("signature array");
+        let signature = signatures
+            .first_mut()
+            .and_then(Value::as_object_mut)
+            .expect("signature entry");
+        let signature_hex = signature
+            .get("signature")
+            .and_then(Value::as_str)
+            .expect("signature hex");
+        let mut signature_bytes = hex::decode(signature_hex).expect("signature hex decodes");
+        signature_bytes[..replacement_r.len()].copy_from_slice(&replacement_r);
+        signature.insert(
+            "signature".into(),
+            Value::from(hex::encode(signature_bytes)),
+        );
+        let malformed_bytes = norito::json::to_vec(&malformed).expect("malformed json");
+        let err = match verify_council_envelope(
+            &bundle.manifest,
+            bundle.chunk_digest_sha3_256,
+            &malformed_bytes,
+        ) {
+            Ok(()) => panic!("{label} council envelope signature R must fail admission"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("signature"),
+            "unexpected {label} signature error: {err:?}"
+        );
+    }
+
     let mut tampered_aliases: Value =
         norito::json::from_slice(&bundle.council_envelope).expect("envelope json");
     tampered_aliases
@@ -1699,6 +1751,100 @@ fn council_envelope_signs_manifest_fixture() {
         err.to_string().contains("profile_aliases"),
         "unexpected error: {err:?}"
     );
+}
+
+#[test]
+fn attestation_envelope_rejects_malformed_ed25519_signature_r() {
+    const SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    let key_pair = fixture_council_keypair().expect("fixture signer");
+    let signer = AccountAddress::from_account_id(&iroha_data_model::account::AccountId::new(
+        key_pair.public_key().clone(),
+    ))
+    .expect("fixture account address");
+    let mut scenario_stats = BTreeMap::new();
+    scenario_stats.insert(
+        "ok".to_owned(),
+        ScenarioStats {
+            total: 1,
+            success: 1,
+            refusal: 0,
+            error: 0,
+            durations: vec![Duration::from_millis(1)],
+        },
+    );
+    let suite = SuiteReport {
+        profile_version: PROFILE_VERSION,
+        fixtures_digest_hex: "00".repeat(32),
+        load_profile: LoadProfile {
+            concurrent_streams: 1,
+            max_duration: Duration::from_secs(1),
+        },
+        load_report: LoadTestReport {
+            total_requests: 1,
+            elapsed: Duration::from_millis(1),
+            scenario_stats,
+        },
+        gateway_target: None,
+        scenarios: vec![ScenarioReport {
+            id: "ok",
+            description: "ok",
+            expected_status: 200,
+            observed_status: 200,
+            expected_outcome: ScenarioOutcome::Success,
+            observed_outcome: ScenarioOutcome::Success,
+            refusal: None,
+        }],
+    };
+    let bundle = generate_attestation(
+        &suite,
+        &key_pair,
+        &signer,
+        UNIX_EPOCH + Duration::from_secs(FIXTURE_RELEASE_UNIX),
+    )
+    .expect("attestation signs");
+    verify_attestation_envelope(&bundle.envelope_bytes).expect("valid attestation verifies");
+
+    for (label, replacement_r) in [
+        ("small-order", SMALL_ORDER_R),
+        ("noncanonical", NONCANONICAL_R),
+    ] {
+        let mut envelope: Value =
+            norito::json::from_slice(&bundle.envelope_bytes).expect("attestation json");
+        let attestation = envelope
+            .as_object_mut()
+            .and_then(|root| root.get_mut("attestation"))
+            .and_then(Value::as_object_mut)
+            .expect("attestation object");
+        let signature_hex = attestation
+            .get("signature_hex")
+            .and_then(Value::as_str)
+            .expect("signature hex");
+        let mut signature_bytes = hex::decode(signature_hex).expect("signature hex decodes");
+        signature_bytes[..replacement_r.len()].copy_from_slice(&replacement_r);
+        attestation.insert(
+            "signature_hex".into(),
+            Value::from(hex::encode(signature_bytes)),
+        );
+        let encoded = norito::json::to_vec(&envelope).expect("encode malformed attestation");
+        let err = match verify_attestation_envelope(&encoded) {
+            Ok(_) => panic!("{label} attestation signature R must fail admission"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("invalid attestation signature material"),
+            "unexpected {label} attestation error: {err:?}"
+        );
+    }
 }
 
 #[test]

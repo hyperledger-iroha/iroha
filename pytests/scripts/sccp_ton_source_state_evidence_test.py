@@ -54,6 +54,15 @@ def ton_args(module):
     )
 
 
+def active_template_hash(module, lane, field):
+    for template_lane, template_field, template_hash in (
+        module.sccp_active_source_template_component_hashes()
+    ):
+        if template_lane == lane and template_field == field:
+            return template_hash
+    raise AssertionError(f"missing active {lane} template hash for {field}")
+
+
 def test_ton_source_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
@@ -608,6 +617,36 @@ def test_ton_direct_record_hashes_reject_cross_role_template_component_hashes():
             )
 
 
+def test_ton_direct_record_hashes_reject_foreign_active_lane_template_component_hashes():
+    module = load_evidence_module()
+    template_hash = active_template_hash(
+        module,
+        "Solana",
+        "consensus_verifier_hash",
+    )
+
+    for record_hash, field in (
+        (module.ton_source_verifier_material_record_hash, "source_trust_anchor_hash"),
+        (
+            module.ton_source_adapter_engine_deployment_record_hash,
+            "source_state_verifier_hash",
+        ),
+    ):
+        args = ton_args(module)
+        setattr(args, field, template_hash)
+        label = field.replace("_", " ")
+
+        try:
+            record_hash(args)
+        except SystemExit as exc:
+            assert f"live {label}" in str(exc)
+            assert "template-derived Solana consensus verifier hash" in str(exc)
+        else:
+            raise AssertionError(
+                f"TON record hash accepted foreign template hash for {field}"
+            )
+
+
 def test_ton_source_deployment_hash_rejects_noncanonical_adapter_vk_hash():
     module = load_evidence_module()
     args = ton_args(module)
@@ -967,6 +1006,29 @@ def test_ton_cli_rejects_full_light_client_audit_hash_reusing_template_material(
     else:
         raise AssertionError(
             "TON full light-client audit hash reused template material"
+        )
+
+
+def test_ton_cli_rejects_full_light_client_audit_hash_reusing_foreign_template_material():
+    module = load_evidence_module()
+    args = ton_args(module)
+    args.masterchain_config_verifier_hash = active_template_hash(
+        module,
+        "Solana",
+        "consensus_verifier_hash",
+    )
+    args.validator_set_transition_verifier_hash = bytes.fromhex("cc" * 32)
+    args.shard_accounts_dictionary_verifier_hash = bytes.fromhex("dd" * 32)
+
+    try:
+        module.ton_full_light_client_gate_hash(args)
+    except SystemExit as exc:
+        assert "built-in template material" in str(exc)
+        assert "masterchain_config_verifier_hash" in str(exc)
+        assert "Solana consensus verifier hash" in str(exc)
+    else:
+        raise AssertionError(
+            "TON full light-client audit hash reused foreign template material"
         )
 
 

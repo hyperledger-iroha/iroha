@@ -84,6 +84,29 @@ public final class HttpClientTransportTests {
 
   private HttpClientTransportTests() {}
 
+  private static String noncanonicalStandardBase64PadBitAlias(final String encoded) {
+    if (!encoded.endsWith("==")) {
+      throw new AssertionError("64-byte signatures encode with == padding");
+    }
+    final String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    final char[] chars = encoded.toCharArray();
+    final int index = chars.length - 3;
+    final int value = alphabet.indexOf(chars[index]);
+    if (value < 0) {
+      throw new AssertionError("standard base64 alphabet");
+    }
+    chars[index] = alphabet.charAt(value ^ 0x01);
+    return new String(chars);
+  }
+
+  private static String canonicalSignatureBase64Fixture() {
+    final byte[] signature = new byte[64];
+    for (int i = 0; i < signature.length; i++) {
+      signature[i] = 0x01;
+    }
+    return Base64.getEncoder().encodeToString(signature);
+  }
+
   private static String abiWordHex(final int value) {
     final String hex = Integer.toHexString(value);
     final StringBuilder out = new StringBuilder(64);
@@ -148,6 +171,7 @@ public final class HttpClientTransportTests {
     submitBuildsToriiRequest();
     submitTransactionJsonBuildsJsonIngressRequest();
     bridgeSubmitJsonHelpersPostRawProofAndMessagePayloads();
+    bridgeProofSubmitRejectsNoncanonicalSignatureB64();
     bridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions();
     bridgeSubmitJsonHelpersRejectPlaceholderProofBytesBeforeRequest();
     submitPropagatesExecutorFailure();
@@ -402,6 +426,22 @@ public final class HttpClientTransportTests {
         : "Typed bridge proof submit endpoint mismatch";
     assert typedBody.equals(new String(typedRequest.body(), StandardCharsets.UTF_8))
         : "Typed bridge proof submit body mismatch";
+  }
+
+  private static void bridgeProofSubmitRejectsNoncanonicalSignatureB64() {
+    final String canonicalSignature = canonicalSignatureBase64Fixture();
+    final List<String> invalidSignatures =
+        List.of(" " + canonicalSignature, noncanonicalStandardBase64PadBitAlias(canonicalSignature));
+    for (final String signatureB64 : invalidSignatures) {
+      expectIllegalArgument(
+          () ->
+              BridgeProofSubmitRequest.builder()
+                  .authority("alice")
+                  .signatureB64(signatureB64)
+                  .messageBundle(Map.of("commitment", Map.of("message_id", "msg-1")))
+                  .build(),
+          "noncanonical bridge proof signatureB64 must be rejected");
+    }
   }
 
   @SuppressWarnings("unchecked")
@@ -3635,6 +3675,20 @@ public final class HttpClientTransportTests {
                     .setSignatureB64("not base64")
                     .build()),
         "malformed detached signature must be rejected");
+    final String canonicalSignature = canonicalSignatureBase64Fixture();
+    for (final String signatureB64 :
+        List.of(" " + canonicalSignature, noncanonicalStandardBase64PadBitAlias(canonicalSignature))) {
+      expectIllegalArgument(
+          () ->
+              HttpClientTransport.buildMultisigProposePayload(
+                  MultisigProposeRequest.builder()
+                      .setMultisigAccountAlias("cbdc@banka")
+                      .setSignerAccountId("alice")
+                      .addInstructionBytes(instruction)
+                      .setSignatureB64(signatureB64)
+                      .build()),
+          "noncanonical detached signature must be rejected");
+    }
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(

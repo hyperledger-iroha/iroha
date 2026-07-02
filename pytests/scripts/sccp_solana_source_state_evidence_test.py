@@ -73,6 +73,15 @@ def solana_args(module):
     )
 
 
+def active_template_hash(module, lane, field):
+    for template_lane, template_field, template_hash in (
+        module.sccp_active_source_template_component_hashes()
+    ):
+        if template_lane == lane and template_field == field:
+            return template_hash
+    raise AssertionError(f"missing active {lane} template hash for {field}")
+
+
 def solana_light_client_cli_args():
     return [
         "--tower-replay-verifier-hash",
@@ -533,6 +542,35 @@ def test_direct_record_hashes_reject_cross_role_template_component_hashes():
             )
 
 
+def test_direct_record_hashes_reject_foreign_active_lane_template_component_hashes():
+    module = load_evidence_module()
+    template_hash = active_template_hash(
+        module,
+        "ETH",
+        "consensus_verifier_hash",
+    )
+
+    for record_hash, field in (
+        (module.solana_source_verifier_material_record_hash, "source_trust_anchor_hash"),
+        (
+            module.solana_source_adapter_engine_deployment_record_hash,
+            "source_state_verifier_hash",
+        ),
+    ):
+        args = solana_args(module)
+        setattr(args, field, template_hash)
+
+        try:
+            record_hash(args)
+        except SystemExit as exc:
+            assert field in str(exc)
+            assert "ETH consensus verifier hash template hash" in str(exc)
+        else:
+            raise AssertionError(
+                f"Solana record hash accepted foreign template hash for {field}"
+            )
+
+
 def test_direct_record_hashes_reject_zero_component_hashes():
     module = load_evidence_module()
     material_fields = tuple(
@@ -981,6 +1019,29 @@ def test_solana_cli_rejects_full_light_client_audit_hash_reusing_template_materi
     else:
         raise AssertionError(
             "Solana full-light-client audit hash reused template material"
+        )
+
+
+def test_solana_cli_rejects_full_light_client_audit_hash_reusing_foreign_template_material():
+    module = load_evidence_module()
+    args = solana_args(module)
+    args.tower_replay_verifier_hash = active_template_hash(
+        module,
+        "ETH",
+        "consensus_verifier_hash",
+    )
+    args.full_accountsdb_lattice_verifier_hash = bytes.fromhex("cc" * 32)
+    args.bank_fork_choice_verifier_hash = bytes.fromhex("dd" * 32)
+
+    try:
+        module.solana_full_light_client_gate_hash(args)
+    except SystemExit as exc:
+        assert "built-in template material" in str(exc)
+        assert "tower_replay_verifier_hash" in str(exc)
+        assert "ETH consensus verifier hash" in str(exc)
+    else:
+        raise AssertionError(
+            "Solana full-light-client audit hash reused foreign template material"
         )
 
 

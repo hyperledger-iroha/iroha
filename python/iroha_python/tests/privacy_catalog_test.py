@@ -8530,6 +8530,8 @@ def test_zk_ace_python_capabilities_require_both_proof_builder_names(
 
 
 def test_zk_ace_python_exports_catalog_named_proof_builder() -> None:
+    assert "zk_ace_verifying_key_registration_payload_v1" in crypto.__all__
+    assert "zk_ace_verifying_key_registration_payload_v1" in iroha_python.__all__
     assert "build_zk_ace_authorization_proof_v1" in crypto.__all__
     assert "build_zk_ace_authorization_proof_v1" in iroha_python.__all__
     assert "privacy_proof_request_v1" in crypto.__all__
@@ -8544,7 +8546,44 @@ def test_zk_ace_python_exports_catalog_named_proof_builder() -> None:
         iroha_python.build_zk_ace_authorization_proof_v1
         is crypto.build_zk_ace_authorization_proof_v1
     )
+    assert (
+        iroha_python.zk_ace_verifying_key_registration_payload_v1
+        is crypto.zk_ace_verifying_key_registration_payload_v1
+    )
     assert iroha_python.privacy_proof_request_v1 is crypto.privacy_proof_request_v1
+
+
+def test_zk_ace_verifying_key_registration_payload_delegates_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Native:
+        @staticmethod
+        def zk_ace_verifying_key_registration_payload_v1() -> dict[str, object]:
+            return {
+                "backend": "stark/fri/sha256-goldilocks",
+                "name": "zk_ace_pq_authorization_v0",
+                "version": 1,
+            }
+
+    monkeypatch.setattr(crypto, "_crypto", Native())
+
+    assert crypto.zk_ace_verifying_key_registration_payload_v1() == {
+        "backend": "stark/fri/sha256-goldilocks",
+        "name": "zk_ace_pq_authorization_v0",
+        "version": 1,
+    }
+
+
+def test_zk_ace_verifying_key_registration_payload_requires_native_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Native:
+        pass
+
+    monkeypatch.setattr(crypto, "_crypto", Native())
+
+    with pytest.raises(RuntimeError, match="missing ZK-ACE verifier-key support"):
+        crypto.zk_ace_verifying_key_registration_payload_v1()
 
 
 def test_zk_ace_python_catalog_named_proof_builder_delegates(

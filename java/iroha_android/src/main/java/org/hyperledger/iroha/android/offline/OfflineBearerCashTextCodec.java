@@ -78,7 +78,12 @@ public final class OfflineBearerCashTextCodec {
         return false;
       }
     }
-    return true;
+    try {
+      OfflineBase64Url.decodeUnpadded(payload, "Offline Bearer Cash text payload");
+      return true;
+    } catch (final IllegalArgumentException ignored) {
+      return false;
+    }
   }
 
   private static boolean isBase64UrlCharacter(final char ch) {

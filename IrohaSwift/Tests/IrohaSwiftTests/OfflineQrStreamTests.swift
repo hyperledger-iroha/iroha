@@ -80,6 +80,9 @@ final class OfflineQrStreamTests: XCTestCase {
             try OfflineQrStreamTextCodec.decode("\(encoded)\n", encoding: .base64)
         )
         XCTAssertThrowsError(
+            try OfflineQrStreamTextCodec.decode("iroha:qr:AB==", encoding: .base64)
+        )
+        XCTAssertThrowsError(
             try OfflineQrStreamTextCodec.decode(retiredPrefix, encoding: .base64)
         )
     }
@@ -114,6 +117,12 @@ final class OfflineQrStreamTests: XCTestCase {
             .unspecified
         )
         XCTAssertEqual(
+            OfflineNoteTransferTextPayloadCodec.payloadKind(
+                for: OfflineNoteTransferTextPayloadCodec.receiveRequestPrefix + "AB"
+            ),
+            .unspecified
+        )
+        XCTAssertEqual(
             try OfflineNoteTransferTextPayloadCodec.decode(challenge, expectedKind: .receiveRequest).payload,
             payload
         )
@@ -122,6 +131,12 @@ final class OfflineQrStreamTests: XCTestCase {
         )
         XCTAssertThrowsError(
             try OfflineNoteTransferTextPayloadCodec.decode("\(ack)\n", expectedKind: .receiptAck)
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteTransferTextPayloadCodec.decode(
+                OfflineNoteTransferTextPayloadCodec.receiveRequestPrefix + "AB",
+                expectedKind: .receiveRequest
+            )
         )
         XCTAssertThrowsError(try OfflineNoteTransferTextPayloadCodec.decode(payment, expectedKind: .receiveRequest))
     }

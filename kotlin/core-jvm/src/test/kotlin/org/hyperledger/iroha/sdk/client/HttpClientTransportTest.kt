@@ -46,6 +46,17 @@ class HttpClientTransportTest {
         AccountAddress.fromAccount(ByteArray(32) { 0x37.toByte() }, "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
+    private fun noncanonicalStandardBase64PadBitAlias(encoded: String): String {
+        require(encoded.endsWith("==")) { "64-byte signatures encode with == padding" }
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        val chars = encoded.toCharArray()
+        val index = chars.size - 3
+        val value = alphabet.indexOf(chars[index])
+        require(value >= 0) { "standard base64 alphabet" }
+        chars[index] = alphabet[value xor 0x01]
+        return String(chars)
+    }
+
     @Test
     fun issueIdentifierClaimReceiptForwardsAccountAliasPathLiteral() {
         val executor = CapturingExecutor()
@@ -1137,6 +1148,19 @@ class HttpClientTransportTest {
                     instructions = listOf(instruction),
                 )
             )
+        }
+        val canonicalSignature = Base64.getEncoder().encodeToString(ByteArray(64) { 0x01 })
+        for (signatureB64 in listOf(" $canonicalSignature", noncanonicalStandardBase64PadBitAlias(canonicalSignature))) {
+            assertFailsWith<IllegalArgumentException> {
+                HttpClientTransport.buildMultisigProposePayload(
+                    MultisigProposeRequest(
+                        multisigAccountAlias = "cbdc@banka",
+                        signerAccountId = "alice",
+                        instructions = listOf(instruction),
+                        signatureB64 = signatureB64,
+                    )
+                )
+            }
         }
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
@@ -2392,6 +2416,20 @@ class HttpClientTransportTest {
         assertEquals(200, typedResponse.statusCode)
         assertEquals("https://127.0.0.1:8080/base/v1/bridge/proofs/submit", typedRequest.uri.toString())
         assertEquals(typedBody, String(typedRequest.body, StandardCharsets.UTF_8))
+    }
+
+    @Test
+    fun bridgeProofSubmitRejectsNoncanonicalSignatureB64() {
+        val canonicalSignature = Base64.getEncoder().encodeToString(ByteArray(64) { 0x01 })
+        for (signatureB64 in listOf(" $canonicalSignature", noncanonicalStandardBase64PadBitAlias(canonicalSignature))) {
+            assertFailsWith<IllegalArgumentException> {
+                BridgeProofSubmitRequest(
+                    authority = "alice",
+                    signatureB64 = signatureB64,
+                    messageBundle = mapOf("commitment" to mapOf("message_id" to "msg-1")),
+                )
+            }
+        }
     }
 
     @Test

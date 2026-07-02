@@ -59,6 +59,15 @@ fn read_user_config(inline_toml: &str) -> UserConfig {
         .expect("user config should read")
 }
 
+fn read_user_config_error(inline_toml: &str) -> String {
+    let table: toml::Table = inline_toml.parse().expect("inline TOML should parse");
+    let error = base_reader()
+        .with_toml_source(TomlSource::inline(table))
+        .read_and_complete::<UserConfig>()
+        .expect_err("user config should reject malformed route manifest");
+    format!("{error:?}")
+}
+
 fn load_actual_config(inline_toml: &str) -> ActualConfig {
     read_user_config(inline_toml)
         .parse()
@@ -78,6 +87,34 @@ fn parse_panic_message(inline_toml: &str) -> String {
             |message| (*message).to_owned(),
         )
     })
+}
+
+#[test]
+fn route_manifest_toml_rejects_scalar_post_deploy_blocker_container() {
+    let toml = route_manifest_toml(&format!(
+        r#"
+source_bridge_address = "{SOURCE_BRIDGE}"
+destination_verifier_address = "{VERIFIER}"
+post_deploy_production_blockers = "operator hold"
+"#
+    ));
+
+    let message = read_user_config_error(&toml);
+    assert!(message.contains("post_deploy_production_blockers"));
+}
+
+#[test]
+fn route_manifest_toml_rejects_non_string_post_deploy_blocker_entry() {
+    let toml = route_manifest_toml(&format!(
+        r#"
+source_bridge_address = "{SOURCE_BRIDGE}"
+destination_verifier_address = "{VERIFIER}"
+full_toml_production_blockers = [123]
+"#
+    ));
+
+    let message = read_user_config_error(&toml);
+    assert!(message.contains("full_toml_production_blockers"));
 }
 
 #[test]

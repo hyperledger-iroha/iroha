@@ -690,7 +690,7 @@ fn verify_signatures(
             return Err("signer_multihash does not match encoded public key".into());
         }
 
-        let signature = Signature::try_from_bytes(&signature_bytes)
+        let signature = iroha_crypto::ed25519_parse_signature(&signature_bytes)
             .map_err(|err| format!("invalid signature material: {err}"))?;
         signature
             .verify(&public_key, manifest_digest.as_bytes())
@@ -1240,7 +1240,7 @@ mod tests {
                 .expect_err("malformed signature R must fail verification");
 
             assert!(
-                err.to_string().contains("signature verification failed"),
+                err.to_string().contains("invalid signature material"),
                 "{label} signature R produced unexpected error: {err}"
             );
         }

@@ -1,14 +1,20 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration regression tests for Sumeragi PRF-based collector selection.
 
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 use eyre::{WrapErr, ensure};
 use integration_tests::sandbox;
 use iroha_config::parameters::actual::ConsensusMode;
-use iroha_core::sumeragi::{collectors::deterministic_collectors, network_topology::Topology};
+use iroha_core::sumeragi::{
+    collectors::deterministic_collectors,
+    network_topology::{Topology, commit_quorum_from_len},
+};
 use iroha_data_model::{Level, isi::Log, peer::PeerId};
-use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry};
 use norito::json::{self, Value};
 use tokio::time::sleep;
 
@@ -21,6 +27,7 @@ async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_sync_timeout(Duration::from_secs(420))
         .with_config_layer(|layer| {
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
@@ -39,17 +46,30 @@ async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
     };
 
     // Produce a handful of blocks so VRF commit/reveal data is available.
-    let client = network.client();
+    let clients = network
+        .peers()
+        .iter()
+        .map(NetworkPeer::client)
+        .collect::<Vec<_>>();
+    let client = clients
+        .first()
+        .cloned()
+        .ok_or_else(|| eyre::eyre!("test network must expose at least one client"))?;
     drive_network_to_total_height(&network, &client, 6, "prf seed").await?;
 
     let topology = topology_from_peers(network.peers());
-    let collectors_url = client
-        .torii_url
-        .join("v1/sumeragi/collectors")
-        .wrap_err("compose collectors URL")?;
+    let collectors_urls = clients
+        .iter()
+        .map(|client| {
+            client
+                .torii_url
+                .join("v1/sumeragi/collectors")
+                .wrap_err("compose collectors URL")
+        })
+        .collect::<eyre::Result<Vec<_>>>()?;
     let http = integration_tests::http::client();
 
-    let snapshot_initial = fetch_collectors_snapshot(&http, &collectors_url).await?;
+    let snapshot_initial = fetch_collectors_snapshot(&http, &collectors_urls[0]).await?;
     ensure!(
         snapshot_initial.mode == ConsensusMode::Npos,
         "collector snapshot should report NPoS mode"
@@ -65,7 +85,7 @@ async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
 
     let snapshot_next = retry_collectors_until_height(
         &http,
-        &collectors_url,
+        &collectors_urls,
         snapshot_initial.plan_height,
         snapshot_initial.plan_view,
         Duration::from_millis(250),
@@ -118,15 +138,55 @@ async fn drive_network_to_total_height(
     label: &str,
 ) -> eyre::Result<()> {
     let mut current_height = client.get_status()?.blocks;
+    let quorum = commit_quorum_from_len(network.peers().len()).max(1);
     while current_height < target_height {
         let next_height = current_height.saturating_add(1);
         client.submit_all([Log::new(Level::INFO, format!("{label} {next_height}"))])?;
-        network
-            .ensure_blocks_with(|height| height.total >= next_height)
-            .await?;
-        current_height = client.get_status()?.blocks;
+        let heights =
+            wait_for_total_height_quorum(network, next_height, quorum, network.sync_timeout())
+                .await?;
+        current_height = heights.iter().copied().max().unwrap_or(next_height);
     }
     Ok(())
+}
+
+async fn wait_for_total_height_quorum(
+    network: &sandbox::SerializedNetwork,
+    target_height: u64,
+    quorum: usize,
+    timeout: Duration,
+) -> eyre::Result<Vec<u64>> {
+    let deadline = Instant::now() + timeout;
+    let mut last_observed = Vec::new();
+    loop {
+        last_observed.clear();
+        let mut heights = Vec::new();
+        for peer in network.peers() {
+            match peer.status().await {
+                Ok(status) => {
+                    heights.push(status.blocks);
+                    last_observed.push(format!("ok:{}", status.blocks));
+                }
+                Err(err) => last_observed.push(format!("err:{err}")),
+            }
+        }
+        if count_heights_at_or_above(&heights, target_height) >= quorum {
+            return Ok(heights);
+        }
+        if Instant::now() >= deadline {
+            eyre::bail!(
+                "total height {target_height} did not reach quorum {quorum} within {timeout:?}; last observed {last_observed:?}"
+            );
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+}
+
+fn count_heights_at_or_above(heights: &[u64], target_height: u64) -> usize {
+    heights
+        .iter()
+        .filter(|height| **height >= target_height)
+        .count()
 }
 
 fn next_collectors_observation_height(current_height: u64, plan_height: u64) -> u64 {
@@ -166,26 +226,50 @@ fn peer_id_to_string(peer: &PeerId) -> String {
 
 async fn retry_collectors_until_height(
     http: &reqwest::Client,
-    url: &reqwest::Url,
+    urls: &[reqwest::Url],
     min_height: u64,
     min_view: u64,
     interval: Duration,
     attempts: usize,
 ) -> eyre::Result<CollectorsSnapshot> {
-    let mut last_snapshot = fetch_collectors_snapshot(http, url).await?;
-    if collectors_snapshot_advanced(&last_snapshot, min_height, min_view) {
-        return Ok(last_snapshot);
-    }
-    for _ in 0..attempts {
-        sleep(interval).await;
-        last_snapshot = fetch_collectors_snapshot(http, url).await?;
-        if collectors_snapshot_advanced(&last_snapshot, min_height, min_view) {
-            return Ok(last_snapshot);
+    ensure!(
+        !urls.is_empty(),
+        "collector retry requires at least one URL"
+    );
+    let mut last_snapshots = Vec::new();
+    for attempt in 0..=attempts {
+        last_snapshots.clear();
+        for url in urls {
+            last_snapshots.push(fetch_collectors_snapshot(http, url).await?);
         }
+        if let Some(snapshot) =
+            first_advanced_collectors_snapshot(&last_snapshots, min_height, min_view)
+        {
+            return Ok(snapshot);
+        }
+        if attempt == attempts {
+            break;
+        }
+        sleep(interval).await;
     }
+    let last_observed = last_snapshots
+        .iter()
+        .map(|snapshot| (snapshot.plan_height, snapshot.plan_view))
+        .collect::<Vec<_>>();
     eyre::bail!(
-        "collector snapshot did not advance beyond height {min_height} / view {min_view} after {attempts} attempts"
+        "collector snapshot did not advance beyond height {min_height} / view {min_view} after {attempts} attempts; last observed {last_observed:?}"
     )
+}
+
+fn first_advanced_collectors_snapshot(
+    snapshots: &[CollectorsSnapshot],
+    min_height: u64,
+    min_view: u64,
+) -> Option<CollectorsSnapshot> {
+    snapshots
+        .iter()
+        .find(|snapshot| collectors_snapshot_advanced(snapshot, min_height, min_view))
+        .cloned()
 }
 
 fn collectors_snapshot_advanced(
@@ -197,7 +281,7 @@ fn collectors_snapshot_advanced(
         || (snapshot.plan_height == min_height && snapshot.plan_view > min_view)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct CollectorsSnapshot {
     mode: ConsensusMode,
     plan_height: u64,
@@ -306,9 +390,39 @@ fn collectors_snapshot_advanced_accepts_same_height_with_higher_view() {
 }
 
 #[test]
+fn first_advanced_collectors_snapshot_scans_all_peers() {
+    let stale = CollectorsSnapshot {
+        mode: ConsensusMode::Npos,
+        plan_height: 6,
+        plan_view: 0,
+        epoch_seed: [0; 32],
+        collectors_k: 1,
+        collector_peer_ids: vec!["peer-a".to_string()],
+    };
+    let advanced = CollectorsSnapshot {
+        plan_height: 7,
+        collector_peer_ids: vec!["peer-b".to_string()],
+        ..stale.clone()
+    };
+
+    assert_eq!(
+        first_advanced_collectors_snapshot(&[stale, advanced.clone()], 6, 0)
+            .expect("advanced snapshot"),
+        advanced
+    );
+}
+
+#[test]
 fn next_collectors_observation_height_forces_one_more_block_when_chain_is_ahead() {
     assert_eq!(next_collectors_observation_height(6, 5), 7);
     assert_eq!(next_collectors_observation_height(4, 5), 6);
+}
+
+#[test]
+fn count_heights_at_or_above_counts_quorum_candidates() {
+    assert_eq!(count_heights_at_or_above(&[5, 4, 5, 3], 5), 2);
+    assert_eq!(count_heights_at_or_above(&[6, 6, 5, 1], 5), 3);
+    assert_eq!(count_heights_at_or_above(&[], 1), 0);
 }
 
 fn parse_seed(hex_str: &str) -> eyre::Result<[u8; 32]> {

@@ -13,7 +13,7 @@ use std::{
 use base64::Engine as _;
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
-use iroha::client::Client;
+use iroha::client::{Client, Status};
 use iroha_core::sumeragi::consensus::{NPOS_TAG, vrf_commit_preimage, vrf_reveal_preimage};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
@@ -32,6 +32,7 @@ use sha2::{Digest as _, Sha256};
 use tokio::time::sleep;
 
 const EPOCH_LENGTH_BLOCKS: u64 = 16;
+const ZERO_PARTICIPATION_EPOCH_LENGTH_BLOCKS: u64 = 4;
 const VRF_COMMIT_WINDOW_BLOCKS: u64 = 4;
 const VRF_REVEAL_WINDOW_BLOCKS: u64 = 0;
 const VRF_LATE_REVEAL_SAFETY_BLOCKS: u64 = 3;
@@ -39,6 +40,7 @@ const BLOCK_TIME_MS: u64 = 600;
 const VRF_INPUT_DOMAIN: &[u8] = b"iroha:npos:vrf:input:v1";
 const TELEMETRY_RETRY_INTERVAL: Duration = Duration::from_millis(200);
 const TELEMETRY_RETRY_ATTEMPTS: usize = 30;
+const HEIGHT_PROGRESS_QUEUE_FALLBACK_LIMIT: u64 = 2;
 const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
@@ -62,8 +64,9 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
         return Ok(());
     };
 
-    let client = network.client();
-    let (epoch, auto_snapshot) = wait_for_epoch_commitment_snapshot(&client).await?;
+    let default_client = network.client();
+    let (epoch, auto_snapshot, client) =
+        wait_for_epoch_commitment_snapshot(&network, &default_client).await?;
 
     let http = HttpClient::new();
     let telemetry_url = client
@@ -255,13 +258,7 @@ async fn npos_late_vrf_reveal_clears_penalty_and_preserves_seed() -> Result<()> 
 
     // Wait for the epoch to finalize (height multiple of epoch length).
     let finalize_height = epoch.saturating_add(1).saturating_mul(EPOCH_LENGTH_BLOCKS);
-    let status = client.get_status()?;
-    for idx in status.blocks..finalize_height {
-        submit_progress_log(&client, format!("vrf finalize tick {idx}"))?;
-    }
-    network
-        .ensure_blocks_with(|height| height.total >= finalize_height)
-        .await?;
+    wait_for_height_total_at_least(&network, &client, finalize_height, "vrf finalize tick").await?;
 
     let penalties = wait_for_penalties(&client, epoch, |json| {
         json.get("committed_no_reveal")
@@ -329,15 +326,19 @@ async fn npos_zero_participation_epoch_reports_full_no_participation() -> Result
     };
 
     let client = network.client();
-    let epoch = wait_for_epoch_position(&client, 1).await?;
+    let epoch =
+        wait_for_epoch_position_with_length(&client, ZERO_PARTICIPATION_EPOCH_LENGTH_BLOCKS, 1)
+            .await?;
     let target_height = epoch
         .saturating_add(1)
-        .saturating_mul(EPOCH_LENGTH_BLOCKS)
-        .saturating_add(1);
-    let status = client.get_status()?;
-    for idx in status.blocks..target_height {
-        submit_progress_log(&client, format!("vrf no-participation tick {idx}"))?;
-    }
+        .saturating_mul(ZERO_PARTICIPATION_EPOCH_LENGTH_BLOCKS);
+    wait_for_height_total_at_least(
+        &network,
+        &client,
+        target_height,
+        "vrf no-participation tick",
+    )
+    .await?;
     network
         .ensure_blocks_with(|height| height.total >= target_height)
         .await?;
@@ -435,7 +436,14 @@ fn zero_participation_network_builder() -> NetworkBuilder {
     let mut params = short_epoch_npos_parameters();
     params.vrf_commit_window_blocks = 0;
     params.vrf_reveal_window_blocks = 0;
+    params.epoch_length_blocks = ZERO_PARTICIPATION_EPOCH_LENGTH_BLOCKS;
     randomness_network_builder_with_params(params)
+        .with_config_layer(|layer| {
+            layer.write(["sumeragi", "collectors", "k"], 2_i64);
+        })
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CollectorsK(2),
+        )))
 }
 
 fn randomness_network_builder_with_params(params: SumeragiNposParameters) -> NetworkBuilder {
@@ -987,15 +995,24 @@ where
 }
 
 fn epoch_and_position_from_height(height: u64) -> (u64, u64) {
+    epoch_and_position_from_height_with_length(height, EPOCH_LENGTH_BLOCKS)
+}
+
+fn epoch_and_position_from_height_with_length(height: u64, epoch_length: u64) -> (u64, u64) {
+    let epoch_length = epoch_length.max(1);
     let normalized_height = height.max(1);
-    let epoch = (normalized_height - 1) / EPOCH_LENGTH_BLOCKS;
-    let position = ((normalized_height - 1) % EPOCH_LENGTH_BLOCKS) + 1;
+    let epoch = (normalized_height - 1) / epoch_length;
+    let position = ((normalized_height - 1) % epoch_length) + 1;
     (epoch, position)
 }
 
 fn submit_progress_log(client: &Client, message: impl Into<String>) -> Result<()> {
-    client.submit_blocking(Log::new(Level::INFO, message.into()))?;
+    client.submit(progress_log_instruction(message))?;
     Ok(())
+}
+
+fn progress_log_instruction(message: impl Into<String>) -> Log {
+    Log::new(Level::INFO, message.into())
 }
 
 fn submit_progress_log_if_stalled(
@@ -1007,22 +1024,69 @@ fn submit_progress_log_if_stalled(
 ) -> Result<()> {
     if *last_progress_height != Some(current_height) {
         *last_progress_height = Some(current_height);
-        submit_progress_log(client, format!("{label} {attempt}"))?;
+        let message = format!("{label} {attempt}");
+        submit_progress_log(client, message)?;
     }
     Ok(())
 }
 
-async fn wait_for_epoch_position(client: &Client, desired_position: u64) -> Result<u64> {
+#[test]
+fn should_submit_height_progress_tick_retries_per_height() {
+    assert!(should_submit_height_progress_tick(None, 2, 0, 25, 0, 2));
+    assert!(should_submit_height_progress_tick(Some(1), 2, 1, 25, 0, 2));
+    assert!(!should_submit_height_progress_tick(
+        Some(2),
+        2,
+        24,
+        25,
+        0,
+        2
+    ));
+    assert!(should_submit_height_progress_tick(Some(2), 2, 25, 25, 0, 2));
+    assert!(!should_submit_height_progress_tick(Some(2), 2, 25, 0, 0, 2));
+    assert!(!should_submit_height_progress_tick(
+        Some(2),
+        2,
+        25,
+        25,
+        3,
+        2
+    ));
+    assert!(!should_submit_height_progress_tick(
+        Some(2),
+        3,
+        26,
+        25,
+        1,
+        0
+    ));
+}
+
+#[test]
+fn progress_log_instruction_uses_info_level_and_message() {
+    let instruction = progress_log_instruction("tick");
+
+    assert_eq!(instruction.level, Level::INFO);
+    assert_eq!(instruction.msg, "tick");
+}
+
+async fn wait_for_epoch_position_with_length(
+    client: &Client,
+    epoch_length: u64,
+    desired_position: u64,
+) -> Result<u64> {
+    let epoch_length = epoch_length.max(1);
     ensure!(
-        (1..=EPOCH_LENGTH_BLOCKS).contains(&desired_position),
-        "desired epoch position {desired_position} out of range 1..={EPOCH_LENGTH_BLOCKS}"
+        (1..=epoch_length).contains(&desired_position),
+        "desired epoch position {desired_position} out of range 1..={epoch_length}"
     );
     const RETRY_INTERVAL: Duration = Duration::from_millis(200);
     const RETRIES: usize = 60;
     let mut last_progress_height = None;
     for attempt in 0..RETRIES {
         let status = client.get_status()?;
-        let (epoch, position) = epoch_and_position_from_height(status.blocks);
+        let (epoch, position) =
+            epoch_and_position_from_height_with_length(status.blocks, epoch_length);
         if position == desired_position {
             return Ok(epoch);
         }
@@ -1038,47 +1102,137 @@ async fn wait_for_epoch_position(client: &Client, desired_position: u64) -> Resu
     eyre::bail!("failed to align to epoch position {desired_position}")
 }
 
-async fn wait_for_epoch_commitment_snapshot(client: &Client) -> Result<(u64, Value)> {
+fn vrf_snapshot_has_commitment(snapshot: &Value) -> bool {
+    snapshot
+        .get("found")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && snapshot
+            .get("participants")
+            .and_then(Value::as_array)
+            .is_some_and(|participants| {
+                participants.iter().any(|participant| {
+                    participant
+                        .get("commitment")
+                        .and_then(Value::as_str)
+                        .is_some()
+                })
+            })
+}
+
+fn summarize_vrf_epoch_snapshot(label: &str, epoch: u64, snapshot: &Value) -> String {
+    let found = snapshot
+        .get("found")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let participant_count = snapshot
+        .get("participants")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let roster_len = snapshot
+        .get("roster_len")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let updated_at_height = snapshot
+        .get("updated_at_height")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    format!(
+        "{label}:epoch={epoch}:found={found}:participants={participant_count}:roster_len={roster_len}:updated_at_height={updated_at_height}"
+    )
+}
+
+async fn wait_for_epoch_commitment_snapshot(
+    network: &sandbox::SerializedNetwork,
+    fallback: &Client,
+) -> Result<(u64, Value, Client)> {
     const RETRY_INTERVAL: Duration = Duration::from_millis(200);
     const RETRIES: usize = 300;
-    let mut last_snapshot = None;
-    let mut last_progress_height = None;
+    let mut last_snapshots = Vec::new();
+    let mut last_submitted_height = None;
     for attempt in 0..RETRIES {
-        let status = client.get_status()?;
-        let (epoch, _) = epoch_and_position_from_height(status.blocks);
-        let snapshot = client.get_sumeragi_vrf_epoch_json(epoch)?;
-        let has_commitment = snapshot
-            .get("found")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-            && snapshot
-                .get("participants")
-                .and_then(Value::as_array)
-                .is_some_and(|participants| {
-                    participants.iter().any(|participant| {
-                        participant
-                            .get("commitment")
-                            .and_then(Value::as_str)
-                            .is_some()
-                    })
-                });
-        if has_commitment {
-            return Ok((epoch, snapshot));
+        let fallback_status = fallback.get_status()?;
+        let network_statuses = collect_network_statuses(network).await;
+        let highest_height = network_statuses
+            .iter()
+            .map(|(_, status)| status.blocks)
+            .chain(core::iter::once(fallback_status.blocks))
+            .max()
+            .unwrap_or_default();
+        let mut candidate_epochs = Vec::new();
+        for height in network_statuses
+            .iter()
+            .map(|(_, status)| status.blocks)
+            .chain(core::iter::once(highest_height))
+            .chain(core::iter::once(fallback_status.blocks))
+        {
+            let (epoch, _) = epoch_and_position_from_height(height);
+            if !candidate_epochs.contains(&epoch) {
+                candidate_epochs.push(epoch);
+            }
         }
-        last_snapshot = Some(snapshot);
-        submit_progress_log_if_stalled(
-            client,
-            status.blocks,
-            "vrf commitment wait tick",
+        candidate_epochs.sort_unstable();
+
+        last_snapshots.clear();
+        for (idx, peer) in network.peers().iter().enumerate() {
+            let peer_client = peer.client();
+            for epoch in &candidate_epochs {
+                match peer_client.get_sumeragi_vrf_epoch_json(*epoch) {
+                    Ok(snapshot) => {
+                        last_snapshots.push(summarize_vrf_epoch_snapshot(
+                            &format!("peer {idx}"),
+                            *epoch,
+                            &snapshot,
+                        ));
+                        if vrf_snapshot_has_commitment(&snapshot) {
+                            return Ok((*epoch, snapshot, peer_client));
+                        }
+                    }
+                    Err(err) => last_snapshots.push(format!("peer {idx}:epoch={epoch}:err:{err}")),
+                }
+            }
+        }
+
+        for epoch in &candidate_epochs {
+            match fallback.get_sumeragi_vrf_epoch_json(*epoch) {
+                Ok(snapshot) => {
+                    last_snapshots
+                        .push(summarize_vrf_epoch_snapshot("fallback", *epoch, &snapshot));
+                    if vrf_snapshot_has_commitment(&snapshot) {
+                        return Ok((*epoch, snapshot, fallback.clone()));
+                    }
+                }
+                Err(err) => last_snapshots.push(format!("fallback:epoch={epoch}:err:{err}")),
+            }
+        }
+
+        let lowest_queue_size = network_statuses
+            .iter()
+            .map(|(_, status)| status.queue_size)
+            .chain(core::iter::once(fallback_status.queue_size))
+            .min()
+            .unwrap_or(fallback_status.queue_size);
+        if should_submit_height_progress_tick(
+            last_submitted_height,
+            highest_height,
             attempt,
-            &mut last_progress_height,
-        )?;
+            25,
+            lowest_queue_size,
+            HEIGHT_PROGRESS_QUEUE_FALLBACK_LIMIT,
+        ) && submit_height_progress_log(
+            network,
+            fallback,
+            &network_statuses,
+            Log::new(
+                Level::INFO,
+                format!("vrf commitment wait tick height {highest_height} attempt {attempt}"),
+            ),
+        )? {
+            last_submitted_height = Some(highest_height);
+        }
         sleep(RETRY_INTERVAL).await;
     }
-    let last_payload = last_snapshot.as_ref().map_or_else(String::new, |value| {
-        json::to_string_pretty(value).unwrap_or_default()
-    });
-    eyre::bail!("failed to observe VRF commitment snapshot; last_payload={last_payload}")
+    eyre::bail!("failed to observe VRF commitment snapshot; last_snapshots={last_snapshots:?}")
 }
 
 async fn wait_for_height_total_at_least_before(
@@ -1116,6 +1270,171 @@ async fn wait_for_height_total_at_least_before(
     eyre::bail!(
         "failed to reach block height {min_height}; final_blocks={final_blocks}; sumeragi_status={status_payload}"
     )
+}
+
+async fn wait_for_height_total_at_least(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    min_height: u64,
+    label: &str,
+) -> Result<()> {
+    const RETRY_INTERVAL: Duration = Duration::from_millis(200);
+    const RETRIES: usize = 3_000;
+    const RESUBMIT_EVERY_ATTEMPTS: usize = 100;
+    let mut last_submitted_height = None;
+    let quorum = commit_quorum_size(network.peers().len()).max(1);
+    let mut last_network_snapshot = Vec::new();
+    for attempt in 0..RETRIES {
+        let status = client.get_status()?;
+        if status.blocks >= min_height {
+            return Ok(());
+        }
+        let network_statuses = collect_network_statuses(network).await;
+        last_network_snapshot = format_network_statuses(&network_statuses);
+        let highest_height = network_statuses
+            .iter()
+            .map(|(_, status)| status.blocks)
+            .chain(core::iter::once(status.blocks))
+            .max()
+            .unwrap_or_default();
+        if count_heights_at_or_above(
+            network_statuses.iter().map(|(_, status)| status.blocks),
+            min_height,
+        ) >= quorum
+        {
+            return Ok(());
+        }
+        let lowest_queue_size = network_statuses
+            .iter()
+            .map(|(_, status)| status.queue_size)
+            .chain(core::iter::once(status.queue_size))
+            .min()
+            .unwrap_or(status.queue_size);
+        if should_submit_height_progress_tick(
+            last_submitted_height,
+            highest_height,
+            attempt,
+            RESUBMIT_EVERY_ATTEMPTS,
+            lowest_queue_size,
+            HEIGHT_PROGRESS_QUEUE_FALLBACK_LIMIT,
+        ) {
+            if submit_height_progress_log(
+                network,
+                client,
+                &network_statuses,
+                Log::new(
+                    Level::INFO,
+                    format!("{label} height {highest_height} attempt {attempt}"),
+                ),
+            )? {
+                last_submitted_height = Some(highest_height);
+            }
+        }
+        sleep(RETRY_INTERVAL).await;
+    }
+    let final_blocks = client
+        .get_status()
+        .map(|status| status.blocks.to_string())
+        .unwrap_or_else(|err| format!("unavailable: {err}"));
+    let status_payload = sumeragi_status_debug_summary(client);
+    eyre::bail!(
+        "failed to reach block height {min_height}; final_blocks={final_blocks}; \
+         network_statuses={last_network_snapshot:?}; sumeragi_status={status_payload}"
+    )
+}
+
+async fn collect_network_statuses(network: &sandbox::SerializedNetwork) -> Vec<(usize, Status)> {
+    let mut statuses = Vec::new();
+    for (idx, peer) in network.peers().iter().enumerate() {
+        if let Ok(status) = peer.status().await {
+            statuses.push((idx, status));
+        }
+    }
+    statuses
+}
+
+fn format_network_statuses(statuses: &[(usize, Status)]) -> Vec<String> {
+    statuses
+        .iter()
+        .map(|(idx, status)| {
+            format!(
+                "#{idx}:height={} queue={} queued={} inflight={}",
+                status.blocks, status.queue_size, status.queue_queued, status.queue_inflight
+            )
+        })
+        .collect()
+}
+
+fn count_heights_at_or_above<I>(heights: I, target_height: u64) -> usize
+where
+    I: IntoIterator<Item = u64>,
+{
+    heights
+        .into_iter()
+        .filter(|height| *height >= target_height)
+        .count()
+}
+
+fn commit_quorum_size(peer_count: usize) -> usize {
+    let tolerated_faults = peer_count.saturating_sub(1) / 3;
+    peer_count.saturating_sub(tolerated_faults)
+}
+
+fn submit_height_progress_log(
+    network: &sandbox::SerializedNetwork,
+    fallback: &Client,
+    statuses: &[(usize, Status)],
+    instruction: Log,
+) -> Result<bool> {
+    let mut candidates = statuses
+        .iter()
+        .filter(|(_, status)| status.queue_size <= HEIGHT_PROGRESS_QUEUE_FALLBACK_LIMIT)
+        .map(|(idx, status)| (*idx, status.blocks))
+        .collect::<Vec<_>>();
+    candidates.sort_by(|(left_idx, left_height), (right_idx, right_height)| {
+        right_height
+            .cmp(left_height)
+            .then_with(|| left_idx.cmp(right_idx))
+    });
+
+    let mut errors = Vec::new();
+    for (idx, _) in candidates {
+        let Some(peer) = network.peers().get(idx) else {
+            continue;
+        };
+        let client = peer.client();
+        match client.submit(instruction.clone()) {
+            Ok(_) => return Ok(true),
+            Err(err) => errors.push(format!("peer {idx}: {err}")),
+        }
+    }
+
+    let fallback_queue = fallback.get_status()?.queue_size;
+    if fallback_queue <= HEIGHT_PROGRESS_QUEUE_FALLBACK_LIMIT {
+        return fallback
+            .submit(instruction)
+            .map(|_| true)
+            .map_err(Into::into);
+    }
+
+    eprintln!(
+        "skipping height progress log because no peer queue is below fallback limit \
+         (fallback_queue={fallback_queue}, limit={HEIGHT_PROGRESS_QUEUE_FALLBACK_LIMIT}, errors={errors:?})"
+    );
+    Ok(false)
+}
+
+fn should_submit_height_progress_tick(
+    last_submitted_height: Option<u64>,
+    current_height: u64,
+    attempt: usize,
+    resubmit_every_attempts: usize,
+    queue_size: u64,
+    queue_limit: u64,
+) -> bool {
+    queue_size <= queue_limit
+        && (last_submitted_height != Some(current_height)
+            || (resubmit_every_attempts > 0 && attempt.is_multiple_of(resubmit_every_attempts)))
 }
 
 fn sumeragi_status_debug_summary(client: &Client) -> String {
@@ -1156,6 +1475,30 @@ fn epoch_and_position_mapping_handles_genesis_and_boundaries() {
         epoch_and_position_from_height(EPOCH_LENGTH_BLOCKS + 1),
         (1, 1)
     );
+}
+
+#[test]
+fn epoch_and_position_mapping_handles_custom_epoch_length() {
+    assert_eq!(epoch_and_position_from_height_with_length(0, 4), (0, 1));
+    assert_eq!(epoch_and_position_from_height_with_length(4, 4), (0, 4));
+    assert_eq!(epoch_and_position_from_height_with_length(5, 4), (1, 1));
+}
+
+#[test]
+fn vrf_snapshot_has_commitment_requires_found_epoch_and_commitment() {
+    let empty: Value = json::from_str(r#"{"found":false,"participants":[]}"#)
+        .expect("empty snapshot JSON should decode");
+    assert!(!vrf_snapshot_has_commitment(&empty));
+
+    let missing_commitment: Value =
+        json::from_str(r#"{"found":true,"participants":[{"signer":0}]}"#)
+            .expect("missing-commitment snapshot JSON should decode");
+    assert!(!vrf_snapshot_has_commitment(&missing_commitment));
+
+    let committed: Value =
+        json::from_str(r#"{"found":true,"participants":[{"signer":0,"commitment":"abcd"}]}"#)
+            .expect("committed snapshot JSON should decode");
+    assert!(vrf_snapshot_has_commitment(&committed));
 }
 
 #[test]

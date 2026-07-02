@@ -439,6 +439,29 @@ test("TON route manifest rejects mismatched TAIRA burn-record VK names", async (
   await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
 });
 
+test("TON route manifest rejects malformed TAIRA burn-record VK names", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const cases = [
+    ` ${DEFAULT_TAIRA_BURN_RECORD_VK_NAME}`,
+    `${DEFAULT_TAIRA_BURN_RECORD_VK_NAME}\n`,
+    "taira/bsc/xor/burn-record",
+  ];
+
+  for (const vkName of cases) {
+    const result = runTonCli(
+      routeManifestArgs(paths, proofArtifactHash, { vkName }),
+    );
+
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /--vk-name must be 1-128 verifier-key identifier characters/u,
+    );
+    await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+  }
+});
+
 test("TON publish-route-manifest records custom gas review settings", async () => {
   const root = await fixtureRoot();
   const { paths, proofArtifactHash } = await writeFixtureFiles(root);
@@ -663,21 +686,23 @@ test("TON route manifest rejects non-canonical TON addresses before writing", as
   await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
 });
 
-test("TON route manifest rejects missing finalize message value", async () => {
+test("TON route manifest rejects malformed finalize message values", async () => {
   const root = await fixtureRoot();
   const { paths, proofArtifactHash } = await writeFixtureFiles(root);
-  const result = runTonCli(
-    routeManifestArgs(paths, proofArtifactHash, {
-      tonFinalizeMessageValueNano: "0",
-    }),
-  );
+  for (const value of ["0", ` ${DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO}`, `${DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO}\n`]) {
+    const result = runTonCli(
+      routeManifestArgs(paths, proofArtifactHash, {
+        tonFinalizeMessageValueNano: value,
+      }),
+    );
 
-  assert.notEqual(result.status, 0);
-  assert.match(
-    result.stderr,
-    /--ton-finalize-message-value-nano must be a positive integer decimal string/u,
-  );
-  await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+    assert.notEqual(result.status, 0);
+    assert.match(
+      result.stderr,
+      /--ton-finalize-message-value-nano must be a positive integer decimal string/u,
+    );
+    await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+  }
 });
 
 test("TON route manifest rejects duplicate CLI options before writing", async () => {
@@ -752,6 +777,90 @@ test("TON route manifest rejects empty output paths before writing", async () =>
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /--out must be a non-empty path/u);
   await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+});
+
+test("TON route manifest rejects malformed input paths before reading", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const cases = [
+    {
+      option: "--taira-contract",
+      value: ` ${paths.tairaContract}`,
+      expected: /--taira-contract must be a non-empty path/u,
+    },
+    {
+      option: "--offline-full-toml-evidence",
+      value: `${paths.offlineFullTomlEvidence}\n`,
+      expected: /--offline-full-toml-evidence must be a non-empty path/u,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const args = routeManifestArgs(paths, proofArtifactHash);
+    args[args.indexOf(testCase.option) + 1] = testCase.value;
+    const result = runTonCli(args);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, testCase.expected);
+    await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+  }
+});
+
+test("TON route manifest rejects unsafe public explorer URLs before writing", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const secretUrl = "https://operator:secret-token-ton-explorer-url@tonscan.org";
+  const cases = [
+    {
+      args: ["--post-deploy-source-event-explorer-url", secretUrl],
+      expected:
+        /--post-deploy-source-event-explorer-url must not include credentials, query, or fragment/u,
+      redacted: secretUrl,
+    },
+    {
+      args: [
+        "--post-deploy-route-canary-explorer-url",
+        "https://tonscan.org/tx/abc?token=secret-token-ton-explorer-url",
+      ],
+      expected:
+        /--post-deploy-route-canary-explorer-url must not include credentials, query, or fragment/u,
+      redacted: "secret-token-ton-explorer-url",
+    },
+    {
+      args: ["--post-deploy-route-canary-explorer-url", "http://tonscan.org/tx/abc"],
+      expected: /--post-deploy-route-canary-explorer-url must be a public HTTPS URL/u,
+      redacted: null,
+    },
+    {
+      args: ["--post-deploy-source-event-explorer-url", "https://localhost/tx/abc"],
+      expected: /--post-deploy-source-event-explorer-url must use a public DNS host/u,
+      redacted: null,
+    },
+    {
+      args: ["--post-deploy-source-event-explorer-url", "https://tonscan/tx/abc"],
+      expected: /--post-deploy-source-event-explorer-url must use a public DNS host/u,
+      redacted: null,
+    },
+    {
+      args: ["--post-deploy-route-canary-explorer-url", "https://127.0.0.1/tx/abc"],
+      expected: /--post-deploy-route-canary-explorer-url must use a public DNS host/u,
+      redacted: null,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const result = runTonCli([
+      ...routeManifestArgs(paths, proofArtifactHash),
+      ...testCase.args,
+    ]);
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, testCase.expected);
+    if (testCase.redacted) {
+      assert.doesNotMatch(result.stderr, new RegExp(testCase.redacted, "u"));
+    }
+    await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+  }
 });
 
 test("TON route manifest rejects unknown options without echoing names", async () => {
@@ -944,6 +1053,61 @@ test("TON publish-route-manifest rejects output path collisions with manifest", 
   assert.equal(await readFile(paths.out, "utf8"), originalManifest);
 });
 
+test("TON publish-route-manifest rejects unsafe top-level explorer metadata", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const render = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+  assert.equal(render.status, 0, render.stderr);
+  const envelope = JSON.parse(await readFile(paths.out, "utf8"));
+  const cases = [
+    {
+      patch: { explorer_url: "https://localhost/tx/abc" },
+      expected: /TON route manifest explorer_url must use a public DNS host/u,
+    },
+    {
+      patch: { explorer_url: "http://testnet.tonscan.org" },
+      expected: /TON route manifest explorer_url must be a public HTTPS URL/u,
+    },
+    {
+      patch: { explorer_host: "evil.example" },
+      expected: /TON route manifest explorer_host must match explorer_url host/u,
+    },
+    {
+      patch: {
+        taira_burn_record_vk_name: ` ${DEFAULT_TAIRA_BURN_RECORD_VK_NAME}`,
+      },
+      expected:
+        /TON route manifest TAIRA burn-record VK name must be 1-128 verifier-key identifier characters/u,
+    },
+  ];
+
+  for (const [index, testCase] of cases.entries()) {
+    const manifestPath = join(root, `unsafe-explorer-${index}.json`);
+    const outPath = join(root, `unsafe-explorer-${index}.out.json`);
+    const sentinel = `sentinel:unsafe-explorer:${index}\n`;
+    await writeJson(manifestPath, {
+      ...envelope,
+      manifest: {
+        ...envelope.manifest,
+        ...testCase.patch,
+      },
+    });
+    await writeFile(outPath, sentinel, "utf8");
+
+    const publish = runTonCli([
+      "publish-route-manifest",
+      "--manifest",
+      manifestPath,
+      "--out",
+      outPath,
+    ]);
+
+    assert.notEqual(publish.status, 0);
+    assert.match(publish.stderr, testCase.expected);
+    assert.equal(await readFile(outPath, "utf8"), sentinel);
+  }
+});
+
 test("TON publish-route-manifest rejects malformed submit booleans before writing", async () => {
   const root = await fixtureRoot();
   const { paths, proofArtifactHash } = await writeFixtureFiles(root);
@@ -1093,6 +1257,26 @@ test("TON publish-route-manifest rejects unsafe Torii URLs before writing", asyn
       expected: /--torii-url must be a valid HTTP\(S\) URL/u,
     },
     {
+      value: "https://localhost",
+      expected: /--torii-url HTTPS host must use public DNS/u,
+    },
+    {
+      value: "https://127.0.0.1",
+      expected: /--torii-url HTTPS host must use public DNS/u,
+    },
+    {
+      value: "https://taira",
+      expected: /--torii-url HTTPS host must use public DNS/u,
+    },
+    {
+      value: "https://taira.local",
+      expected: /--torii-url HTTPS host must use public DNS/u,
+    },
+    {
+      value: "https://bad_host.sora.org",
+      expected: /--torii-url HTTPS host must use public DNS/u,
+    },
+    {
       value: "not a url",
       expected: /--torii-url must be a valid HTTP\(S\) URL/u,
     },
@@ -1240,32 +1424,38 @@ test("TON publish-route-manifest rejects submit metadata before private key look
   }
 });
 
-test("TON publish-route-manifest rejects numeric nanoTON manifest scalars", async () => {
+test("TON publish-route-manifest rejects malformed nanoTON manifest scalars", async () => {
   const root = await fixtureRoot();
   const { paths, proofArtifactHash } = await writeFixtureFiles(root);
   const render = runTonCli(routeManifestArgs(paths, proofArtifactHash));
   assert.equal(render.status, 0, render.stderr);
 
   const envelope = JSON.parse(await readFile(paths.out, "utf8"));
-  envelope.manifest.ton_finalize_message_value_nano = Number(
-    DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO,
-  );
-  await writeJson(paths.out, envelope);
+  const cases = [
+    Number(DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO),
+    ` ${DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO}`,
+  ];
+  for (const [index, value] of cases.entries()) {
+    const manifestPath = join(root, `malformed-nanoton-${index}.json`);
+    const outPath = join(root, `malformed-nanoton-${index}.out.json`);
+    envelope.manifest.ton_finalize_message_value_nano = value;
+    await writeJson(manifestPath, envelope);
 
-  const publish = runTonCli([
-    "publish-route-manifest",
-    "--manifest",
-    paths.out,
-    "--out",
-    paths.publishOut,
-  ]);
+    const publish = runTonCli([
+      "publish-route-manifest",
+      "--manifest",
+      manifestPath,
+      "--out",
+      outPath,
+    ]);
 
-  assert.notEqual(publish.status, 0);
-  assert.match(
-    publish.stderr,
-    /TON finalize message value in nanoTON must be a positive integer decimal string/u,
-  );
-  await assert.rejects(readFile(paths.publishOut, "utf8"), /ENOENT/u);
+    assert.notEqual(publish.status, 0);
+    assert.match(
+      publish.stderr,
+      /TON finalize message value in nanoTON must be a positive integer decimal string/u,
+    );
+    await assert.rejects(readFile(outPath, "utf8"), /ENOENT/u);
+  }
 });
 
 test("TON route manifest rejects secret-like public evidence", async () => {
@@ -1353,6 +1543,166 @@ test("TON route manifest rejects credentialed browser module URLs", async () => 
   await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
 });
 
+test("TON route manifest rejects non-public HTTPS browser module URLs", async () => {
+  const browserProver = (seed, moduleUrl) => ({
+    module_url: moduleUrl,
+    module_hash: hex32(seed),
+    manifest_hash: hex32(seed + 1),
+    expected_exports: ["tonSccpProve", `tonSccpSelfTest${seed}`],
+    bound_route_hash: TON_DESTINATION_BINDING_HASH,
+    bound_proof_hash: hex32(0x90),
+  });
+  const cases = [
+    {
+      overrides: {
+        destinationBrowserProver: browserProver(
+          0x61,
+          "https://localhost/ton-destination.js",
+        ),
+      },
+      expected:
+        /destination_browser_prover\.module_url HTTPS URLs must use a public DNS host/u,
+    },
+    {
+      overrides: {
+        sourceBrowserProver: browserProver(
+          0x71,
+          "https://provers/ton-source.js",
+        ),
+      },
+      expected:
+        /source_browser_prover\.module_url HTTPS URLs must use a public DNS host/u,
+    },
+    {
+      overrides: {
+        destinationBrowserProver: browserProver(
+          0x61,
+          "https://127.0.0.1/ton-destination.js",
+        ),
+      },
+      expected:
+        /destination_browser_prover\.module_url HTTPS URLs must use a public DNS host/u,
+    },
+    {
+      overrides: {
+        sourceBrowserProver: browserProver(
+          0x71,
+          "https://provers.local/ton-source.js",
+        ),
+      },
+      expected:
+        /source_browser_prover\.module_url HTTPS URLs must use a public DNS host/u,
+    },
+    {
+      overrides: {
+        destinationBrowserProver: browserProver(
+          0x61,
+          "https://provers..sora.org/ton-destination.js",
+        ),
+      },
+      expected:
+        /destination_browser_prover\.module_url HTTPS URLs must use a public DNS host/u,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const root = await fixtureRoot();
+    const { paths, proofArtifactHash } = await writeFixtureFiles(
+      root,
+      testCase.overrides,
+    );
+    const result = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, testCase.expected);
+    await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+  }
+});
+
+test("TON route manifest rejects traversal and root-relative browser module URLs", async () => {
+  const browserProver = (seed, moduleUrl) => ({
+    module_url: moduleUrl,
+    module_hash: hex32(seed),
+    manifest_hash: hex32(seed + 1),
+    expected_exports: ["tonSccpProve", `tonSccpSelfTest${seed}`],
+    bound_route_hash: TON_DESTINATION_BINDING_HASH,
+    bound_proof_hash: hex32(0x90),
+  });
+  const cases = [
+    {
+      overrides: {
+        destinationBrowserProver: browserProver(0x61, "../ton-destination.js"),
+      },
+      expected:
+        /destination_browser_prover\.module_url must not traverse parent directories/u,
+    },
+    {
+      overrides: {
+        sourceBrowserProver: browserProver(0x71, "./../ton-source.js"),
+      },
+      expected:
+        /source_browser_prover\.module_url must not traverse parent directories/u,
+    },
+    {
+      overrides: {
+        destinationBrowserProver: browserProver(0x61, "/ton-destination.js"),
+      },
+      expected:
+        /destination_browser_prover\.module_url must be package-relative, HTTPS, or loopback HTTP/u,
+    },
+    {
+      overrides: {
+        sourceBrowserProver: browserProver(
+          0x71,
+          "//provers.sora.org/ton-source.js",
+        ),
+      },
+      expected:
+        /source_browser_prover\.module_url must be HTTPS, loopback HTTP, or package-relative/u,
+    },
+    {
+      overrides: {
+        destinationBrowserProver: browserProver(0x61, ".//ton-destination.js"),
+      },
+      expected:
+        /destination_browser_prover\.module_url must be package-relative, HTTPS, or loopback HTTP/u,
+    },
+    {
+      overrides: {
+        sourceBrowserProver: browserProver(0x71, "./ton-source%2ejs"),
+      },
+      expected:
+        /source_browser_prover\.module_url must be package-relative, HTTPS, or loopback HTTP/u,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const root = await fixtureRoot();
+    const { paths, proofArtifactHash } = await writeFixtureFiles(
+      root,
+      testCase.overrides,
+    );
+    const result = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, testCase.expected);
+    await assert.rejects(readFile(paths.out, "utf8"), /ENOENT/u);
+  }
+
+  for (const moduleUrl of [
+    "./ton-destination.js",
+    "@sora/sccp-ton-destination-prover/ton-destination.js",
+  ]) {
+    const root = await fixtureRoot();
+    const { paths, proofArtifactHash } = await writeFixtureFiles(root, {
+      destinationBrowserProver: browserProver(0x61, moduleUrl),
+    });
+    const result = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+
+    assert.equal(result.status, 0, result.stderr);
+  }
+});
+
 test("TON publish-route-manifest refuses submit without runtime private key", async () => {
   const root = await fixtureRoot();
   const { paths, proofArtifactHash } = await writeFixtureFiles(root);
@@ -1372,6 +1722,8 @@ test("TON publish-route-manifest refuses submit without runtime private key", as
       TAIRA_ROUTE_MANIFEST_AUTHORITY,
       "--private-key-env",
       "SCCP_TON_TEST_MISSING_PRIVATE_KEY",
+      "--torii-url",
+      "http://127.0.0.1:8080",
     ],
     { env: { SCCP_TON_TEST_MISSING_PRIVATE_KEY: "" } },
   );

@@ -20,6 +20,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import check_android_device_lab_slot as device_lab  # noqa: E402
+import kagemusha_staged_resource_guard as resource_guard  # noqa: E402
 import kagemusha_lineage_proof_evidence as lineage_evidence  # noqa: E402
 import kagemusha_production_readiness as readiness  # noqa: E402
 
@@ -49,6 +50,12 @@ STAGED_COMMAND_HEARTBEAT_SECONDS = 300.0
 COMMAND_LAUNCH_FAILURE_DETAIL = "process launch failed"
 DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND = (
     lineage_evidence.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND
+)
+DEFAULT_MAX_RSS_GB = resource_guard.DEFAULT_MAX_RSS_GB
+DEFAULT_RSS_SAMPLE_INTERVAL_SECONDS = resource_guard.DEFAULT_RSS_SAMPLE_INTERVAL_SECONDS
+DEFAULT_RESOURCE_LOCK_FILE = resource_guard.DEFAULT_RESOURCE_LOCK_FILE
+FORBIDDEN_CHILD_ENV_KEYS = frozenset(
+    (readiness.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV,)
 )
 CommandRunner = Callable[[list[str], Path, Path], int]
 
@@ -146,6 +153,15 @@ def validate_iroha_bin_path(path: Path | None) -> list[str]:
     return []
 
 
+def _scrubbed_child_env() -> dict[str, str]:
+    """Return a child environment that cannot enable runtime lineage keygen."""
+
+    env = os.environ.copy()
+    for key in FORBIDDEN_CHILD_ENV_KEYS:
+        env.pop(key, None)
+    return env
+
+
 def _child_env_with_repo_binaries(
     repo_root: Path,
     *,
@@ -153,7 +169,7 @@ def _child_env_with_repo_binaries(
 ) -> dict[str, str]:
     """Return a child environment that can find locally built Iroha binaries."""
 
-    env = os.environ.copy()
+    env = _scrubbed_child_env()
     absolute_repo_root = _absolute_repo_root(repo_root)
     explicit_bins = []
     if iroha_bin is not None:
@@ -597,6 +613,23 @@ def _preflight_paths(args: argparse.Namespace) -> tuple[Path | None, list[str]]:
             replace=run_level_replace,
         )
     )
+    lock_error = _secret_path_error(args.resource_lock_file, "--resource-lock-file")
+    if lock_error is not None:
+        errors.append(lock_error)
+    else:
+        errors.extend(
+            validate_directory_path(
+                args.resource_lock_file.parent,
+                "--resource-lock-file parent",
+                must_exist=True,
+            )
+        )
+    errors.extend(
+        resource_guard.validate_resource_options(
+            max_rss_gb=args.max_rss_gb,
+            rss_sample_interval_seconds=args.rss_sample_interval_seconds,
+        )
+    )
     return staged_root, errors
 
 
@@ -968,48 +1001,41 @@ def _run_command_to_log(
     heartbeat_interval_seconds: float = STAGED_COMMAND_HEARTBEAT_SECONDS,
     executable_repo_root: Path | None = None,
     iroha_bin: Path | None = None,
-) -> int:
+    max_rss_bytes: int = resource_guard.rss_limit_bytes_from_gb(DEFAULT_MAX_RSS_GB),
+    rss_sample_interval_seconds: float = DEFAULT_RSS_SAMPLE_INTERVAL_SECONDS,
+    rss_sampler: Callable[[int], int] = resource_guard.rss_bytes_for_pid,
+) -> resource_guard.GuardedCommandResult:
     """Run the canonical proof command with child output owned by ``log_path``."""
 
     child_env = (
         _child_env_with_repo_binaries(executable_repo_root, iroha_bin=iroha_bin)
         if executable_repo_root is not None
-        else None
+        else _scrubbed_child_env()
     )
     with log_path.open("xb") as log_handle:
         os.fchmod(log_handle.fileno(), 0o600)
-        popen_kwargs = {}
-        if child_env is not None:
-            popen_kwargs["env"] = child_env
         process = subprocess.Popen(
             command,
             cwd=cwd,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
-            **popen_kwargs,
+            env=child_env,
+            start_new_session=True,
         )
         started = time.monotonic()
-        while True:
-            try:
-                exit_code = (
-                    process.wait(timeout=heartbeat_interval_seconds)
-                    if heartbeat_interval_seconds > 0
-                    else process.wait()
-                )
-                break
-            except subprocess.TimeoutExpired:
-                elapsed_seconds = max(time.monotonic() - started, 0.0)
-                log_handle.write(
-                    (
-                        "[kagemusha-staged-runner] lineage-proof heartbeat "
-                        f"elapsed_seconds={elapsed_seconds:.6f}\n"
-                    ).encode("utf-8")
-                )
-                log_handle.flush()
-                os.fsync(log_handle.fileno())
+        result = resource_guard.run_with_resource_guard(
+            process=process,
+            log_handle=log_handle,
+            heartbeat_label="lineage-proof",
+            started_monotonic=started,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+            max_rss_bytes=max_rss_bytes,
+            rss_sample_interval_seconds=rss_sample_interval_seconds,
+            rss_sampler=rss_sampler,
+        )
         log_handle.flush()
         os.fsync(log_handle.fileno())
-        return exit_code
+        return result
 
 
 def _install_log_temp(temp_log: Path, final_log: Path, label: str, *, replace: bool) -> list[str]:
@@ -1148,6 +1174,7 @@ def _write_execution_report(
     exit_code: int,
     elapsed_seconds: float,
     log_path: Path,
+    resource_summary: resource_guard.ResourceSummary,
     replace: bool,
 ) -> list[str]:
     log_digest, digest_errors = lineage_evidence._sha256_file(
@@ -1170,6 +1197,7 @@ def _write_execution_report(
         "log_path": log_path.name,
         "log_sha256": log_digest,
         "log_size_bytes": log_size,
+        **resource_summary.report_fields(),
     }
     try:
         text = json.dumps(report, allow_nan=False, indent=2, sort_keys=True)
@@ -1237,6 +1265,9 @@ def _validate_reusable_execution_report(
         "log_path",
         "log_sha256",
         "log_size_bytes",
+        "max_rss_bytes",
+        "rss_limit_bytes",
+        "terminated_for_rss_limit",
     }
     extra_keys = sorted(set(document) - allowed_keys)
     if extra_keys:
@@ -1251,6 +1282,13 @@ def _validate_reusable_execution_report(
     expected_phase = f"{profile} lineage key artifact command"
     if document["phase"] != expected_phase:
         return [f"{label} phase must be {expected_phase}"]
+    resource_errors = resource_guard.validate_report_resource_fields(
+        document,
+        label,
+        require_not_terminated=True,
+    )
+    if resource_errors:
+        return resource_errors
     command_errors = _validate_report_command(
         document["command"],
         label,
@@ -1370,10 +1408,13 @@ def _run_lineage_key_artifact_command(
     staged_artifact_dir: Path,
     replace: bool,
     runner: CommandRunner | None,
-) -> tuple[int, list[str]]:
+    rss_limit_bytes: int,
+    rss_sample_interval_seconds: float,
+) -> tuple[int, list[str], resource_guard.ResourceSummary]:
     log_name = LINEAGE_KEY_ARTIFACT_LOG_FILENAMES[profile]
     final_log = staged_artifact_dir / log_name
     temp_log = staged_artifact_dir / f".{log_name}.staged-runner.tmp"
+    resource_summary = resource_guard.ResourceSummary.empty(rss_limit_bytes)
     temp_cleanup_errors = _cleanup_existing_temp_output_for_replace(
         final_log,
         temp_log,
@@ -1381,20 +1422,24 @@ def _run_lineage_key_artifact_command(
         replace=replace,
     )
     if temp_cleanup_errors:
-        return 1, temp_cleanup_errors
+        return 1, temp_cleanup_errors, resource_summary
     start = time.monotonic()
     try:
-        exit_code = (
-            runner(shlex.split(command), staged_root, temp_log)
-            if runner is not None
-            else _run_command_to_log(
+        if runner is not None:
+            exit_code = runner(shlex.split(command), staged_root, temp_log)
+            resource_summary = resource_guard.ResourceSummary.empty(rss_limit_bytes)
+        else:
+            command_result = _run_command_to_log(
                 shlex.split(command),
                 staged_root,
                 temp_log,
                 executable_repo_root=repo_root,
                 iroha_bin=iroha_bin,
+                max_rss_bytes=rss_limit_bytes,
+                rss_sample_interval_seconds=rss_sample_interval_seconds,
             )
-        )
+            exit_code = command_result.exit_code
+            resource_summary = command_result.resource_summary
     except OSError:
         temp_identity, temp_identity_errors = _regular_file_identity_for_unlink(
             temp_log,
@@ -1411,7 +1456,7 @@ def _run_lineage_key_artifact_command(
                 f"staged {profile} lineage key artifact log",
                 temp_identity,
             ),
-        ]
+        ], resource_summary
     elapsed_seconds = max(time.monotonic() - start, 0.000001)
     log_errors = _install_log_temp(
         temp_log,
@@ -1420,7 +1465,7 @@ def _run_lineage_key_artifact_command(
         replace=replace,
     )
     if log_errors:
-        return 1, log_errors
+        return 1, log_errors, resource_summary
     report_errors = _write_execution_report(
         path=staged_artifact_dir / LINEAGE_EXECUTION_REPORT_FILENAMES[profile],
         phase=f"{profile} lineage key artifact command",
@@ -1428,11 +1473,12 @@ def _run_lineage_key_artifact_command(
         exit_code=exit_code,
         elapsed_seconds=elapsed_seconds,
         log_path=final_log,
+        resource_summary=resource_summary,
         replace=replace,
     )
     if report_errors:
-        return 1, report_errors
-    return exit_code, []
+        return 1, report_errors, resource_summary
+    return exit_code, [], resource_summary
 
 
 def _write_run_report(
@@ -1443,6 +1489,7 @@ def _write_run_report(
     elapsed_seconds: float,
     staged_artifact_dir: Path,
     proof_log_path: Path,
+    resource_summary: resource_guard.ResourceSummary,
     replace: bool,
 ) -> list[str]:
     try:
@@ -1468,6 +1515,7 @@ def _write_run_report(
         "lineage_key_artifact_logs": key_artifact_logs,
         "proof_log_path": PROOF_LOG_FILENAME,
         "proof_log_size_bytes": proof_log_size,
+        **resource_summary.report_fields(),
     }
     try:
         text = json.dumps(report, allow_nan=False, indent=2, sort_keys=True)
@@ -1526,125 +1574,164 @@ def run_staged_lineage_proof(
         if replace_errors:
             return 1, replace_errors
 
-    for profile, command in LINEAGE_KEY_ARTIFACT_COMMANDS.items():
-        if args.resume_key_artifacts and not args.replace:
-            reused, resume_errors = _try_resume_key_artifact_phase(
-                staged_artifact_dir=args.staged_artifact_dir,
-                profile=profile,
+    rss_limit_bytes = resource_guard.rss_limit_bytes_from_gb(args.max_rss_gb)
+    resource_summaries: list[resource_guard.ResourceSummary] = []
+    conflict_errors = resource_guard.validate_no_conflicting_heavy_jobs()
+    if conflict_errors:
+        return 1, conflict_errors
+    try:
+        lock_context = resource_guard.acquire_heavy_job_lock(args.resource_lock_file)
+        with lock_context:
+            for profile, command in LINEAGE_KEY_ARTIFACT_COMMANDS.items():
+                if args.resume_key_artifacts and not args.replace:
+                    reused, resume_errors = _try_resume_key_artifact_phase(
+                        staged_artifact_dir=args.staged_artifact_dir,
+                        profile=profile,
+                    )
+                    if resume_errors:
+                        return 1, resume_errors
+                    if reused:
+                        continue
+                keygen_exit, keygen_errors, keygen_resource = (
+                    _run_lineage_key_artifact_command(
+                        profile=profile,
+                        command=command,
+                        repo_root=args.repo_root,
+                        iroha_bin=args.iroha_bin,
+                        staged_root=staged_root,
+                        staged_artifact_dir=args.staged_artifact_dir,
+                        replace=args.replace or args.resume_key_artifacts,
+                        runner=runner,
+                        rss_limit_bytes=rss_limit_bytes,
+                        rss_sample_interval_seconds=args.rss_sample_interval_seconds,
+                    )
+                )
+                resource_summaries.append(keygen_resource)
+                if keygen_errors:
+                    return 1, keygen_errors
+                if keygen_exit != 0:
+                    exit_errors = _write_exit_marker(args, keygen_exit)
+                    if exit_errors:
+                        return 1, exit_errors
+                    return keygen_exit, []
+
+            if args.resume_key_artifacts and not args.replace:
+                cleanup_errors = _unlink_resume_outputs(_run_level_output_paths(args))
+                if cleanup_errors:
+                    return 1, cleanup_errors
+                temp_cleanup_errors = _unlink_replace_temp_outputs(args)
+                if temp_cleanup_errors:
+                    return 1, temp_cleanup_errors
+
+            proof_log = args.staged_artifact_dir / PROOF_LOG_FILENAME
+            temp_log = args.staged_artifact_dir / f".{PROOF_LOG_FILENAME}.staged-runner.tmp"
+            temp_cleanup_errors = _cleanup_existing_temp_output_for_replace(
+                proof_log,
+                temp_log,
+                "staged proof log",
+                replace=args.replace or args.resume_key_artifacts,
             )
-            if resume_errors:
-                return 1, resume_errors
-            if reused:
-                continue
-        keygen_exit, keygen_errors = _run_lineage_key_artifact_command(
-            profile=profile,
-            command=command,
-            repo_root=args.repo_root,
-            iroha_bin=args.iroha_bin,
-            staged_root=staged_root,
-            staged_artifact_dir=args.staged_artifact_dir,
-            replace=args.replace or args.resume_key_artifacts,
-            runner=runner,
-        )
-        if keygen_errors:
-            return 1, keygen_errors
-        if keygen_exit != 0:
-            exit_errors = _write_exit_marker(args, keygen_exit)
+            if temp_cleanup_errors:
+                return 1, temp_cleanup_errors
+
+            command = shlex.split(DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND)
+            proof_resource = resource_guard.ResourceSummary.empty(rss_limit_bytes)
+            start = monotonic()
+            try:
+                if runner is not None:
+                    exit_code = runner(command, args.repo_root, temp_log)
+                    proof_resource = resource_guard.ResourceSummary.empty(rss_limit_bytes)
+                else:
+                    command_result = _run_command_to_log(
+                        command,
+                        args.repo_root,
+                        temp_log,
+                        executable_repo_root=args.repo_root,
+                        iroha_bin=args.iroha_bin,
+                        max_rss_bytes=rss_limit_bytes,
+                        rss_sample_interval_seconds=args.rss_sample_interval_seconds,
+                    )
+                    exit_code = command_result.exit_code
+                    proof_resource = command_result.resource_summary
+            except OSError:
+                temp_identity, temp_identity_errors = _regular_file_identity_for_unlink(
+                    temp_log,
+                    "staged proof log temporary output",
+                )
+                return 1, [
+                    (
+                        "staged lineage proof command could not be run: "
+                        f"{COMMAND_LAUNCH_FAILURE_DETAIL}"
+                    ),
+                    *temp_identity_errors,
+                    *_cleanup_temp_output(temp_log, "staged proof log", temp_identity),
+                ]
+            resource_summaries.append(proof_resource)
+            elapsed_seconds = max(monotonic() - start, 0.000001)
+
+            log_errors = _install_log_temp(
+                temp_log,
+                proof_log,
+                "staged proof log",
+                replace=args.replace or args.resume_key_artifacts,
+            )
+            if log_errors:
+                return 1, log_errors
+            execution_report_errors = _write_execution_report(
+                path=args.staged_artifact_dir / LINEAGE_EXECUTION_REPORT_FILENAMES["proof"],
+                phase="lineage proof command",
+                command=DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND,
+                exit_code=exit_code,
+                elapsed_seconds=elapsed_seconds,
+                log_path=proof_log,
+                resource_summary=proof_resource,
+                replace=args.replace or args.resume_key_artifacts,
+            )
+            if execution_report_errors:
+                return 1, execution_report_errors
+
+            elapsed_errors = _write_text_atomic(
+                args.elapsed_seconds_file,
+                f"{elapsed_seconds:.6f}\n",
+                "staged lineage proof elapsed-seconds file",
+                replace=args.replace or args.resume_key_artifacts,
+            )
+            if elapsed_errors:
+                return 1, elapsed_errors
+            run_resource = resource_guard.ResourceSummary.combine(
+                resource_summaries,
+                rss_limit_bytes=rss_limit_bytes,
+            )
+            report_errors = _write_run_report(
+                path=args.staged_artifact_dir / RUN_REPORT_FILENAME,
+                command=DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND,
+                exit_code=exit_code,
+                elapsed_seconds=elapsed_seconds,
+                staged_artifact_dir=args.staged_artifact_dir,
+                proof_log_path=proof_log,
+                resource_summary=run_resource,
+                replace=args.replace or args.resume_key_artifacts,
+            )
+            if report_errors:
+                return 1, report_errors
+            exit_errors = _write_exit_marker(args, exit_code)
             if exit_errors:
                 return 1, exit_errors
-            return keygen_exit, []
-
-    if args.resume_key_artifacts and not args.replace:
-        cleanup_errors = _unlink_resume_outputs(_run_level_output_paths(args))
-        if cleanup_errors:
-            return 1, cleanup_errors
-        temp_cleanup_errors = _unlink_replace_temp_outputs(args)
-        if temp_cleanup_errors:
-            return 1, temp_cleanup_errors
-
-    proof_log = args.staged_artifact_dir / PROOF_LOG_FILENAME
-    temp_log = args.staged_artifact_dir / f".{PROOF_LOG_FILENAME}.staged-runner.tmp"
-    temp_cleanup_errors = _cleanup_existing_temp_output_for_replace(
-        proof_log,
-        temp_log,
-        "staged proof log",
-        replace=args.replace or args.resume_key_artifacts,
-    )
-    if temp_cleanup_errors:
-        return 1, temp_cleanup_errors
-
-    command = shlex.split(DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND)
-    start = monotonic()
-    try:
-        exit_code = (
-            runner(command, args.repo_root, temp_log)
-            if runner is not None
-            else _run_command_to_log(
-                command,
-                args.repo_root,
-                temp_log,
-                executable_repo_root=args.repo_root,
-                iroha_bin=args.iroha_bin,
-            )
-        )
-    except OSError:
-        temp_identity, temp_identity_errors = _regular_file_identity_for_unlink(
-            temp_log,
-            "staged proof log temporary output",
-        )
+            return exit_code, []
+    except resource_guard.HeavyJobLockUnavailable:
         return 1, [
             (
-                "staged lineage proof command could not be run: "
-                f"{COMMAND_LAUNCH_FAILURE_DETAIL}"
-            ),
-            *temp_identity_errors,
-            *_cleanup_temp_output(temp_log, "staged proof log", temp_identity),
+                "another Kagemusha staged heavy job is already running; "
+                f"lock file {args.resource_lock_file} is held"
+            )
         ]
-    elapsed_seconds = max(monotonic() - start, 0.000001)
-
-    log_errors = _install_log_temp(
-        temp_log,
-        proof_log,
-        "staged proof log",
-        replace=args.replace or args.resume_key_artifacts,
-    )
-    if log_errors:
-        return 1, log_errors
-    execution_report_errors = _write_execution_report(
-        path=args.staged_artifact_dir / LINEAGE_EXECUTION_REPORT_FILENAMES["proof"],
-        phase="lineage proof command",
-        command=DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND,
-        exit_code=exit_code,
-        elapsed_seconds=elapsed_seconds,
-        log_path=proof_log,
-        replace=args.replace or args.resume_key_artifacts,
-    )
-    if execution_report_errors:
-        return 1, execution_report_errors
-
-    elapsed_errors = _write_text_atomic(
-        args.elapsed_seconds_file,
-        f"{elapsed_seconds:.6f}\n",
-        "staged lineage proof elapsed-seconds file",
-        replace=args.replace or args.resume_key_artifacts,
-    )
-    if elapsed_errors:
-        return 1, elapsed_errors
-    report_errors = _write_run_report(
-        path=args.staged_artifact_dir / RUN_REPORT_FILENAME,
-        command=DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND,
-        exit_code=exit_code,
-        elapsed_seconds=elapsed_seconds,
-        staged_artifact_dir=args.staged_artifact_dir,
-        proof_log_path=proof_log,
-        replace=args.replace or args.resume_key_artifacts,
-    )
-    if report_errors:
-        return 1, report_errors
-    exit_errors = _write_exit_marker(args, exit_code)
-    if exit_errors:
-        return 1, exit_errors
-    return exit_code, []
+    except OSError:
+        return 1, [
+            (
+                "staged lineage proof resource lock could not be acquired: "
+                f"{COMMAND_LAUNCH_FAILURE_DETAIL}"
+            )
+        ]
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -1686,6 +1773,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "artifacts, logs, and zero-exit execution reports validate; incomplete "
             "regular staged phase outputs are replaced and rerun."
         ),
+    )
+    parser.add_argument(
+        "--max-rss-gb",
+        type=float,
+        default=DEFAULT_MAX_RSS_GB,
+        help="Maximum child-process RSS in GiB before the staged proof job is stopped.",
+    )
+    parser.add_argument(
+        "--rss-sample-interval-seconds",
+        type=float,
+        default=DEFAULT_RSS_SAMPLE_INTERVAL_SECONDS,
+        help="Seconds between child RSS samples while staged proof commands are running.",
+    )
+    parser.add_argument(
+        "--resource-lock-file",
+        type=Path,
+        default=DEFAULT_RESOURCE_LOCK_FILE,
+        help="Shared lock file preventing concurrent Kagemusha staged heavy jobs.",
     )
     return parser.parse_args(argv)
 

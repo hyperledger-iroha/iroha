@@ -744,7 +744,12 @@ class OfflineNoteNearbyEnvelope @JvmOverloads constructor(
                 return null
             }
             return try {
-                Base64.getUrlDecoder().decode(value)
+                val decoded = Base64.getUrlDecoder().decode(value)
+                if (Base64.getUrlEncoder().withoutPadding().encodeToString(decoded) == value) {
+                    decoded
+                } else {
+                    null
+                }
             } catch (_: IllegalArgumentException) {
                 null
             }

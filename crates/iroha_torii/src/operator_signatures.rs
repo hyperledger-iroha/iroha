@@ -89,6 +89,21 @@ fn validate_operator_ed25519_signature_payload(
     Ok(())
 }
 
+fn parse_operator_signature_for_public_key(
+    signature_bytes: &[u8],
+    public_key: &PublicKey,
+) -> Result<Signature, OperatorSignatureError> {
+    let algorithm = public_key
+        .try_algorithm()
+        .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_PUBLIC_KEY))?;
+    match algorithm {
+        Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(signature_bytes)
+            .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE)),
+        _ => Signature::try_from_bytes(signature_bytes)
+            .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE)),
+    }
+}
+
 fn operator_ed25519_compressed_y_is_canonical(
     bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
 ) -> bool {
@@ -421,8 +436,7 @@ impl OperatorSignatures {
         let signature_bytes = BASE64_STANDARD
             .decode(signature_str)
             .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE))?;
-        let signature = Signature::try_from_bytes(&signature_bytes)
-            .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE))?;
+        let signature = parse_operator_signature_for_public_key(&signature_bytes, &public_key)?;
         validate_operator_signature_for_public_key(&signature, &public_key)?;
 
         self.ensure_freshness(timestamp_ms, nonce, &public_key)?;

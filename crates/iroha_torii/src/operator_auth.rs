@@ -1687,6 +1687,9 @@ fn verify_signature(
             let verifying_key = parse_es256_public_key(public_key)?;
             let sig = P256Signature::from_der(signature)
                 .map_err(|_| OperatorAuthError::signature_invalid())?;
+            if sig.normalize_s().is_some() {
+                return Err(OperatorAuthError::signature_invalid());
+            }
             verifying_key
                 .verify(message, &sig)
                 .map_err(|_| OperatorAuthError::signature_invalid())
@@ -1697,7 +1700,7 @@ fn verify_signature(
             }
             let verifying_key = PublicKey::from_bytes(Algorithm::Ed25519, public_key)
                 .map_err(|_| OperatorAuthError::signature_invalid())?;
-            let signature = Signature::try_from_bytes(signature)
+            let signature = iroha_crypto::ed25519_parse_signature(signature)
                 .map_err(|_| OperatorAuthError::signature_invalid())?;
             signature
                 .verify(&verifying_key, message)
@@ -2612,6 +2615,53 @@ mod tests {
 
         assert_eq!(err.code, "operator_webauthn_payload_invalid");
         assert_eq!(err.metric_label, "invalid_payload");
+    }
+
+    #[test]
+    fn es256_signature_verify_rejects_high_s_signature_material() {
+        const P256_ORDER: [u8; 32] = [
+            0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2,
+            0xfc, 0x63, 0x25, 0x51,
+        ];
+
+        let signing_key = SigningKey::random(&mut OsRng);
+        let public_key = signing_key.verifying_key().to_encoded_point(false);
+        let message = b"operator-auth-test-high-s";
+        let low_s = {
+            let signature: P256Signature = signing_key.sign(message);
+            signature.normalize_s().unwrap_or(signature)
+        };
+        let low_s_bytes = low_s.to_bytes();
+        let mut high_s_bytes = [0_u8; 64];
+        high_s_bytes[..32].copy_from_slice(&low_s_bytes[..32]);
+
+        let mut borrow = 0_u16;
+        for i in (0..32).rev() {
+            let minuend = i16::from(P256_ORDER[i]) - i16::from(borrow as u8);
+            let subtrahend = i16::from(low_s_bytes[32 + i]);
+            if minuend >= subtrahend {
+                high_s_bytes[32 + i] = (minuend - subtrahend) as u8;
+                borrow = 0;
+            } else {
+                high_s_bytes[32 + i] = (minuend + 256 - subtrahend) as u8;
+                borrow = 1;
+            }
+        }
+        assert_eq!(borrow, 0);
+        let high_s = P256Signature::from_slice(&high_s_bytes).expect("high-S signature");
+        assert!(high_s.normalize_s().is_some());
+
+        let err = verify_signature(
+            OperatorWebAuthnAlgorithm::Es256,
+            public_key.as_bytes(),
+            message,
+            high_s.to_der().as_bytes(),
+        )
+        .expect_err("high-S ES256 signature material must be rejected");
+
+        assert_eq!(err.code, "operator_webauthn_signature_invalid");
+        assert_eq!(err.metric_label, "signature_invalid");
     }
 
     #[test]

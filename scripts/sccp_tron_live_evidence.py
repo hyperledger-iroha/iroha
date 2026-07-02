@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 from html import unescape as html_unescape
 from urllib.parse import unquote
 import json
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
@@ -401,8 +403,65 @@ def _is_nonzero_tron_address_payload(payload: bytes) -> bool:
     return len(payload) == 21 and payload[0] == 0x41 and any(payload[1:])
 
 
+def _normalize_tron_node_url(base_url: str) -> str:
+    if (
+        not isinstance(base_url, str)
+        or base_url != base_url.strip()
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in base_url)
+    ):
+        raise ValueError("--tron-node-url must be an exact http(s) URL")
+    parsed = urllib.parse.urlparse(base_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("--tron-node-url must be an http(s) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("--tron-node-url must not include credentials")
+    if parsed.params or parsed.query or parsed.fragment:
+        raise ValueError("--tron-node-url must not include params, query, or fragment")
+    host = parsed.hostname
+    if host is None:
+        raise ValueError("--tron-node-url must be an http(s) URL")
+    if parsed.scheme == "http" and not _tron_node_host_is_loopback(host):
+        raise ValueError("--tron-node-url must use HTTPS unless it is loopback HTTP")
+    if parsed.scheme == "https" and _tron_node_host_is_non_public_dns(host):
+        raise ValueError("--tron-node-url HTTPS host must use public DNS")
+    return base_url
+
+
+def _tron_node_host_is_loopback(host: str) -> bool:
+    normalized = host.strip("[]").lower()
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return normalized == "localhost" or normalized.endswith(".localhost")
+
+
+def _tron_node_host_is_non_public_dns(host: str) -> bool:
+    normalized = host.strip("[]").lower()
+    try:
+        ipaddress.ip_address(normalized)
+    except ValueError:
+        pass
+    else:
+        return True
+    labels = normalized.split(".")
+    return (
+        _tron_node_host_is_loopback(normalized)
+        or normalized.endswith(".local")
+        or "." not in normalized
+        or any(
+            label == ""
+            or not all(ch.isascii() for ch in label)
+            or not label[0].isalnum()
+            or not label[-1].isalnum()
+            or len(label) > 63
+            or any(not (ch.isalnum() or ch == "-") for ch in label)
+            for label in labels
+        )
+    )
+
+
 def _url(base_url: str, endpoint: str) -> str:
-    return base_url.rstrip("/") + "/" + endpoint.lstrip("/")
+    return _normalize_tron_node_url(base_url).rstrip("/") + "/" + endpoint.lstrip("/")
 
 
 def _tron_pro_api_key_token(value: Any, *, label: str) -> str:
@@ -6658,8 +6717,9 @@ def collect_live_evidence(
         args,
         "solid_block_confirmation_depth",
     )
+    tron_node_url = _normalize_tron_node_url(args.tron_node_url)
     summary: dict[str, Any] = {
-        "tron_node_url": args.tron_node_url.rstrip("/"),
+        "tron_node_url": tron_node_url.rstrip("/"),
         "read_only": True,
         "constant_endpoint": _constant_endpoint(args),
         "transaction_info_endpoint": _transaction_info_endpoint(args),
@@ -6668,7 +6728,7 @@ def collect_live_evidence(
     }
     if args.source_bridge_address is not None:
         summary["source_bridge"] = collect_source_bridge_evidence(
-            args.tron_node_url,
+            tron_node_url,
             source_bridge_address=args.source_bridge_address,
             caller_address=caller_address,
             tron_pro_api_key=tron_pro_api_key,
@@ -6740,7 +6800,7 @@ def collect_live_evidence(
             )
             already_submitted = _word_bool(
                 _constant_word(
-                    args.tron_node_url,
+                    tron_node_url,
                     endpoint=str(summary["constant_endpoint"]),
                     contract_address=str(summary["source_bridge"]["address"]),
                     function_selector="submittedSourceEvents(bytes32)",
@@ -6795,7 +6855,7 @@ def collect_live_evidence(
                 }
             else:
                 transaction = _transaction_by_id(
-                    args.tron_node_url,
+                    tron_node_url,
                     endpoint=str(summary["transaction_endpoint"]),
                     transaction_id=source_event_transaction_id,
                     tron_pro_api_key=tron_pro_api_key,
@@ -6803,7 +6863,7 @@ def collect_live_evidence(
                     timeout=args.timeout,
                 )
                 transaction_info = _transaction_info(
-                    args.tron_node_url,
+                    tron_node_url,
                     endpoint=str(summary["transaction_info_endpoint"]),
                     transaction_id=source_event_transaction_id,
                     tron_pro_api_key=tron_pro_api_key,
@@ -6837,7 +6897,7 @@ def collect_live_evidence(
                     source_event_call_data=source_event_call_data,
                 )
                 block = _block_by_number(
-                    args.tron_node_url,
+                    tron_node_url,
                     endpoint=str(summary["block_endpoint"]),
                     block_number=block_number,
                     tron_pro_api_key=tron_pro_api_key,
@@ -6845,7 +6905,7 @@ def collect_live_evidence(
                     timeout=args.timeout,
                 )
                 parent_block = _block_by_number(
-                    args.tron_node_url,
+                    tron_node_url,
                     endpoint=str(summary["block_endpoint"]),
                     block_number=block_number - 1,
                     tron_pro_api_key=tron_pro_api_key,
@@ -6861,7 +6921,7 @@ def collect_live_evidence(
                     )
                 ancestor_blocks = [
                     _block_by_number(
-                        args.tron_node_url,
+                        tron_node_url,
                         endpoint=str(summary["block_endpoint"]),
                         block_number=block_number - 2 - index,
                         tron_pro_api_key=tron_pro_api_key,
@@ -6872,7 +6932,7 @@ def collect_live_evidence(
                 ]
                 confirmation_blocks = [
                     _block_by_number(
-                        args.tron_node_url,
+                        tron_node_url,
                         endpoint=str(summary["block_endpoint"]),
                         block_number=block_number + 1 + index,
                         tron_pro_api_key=tron_pro_api_key,
@@ -6929,7 +6989,7 @@ def collect_live_evidence(
             summary["source_event_call"] = source_event_call
     if args.destination_verifier_address is not None:
         summary["destination_verifier"] = collect_destination_verifier_evidence(
-            args.tron_node_url,
+            tron_node_url,
             destination_verifier_address=args.destination_verifier_address,
             caller_address=caller_address,
             tron_pro_api_key=tron_pro_api_key,
@@ -6963,7 +7023,7 @@ def collect_live_evidence(
     route_canary_transaction = None
     if route_canary_transaction_id is not None:
         response = _transaction_info(
-            args.tron_node_url,
+            tron_node_url,
             endpoint=str(summary["transaction_info_endpoint"]),
             transaction_id=route_canary_transaction_id,
             tron_pro_api_key=tron_pro_api_key,
@@ -6982,7 +7042,7 @@ def collect_live_evidence(
         )
         route_canary_transaction.update(
             _route_canary_used_message_proof_summary(
-                args.tron_node_url,
+                tron_node_url,
                 constant_endpoint=str(summary["constant_endpoint"]),
                 destination_verifier=summary["destination_verifier"],
                 message_id=route_canary_message_id,
@@ -6993,7 +7053,7 @@ def collect_live_evidence(
             )
         )
         transaction = _transaction_by_id(
-            args.tron_node_url,
+            tron_node_url,
             endpoint=str(summary["transaction_endpoint"]),
             transaction_id=route_canary_transaction_id,
             tron_pro_api_key=tron_pro_api_key,
@@ -7553,7 +7613,7 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
         return fallback
     if _decoded_cli_error_text_issue(text):
         return fallback
-    normalized_text = _decoded_public_blocker_text(text).lower()
+    normalized_text = _decoded_public_blocker_text(text).casefold()
     if any(marker in normalized_text for marker in SENSITIVE_CLI_ERROR_MARKERS):
         return fallback
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):

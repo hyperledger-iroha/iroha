@@ -369,7 +369,7 @@ mod portable_tests {
     }
 }
 
-#[cfg(all(unix, target_os = "linux"))]
+#[cfg(all(test, unix, target_os = "linux"))]
 mod tests {
     use std::{
         env, fs,
