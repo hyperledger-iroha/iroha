@@ -9348,6 +9348,8 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
         case offlineKagemushaRecursiveCompactRequiredNativeBridgeAbiVersion = "offline_kagemusha_recursive_compact_required_native_bridge_abi_version"
         case offlineKagemushaRecursiveCompactCircuitId = "offline_kagemusha_recursive_compact_circuit_id"
         case offlineKagemushaRecursiveCompactArtifactsAvailable = "offline_kagemusha_recursive_compact_artifacts_available"
+        case removedOfflineKagemushaAbi7 = "offline_kagemusha_abi7"
+        case removedOfflineKagemushaAbi7BridgeAbiVersion = "offline_kagemusha_abi7_bridge_abi_version"
         case offlineTelemetry = "offline_telemetry"
         case offlineNote = "offline_note"
         case offlineOneUseKeys = "offline_one_use_keys"
@@ -9383,11 +9385,9 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
     }
 
     public init(from decoder: Decoder) throws {
-        do {
-            let container = try decoder.container(keyedBy: ReadinessField.self)
-            try Self.rejectRemovedAbi7Fields(in: container)
-            try Self.rejectUnknownFields(in: container)
-        }
+        let readinessContainer = try decoder.container(keyedBy: ReadinessField.self)
+        try Self.rejectRemovedAbi7Fields(in: readinessContainer)
+        try Self.rejectUnknownFields(in: readinessContainer)
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let hasRecursiveCompactFamily = Self.containsAny(
             container,

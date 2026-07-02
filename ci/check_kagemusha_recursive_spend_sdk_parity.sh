@@ -8737,7 +8737,7 @@ def check_mobile_offline_readiness_coverage(texts, errors):
         (
             "private struct KagemushaReadinessFamily",
             "let hasRecursiveCompactFamily = Self.containsAny(",
-            "try Self.rejectRemovedAbi7Fields(in: container)",
+            "try Self.rejectRemovedAbi7Fields(in: readinessContainer)",
             "private static func rejectRemovedAbi7Fields(",
             "private static func decodeRecursiveCompactFamily(",
             "private static func decodeRequiredExactString(",
@@ -9033,6 +9033,7 @@ def check_mobile_bearer_cash_policy_validation(texts, errors):
 def check_mobile_offline_bearer_cash_text_exactness(texts, errors):
     swift_note_source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
     swift_text_source = "IrohaSwift/Sources/IrohaSwift/OfflineBearerCashWallet.swift"
+    swift_contract_source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteTextTransferContract.swift"
     swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
     java_base64_source = (
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBase64Url.java"
@@ -9081,10 +9082,17 @@ def check_mobile_offline_bearer_cash_text_exactness(texts, errors):
             f"{label} whitespace normalization",
             errors,
         )
-    swift_note_text = texts[swift_note_source]
-    require(
-        swift_note_text.count('guard !value.isEmpty,\n              !value.contains("="),') >= 3,
-        "Swift Offline Bearer Cash base64url text exactness source missing exact empty-payload checks",
+    require_contains(
+        texts,
+        swift_contract_source,
+        (
+            "public static func base64URLDecodedData(_ value: String) -> Data?",
+            "guard !value.isEmpty,\n              value == value.trimmingCharacters(in: .whitespacesAndNewlines),",
+            "!value.contains(\"=\")",
+            "value.unicodeScalars.allSatisfy(isBase64URLScalarAllowed)",
+            "base64URLEncodedString(decoded) == value",
+        ),
+        "Swift Offline Bearer Cash base64url text exactness source",
         errors,
     )
     require_not_regex(
@@ -9098,7 +9106,7 @@ def check_mobile_offline_bearer_cash_text_exactness(texts, errors):
         texts,
         swift_text_source,
         "public static func payloadKind(_ text: String)",
-        "private static func isBase64UrlCharacter",
+        "private static func hasExactUnpaddedBase64UrlPayload",
         (
             "hasExactUnpaddedBase64UrlPayload(text, prefix: receiveRequestTextPrefix)",
             "hasExactUnpaddedBase64UrlPayload(text, prefix: paymentTextPrefix)",
@@ -9107,16 +9115,14 @@ def check_mobile_offline_bearer_cash_text_exactness(texts, errors):
         "Swift Offline Bearer Cash payload kind exactness source block",
         errors,
     )
-    require_block_contains(
+    require_contains(
         texts,
         swift_text_source,
-        "private static func hasExactUnpaddedBase64UrlPayload",
-        "private static func isBase64UrlCharacter",
         (
+            "private static func hasExactUnpaddedBase64UrlPayload",
             "guard text.hasPrefix(prefix)",
-            "payload.trimmingCharacters(in: .whitespacesAndNewlines) == payload",
-            "!payload.contains(\"=\")",
-            "payload.unicodeScalars.allSatisfy(isBase64UrlCharacter)",
+            "let payload = String(text.dropFirst(prefix.count))",
+            "OfflineNoteTextTransferContract.base64URLDecodedData(payload) != nil",
         ),
         "Swift Offline Bearer Cash payload kind payload exactness source block",
         errors,
@@ -9442,8 +9448,8 @@ def check_kotlin_offline_bearer_cash_text_exactness(texts, errors):
         "private fun isBase64UrlCharacter",
         (
             "if (!text.startsWith(prefix)) return false",
-            "payload.trim() == payload",
-            "!payload.contains(\"=\")",
+            "payload.trim() != payload",
+            "payload.contains(\"=\")",
             "payload.all(::isBase64UrlCharacter)",
         ),
         "Kotlin Offline Bearer Cash payload kind payload exactness source block",
@@ -9729,7 +9735,6 @@ def check_swift_transfer_text_payload_exactness(texts, errors):
         texts,
         handoff,
         (
-            "guard !value.isEmpty,\n              value == value.trimmingCharacters(in: .whitespacesAndNewlines),",
             "if value.hasPrefix(receiveRequestPrefix)",
             "encoded = value.dropFirst(receiveRequestPrefix.count)",
             "if value.hasPrefix(paymentTokenPrefix)",
@@ -9741,7 +9746,10 @@ def check_swift_transfer_text_payload_exactness(texts, errors):
             "if hasExactTextPayload(value, prefix: paymentTokenPrefix)",
             "if hasExactTextPayload(value, prefix: receiptAckPrefix)",
             "private static func hasExactTextPayload(_ value: String, prefix: String) -> Bool",
+            "guard value.hasPrefix(prefix) else { return false }",
             "base64UrlDecode(String(value.dropFirst(prefix.count))) != nil",
+            "private static func base64UrlDecode(_ value: String) -> Data?",
+            "OfflineNoteTextTransferContract.base64URLDecodedData(value)",
         ),
         "Swift transfer text payload exactness source",
         errors,
@@ -9792,7 +9800,10 @@ def check_mobile_qr_stream_text_exactness(texts, errors):
         swift_source,
         (
             "guard let stripped = value.stripPrefix(base64Prefix) else",
-            "guard let decoded = Data(base64Encoded: stripped) else",
+            "guard let decoded = decodeExactBase64(stripped) else",
+            "private static func decodeExactBase64(_ value: String) -> Data?",
+            "guard let decoded = Data(base64Encoded: value),",
+            "decoded.base64EncodedString() == value else",
         ),
         "Swift QR stream text exactness source",
         errors,
@@ -22067,7 +22078,7 @@ def check_swift(texts, errors):
         (
             "private static func supportedPlatform(",
             "switch value {",
-            'case "ios", "android":',
+            "case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:",
             "return value",
             "guard binding.platform == Self.platform else",
             "guard proof.platform == Self.platform else",
@@ -66888,10 +66899,10 @@ if mode == "--negative-control-swift-offline-proof-platform-exactness":
     source_replacements = (
         (
             '        switch value {\n'
-            '        case "ios", "android":\n'
+            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
             "            return value\n",
             '        switch value.lowercased() {\n'
-            '        case "ios", "android":\n'
+            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
             "            return value.lowercased()\n",
         ),
         (
