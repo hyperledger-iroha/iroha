@@ -30,6 +30,10 @@ use iroha_data_model::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode,
         },
+        space_directory::{
+            ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,
+            RevokeSpaceDirectoryManifest,
+        },
         zk::{
             AssetHiddenZkTransfer, CancelConfidentialPolicyTransition, RegisterAssetHiddenZkPool,
             RegisterZkAceIdentityCommitment, RegisterZkAsset, RevokeZkAceIdentityCommitment,
@@ -57,7 +61,7 @@ use iroha_executor_data_model::permission::{
         CanModifyAssetMetadataWithDefinition, CanTransferAssetWithDefinition,
     },
     asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
-    nexus::CanPublishSpaceDirectoryManifest,
+    nexus::{CanPublishSpaceDirectoryManifest, CanUseFeeSponsor},
 };
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
@@ -1964,6 +1968,36 @@ fn instruction_transaction_dataspace_target(
         );
     }
 
+    if let Some(grant) = any.downcast_ref::<GrantBox>() {
+        return match grant {
+            GrantBox::Permission(grant) => {
+                dataspace_scoped_permission_target(&grant.object, dataspace_catalog, state_view)
+                    .or_else(|| {
+                        account_dataspace_target(
+                            state_view.map(StateView::world),
+                            &grant.destination,
+                        )
+                    })
+            }
+            GrantBox::Role(_) | GrantBox::RolePermission(_) => None,
+        };
+    }
+
+    if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
+        return match revoke {
+            RevokeBox::Permission(revoke) => {
+                dataspace_scoped_permission_target(&revoke.object, dataspace_catalog, state_view)
+                    .or_else(|| {
+                        account_dataspace_target(
+                            state_view.map(StateView::world),
+                            &revoke.destination,
+                        )
+                    })
+            }
+            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => None,
+        };
+    }
+
     if let Some(register) = any.downcast_ref::<RegisterBox>() {
         return match register {
             RegisterBox::Domain(register) => domain_dataspace_target_with_state(
@@ -2268,6 +2302,18 @@ fn instruction_transaction_dataspace_target(
         );
     }
 
+    if let Some(publish) = any.downcast_ref::<PublishSpaceDirectoryManifest>() {
+        return Some(publish.manifest.dataspace);
+    }
+
+    if let Some(revoke) = any.downcast_ref::<RevokeSpaceDirectoryManifest>() {
+        return Some(revoke.dataspace);
+    }
+
+    if let Some(expire) = any.downcast_ref::<ExpireSpaceDirectoryManifest>() {
+        return Some(expire.dataspace);
+    }
+
     if let Some(activate) = any.downcast_ref::<ActivateContractInstance>() {
         return contract_address_dataspace_target(&activate.contract_address);
     }
@@ -2339,6 +2385,32 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             world,
             ledger_time_ms,
         );
+    }
+
+    if let Some(grant) = any.downcast_ref::<GrantBox>() {
+        return match grant {
+            GrantBox::Permission(grant) => dataspace_scoped_permission_target_with_world(
+                &grant.object,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            )
+            .or_else(|| account_dataspace_target(Some(world), &grant.destination)),
+            GrantBox::Role(_) | GrantBox::RolePermission(_) => None,
+        };
+    }
+
+    if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
+        return match revoke {
+            RevokeBox::Permission(revoke) => dataspace_scoped_permission_target_with_world(
+                &revoke.object,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            )
+            .or_else(|| account_dataspace_target(Some(world), &revoke.destination)),
+            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => None,
+        };
     }
 
     if let Some(register) = any.downcast_ref::<RegisterBox>() {
@@ -2669,6 +2741,18 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             world,
             ledger_time_ms,
         );
+    }
+
+    if let Some(publish) = any.downcast_ref::<PublishSpaceDirectoryManifest>() {
+        return Some(publish.manifest.dataspace);
+    }
+
+    if let Some(revoke) = any.downcast_ref::<RevokeSpaceDirectoryManifest>() {
+        return Some(revoke.dataspace);
+    }
+
+    if let Some(expire) = any.downcast_ref::<ExpireSpaceDirectoryManifest>() {
+        return Some(expire.dataspace);
     }
 
     if let Some(activate) = any.downcast_ref::<ActivateContractInstance>() {
@@ -3387,6 +3471,24 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
         return true;
     }
 
+    if let Some(grant) = any.downcast_ref::<GrantBox>() {
+        return match grant {
+            GrantBox::Permission(grant) => {
+                dataspace_scoped_permission_target_needs_state(&grant.object)
+            }
+            GrantBox::Role(_) | GrantBox::RolePermission(_) => false,
+        };
+    }
+
+    if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
+        return match revoke {
+            RevokeBox::Permission(revoke) => {
+                dataspace_scoped_permission_target_needs_state(&revoke.object)
+            }
+            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => false,
+        };
+    }
+
     if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
         return dvp
             .delivery_leg()
@@ -3834,6 +3936,11 @@ fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bo
             .try_into_any_norito::<CanModifyAssetDefinitionMetadata>()
             .ok()
             .is_some(),
+        "CanUseFeeSponsor" => permission
+            .payload()
+            .try_into_any_norito::<CanUseFeeSponsor>()
+            .ok()
+            .is_some(),
         _ => false,
     }
 }
@@ -3944,6 +4051,13 @@ fn dataspace_scoped_permission_target(
                         dataspace_catalog,
                         state_view,
                     )
+                }),
+            "CanUseFeeSponsor" => permission
+                .payload()
+                .try_into_any_norito::<CanUseFeeSponsor>()
+                .ok()
+                .and_then(|token| {
+                    account_dataspace_target(state_view.map(StateView::world), &token.sponsor)
                 }),
             _ => None,
         };
@@ -4072,6 +4186,11 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                         ledger_time_ms,
                     )
                 }),
+            "CanUseFeeSponsor" => permission
+                .payload()
+                .try_into_any_norito::<CanUseFeeSponsor>()
+                .ok()
+                .and_then(|token| account_dataspace_target(Some(world), &token.sponsor)),
             _ => None,
         };
     }
@@ -5998,8 +6117,8 @@ mod tests {
         },
         metadata::Metadata,
         nexus::{
-            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, LaneConfig, LaneVisibility,
-            UniversalAccountId,
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
+            LaneConfig, LaneVisibility, ManifestVersion, UniversalAccountId,
         },
         offline::OfflineNoteKeyCertificate,
         permission::Permission,
@@ -8420,8 +8539,10 @@ mod tests {
         );
 
         let decision = router.route_with_view(&tx, &state.view());
-        assert_eq!(decision.lane_id, LaneId::new(4));
-        assert_eq!(decision.dataspace_id, DataSpaceId::new(9));
+        assert_eq!(
+            decision,
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
 
         let helper_err =
             evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
@@ -8477,8 +8598,10 @@ mod tests {
         );
 
         let decision = router.route_with_view(&tx, &state.view());
-        assert_eq!(decision.lane_id, LaneId::new(9));
-        assert_eq!(decision.dataspace_id, DataSpaceId::new(7));
+        assert_eq!(
+            decision,
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
 
         let helper_err =
             evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
@@ -8542,8 +8665,10 @@ mod tests {
         );
 
         let decision = router.route_with_view(&tx, &state.view());
-        assert_eq!(decision.lane_id, LaneId::new(11));
-        assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
+        assert_eq!(
+            decision,
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
 
         let helper_err =
             evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
@@ -14494,6 +14619,123 @@ mod tests {
     }
 
     #[test]
+    fn space_directory_manifest_writes_route_by_manifest_dataspace() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace = DataSpaceId::new(10);
+        let lane = LaneId::new(3);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane, dataspace),
+        ]);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace, "sbp")]);
+        let router = ConfigLaneRouter::new(policy.clone(), dataspace_catalog, lane_catalog.clone());
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid: UniversalAccountId::from_hash(Hash::new(b"router::space-directory-publish")),
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 0,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(PublishSpaceDirectoryManifest {
+                manifest: manifest.clone(),
+            })],
+        );
+        let expected = RoutingDecision::new(lane, dataspace);
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("space-directory publish should route without WSV state"),
+            Some(expected)
+        );
+        assert_eq!(
+            router
+                .try_route_plan_without_state(&tx)
+                .expect("space-directory publish plan should route without WSV state")
+                .map(|plan| plan.coordinator_route()),
+            Some(expected)
+        );
+        assert_eq!(
+            evaluate_policy_with_catalog(
+                &policy,
+                &lane_catalog,
+                router.dataspace_catalog.as_ref(),
+                &tx,
+            )
+            .expect("validation routing should match queue routing"),
+            expected
+        );
+    }
+
+    #[test]
+    fn mixed_activation_followups_plan_routes_space_directory_publish_to_private_lane() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let dataspace = DataSpaceId::new(10);
+        let lane = LaneId::new(3);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane, dataspace),
+        ]);
+        let router = ConfigLaneRouter::new(
+            policy,
+            dataspace_catalog(&[(dataspace, "sbp")]),
+            lane_catalog,
+        );
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid: UniversalAccountId::from_hash(Hash::new(b"router::activation-followup")),
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 0,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("activation-followup", "universal").expect("domain id"),
+                ))),
+                InstructionBox::from(PublishSpaceDirectoryManifest { manifest }),
+            ],
+        );
+
+        let plan = router
+            .try_route_plan(&tx)
+            .expect("mixed activation follow-up plan should resolve");
+        let RoutingPlan::NativeAmx(plan) = plan else {
+            panic!("mixed universal and SBP follow-ups should build a native AMX plan");
+        };
+
+        assert_eq!(
+            plan.coordinator.route,
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+        assert!(
+            plan.participants
+                .iter()
+                .any(|leg| leg.route == RoutingDecision::new(lane, dataspace)),
+            "SBP publish leg must be retained in the routing plan"
+        );
+    }
+
+    #[test]
     fn account_permission_grant_routes_by_destination_account_policy() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, _) = gen_account_in("wonderland");
@@ -15248,6 +15490,13 @@ mod tests {
             expected
         );
         assert_eq!(
+            router
+                .try_route_plan_with_state(&tx, &state)
+                .expect("state-backed routing plan should use holder account scope")
+                .coordinator_route(),
+            expected
+        );
+        assert_eq!(
             evaluate_policy_with_catalog_and_world(
                 &policy,
                 &lane_catalog,
@@ -15256,6 +15505,153 @@ mod tests {
                 state_view.world(),
             )
             .expect("validation routing should use holder account scope"),
+            expected
+        );
+    }
+
+    #[test]
+    fn fee_sponsor_account_permission_grant_routes_to_sponsor_scope_for_new_holder() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (holder_id, _) = gen_account_in("new-retail-holder");
+        let (sponsor_id, _) = gen_account_in("wonderland-sponsor");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                CanUseFeeSponsor {
+                    sponsor: sponsor_id.clone(),
+                    policy: "default".parse().expect("default fee sponsor policy"),
+                },
+                holder_id,
+            ))],
+        );
+        let mut sponsor_scope =
+            crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        sponsor_scope.ensure_dataspace(dataspace_id);
+        let state = state_with_account_scope_entries(&[(sponsor_id, sponsor_scope)], catalog);
+        state.nexus.write().lane_catalog = lane_catalog.clone();
+        let state_view = state.view();
+        let expected = RoutingDecision::new(lane_id, dataspace_id);
+
+        assert_eq!(
+            router
+                .try_route_plan_without_state(&tx)
+                .expect("fee sponsor grants should defer without sponsor scope state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state_view)
+                .expect("state-view routing should use sponsor account scope"),
+            expected
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_state(&tx, &state)
+                .expect("state-backed routing plan should use sponsor account scope")
+                .coordinator_route(),
+            expected
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                &lane_catalog,
+                &state_view.nexus().dataspace_catalog,
+                &tx,
+                state_view.world(),
+            )
+            .expect("validation routing should use sponsor account scope")
+            .coordinator_route(),
+            expected
+        );
+    }
+
+    #[test]
+    fn fee_sponsor_account_permission_grant_prefers_sponsor_scope_over_holder_scope() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (holder_id, _) = gen_account_in("retail-holder");
+        let (sponsor_id, _) = gen_account_in("cbuae-sponsor");
+        let holder_dataspace = DataSpaceId::new(10);
+        let sponsor_dataspace = DataSpaceId::new(11);
+        let holder_lane = LaneId::new(3);
+        let sponsor_lane = LaneId::new(4);
+        let catalog = dataspace_catalog(&[(holder_dataspace, "sbp"), (sponsor_dataspace, "cbuae")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (holder_lane, holder_dataspace),
+            (sponsor_lane, sponsor_dataspace),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                CanUseFeeSponsor {
+                    sponsor: sponsor_id.clone(),
+                    policy: "default".parse().expect("default fee sponsor policy"),
+                },
+                holder_id.clone(),
+            ))],
+        );
+        let mut holder_scope = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        holder_scope.ensure_dataspace(holder_dataspace);
+        let mut sponsor_scope =
+            crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        sponsor_scope.ensure_dataspace(sponsor_dataspace);
+        let state = state_with_account_scope_entries(
+            &[(holder_id, holder_scope), (sponsor_id, sponsor_scope)],
+            catalog,
+        );
+        state.nexus.write().lane_catalog = lane_catalog;
+        let expected = RoutingDecision::new(sponsor_lane, sponsor_dataspace);
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("fee sponsor grants should defer without account scope state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("state-view routing should prefer sponsor account scope"),
+            expected
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_state(&tx, &state)
+                .expect("state-backed routing plan should prefer sponsor account scope")
+                .coordinator_route(),
+            expected
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &state.view().nexus().dataspace_catalog,
+                &tx,
+                state.view().world(),
+            )
+            .expect("validation routing should prefer sponsor account scope")
+            .coordinator_route(),
             expected
         );
     }
@@ -15809,6 +16205,176 @@ mod tests {
             )
             .expect("validation routing plan should match proposal-state fallback routing"),
             expected_plan
+        );
+    }
+
+    #[test]
+    fn multisig_approve_ignores_corrupt_proposal_state_and_uses_account_scope() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (multisig_id, _) = gen_account_in("wonderland");
+        let (target_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let proposed = vec![InstructionBox::from(Register::account(
+            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
+        ))];
+        let instructions_hash = HashOf::new(&proposed);
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(MultisigApprove::new(
+                multisig_id.clone(),
+                instructions_hash,
+            ))],
+        );
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(dataspace_id);
+        let mut state =
+            state_with_account_scope_entries(&[(multisig_id.clone(), scope_entry)], catalog);
+        state.nexus.write().lane_catalog = lane_catalog;
+        state.world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_key(&multisig_id, &instructions_hash),
+            b"not a multisig proposal state".to_vec(),
+        );
+        let expected_route = RoutingDecision::new(lane_id, dataspace_id);
+        let expected_plan = RoutingPlan::single(expected_route);
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("multisig approval should defer to state-aware routing"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("corrupt proposal state should fall back to multisig account scope"),
+            expected_route
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&tx, &state.view())
+                .expect("corrupt proposal state plan should fall back to multisig account scope"),
+            expected_plan
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &state.view().nexus().dataspace_catalog,
+                &tx,
+                state.view().world(),
+            )
+            .expect("validation routing should ignore corrupt proposal state")
+            .coordinator_route(),
+            expected_route
+        );
+    }
+
+    #[test]
+    fn multisig_approve_ignores_unrelated_persisted_proposal_hash() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (multisig_id, _) = gen_account_in("wonderland");
+        let (approved_target_id, _) = gen_account_in("wonderland");
+        let (stale_target_id, _) = gen_account_in("wonderland");
+        let account_dataspace = DataSpaceId::new(10);
+        let stale_dataspace = DataSpaceId::new(11);
+        let account_lane = LaneId::new(2);
+        let stale_lane = LaneId::new(3);
+        let catalog = dataspace_catalog(&[
+            (account_dataspace, "restricted"),
+            (stale_dataspace, "stale-restricted"),
+        ]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (account_lane, account_dataspace),
+            (stale_lane, stale_dataspace),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let approved = vec![InstructionBox::from(Register::account(
+            Account::new(approved_target_id)
+                .with_label(Some(account_alias("approved@restricted", &catalog))),
+        ))];
+        let approved_hash = HashOf::new(&approved);
+        let stale_proposed = vec![InstructionBox::from(Register::account(
+            Account::new(stale_target_id)
+                .with_label(Some(account_alias("stale@stale-restricted", &catalog))),
+        ))];
+        let stale_hash = HashOf::new(&stale_proposed);
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(MultisigApprove::new(
+                multisig_id.clone(),
+                approved_hash,
+            ))],
+        );
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(account_dataspace);
+        let mut state =
+            state_with_account_scope_entries(&[(multisig_id.clone(), scope_entry)], catalog);
+        state.nexus.write().lane_catalog = lane_catalog;
+        let stale_state = MultisigProposalState::new(
+            multisig_id.clone(),
+            stale_hash,
+            stale_proposed,
+            1,
+            10_000,
+            BTreeSet::new(),
+            None,
+        );
+        state.world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_key(&multisig_id, &stale_hash),
+            norito::to_bytes(&stale_state).expect("stale proposal state should encode"),
+        );
+        let expected_route = RoutingDecision::new(account_lane, account_dataspace);
+        let expected_plan = RoutingPlan::single(expected_route);
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("multisig approval should defer to state-aware routing"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("unrelated proposal state should not route this approval"),
+            expected_route
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&tx, &state.view())
+                .expect("unrelated proposal state plan should fall back to account scope"),
+            expected_plan
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &state.view().nexus().dataspace_catalog,
+                &tx,
+                state.view().world(),
+            )
+            .expect("validation routing should ignore unrelated proposal state")
+            .coordinator_route(),
+            expected_route
         );
     }
 

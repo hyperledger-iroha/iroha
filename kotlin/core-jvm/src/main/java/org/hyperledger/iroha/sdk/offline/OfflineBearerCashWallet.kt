@@ -197,12 +197,10 @@ object OfflineBearerCashTextCodec {
         if (!text.startsWith(prefix)) return false
         val payload = text.substring(prefix.length)
         if (
-            !(
-                payload.trim() == payload &&
-                    payload.isNotEmpty() &&
-                    !payload.contains("=") &&
-                    payload.all(::isBase64UrlCharacter)
-            )
+            payload.isEmpty() ||
+            payload.trim() != payload ||
+            payload.contains("=") ||
+            !payload.all(::isBase64UrlCharacter)
         ) {
             return false
         }

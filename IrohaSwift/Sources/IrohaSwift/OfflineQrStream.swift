@@ -771,10 +771,7 @@ public enum OfflineQrStreamTextCodec {
             guard let stripped = value.stripPrefix(base64Prefix) else {
                 throw OfflineQrStreamError.invalidEnvelope("qr text prefix missing")
             }
-            guard let decoded = Data(base64Encoded: stripped) else {
-                throw OfflineQrStreamError.invalidEnvelope("frame text is not base64")
-            }
-            guard decoded.base64EncodedString() == stripped else {
+            guard let decoded = decodeExactBase64(stripped) else {
                 throw OfflineQrStreamError.invalidEnvelope("frame text is not base64")
             }
             return decoded

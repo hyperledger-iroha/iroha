@@ -7485,7 +7485,18 @@ pub mod tests {
             .with_metadata(multisig_metadata)
             .build(&multisig_id);
         let world = World::with([domain], [signer, cosigner, validator, multisig], []);
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let mut state = State::new(world, kura, query_handle);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+        let state = Arc::new(state);
 
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let mut statuses = BTreeMap::new();
@@ -7507,6 +7518,7 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        queue.reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None);
         queue.install_lane_manifests(&manifests);
 
         let tx = accepted_tx_with(
