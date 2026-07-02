@@ -6017,7 +6017,9 @@ fn pdp_proof_validation_code(error: &PdpProofValidationError) -> &'static str {
     match error {
         PdpProofValidationError::UnsupportedVersion { .. } => "SFS-VAL-002",
         PdpProofValidationError::InvalidManifestDigest => "SFS-VAL-001",
-        PdpProofValidationError::MissingSignature => "SFS-SIG-008",
+        PdpProofValidationError::MissingSignature | PdpProofValidationError::InertSignature => {
+            "SFS-SIG-008"
+        }
         PdpProofValidationError::EmptyProofSet
         | PdpProofValidationError::InvalidSegmentDigest { .. }
         | PdpProofValidationError::MissingSegmentMerklePath { .. }
@@ -6194,7 +6196,9 @@ fn pdp_challenge_validation_category(error: &PdpChallengeValidationError) -> &'s
 
 fn pdp_proof_validation_category(error: &PdpProofValidationError) -> &'static str {
     match error {
-        PdpProofValidationError::MissingSignature => CATEGORY_SIGNATURE,
+        PdpProofValidationError::MissingSignature | PdpProofValidationError::InertSignature => {
+            CATEGORY_SIGNATURE
+        }
         _ => CATEGORY_VALIDATION,
     }
 }

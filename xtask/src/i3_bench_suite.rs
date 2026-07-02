@@ -812,7 +812,7 @@ async fn proof_handler(
     }
     let payload = hex::decode(&request.payload_hex).map_err(|_| StatusCode::BAD_REQUEST)?;
     let sig_bytes = hex::decode(&request.signature_hex).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let candidate = Signature::from_bytes(&sig_bytes);
+    let candidate = Signature::try_from_bytes(&sig_bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
     candidate
         .verify(&signature.public_key, &payload)
         .map_err(|_| StatusCode::UNAUTHORIZED)?;

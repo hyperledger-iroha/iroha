@@ -86,7 +86,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 14;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
 const SORAFS_ORDERBOOK_SIDE_ASK: u32 = 2;
@@ -5363,6 +5363,18 @@ fn parse_connect_wallet_signature_algorithm_label(alg_str: &str) -> Result<Algor
     Err(-8)
 }
 
+fn connect_wallet_signature_from_algorithm_bytes(
+    algorithm: Algorithm,
+    signature: &[u8],
+) -> Option<proto::WalletSignatureV1> {
+    match algorithm {
+        Algorithm::Ed25519 => proto::WalletSignatureV1::from_ed25519_bytes(signature),
+        _ => Signature::try_from_bytes(signature)
+            .ok()
+            .map(|signature| proto::WalletSignatureV1::new(algorithm, signature)),
+    }
+}
+
 unsafe fn parse_algorithm_cstr(
     alg_ptr: *const c_char,
     alg_len: c_ulong,
@@ -6624,16 +6636,16 @@ pub unsafe extern "C" fn connect_norito_encode_control_approve_ext_with_alg(
             Err(code) => return code,
         };
         let sig_bytes = std::slice::from_raw_parts(sig_ptr, sig_len as usize);
-        let signature = match Signature::try_from_bytes(sig_bytes) {
-            Ok(signature) => signature,
-            Err(_) => return -4,
+        let sig_wallet = match connect_wallet_signature_from_algorithm_bytes(algorithm, sig_bytes) {
+            Some(signature) => signature,
+            None => return -4,
         };
         let ctrl = proto::ConnectControlV1::Approve {
             wallet_pk: wallet_pk_arr,
             account_id,
             permissions,
             proof,
-            sig_wallet: proto::WalletSignatureV1::new(algorithm, signature),
+            sig_wallet,
         };
         let frame = proto::ConnectFrameV1 {
             sid: sid_arr,
@@ -10468,7 +10480,7 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_abi_version_advertises_sorafs_hedging_validation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 13);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 14);
     }
 
     #[test]
@@ -14615,15 +14627,13 @@ pub unsafe extern "C" fn connect_norito_encode_envelope_sign_result_ok_with_alg(
             Err(code) => return code,
         };
         let sig_bytes = std::slice::from_raw_parts(sig_ptr, sig_len as usize);
-        let signature = match Signature::try_from_bytes(sig_bytes) {
-            Ok(signature) => signature,
-            Err(_) => return -2,
+        let signature = match connect_wallet_signature_from_algorithm_bytes(algorithm, sig_bytes) {
+            Some(signature) => signature,
+            None => return -2,
         };
         let env = proto::EnvelopeV1 {
             seq,
-            payload: proto::ConnectPayloadV1::SignResultOk {
-                signature: proto::WalletSignatureV1::new(algorithm, signature),
-            },
+            payload: proto::ConnectPayloadV1::SignResultOk { signature },
         };
         let buf = match encode_envelope_framed(&env) {
             Ok(buf) => buf,
@@ -15382,6 +15392,48 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
         unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_transfer_instruction_box(
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    asset_definition_ptr: *const c_char,
+    asset_definition_len: c_ulong,
+    quantity_ptr: *const c_char,
+    quantity_len: c_ulong,
+    destination_ptr: *const c_char,
+    destination_len: c_ulong,
+    out_instruction_ptr: *mut *mut c_uchar,
+    out_instruction_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_instruction_ptr.is_null() || out_instruction_len.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let authority =
+            parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
+        let asset_definition =
+            unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
+        let quantity = parse_quantity(unsafe { read_string_bridge(quantity_ptr, quantity_len) }?)?;
+        let destination =
+            parse_destination(unsafe { read_string_bridge(destination_ptr, destination_len) }?)?;
+        let (asset_definition, asset_scope) =
+            parse_asset_definition_with_balance_scope(asset_definition)?;
+        let asset_id = AssetId::with_scope(asset_definition, authority, asset_scope);
+        let instruction =
+            InstructionBox::from(Transfer::asset_numeric(asset_id, quantity, destination));
+        let instruction_bytes =
+            norito::core::to_bytes(&instruction).map_err(|_| BridgeError::JsonSerialize)?;
+
+        unsafe {
+            write_bytes_bridge(out_instruction_ptr, out_instruction_len, &instruction_bytes)
+        }?;
         Ok(())
     })();
 
@@ -33003,9 +33055,99 @@ mod tests {
     }
 
     #[test]
+    fn encode_control_approve_ext_with_alg_rejects_noncanonical_ed25519_signature_r() {
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let sid = [0x11_u8; 32];
+        let wallet_pk = [0x22_u8; 32];
+        let account = b"wallet-account";
+        let algorithm = b"ed25519";
+        let key_pair = fixture_key_pair(0x62);
+        let mut signature = Signature::try_new(
+            key_pair.private_key(),
+            b"connect approve ext with alg malformed R",
+        )
+        .expect("fixture signature")
+        .payload()
+        .to_vec();
+        signature[..32].copy_from_slice(&NONCANONICAL_R);
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_encode_control_approve_ext_with_alg(
+                sid.as_ptr(),
+                1,
+                7,
+                wallet_pk.as_ptr(),
+                account.as_ptr().cast::<c_char>(),
+                account.len() as c_ulong,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                algorithm.as_ptr().cast::<c_char>(),
+                algorithm.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if !out_ptr.is_null() {
+            connect_norito_free(out_ptr);
+        }
+
+        assert_eq!(rc, -4);
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
     fn encode_envelope_sign_result_ok_with_alg_rejects_all_zero_signature_material() {
         let algorithm = b"ed25519";
         let signature = [0_u8; 64];
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_encode_envelope_sign_result_ok_with_alg(
+                9,
+                algorithm.as_ptr().cast::<c_char>(),
+                algorithm.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        if !out_ptr.is_null() {
+            connect_norito_free(out_ptr);
+        }
+
+        assert_eq!(rc, -2);
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn encode_envelope_sign_result_ok_with_alg_rejects_noncanonical_ed25519_signature_r() {
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let algorithm = b"ed25519";
+        let key_pair = fixture_key_pair(0x63);
+        let mut signature = Signature::try_new(
+            key_pair.private_key(),
+            b"connect envelope sign result malformed R",
+        )
+        .expect("fixture signature")
+        .payload()
+        .to_vec();
+        signature[..32].copy_from_slice(&NONCANONICAL_R);
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
 
@@ -33116,6 +33258,31 @@ mod tests {
     }
 
     #[test]
+    fn sm2_public_key_prefixed_ffi_rejects_zero_coordinate_material() {
+        let distid = "connect-sm2-zero-coordinate-prefixed";
+        let distid_c = CString::new(distid).expect("distid c string");
+        let mut public_bytes = [0u8; 65];
+        public_bytes[0] = 0x04;
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let rc = unsafe {
+            connect_norito_sm2_public_key_prefixed(
+                distid_c.as_ptr(),
+                distid_c.as_bytes().len() as c_ulong,
+                public_bytes.as_ptr(),
+                public_bytes.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(rc, ERR_SM2_PARSE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
     fn sm2_sign_ffi_uses_checked_signing_and_verifies() {
         let distid = "connect-sm2-checked-signing";
         let distid_c = CString::new(distid).expect("distid c string");
@@ -33169,6 +33336,36 @@ mod tests {
             )
         };
         assert_eq!(rc_bad, 0, "tampered SM2 signature must fail cleanly");
+    }
+
+    #[test]
+    fn sm2_verify_ffi_rejects_zero_coordinate_public_key_material() {
+        let distid = "connect-sm2-zero-coordinate-verify";
+        let distid_c = CString::new(distid).expect("distid c string");
+        let private = Sm2PrivateKey::from_seed(distid, b"connect-sm2-zero-coordinate-verify-seed")
+            .expect("derive SM2 key");
+        let message = b"connect-sm2-zero-coordinate-verify";
+        let signature = private
+            .try_sign(message)
+            .expect("fixture SM2 signature")
+            .to_bytes();
+        let mut public_bytes = [0u8; 65];
+        public_bytes[0] = 0x04;
+
+        let rc = unsafe {
+            connect_norito_sm2_verify(
+                distid_c.as_ptr(),
+                distid_c.as_bytes().len() as c_ulong,
+                public_bytes.as_ptr(),
+                public_bytes.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+            )
+        };
+
+        assert_eq!(rc, ERR_SM2_PARSE);
     }
 
     #[test]

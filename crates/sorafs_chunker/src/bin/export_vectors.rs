@@ -1170,4 +1170,81 @@ mod tests {
 
         fs::remove_dir_all(&dir).expect("cleanup temp dir");
     }
+
+    #[test]
+    fn existing_manifest_signatures_reject_malformed_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let dir = temp_dir();
+        let vectors = FixtureProfile::SF1_V1.generate_vectors();
+        prepare_fixture_files(&dir, &vectors);
+        let manifest_digest = write_manifest(&dir, &vectors).expect("write manifest");
+        let signature_path = dir.join("manifest_signatures.json");
+
+        let signer_cli = CliOptions {
+            signature_out: Some(signature_path.clone()),
+            signing_key_hex: Some(SIGNING_KEY_1.to_owned()),
+            ..CliOptions::default()
+        };
+        write_manifest_signatures(&dir, &vectors, manifest_digest, &signer_cli)
+            .expect("signing should succeed");
+
+        let signature_json: Value =
+            json::from_slice(&fs::read(&signature_path).expect("read signatures"))
+                .expect("signature json parses");
+        let original_signature = signature_json
+            .get("signatures")
+            .and_then(Value::as_array)
+            .and_then(|signatures| signatures.first())
+            .and_then(Value::as_object)
+            .and_then(|entry| entry.get("signature"))
+            .and_then(Value::as_str)
+            .expect("signature field");
+        let signature_bytes =
+            hex::decode(original_signature).expect("generated signature hex decodes");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut tampered_json = signature_json.clone();
+            let signatures = tampered_json
+                .get_mut("signatures")
+                .and_then(Value::as_array_mut)
+                .expect("signatures array");
+            let first = signatures
+                .first_mut()
+                .and_then(Value::as_object_mut)
+                .expect("signature entry");
+            let mut tampered_signature = signature_bytes.clone();
+            tampered_signature[..32].copy_from_slice(&replacement_r);
+            first.insert(
+                "signature".to_owned(),
+                Value::from(hex::encode(tampered_signature)),
+            );
+            let bytes = json::to_vec_pretty(&tampered_json).expect("serialize signature json");
+            fs::write(&signature_path, bytes).expect("write tampered signatures");
+
+            let verify_cli = CliOptions {
+                signature_out: Some(signature_path.clone()),
+                ..CliOptions::default()
+            };
+            let err = write_manifest_signatures(&dir, &vectors, manifest_digest, &verify_cli)
+                .expect_err("malformed signature R must fail verification");
+
+            assert!(
+                err.to_string().contains("signature verification failed"),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
+
+        fs::remove_dir_all(&dir).expect("cleanup temp dir");
+    }
 }

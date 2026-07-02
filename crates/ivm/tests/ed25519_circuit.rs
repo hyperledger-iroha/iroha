@@ -43,3 +43,18 @@ fn test_ed25519_circuit_all_zero_signature_is_false() {
 
     assert!(circuit.verify().is_ok());
 }
+
+#[test]
+fn test_ed25519_circuit_weak_public_key_is_false() {
+    let keypair = SigningKey::from_bytes(&[0x34; 32]);
+    let msg = b"ed25519 weak public key";
+    let signature = keypair.sign(msg);
+    let circuit = Ed25519VerifyCircuit {
+        public_key: [0u8; 32],
+        signature: signature.to_bytes(),
+        message: msg,
+        result: false,
+    };
+
+    assert!(circuit.verify().is_ok());
+}

@@ -93,23 +93,30 @@ Helper operand polarity checks unwrap one-line `LET` helper aliases.
 Transitive exactness predicate chains must not hide undefined helpers.
 Quantified exactness helper formulas must not hide undefined helpers.
 Undefined helper scans preserve quantified binding scope.
+Undefined helper scans preserve unbounded quantified binding scope.
+Undefined helper scans reject relation-bearing quantified binding prefixes.
 Undefined helper scans preserve tuple-pattern quantifier domains.
 Undefined helper scans preserve LET binding scope.
 Undefined helper scans preserve parameterized LET operator scope.
 Undefined helper scans preserve CHOOSE binding scope.
 Undefined helper scans preserve LAMBDA binding scope.
+Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes.
 Undefined helper scans preserve standard TLA set/operator identifiers.
 Undefined helper scans preserve ENABLED/UNCHANGED operand scope.
 Undefined helper scans preserve CASE branch scope.
 Undefined helper scans preserve relation operand scope.
 Undefined helper scans preserve operator-call argument scope.
 Undefined helper scans preserve arithmetic/set infix operand scope.
+Undefined helper scans preserve sequence/function infix operand scope.
 Undefined helper scans preserve explicit set literal element scope.
 Undefined helper scans preserve unary set-operator operand scope.
 Undefined helper scans preserve set-comprehension binding scope.
 Undefined helper scans preserve set-comprehension outer enclosure scope.
 Undefined helper scans preserve function-constructor binding scope.
 Undefined helper scans preserve function-set domain and range scope.
+Function-set scans preserve CASE domain branch arrows.
+Function-set scans preserve record maplet CASE values.
+Function-set scans preserve record set/update CASE values.
 Undefined helper scans preserve record field label scope.
 Undefined helper scans preserve record set field label scope.
 Undefined helper scans preserve record update field label scope.
@@ -122,15 +129,19 @@ Quantified helper restatement checks reject pure top-level boolean compositions.
 Quantified helper restatement checks reject identity-literal gates.
 Quantified helper restatement checks propagate known truth values.
 Quantified formula prefix scans preserve escaped string literal colons.
+Quantified formula prefix scans preserve tuple literal maplet colons.
+Quantified helper formula scans require scoped binding prefixes.
 Quantified bound identifier scans preserve escaped string literal domains.
 Quantified helper bound-domain checks preserve escaped string literal domains.
 Quantified helper bound-domain checks include comma-shared bindings.
 Quantified helper bound-domain checks skip tuple-pattern component domains.
 Quantified helper singleton-domain checks preserve tuple literal elements.
+Quantified helper vacuity checks include unbounded static bodies.
 Line comment scans preserve escaped string literal comment markers.
 Static outer wrapper scans preserve escaped string literal parentheses.
 Semantic identifier scans ignore escaped string literal contents.
 Top-level relation and boolean scans preserve tuple literal operators.
+Top-level relation scans reject whole-body control/action wrappers.
 Top-level boolean scans preserve escaped string literal operators.
 Top-level boolean/equality detector helpers preserve tuple literal operators.
 Top-level keyword scans preserve tuple literal keywords.
@@ -138,7 +149,9 @@ Top-level CASE branch scans preserve tuple literal arms and conditions.
 Top-level keyword and CASE branch scans preserve escaped string literal delimiters.
 Top-level CASE branch scans distinguish unary temporal boxes from arm separators.
 Quantified exactness helper formulas must use their bound identifiers.
+Quantified exactness helper formulas must not duplicate bound identifiers.
 Quantified unused-bound checks include later binding groups.
+Quantified unused-bound checks include unbounded bindings.
 Quantified bound identifier scans include later tuple-pattern binding groups.
 Quantified exactness helper formulas must not select predicates with control flow.
 Quantified exactness helper formulas must not appear below top-level negation operands.
@@ -175,6 +188,10 @@ Quantified-predicate exactness boolean-composition helper operands are checked t
 Literal-gated quantified-predicate exactness boolean-composition helper operands are checked through identity literals.
 Exactness boolean-composition checks unwrap one-line `LET` helper aliases.
 Unary-temporal exactness helper wrappers must not hide quantified formulas.
+Static action/set/choice exactness helper wrappers must not hide quantified formulas.
+Static action/set/choice exactness helper wrappers traverse structured operands.
+Structured exactness helper operands must not hide quantified formulas.
+Structured exactness helper operands must not hide control-flow predicate selection.
 Unary-temporal quantified, parameterized-call, and control-flow checks split top-level boolean operands before peeling temporal wrappers.
 Unary-temporal quantified checks unwrap one-line `LET` helper aliases.
 Unary-temporal parameterized-call checks unwrap one-line `LET` helper aliases.
@@ -196,6 +213,7 @@ Negated unary-temporal boolean-only helper wrappers count as literal helpers too
 Compound boolean-only temporal helper wrappers count as literal helpers too.
 Compound exactness helper traversal includes disjunction, implication, equivalence, and negation operands.
 Helper reference traversal unwraps one-line `LET` helper aliases.
+Exactness vacuous-helper checks inspect static and structured operands.
 LET helper alias unwrapping preserves static unary result wrappers.
 LET binding scans preserve tuple literal definition bodies.
 LET binding scans preserve escaped string literal definition bodies.
@@ -220,6 +238,10 @@ temporal predicates before composition.
 Transitive allowlisted temporal helper chains must not hide whole-body control-flow predicate-selection helpers.
 Transitive allowlisted temporal helper chains must not hide nested control-flow predicate-selection helpers.
 Unary-temporal temporal helper wrappers must not hide control-flow predicate selection.
+Static action/set/choice temporal helper wrappers must not hide quantified formulas.
+Static action/set/choice temporal helper wrappers traverse structured operands.
+Structured temporal helper operands must not hide quantified formulas.
+Structured temporal helper operands must not hide control-flow predicate selection.
 Unary-temporal temporal LET-alias helper wrappers must name concrete temporal predicates.
 Transitive allowlisted temporal helper chains must not hide whole-body temporal-helper boolean-composition helpers.
 Temporal-helper boolean-composition checks traverse boolean operands.
@@ -237,23 +259,30 @@ hide `TypeInvariant`, generic correctness, or `*Exactness` identifiers.
 Transitive allowlisted temporal helper chains must not hide undefined helpers.
 Quantified temporal helper formulas must not hide undefined helpers.
 Undefined helper scans preserve quantified binding scope.
+Undefined helper scans preserve unbounded quantified binding scope.
+Undefined helper scans reject relation-bearing quantified binding prefixes.
 Undefined helper scans preserve tuple-pattern quantifier domains.
 Undefined helper scans preserve LET binding scope.
 Undefined helper scans preserve parameterized LET operator scope.
 Undefined helper scans preserve CHOOSE binding scope.
 Undefined helper scans preserve LAMBDA binding scope.
+Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes.
 Undefined helper scans preserve standard TLA set/operator identifiers.
 Undefined helper scans preserve ENABLED/UNCHANGED operand scope.
 Undefined helper scans preserve CASE branch scope.
 Undefined helper scans preserve relation operand scope.
 Undefined helper scans preserve operator-call argument scope.
 Undefined helper scans preserve arithmetic/set infix operand scope.
+Undefined helper scans preserve sequence/function infix operand scope.
 Undefined helper scans preserve explicit set literal element scope.
 Undefined helper scans preserve unary set-operator operand scope.
 Undefined helper scans preserve set-comprehension binding scope.
 Undefined helper scans preserve set-comprehension outer enclosure scope.
 Undefined helper scans preserve function-constructor binding scope.
 Undefined helper scans preserve function-set domain and range scope.
+Function-set scans preserve CASE domain branch arrows.
+Function-set scans preserve record maplet CASE values.
+Function-set scans preserve record set/update CASE values.
 Undefined helper scans preserve record field label scope.
 Undefined helper scans preserve record set field label scope.
 Undefined helper scans preserve record update field label scope.
@@ -266,15 +295,19 @@ Quantified helper restatement checks reject pure top-level boolean compositions.
 Quantified helper restatement checks reject identity-literal gates.
 Quantified helper restatement checks propagate known truth values.
 Quantified formula prefix scans preserve escaped string literal colons.
+Quantified formula prefix scans preserve tuple literal maplet colons.
+Quantified helper formula scans require scoped binding prefixes.
 Quantified bound identifier scans preserve escaped string literal domains.
 Quantified helper bound-domain checks preserve escaped string literal domains.
 Quantified helper bound-domain checks include comma-shared bindings.
 Quantified helper bound-domain checks skip tuple-pattern component domains.
 Quantified helper singleton-domain checks preserve tuple literal elements.
+Quantified helper vacuity checks include unbounded static bodies.
 Line comment scans preserve escaped string literal comment markers.
 Static outer wrapper scans preserve escaped string literal parentheses.
 Semantic identifier scans ignore escaped string literal contents.
 Top-level relation and boolean scans preserve tuple literal operators.
+Top-level relation scans reject whole-body control/action wrappers.
 Top-level boolean scans preserve escaped string literal operators.
 Top-level boolean/equality detector helpers preserve tuple literal operators.
 Top-level keyword scans preserve tuple literal keywords.
@@ -282,7 +315,9 @@ Top-level CASE branch scans preserve tuple literal arms and conditions.
 Top-level keyword and CASE branch scans preserve escaped string literal delimiters.
 Top-level CASE branch scans distinguish unary temporal boxes from arm separators.
 Quantified temporal helper formulas must use their bound identifiers.
+Quantified temporal helper formulas must not duplicate bound identifiers.
 Quantified unused-bound checks include later binding groups.
+Quantified unused-bound checks include unbounded bindings.
 Quantified bound identifier scans include later tuple-pattern binding groups.
 Quantified temporal helper formulas must not select predicates with control flow.
 Quantified helper body control-flow checks reject non-transparent `LET` bodies.
@@ -315,6 +350,7 @@ Compound temporal helper traversal includes disjunction operands.
 Compound temporal helper traversal includes implication operands.
 Compound temporal helper traversal includes equivalence operands.
 Compound temporal helper traversal includes negation operands.
+Temporal vacuous-helper checks inspect static and structured operands.
 Exactness and correctness-envelope conjunct references must resolve to zero-arity
 operator definitions, including bounded temporal exception helper chains.
 Transitive exactness predicate chains must also resolve through zero-arity
@@ -13064,6 +13100,11 @@ Temporal properties:
   progress evidence shape: idle and init states carry no stale chunk/READY
   counters, chunking stays below full chunk coverage, chunk-complete states have
   no READY votes yet, and partial READY states remain below commit quorum.
+- The aggregate `RbcProgressStateEvidenceAlwaysMatchesEnvelope` theorem composes
+  the full and partial RBC progress evidence predicates plus the live evidence
+  causality envelope, so the lifecycle proof carries both the positive evidence
+  required by initialized/covered/quorum states and the absence, boundedness,
+  and confinement of premature CHUNK/READY counters.
 - `RbcCorruptedDigestNeverValid` proves that once RBC enters the corrupted
   repair path, any retained RBC evidence is paired with an invalidated digest
   until the protocol repairs through RBC INIT.
@@ -13093,15 +13134,16 @@ Temporal properties:
   increase, or reset classifier for the field that moved.
 - The aggregate `RbcProgressMutationAlwaysMatchesLocalClassification` theorem
   composes the already checked RBC state/evidence provenance, local
-  state/evidence classifiers, delivered-entry classifier, corrupted-entry
-  classifier, and corrupted-repair exit classifier. The fast, deep, and
-  TLC-fast configs wire the aggregate alongside those constituent obligations so
-  both the local classifiers and their combined progress-mutation frame stay
-  checked.
+  state/evidence classifiers, startup/defensive boundary envelope,
+  delivered-entry classifier, corrupted-entry classifier, and corrupted-repair
+  exit classifier. The fast, deep, and TLC-fast configs wire the aggregate
+  alongside those constituent obligations so both the local classifiers and
+  their combined progress-mutation frame stay checked.
 - The aggregate `RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope` theorem
-  composes the progress-mutation classifier with the live header/digest, CHUNK,
-  and READY handoff-envelope invariants, so any reachable RBC progress mutation
-  stays tied to the proved evidence-causality envelope.
+  composes the progress-state evidence envelope and progress-mutation classifier
+  with the live header/digest, CHUNK, and READY handoff-envelope invariants, so
+  any reachable RBC progress mutation stays tied to the proved evidence-causality
+  envelope.
 - `RbcHeaderInstallationOnlyByProposalOrInit` proves that RBC header evidence
   can move from absent to present only through an honest proposal starting RBC
   from `Idle` or an explicit RBC INIT repair/recovery step.
@@ -13168,6 +13210,10 @@ Temporal properties:
   is confined to the initial idle state or the explicit corrupted repair state,
   so every non-corrupted RBC progress or delivery state keeps validated digest
   evidence.
+- The aggregate `RbcLiveEvidenceCausalityAlwaysMatchesEnvelope` theorem composes
+  the live RBC header/digest, CHUNK, READY, counter, and invalid-digest
+  causality predicates so the lifecycle proof carries one evidence-causality
+  contract before it reasons about progress mutation or handoff preservation.
 - `RbcWithheldNeverReached` proves that the main Sumeragi model never reaches
   the defensive `Withheld` RBC state from its initial state; `Withheld` remains
   available only to gate repair/recovery branches if a future model explicitly
@@ -13218,6 +13264,11 @@ Temporal properties:
   only be a proposal starting RBC from `Idle` or an explicit RBC INIT repair
   from `Idle`, `Withheld`, or `Corrupted`, with header/digest evidence
   installed and chunk/READY counters reset.
+- The aggregate `RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope` theorem
+  composes the startup boundary (`Idle` exit and `Init` entry) with the
+  defensive `Withheld` exclusion boundary, so the progress-mutation classifier
+  carries both normal session start provenance and unreachable defensive-state
+  constraints.
 - `RbcChunkGateNeverBypassesHeaderDigestEvidence` proves that the live RBC
   CHUNK transition is enabled exactly when the session is in an INIT,
   CHUNKING, or post-GST withheld recovery state carrying header evidence,
@@ -13678,6 +13729,12 @@ Temporal properties:
   finality certificate stack with exact vote/stake witnesses for the current
   view, and closes every post-commit progress, timeout, RBC, and fault gate
   except the pre-GST `GstElapsed` observation surface.
+- `DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysMatchesCertifiedCommitEnvelope`
+  proves that the same finalizing commit-vote branch satisfies the complete
+  delivered-state certified-commit envelope: commit-vote provenance, exact
+  witness installation, delivered RBC evidence preservation, finality
+  certificate stack, committed post-state invariants, and the pre/post-GST gate
+  split all match the delivered finality proof surface.
 - `DeliveredPendingCompleteWaitStatePrepareVoteStepAlwaysSplits` proves that
   an honest prepare vote from the named delivered-pending complete wait state
   preserves delivered RBC evidence and absent commit witnesses, increments the
@@ -13725,11 +13782,27 @@ Temporal properties:
   commit-vote, timeout, NewView, proposal, or GST branch with RBC/fault actions
   closed, while stuttering steps keep the full delivered-pending complete
   wait-state envelope unchanged.
+- `DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCommittedCertifiedEnvelope`
+  proves the committed side of that classifier: any committed post-state from
+  the named delivered-pending complete wait state must be a real `Next` step
+  from the exact finalizing honest or Byzantine commit-vote source and must
+  satisfy the delivered-state certified-commit envelope.
+- `DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesNonCommittedWaitEnvelope`
+  proves the non-committed side of that classifier: every non-final post-state
+  re-enters the named delivered-pending complete wait state with delivered RBC
+  evidence, absent commit artifacts, closed RBC/fault gates, and the exact
+  consensus/GST/timer action surface.
+- `DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteOutcomeEnvelope`
+  proves the complete classifier outcome envelope: every spec step from the
+  named delivered-pending wait state either installs the committed certified
+  envelope with exact commit artifacts or re-enters the non-committed complete
+  wait envelope with commit artifacts absent.
 - The aggregate
   `DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope` theorem
   composes the named delivered-pending complete wait-state closure,
   commit-vote, prepare-vote, timeout/NewView, NewView-vote, proposal, GST,
-  stutter, and branch-classifier obligations into one continuation envelope.
+  stutter, branch-classifier, committed-certified outcome, and non-committed
+  wait-envelope obligations into one complete continuation envelope.
 - The aggregate `RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope`
   theorem composes the full delivered-state lifecycle surface: delivered
   evidence stability, no commit certificate before finality, certified
@@ -13764,7 +13837,8 @@ Temporal properties:
   theorem composes the main consensus safety surface: terminal committed-state
   closure, post-finality stability, timeout/view-change recovery, certified
   finality installation, pre-commit and commit-vote handoffs, finalized
-  certificate/evidence retention, and the full RBC lifecycle envelope.
+  certificate/evidence retention, pending protocol GST preservation, and the
+  full RBC lifecycle envelope.
 - The aggregate `SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`
   theorem composes the full fast/deep state-invariant surface under `[]` with
   the end-to-end temporal safety envelope, giving one checkable consensus-core
@@ -30669,6 +30743,16 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Undefined-helper scans inside quantified helper formulas must preserve
   quantified binding scope, so a helper-like name bound by an inner quantifier
   cannot mask a free helper obligation with the same name in the outer body.
+  Unbounded quantified scopes must be preserved too, so `\A MissingHelper: P`
+  and `\E MissingHelper: P` keep `MissingHelper` local to the quantified body.
+  Those unbounded quantified helpers still participate in vacuity and
+  unused-bound checks, so `\A MissingHelper: TRUE` and
+  `\A MissingHelper: ConcretePredicate` cannot pass as meaningful proof
+  obligations.
+  Relation-bearing quantified prefixes such as
+  `\A MissingHelper \subseteq MissingDomain: P` must not bind
+  `MissingHelper`; their prefix and body operands remain visible to
+  undefined-helper scans.
   Tuple-pattern quantifier domains must remain visible to undefined-helper
   scans, so `\A <<x, y>> \in MissingDomain: P(x, y)` still reports
   `MissingDomain` while `x` and `y` stay local to the quantified body.

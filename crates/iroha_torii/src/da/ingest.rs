@@ -63,7 +63,7 @@ use sorafs_manifest::{
 };
 use zstd::stream::read::Decoder as ZstdDecoder;
 
-use super::persistence::{RECEIPT_SIGNATURE_PLACEHOLDER, ReceiptInsertOutcome};
+use super::persistence::{ReceiptInsertOutcome, receipt_signature_placeholder};
 use super::rs16::build_chunk_commitments;
 use super::{
     DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpoolBatchReport, persistence,
@@ -1297,7 +1297,7 @@ fn build_receipt(
         stripe_layout,
         queued_at_unix: queued_at,
         rent_quote,
-        operator_signature: Signature::from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER),
+        operator_signature: receipt_signature_placeholder(),
     };
     let unsigned_bytes =
         persistence::unsigned_receipt_bytes(&receipt, request.sequence).map_err(|err| {

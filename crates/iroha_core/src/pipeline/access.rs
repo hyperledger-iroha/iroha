@@ -58,6 +58,7 @@ const AUTHORITY_ACCOUNT_KEY: &str = "account:$authority";
 const ACCOUNT_WILDCARD_KEY: &str = "account:*";
 const ASSET_WILDCARD_KEY: &str = "asset:*";
 const ASSET_DEF_WILDCARD_KEY: &str = "asset_def:*";
+const NEXUS_ACTIVE_LANE_CATALOG_KEY: &str = "nexus.active_lane_catalog";
 
 /// Access set with separate read and write collections.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -627,6 +628,87 @@ fn key_sccp_outbound_message(key: &iroha_data_model::bridge::SccpOutboundMessage
     out
 }
 
+fn key_bridge_proof_hash(proof_hash: &[u8; 32]) -> AccessKey {
+    let mut out = "bridge.proof:".to_owned();
+    for byte in proof_hash {
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
+fn key_bridge_backend(backend: &str) -> AccessKey {
+    format!("bridge.backend:{backend}")
+}
+
+fn key_sccp_bridge_message(
+    source_domain: u32,
+    target_domain: u32,
+    message_id: [u8; 32],
+) -> AccessKey {
+    let mut out = format!("sccp.bridge.message:{source_domain}:{target_domain}:");
+    for byte in message_id {
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    out
+}
+
+fn bridge_proof_hash(proof: &iroha_data_model::bridge::BridgeProof) -> Option<[u8; 32]> {
+    let backend = proof.backend_label();
+    let encoded = norito::to_bytes(proof).ok()?;
+    Some(crate::zk::hash_proof(
+        &iroha_data_model::proof::ProofBox::new(backend, encoded),
+    ))
+}
+
+fn sccp_bridge_message_access_key(
+    proof: &iroha_data_model::bridge::BridgeProof,
+) -> Option<Option<AccessKey>> {
+    let iroha_data_model::bridge::BridgeProofPayload::TransparentZk(transparent) = &proof.payload
+    else {
+        return Some(None);
+    };
+    if !transparent.proof.backend.starts_with("sccp/stark-fri-v1/") {
+        return Some(None);
+    }
+    let artifact =
+        iroha_sccp::decode_nexus_sccp_message_transparent_proof(&transparent.proof.bytes)?;
+    if artifact.message_backend != transparent.proof.backend {
+        return None;
+    }
+    Some(Some(key_sccp_bridge_message(
+        iroha_sccp::sccp_message_source_domain(&artifact.bundle.payload),
+        iroha_sccp::sccp_message_target_domain(&artifact.bundle.payload),
+        artifact.bundle.commitment.message_id,
+    )))
+}
+
+fn derive_submit_bridge_proof_access(
+    submit: &iroha_data_model::isi::bridge::SubmitBridgeProof,
+) -> AccessSet {
+    let Some(proof_hash) = bridge_proof_hash(&submit.proof) else {
+        return AccessSet::global();
+    };
+    let Some(sccp_message_key) = sccp_bridge_message_access_key(&submit.proof) else {
+        return AccessSet::global();
+    };
+    let mut set = AccessSet::new();
+    set.add_write(key_bridge_proof_hash(&proof_hash));
+    set.add_write(key_bridge_backend(&submit.proof.backend_label()));
+    if let Some(sccp_message_key) = sccp_message_key {
+        set.add_write(sccp_message_key);
+    }
+    set
+}
+
+fn derive_record_bridge_receipt_access(
+    record: &iroha_data_model::isi::bridge::RecordBridgeReceipt,
+) -> AccessSet {
+    let mut set = AccessSet::new();
+    set.add_read(NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned());
+    set.add_write(key_bridge_proof_hash(&record.receipt.proof_hash));
+    set
+}
+
 fn derive_sccp_outbound_message_access(
     record: &iroha_data_model::isi::bridge::RecordSccpMessage,
 ) -> AccessSet {
@@ -638,6 +720,7 @@ fn derive_sccp_outbound_message_access(
         return AccessSet::global();
     }
     let mut set = AccessSet::new();
+    set.add_read(NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned());
     set.add_write(key_sccp_outbound_message(
         &crate::bridge::sccp_outbound_message_key(&payload),
     ));
@@ -1339,6 +1422,12 @@ where
     // Logging is side-effect-free; keep it conflict-free.
     if any.downcast_ref::<Log>().is_some() {
         return set;
+    }
+    if let Some(submit) = any.downcast_ref::<iroha_data_model::isi::bridge::SubmitBridgeProof>() {
+        return derive_submit_bridge_proof_access(submit);
+    }
+    if let Some(record) = any.downcast_ref::<iroha_data_model::isi::bridge::RecordBridgeReceipt>() {
+        return derive_record_bridge_receipt_access(record);
     }
     if let Some(record) = any.downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>() {
         return derive_sccp_outbound_message_access(record);
@@ -2052,6 +2141,144 @@ mod tests {
         })
     }
 
+    fn bridge_proof_fixture(seed: u8) -> iroha_data_model::bridge::BridgeProof {
+        iroha_data_model::bridge::BridgeProof {
+            range: iroha_data_model::bridge::BridgeProofRange {
+                start_height: 20 + u64::from(seed),
+                end_height: 20 + u64::from(seed),
+            },
+            manifest_hash: [0xB0 | (seed & 0x0F); 32],
+            payload: iroha_data_model::bridge::BridgeProofPayload::TransparentZk(
+                iroha_data_model::bridge::BridgeTransparentProof {
+                    proof: iroha_data_model::proof::ProofBox::new(
+                        format!("halo2/mock/{seed}").into(),
+                        vec![0xCA, 0xFE, seed],
+                    ),
+                    recursion_depth: Some(1),
+                },
+            ),
+            pinned: true,
+        }
+    }
+
+    fn bridge_receipt_fixture(proof_hash: [u8; 32]) -> iroha_data_model::bridge::BridgeReceipt {
+        iroha_data_model::bridge::BridgeReceipt {
+            lane: LaneId::SINGLE,
+            direction: b"mint".to_vec(),
+            source_tx: [0x11; 32],
+            dest_tx: None,
+            proof_hash,
+            amount: 1,
+            asset_id: b"wBTC#btc".to_vec(),
+            recipient: b"alice@main".to_vec(),
+        }
+    }
+
+    fn sccp_bridge_proof_fixture(
+        nonce: u64,
+        proof_seed: u8,
+    ) -> (iroha_data_model::bridge::BridgeProof, AccessKey) {
+        let payload = sccp_transfer_payload(
+            nonce,
+            iroha_sccp::SCCP_DOMAIN_ETH,
+            iroha_sccp::SCCP_DOMAIN_SORA,
+        );
+        let commitment = iroha_sccp::hub_commitment_from_sccp_payload(&payload);
+        let merkle_proof = iroha_sccp::SccpMerkleProofV1 { steps: Vec::new() };
+        let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+        let bundle = iroha_sccp::NexusSccpMessageProofV1 {
+            version: 1,
+            commitment_root,
+            commitment: commitment.clone(),
+            merkle_proof,
+            payload,
+            finality_proof: vec![0xFA, proof_seed],
+        };
+        let verifier_backend = iroha_sccp::SccpVerifierBackendV1 {
+            version: 1,
+            family: iroha_sccp::SccpVerifierBackendFamilyV1::Unknown,
+            key: "access-test".to_owned(),
+        };
+        let proof_family = "stark-fri-v1".to_owned();
+        let message_backend = format!("sccp/stark-fri-v1/access-test/{proof_seed}");
+        let public_inputs = iroha_sccp::SccpMessageTransparentPublicInputsV1 {
+            version: 1,
+            message_id: commitment.message_id,
+            payload_hash: commitment.payload_hash,
+            target_domain: commitment.target_domain,
+            commitment_root,
+            finality_height: 20 + u64::from(proof_seed),
+            finality_block_hash: [proof_seed; 32],
+        };
+        let bundle_bytes = norito::to_bytes(&bundle).expect("bundle fixture should encode");
+        let artifact = iroha_sccp::NexusSccpMessageTransparentProofV1 {
+            version: 1,
+            local_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            counterparty_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            security_model: iroha_sccp::SccpProofSecurityModelV1::RecursiveZk,
+            anchor_governance: iroha_sccp::SccpAnchorGovernanceV1::CryptographicProof,
+            destination_binding: iroha_sccp::SccpDestinationBindingV1 {
+                version: 1,
+                key: "access-test".to_owned(),
+                binding_hash: [0x77; 32],
+            },
+            proof_family: proof_family.clone(),
+            verifier_backend: verifier_backend.clone(),
+            message_backend: message_backend.clone(),
+            registry_backend: "sccp/registry/access-test".to_owned(),
+            manifest_seed: "access-test".to_owned(),
+            finality_model: iroha_sccp::SccpProofFinalityModelV1::EthereumBeaconExecution,
+            verifier_target: iroha_sccp::SccpProofVerifierTargetV1::EvmContract,
+            public_inputs,
+            proof_bytes: vec![0xA5, proof_seed],
+            submission_package: iroha_sccp::SccpCounterpartySubmissionPackageV1 {
+                version: 1,
+                proof_family,
+                verifier_backend,
+                envelope_encoding: "norito".to_owned(),
+                submission_kind: "local_admission".to_owned(),
+                verifier_entrypoint: "verify".to_owned(),
+                platform_payload: iroha_sccp::SccpPlatformSubmissionPayloadV1::LocalAdmission(
+                    iroha_sccp::SccpLocalAdmissionSubmissionPayloadV1 {
+                        version: 1,
+                        proof_bytes: vec![0xA5, proof_seed],
+                        public_inputs_bytes: vec![0xB6, proof_seed],
+                        bundle_bytes,
+                        statement_hash: [0x88; 32],
+                        source_verifier_material_hash: [0x89; 32],
+                        source_adapter_engine_deployment_hash: [0x8A; 32],
+                    },
+                ),
+                arguments: Vec::new(),
+                envelope_bytes: vec![0xE0, proof_seed],
+            },
+            bundle,
+        };
+        let proof = iroha_data_model::bridge::BridgeProof {
+            range: iroha_data_model::bridge::BridgeProofRange {
+                start_height: 20 + u64::from(proof_seed),
+                end_height: 20 + u64::from(proof_seed),
+            },
+            manifest_hash: iroha_sccp::sccp_bridge_manifest_hash_for_seed("access-test"),
+            payload: iroha_data_model::bridge::BridgeProofPayload::TransparentZk(
+                iroha_data_model::bridge::BridgeTransparentProof {
+                    proof: iroha_data_model::proof::ProofBox::new(
+                        message_backend.into(),
+                        norito::to_bytes(&artifact).expect("SCCP artifact fixture should encode"),
+                    ),
+                    recursion_depth: Some(1),
+                },
+            ),
+            pinned: true,
+        };
+        let expected_key = key_sccp_bridge_message(
+            iroha_sccp::SCCP_DOMAIN_ETH,
+            iroha_sccp::SCCP_DOMAIN_SORA,
+            commitment.message_id,
+        );
+        (proof, expected_key)
+    }
+
     fn test_contract_artifact(
         code: Vec<u8>,
         access_set_hints: Option<iroha_data_model::smart_contract::manifest::AccessSetHints>,
@@ -2270,7 +2497,10 @@ mod tests {
 
         let expected =
             key_sccp_outbound_message(&crate::bridge::sccp_outbound_message_key(&payload));
-        assert!(set.read_keys.is_empty());
+        assert_eq!(
+            set.read_keys,
+            BTreeSet::from([NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned()])
+        );
         assert_eq!(set.write_keys, BTreeSet::from([expected]));
     }
 
@@ -2298,7 +2528,10 @@ mod tests {
                 0,
                 0,
             );
-            assert!(set.read_keys.is_empty());
+            assert_eq!(
+                set.read_keys,
+                BTreeSet::from([NEXUS_ACTIVE_LANE_CATALOG_KEY.to_owned()])
+            );
             assert_eq!(set.write_keys, BTreeSet::from([expected.clone()]));
         }
     }
@@ -2319,6 +2552,124 @@ mod tests {
             let mut visited_triggers = BTreeSet::new();
             let set = derive_from_instruction(
                 instruction,
+                None::<&crate::state::StateView<'_>>,
+                &mut visited_triggers,
+                0,
+                0,
+            );
+            assert_eq!(set, AccessSet::global());
+        }
+    }
+
+    #[test]
+    fn submit_bridge_proof_access_uses_canonical_proof_hash() {
+        let proof = bridge_proof_fixture(5);
+        let expected_hash = bridge_proof_hash(&proof).expect("fixture proof should encode");
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof));
+        let mut visited_triggers = BTreeSet::new();
+
+        let set = derive_from_instruction(
+            &instruction,
+            None::<&crate::state::StateView<'_>>,
+            &mut visited_triggers,
+            0,
+            0,
+        );
+
+        assert!(set.read_keys.is_empty());
+        assert_eq!(
+            set.write_keys,
+            BTreeSet::from([
+                key_bridge_proof_hash(&expected_hash),
+                key_bridge_backend(&bridge_proof_fixture(5).backend_label())
+            ])
+        );
+    }
+
+    #[test]
+    fn bridge_receipt_access_conflicts_with_submitted_proof_hash() {
+        let proof = bridge_proof_fixture(6);
+        let proof_hash = bridge_proof_hash(&proof).expect("fixture proof should encode");
+        let submit =
+            InstructionBox::from(iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof));
+        let receipt =
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordBridgeReceipt::new(
+                bridge_receipt_fixture(proof_hash),
+            ));
+        let expected_key = key_bridge_proof_hash(&proof_hash);
+
+        let mut visited_triggers = BTreeSet::new();
+        let submit_set = derive_from_instruction(
+            &submit,
+            None::<&crate::state::StateView<'_>>,
+            &mut visited_triggers,
+            0,
+            0,
+        );
+        assert!(!submit_set.read_keys.contains(NEXUS_ACTIVE_LANE_CATALOG_KEY));
+        assert!(submit_set.write_keys.contains(&expected_key));
+
+        let mut visited_triggers = BTreeSet::new();
+        let receipt_set = derive_from_instruction(
+            &receipt,
+            None::<&crate::state::StateView<'_>>,
+            &mut visited_triggers,
+            0,
+            0,
+        );
+        assert!(
+            receipt_set
+                .read_keys
+                .contains(NEXUS_ACTIVE_LANE_CATALOG_KEY)
+        );
+        assert!(receipt_set.write_keys.contains(&expected_key));
+    }
+
+    #[test]
+    fn submit_sccp_bridge_proof_access_serializes_same_message_artifacts() {
+        let (first_proof, expected_message_key) = sccp_bridge_proof_fixture(7, 1);
+        let (second_proof, second_message_key) = sccp_bridge_proof_fixture(7, 2);
+        assert_eq!(expected_message_key, second_message_key);
+
+        for proof in [first_proof, second_proof] {
+            let instruction =
+                InstructionBox::from(iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof));
+            let mut visited_triggers = BTreeSet::new();
+            let set = derive_from_instruction(
+                &instruction,
+                None::<&crate::state::StateView<'_>>,
+                &mut visited_triggers,
+                0,
+                0,
+            );
+            assert!(
+                set.write_keys.contains(&expected_message_key),
+                "SCCP proof access set did not include {expected_message_key}: {:?}",
+                set.write_keys
+            );
+        }
+    }
+
+    #[test]
+    fn submit_sccp_bridge_proof_access_serializes_malformed_sccp_artifacts_globally() {
+        let (valid_proof, _) = sccp_bridge_proof_fixture(8, 1);
+        for (index, mut proof) in [valid_proof.clone(), valid_proof].into_iter().enumerate() {
+            let iroha_data_model::bridge::BridgeProofPayload::TransparentZk(transparent) =
+                &mut proof.payload
+            else {
+                panic!("SCCP fixture must be transparent");
+            };
+            if index == 0 {
+                transparent.proof.bytes = vec![0xFF];
+            } else {
+                transparent.proof.backend = "sccp/stark-fri-v1/access-test/mismatch".into();
+            }
+            let instruction =
+                InstructionBox::from(iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof));
+            let mut visited_triggers = BTreeSet::new();
+            let set = derive_from_instruction(
+                &instruction,
                 None::<&crate::state::StateView<'_>>,
                 &mut visited_triggers,
                 0,

@@ -1206,6 +1206,61 @@ def test_live_solana_decimal_parsers_reject_noncanonical_text():
             raise AssertionError(f"noncanonical live Solana slot {value!r} was accepted")
 
 
+def test_solana_live_cli_parsers_reject_non_string_values_without_stringification():
+    module = load_live_module()
+
+    class HostileSolanaLiveParserValue:
+        def __str__(self):
+            raise AssertionError("secret-token-solana-live-parser-value stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token-solana-live-parser-value repr leaked")
+
+        def strip(self):
+            raise AssertionError("secret-token-solana-live-parser-value strip called")
+
+        def startswith(self, _prefix):
+            raise AssertionError(
+                "secret-token-solana-live-parser-value startswith called"
+            )
+
+        def isascii(self):
+            raise AssertionError("secret-token-solana-live-parser-value isascii called")
+
+        def isdecimal(self):
+            raise AssertionError("secret-token-solana-live-parser-value isdecimal called")
+
+    hostile = HostileSolanaLiveParserValue()
+    cases = (
+        (
+            lambda value: module._parse_solana_program_id(
+                value,
+                label="verifier program id",
+            ),
+            "verifier program id must be a Solana public key",
+        ),
+        (
+            lambda value: module._parse_hex32(value, label="route allowlist hash"),
+            "route allowlist hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda value: module._parse_positive_u64(
+                value,
+                label="expected programdata slot",
+            ),
+            "expected programdata slot must be a positive u64",
+        ),
+    )
+
+    for parser, expected_message in cases:
+        try:
+            parser(hostile)
+        except module.argparse.ArgumentTypeError as exc:
+            assert str(exc) == expected_message
+        else:
+            raise AssertionError("non-string Solana live parser value was accepted")
+
+
 def test_live_solana_evidence_rejects_zero_programdata_slot():
     module = load_live_module()
     program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))

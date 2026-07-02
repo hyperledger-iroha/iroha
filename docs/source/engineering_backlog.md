@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-07-01
+Last updated: 2026-07-02
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -22,11 +22,12 @@ Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
 unless governance explicitly re-opens that scope.
 The retired-network surface scan now rejects separator-, zero-width-, nested
-HTML-entity-, URL-percent-, and Unicode-confusable-obfuscated references to that
-family, so slash-, colon-, table-, shell-, punctuation-, backslash-,
-whitespace-spliced, single- or double-entity-hidden, percent-encoded, or
-homoglyph-spliced names cannot re-enter SCCP-facing code, SDKs, scripts, or
-docs unnoticed.
+HTML-entity-, URL-percent-, Unicode-confusable-, compatibility-form-, and
+combining-mark-obfuscated references to that family, so slash-, colon-, table-,
+shell-, punctuation-, backslash-, whitespace-spliced, single- or
+double-entity-hidden, percent-encoded, fullwidth/compatibility-normalized,
+mark/format-control-hidden, or homoglyph-spliced names cannot re-enter
+SCCP-facing code, SDKs, scripts, or docs unnoticed.
 Translated public bridge-proof launch-scope docs now carry the same generic
 unsupported-family and not-remaining-work boundary, and the retired-network
 surface guard pins those localized files before release evidence can pass.
@@ -54,6 +55,9 @@ artifact text.
 Copied readiness cryptographic-evidence and user-prover surface lists now also
 keep duplicate domain/lane diagnostics visible when a malformed non-object row
 is present, while the copied roots and operator text stay suppressed.
+Release-bundle pre-render copied `cryptographic_evidence` validation now pins
+the same mixed non-object plus duplicate-domain guard, so a malformed row cannot
+hide duplicate-domain or lane-coverage blockers before Markdown is written.
 Replace the remaining SCCP source-chain verifier placeholders behind the typed
 adapter variants with governed live verifier deployments and external-chain
 rule checks before inbound source proofs can be treated as production-ready:
@@ -131,10 +135,14 @@ malformed scalar.
 EVM receipt-proof source-event logs now require `removed` to be absent or exact
 `false`; literal `true` and non-boolean copied/RPC values fail before
 receipt-trie or source-event evidence can be accepted. JavaScript/browser,
-Swift, Kotlin/JVM, and Java Android receipt RLP/source-event helpers now mirror
-that exactness and pin explicit `null`, numeric, and secret-bearing string
-regressions; native .NET parity remains on the Windows-machine recertification
-handoff path.
+Swift, Kotlin/JVM, Java Android, and native .NET receipt RLP/source-event
+helpers now mirror that exactness and pin explicit `null`, numeric, and
+secret-bearing string regressions; native .NET runtime recertification remains
+on the Windows-machine handoff path. The Python EVM receipt-proof CLI parsers
+now reject non-string transaction-hash, domain, and expected-chain-id values
+before invoking string methods, so hostile helper objects cannot stringify or
+run secret-bearing `strip`/`lower`/`startswith` hooks while direct parser
+coverage and release inventories pin that fail-closed boundary.
 Deployment-backed Rust readiness
 coverage now also opens only matching governed ETH, BSC, Solana, TON, and TRON
 source material plus SORA-targeted source-adapter deployment descriptors, and it
@@ -234,7 +242,25 @@ Live EVM destination/source, Solana, TON, and TRON evidence collectors now
 apply the same bounded `argparse.ArgumentTypeError` path across hex/base64
 metadata, receipt readback, protobuf/result-byte, and route-canary prefilter
 helpers, with all-lanes summary and release-inventory pins for the
-corresponding no-leak regressions.
+corresponding no-leak regressions. The Python EVM source-live CLI parser
+helpers now also reject non-string domain, component-hash, expected-chain-id,
+and block-tag values before invoking `strip`, `lower`, `startswith`, or
+decimal/hex checks, so hostile helper objects cannot stringify or run
+secret-bearing string hooks before evidence collection is rejected. The Python
+EVM destination-live CLI parser helpers now mirror that boundary for
+bridge/component hashes, bridge addresses, expected chain IDs, and block tags,
+rejecting hostile non-string values before any string-like hook can run. The
+Python Solana live CLI parser helpers now apply the same exact-string boundary
+to verifier program ids, ProgramData slot pins, and bytes32 evidence hashes.
+The Python TON live CLI parser helpers now apply that boundary to verifier raw
+addresses and bytes32 evidence hashes before delegated TON parser helpers can
+run string-like hooks. The Python TRON live CLI parser helpers now apply the
+same boundary to TRON address payloads and bytes32 evidence hashes before
+delegated address or hex parser helpers can run string-like hooks.
+The Python TON destination CLI parser helpers now apply the exact-string
+boundary to verifier raw addresses, code BoC text/file path inputs, account
+status, last-transaction LT text, and bytes32 evidence hashes before delegated
+TON parser helpers can run string-like hooks.
 EVM destination/source live collectors, EVM receipt-proof collection, and
 Solana live evidence collection also require JSON-RPC response IDs to be exact
 integer `1`, so boolean response IDs cannot alias the request ID during
@@ -392,6 +418,13 @@ lane mismatch to fail closed. Standalone readiness-report public
 `cryptographic_evidence` source-record and source-gate template-replay
 negatives now cover every launch domain too, so non-active BSC, Solana, TON, or
 TRON rows cannot regress behind active-lane-only test coverage.
+Active-launch checklist recomputation now applies the same template-material
+boundary to copied source-record hashes, destination-binding hashes,
+source-adapter gate hashes, `evm_source_gate_hash` audit hashes, active
+route-allowlist hashes, and active route-canary hash roles, so canonical-looking
+built-in template hashes cannot satisfy governed deployment,
+destination-binding, route-binding, or live-canary evidence before live verifier
+deployment material exists.
 No active source-record hash field may disappear from standalone copied
 summaries or pre-render bundle validation even when the copied active lane is
 marked not-ready.
@@ -575,7 +608,59 @@ live-route-canary or no-unresolved checklist items can pass.
 The same direct checklist path now rejects built-in source-material template
 hashes copied into route-canary evidence or transcript fields, and template
 hash loader failures collapse to fixed checklist blockers without leaking
-helper exception text.
+helper exception text. Direct all-lanes release checklists and copied all-lanes
+public-summary preflight now also reject those template hashes when copied into
+destination-binding or route-allowlist actual/expected hash roles, so copied
+public summaries cannot relabel source templates as governed destination or
+route-binding evidence. Release-bundle pre-render and strict verification now
+mirror the same destination/route template boundary for embedded readiness
+evidence and standalone all-lanes summaries. Strict verification also runs a
+template-only audit before the relaxed non-active not-ready lane exit, while
+pre-render validation rejects not-ready source-record and source-gate template
+replays, so diagnostic lanes cannot stash source-template hashes in nested
+evidence while deferring full readiness. Pre-render validation and strict
+verification now also apply public-schema checks to copied non-active not-ready
+nested lane evidence before their relaxed exits, so malformed or hostile
+unknown source-record, source-gate, EVM metadata, destination, route, or
+route-canary fields, plus missing nested fields in present copied evidence
+sections, cannot bypass bundle generation or verification. Those copied
+not-ready nested sections must also keep expected destination/route hashes and
+route-canary lane binding hashes internally coherent, so contradictory public
+hash bindings fail before the relaxed not-ready branch can return. Their
+`expected_*_hash_matches` flags, plus destination `recomputed`, must also stay
+true whenever the copied expected hash equals the copied lane hash, so false
+match/recompute flags cannot preserve self-contradictory not-ready public
+metadata. Copied not-ready destination bindings now also preserve lane-specific
+field semantics: EVM-family lanes require canonical non-zero network-id and
+bridge-address fields, TRON requires a canonical non-zero network id and no
+bridge-address field, and Solana/TON lanes reject those EVM/TRON-only fields.
+Copied not-ready route-canary common fields also keep bounded
+live-evidence semantics: present `status` must be `passed`, present
+`evidence_source` must match the lane source-adapter class, and present boolean
+`evidence_bound` must be true. For EVM-family and TRON copied not-ready
+canaries, present message-proof, finalized-receipt, owner-match, and
+signature-recovery truth flags must also stay true. Copied not-ready
+route-canary proof context also preserves lane-specific semantics for
+EVM-family receipt/log/proof-domain fields, TRON block/log/proof-domain and
+owner/recovered-owner fields, Solana ProgramData address/slot fields, and TON
+last-transaction logical time. The all-lanes CLI now pins the same copied
+not-ready proof-context semantics before returning public summaries, including
+BSC, Solana, TON, and TRON adversarial drift without echoing operator text;
+Solana ProgramData addresses must be non-zero canonical base58 pubkeys, not
+merely non-empty copied strings, and TRON owner/recovered-owner addresses must
+stay non-zero canonical `0x41`-prefixed 21-byte hex strings.
+Copied not-ready route-canary hash roles now also stay separated from governed
+source/gate/destination/route hashes and sibling transcript hashes before public
+summaries can render.
+Release source-inventory gates now pin the direct,
+copied-summary, pre-render, strict-verifier, and not-ready template/schema
+hash/flag-coherence/destination-domain/proof-context/hash-role/common/truth-semantic
+helpers and regressions beside the existing source-record, source-gate, and
+route-canary guards. Generated Required
+Release Evidence now names those not-ready nested schema, hash/flag-coherence,
+and route-canary proof-context/hash-role/common/truth-semantic blockers
+explicitly, and strict Markdown checks reject public release evidence that drops
+that phrase.
 Direct release-checklist validation now also requires copied destination
 bindings to carry canonical keys, exact recomputed flags, and hashes that
 recompute from those keys, while copied route-allowlist hashes must recompute
@@ -622,14 +707,23 @@ Direct route-canary validation now also emits the exact unbound-evidence
 blocker whenever `evidence_bound` is not `true`, even when copied top-level lane
 blockers already mention route-canary work, so copied blockers cannot mask the
 evidence-bound failure.
-Active EVM route-canary proof metadata must likewise keep target domain, proof
+Direct active route-canary validation now also requires the copied canary
+`route_allowlist_hash` and `destination_binding_hash` to be canonical non-zero
+bytes32 values that match the lane route allowlist and destination binding
+hashes, so copied binding fields cannot disappear, uppercase, zero out, or drift
+behind the route-canary readiness item.
+Active EVM route-canary proof metadata now likewise keeps target domain, proof
 version, proof source domain, message-proof usage, and finalized receipt state
 exact in standalone copied summaries and pre-render bundle validation even when
-the copied active lane is marked not-ready.
-Active EVM route-canary transcript hashes must also remain canonical, non-zero,
+the copied active lane is marked not-ready, with source-inventory markers
+pinning the direct readiness and strict-verifier checklist helpers.
+Active EVM route-canary transcript hashes now also remain canonical, non-zero,
 and role-separated from other transcript hashes and governed lane hashes in
 standalone copied summaries and pre-render bundle validation even when the
-copied active lane is marked not-ready. Standalone readiness-report public
+copied active lane is marked not-ready. The direct active checklist covers the
+full EVM transcript set: call-data SHA-256, payload hash, statement hash,
+commitment root, finality height, finality block hash, transaction hash,
+receipt block hash, receipts root, and message id. Standalone readiness-report public
 `cryptographic_evidence` route-canary transcript replay negatives now cover
 every launch-domain row too, so non-active BSC, Solana, TON, or TRON rows
 cannot regress behind active-lane-only test coverage. Standalone readiness
@@ -689,10 +783,12 @@ readiness-report public `cryptographic_evidence` source-gate audit role
 negatives now cover every launch-domain row for source-role and route-canary
 transcript replay too, including route-record fallbacks when a forged
 source-gate hash causes route-allowlist recomputation to fail.
-Active EVM route-canary scalar metadata must also keep `log_index` within u32
+Active EVM route-canary scalar metadata now also keeps `log_index` within u32
 bounds and receipt block numbers positive in standalone copied summaries and
 pre-render bundle validation even when the copied active lane is marked
-not-ready. Standalone readiness-report public `cryptographic_evidence`
+not-ready, with direct readiness and strict-verifier checklist coverage for
+string, boolean, negative, overflow, and missing `log_index` drift. Standalone
+readiness-report public `cryptographic_evidence`
 route-canary scalar negatives now cover exact scalar context for every
 message-proof launch domain and null scalar context for every non-message-proof
 launch domain.
@@ -1319,9 +1415,50 @@ passed-test count. The pre-parse
 DTD/entity scan now also checks NUL-stripped bytes, so UTF-16 or similarly
 NUL-interleaved DTD/entity declarations cannot reach XML parsing, and generated
 Required Release Evidence plus the strict Markdown invariant now name that
-NUL-interleaved UTF-16 DTD/entity boundary explicitly. The TRX parser also rejects
-VSTest local names from arbitrary XML namespaces and mixed-namespace TRX files,
-while accepting only fully unnamespaced TRX or fully VSTest 2010 namespaced TRX,
+NUL-interleaved UTF-16 DTD/entity boundary explicitly. The TRX parser also
+rejects XML comments, non-declaration XML processing instructions,
+non-whitespace XML text/tail nodes, namespaced attributes on trusted VSTest
+elements, unexpected trusted-element attributes, non-printable or non-ASCII
+ignored metadata attributes even after bounded percent decoding, and raw or
+bounded-percent-decoded sensitive metadata in schema-known trusted attributes
+before trusting VSTest structure, so commented, stylesheet-like, text-node,
+namespaced-attribute, unexpected-attribute, schema-known control or Unicode
+metadata, percent-encoded control or Unicode metadata, or schema-known
+sensitive-attribute copied path/URI probes
+cannot be bundled as direct VSTest-shaped release evidence or leak through TRX
+marker publication. Optional TRX `duration`, `startTime`, and `endTime`
+metadata must also remain canonical VSTest TimeSpan/ISO timestamp values across
+raw and bounded-percent-decoded forms, so free-form or percent-encoded timing
+metadata cannot certify the Windows `.NET` SCCP phase. Optional
+`TestRun.id`, `testListId`, and `testType` metadata must likewise be lowercase
+non-zero GUIDs across raw and bounded-percent-decoded forms, so copied aliases,
+uppercase GUID text, zero GUIDs, or encoded GUID separators cannot certify the
+Windows `.NET` SCCP phase. Optional `relativeResultsDirectory` metadata must
+remain a single printable leaf with no path separators, URI delimiters,
+percent-encoded aliases, or empty dotted components, so result-directory hints
+cannot smuggle filesystem paths into the Windows `.NET` SCCP phase.
+Non-critical VSTest
+extension XML elements may still appear, but their element names, namespace
+URIs, attribute names, and attribute values must also remain printable ASCII and
+free of raw or bounded-percent-decoded sensitive metadata, so unknown TRX
+sections cannot carry hidden operator paths or secret markers while the
+validator trusts the direct Results/TestDefinitions evidence. Present
+`codeBase` and `storage` assembly-reference attributes must obey the same
+printable, non-sensitive, non-URI, non-smuggled path-safety envelope and must
+resolve to a single `.dll` leaf with no pre-leaf `.dll` segment even when they
+name decoy or non-SCCP assemblies, so a valid SCCP assembly reference cannot
+mask hostile metadata in adjacent VSTest assembly paths. The final direct-TRX
+inventory also counts symlinked `sccp-dotnet-sdk.trx` matches before publishing
+markers, so hidden nested TestResults symlinks cannot coexist with the expected
+direct Windows `.NET` evidence file. The native bridge digest step now computes
+the freshly built `connect_norito_bridge.dll` digest through the configured
+Python `hashlib` runner instead of PATH hash tools, requires one canonical
+lowercase SHA-256 digest line, and suppresses raw digest-runner diagnostics, so
+PATH-injected `sha256sum`/`shasum` binaries or malformed digest output cannot
+leak operator text or certify the Windows `.NET` bridge marker.
+The same parser also rejects VSTest local names from arbitrary XML namespaces
+and mixed-namespace TRX files, while accepting only fully unnamespaced TRX or
+fully VSTest 2010 namespaced TRX,
 and requires exactly one root-level `Results` section and exactly one root-level
 `TestDefinitions` section, rejecting nested section splices before trusted local
 element names can be reused. SCCP TRX
@@ -1406,6 +1543,40 @@ rejections, including bounded public response previews, before attempting any
 JSON fallback that depends on local native decoding. BSC native prover bundle
 admission now treats `remote_prover` markers in proof artifacts as forbidden
 local-prover dependency evidence instead of accepting them as inert bytes.
+TON TAIRA XOR route-manifest publication now keeps its CLI and manifest scalar
+boundary explicit: duplicate options fail with fixed redacted diagnostics before
+artifacts are written, every non-help option must carry an explicit value,
+path options must be non-empty and unpadded before filesystem work,
+unknown commands and unknown named options fail with fixed command-scoped
+diagnostics before artifacts or manifest reads, command-specific help cannot
+carry values or hide unknown options, unexpected positional arguments are
+redacted, and published
+`ton_finalize_message_value_nano` values must remain JSON strings instead of
+numeric aliases, and publish `--submit`/`--wait-for-commit` options must use
+exact `true`/`false` values rather than truthy or padded aliases.
+Publish-time `--private-key-env` values must also be bounded uppercase
+environment variable names, so malformed or secret-looking option text is
+rejected without echoing it before runtime secret lookup.
+TON publish `--torii-url` values must use HTTPS except loopback HTTP, and must
+not carry credentials, query strings, fragments, or whitespace/control-bearing
+URL text before the submission path can write artifacts.
+Publish `--authority` values must be canonical I105 account ids before runtime
+secret lookup, so aliases, hex/UAID literals, padded values, control-bearing
+text, and secret-looking authority values fail with a fixed diagnostic.
+Submit metadata such as `--chain-id`, `--torii-url`, and
+`--commit-timeout-ms` must be rejected before runtime private-key lookup, so
+operator metadata mistakes cannot force secret reads before local validation.
+Review-only publish artifacts must also reject submit-only flags unless
+`--submit true`, so authority, private-key-env, Torii URL, chain-id,
+wait-for-commit, or commit-timeout settings cannot be silently ignored.
+Publish review gas metadata must also be validated before manifest reads, so
+invalid gas asset ids or gas limits cannot be masked by missing or malformed
+route manifests.
+Route-manifest outputs must also stay distinct from input evidence files and
+publish outputs must stay distinct from the reviewed manifest, so operator
+typos cannot replace deployment evidence or approved manifest artifacts. The
+readiness report and strict bundle source inventories pin those guards so they
+cannot disappear from release evidence.
 TRON route-config handoff also rejects duplicate camelCase/snake_case aliases
 for required route-manifest containers and scalars, including production flags,
 post-deploy evidence, destination rollout/binding domains and hashes, fixed
@@ -4777,12 +4948,26 @@ redistributable schemas, and official trust/revocation bundles.
   public-key recovery primitive rejects high-S malleable encodings before
   deriving EVM addresses;
   Ed25519 uncached batch verification now rejects noncanonical or small-order
-  signature `R` encodings before entering the dalek batch backend, and direct
-  byte-key/preparsed batch APIs now filter exact verify-cache hits before
-  signature parsing and backend setup; the thread-local exact verify-ok cache
-  now keeps two entries per exact slot to reduce collision churn for 32-byte
-  transaction-hash verification tuples without returning to a process-wide
-  cache;
+  signature `R` encodings before entering the dalek batch backend, IVM Ed25519
+  helper/syscall/opcode/batch accelerator paths reject the same `R` encodings
+  before verifier dispatch, SoraFS manifest Ed25519 verifier paths reject the
+	  same `R` encodings before constructing dalek signature material and now use
+	  dalek `verify_strict` for backend verification, SoraNet SRCv2 certificate
+	  Ed25519 verification routes certificate signatures through the shared strict
+		  `R` parser before backend verification, SoraFS CLI detached
+			  manifest signature verification now uses dalek `verify_strict` for the same
+					  malformed-`R` boundary, SoraFS PoTR receipt validation routes Ed25519
+					  receipt signatures, provider-admission council signatures, and repair
+					  signed-auditor signatures through the same malformed-`R` preflight,
+					  gateway GAR compact-JWS signatures use the same preflight, alias-proof
+					  council signatures reject inert all-zero payloads and malformed `R`
+					  encodings before bundle verification, SoraFS proof-token binary decode
+					  routes token signatures through the shared strict `R` parser before
+					  admission, and direct byte-key/preparsed batch APIs now filter exact
+					  verify-cache hits before signature parsing and backend setup;
+	  the thread-local exact verify-ok cache now keeps two entries per exact slot
+	  to reduce collision churn for 32-byte transaction-hash verification tuples
+	  without returning to a process-wide cache;
   SoraNet relay handshake frame length-prefix writes now use a checked helper
   plus a compile-time `u16` maximum-frame assertion, so oversized relay hellos
   fail as `FrameTooLarge` instead of relying on a narrowing assertion;

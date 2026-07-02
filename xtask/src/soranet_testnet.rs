@@ -1141,7 +1141,8 @@ mod tests {
             .as_str()
             .expect("public key hex");
         let signature =
-            Signature::from_bytes(&hex::decode(signature_hex).expect("decode signature bytes"));
+            Signature::try_from_bytes(&hex::decode(signature_hex).expect("decode signature bytes"))
+                .expect("drill bundle signature is non-empty and nonzero");
         let public_key =
             PublicKey::from_hex(Algorithm::Ed25519, public_hex).expect("parse public key");
         signature

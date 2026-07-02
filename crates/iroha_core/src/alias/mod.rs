@@ -34,6 +34,12 @@ use crate::state::WorldReadOnly;
 
 const MOCK_VOPRF_DOMAIN: &[u8] = b"iroha.alias.voprf.mock.v1";
 const MAX_VOPRF_INPUT_BYTES: usize = 4096;
+const PLACEHOLDER_ALIAS_ATTESTATION_SIGNATURE: [u8; 64] = [0xA5; 64];
+
+fn placeholder_alias_attestation_signature() -> Signature {
+    Signature::try_from_bytes(&PLACEHOLDER_ALIAS_ATTESTATION_SIGNATURE)
+        .expect("placeholder alias attestation signature is non-empty and nonzero")
+}
 
 fn authority_has_permission(
     world: &impl WorldReadOnly,
@@ -323,9 +329,10 @@ impl AliasStorage {
             record,
             attestation: AliasAttestation::new(
                 alias,
-                // Placeholder attester id; callers should override via `push_attestation`.
                 owner,
-                Signature::from_bytes(&[]),
+                // TODO: Replace this marker with a real signed alias attestation
+                // once the alias attester integration is wired into storage.
+                placeholder_alias_attestation_signature(),
                 Vec::new(),
             ),
         }))
@@ -514,6 +521,9 @@ mod tests {
         match event {
             AliasEvent::Recorded(payload) => {
                 assert_eq!(payload.record.index, AliasIndex(1));
+                let signature = payload.attestation.signature.payload();
+                assert!(!signature.is_empty());
+                assert!(!signature.iter().all(|byte| *byte == 0));
             }
             _ => panic!("unexpected event"),
         }

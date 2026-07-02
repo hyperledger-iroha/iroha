@@ -94,10 +94,20 @@ def _summary_ready(summary: dict[str, Any], field: str, *, fallback: str | None 
 
 
 def _parse_hex32(value: str, *, label: str) -> bytes:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     return evidence.parse_hex_bytes(value, label=label, byte_length=32)
 
 
+def _parse_solana_program_id(value: str, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be a Solana public key")
+    return evidence.normalize_solana_program_id(value, label=label)
+
+
 def _parse_positive_u64(value: str, *, label: str) -> int:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be a positive u64")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must be a positive u64")
     text = value
@@ -868,7 +878,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--verifier-program-id",
         required=True,
-        type=lambda value: evidence.normalize_solana_program_id(
+        type=lambda value: _parse_solana_program_id(
             value,
             label="verifier program id",
         ),
@@ -882,7 +892,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--expected-programdata-address",
-        type=lambda value: evidence.normalize_solana_program_id(
+        type=lambda value: _parse_solana_program_id(
             value,
             label="expected programdata address",
         ),
@@ -898,55 +908,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--expected-verifier-code-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="expected verifier code hash",
-            byte_length=32,
         ),
         help="Pinned BLAKE2b-256 hash of the deployed ProgramData executable bytes.",
     )
     parser.add_argument(
         "--route-allowlist-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="route allowlist hash",
-            byte_length=32,
         ),
         help="Governed Solana route allowlist hash.",
     )
     parser.add_argument(
         "--source-verifier-material-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="source verifier material hash",
-            byte_length=32,
         ),
         help="Source verifier material record hash bound into the route allowlist.",
     )
     parser.add_argument(
         "--source-adapter-engine-deployment-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="source adapter engine deployment hash",
-            byte_length=32,
         ),
         help="Source adapter engine deployment record hash bound into the route allowlist.",
     )
     parser.add_argument(
         "--route-canary-evidence-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="route canary evidence hash",
-            byte_length=32,
         ),
         help="Post-deploy route canary evidence hash for all-lanes TOML metadata.",
     )
     parser.add_argument(
         "--expected-destination-binding-hash",
-        type=lambda value: evidence.parse_hex_bytes(
+        type=lambda value: _parse_hex32(
             value,
             label="expected destination binding hash",
-            byte_length=32,
         ),
         help="Expected canonical SORA -> Solana destination binding hash.",
     )

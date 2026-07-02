@@ -30,6 +30,7 @@ use iroha_data_model::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode,
         },
+        zk::{AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, Shield, Unshield, ZkTransfer},
     },
     musubi::{MusubiNamespace, MusubiPackageId},
     nexus::{
@@ -2282,6 +2283,18 @@ fn offline_note_asset_definition_target(any: &dyn std::any::Any) -> Option<&Asse
     if let Some(transfer) = any.downcast_ref::<KagemushaTransfer>() {
         return Some(&transfer.asset);
     }
+    if let Some(shield) = any.downcast_ref::<Shield>() {
+        return Some(&shield.asset);
+    }
+    if let Some(transfer) = any.downcast_ref::<ZkTransfer>() {
+        return Some(&transfer.asset);
+    }
+    if let Some(unshield) = any.downcast_ref::<Unshield>() {
+        return Some(&unshield.asset);
+    }
+    if let Some(register_pool) = any.downcast_ref::<RegisterAssetHiddenZkPool>() {
+        return Some(&register_pool.storage_asset);
+    }
     None
 }
 
@@ -4486,11 +4499,37 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
             || matches_label(matcher, "smart_contract::deploy");
     }
 
+    if any.is::<Shield>() {
+        return matches_zk_instruction_label(matcher, "shield");
+    }
+
+    if any.is::<ZkTransfer>() {
+        return matches_zk_instruction_label(matcher, "zk_transfer");
+    }
+
+    if any.is::<Unshield>() {
+        return matches_zk_instruction_label(matcher, "unshield");
+    }
+
+    if any.is::<RegisterAssetHiddenZkPool>() {
+        return matches_zk_instruction_label(matcher, "register_asset_hidden_zk_pool");
+    }
+
+    if any.is::<AssetHiddenZkTransfer>() {
+        return matches_zk_instruction_label(matcher, "asset_hidden_zk_transfer");
+    }
+
     false
 }
 
 fn matches_box_variant(matcher: &str, base: &str, variant: &str) -> bool {
     matches_label(matcher, base) || matches_label(matcher, variant)
+}
+
+fn matches_zk_instruction_label(matcher: &str, variant: &str) -> bool {
+    matches_label(matcher, "zk")
+        || matches_label(matcher, variant)
+        || matches_label(matcher, &format!("zk::{variant}"))
 }
 
 fn matches_label(matcher: &str, label: &str) -> bool {
@@ -5169,6 +5208,7 @@ mod tests {
         asset::{
             AssetDefinitionAlias, Mintable, NewAssetDefinition, definition::AssetConfidentialPolicy,
         },
+        confidential::ConfidentialEncryptedPayload,
         isi::{
             offline::KagemushaTransfer,
             prelude::{Mint, Register, Transfer},
@@ -5177,6 +5217,7 @@ mod tests {
                 SettlementPlan,
             },
             smart_contract_code::RegisterSmartContractBytes,
+            zk::{AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, Shield, Unshield, ZkTransfer},
         },
         metadata::Metadata,
         nexus::{
@@ -8106,6 +8147,159 @@ mod tests {
         install_router_nexus(&state, &router);
         let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(1));
+    }
+
+    #[test]
+    fn matches_native_zk_instruction_rules() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let lane_id = LaneId::new(2);
+        let dataspace_id = DataSpaceId::new(10);
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "is").expect("asset definition domain"),
+            "unit".parse().expect("asset definition name"),
+        );
+
+        let proof = || {
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+                VerifyingKeyId::new("halo2/ipa", "zk-route-test"),
+            )
+        };
+        let encrypted_payload =
+            ConfidentialEncryptedPayload::new([0x11; 32], [0x22; 24], vec![0x33; 16]);
+
+        let cases: Vec<(&str, InstructionBox)> = vec![
+            (
+                "shield",
+                Shield::new(
+                    asset_definition.clone(),
+                    alice_id.clone(),
+                    10,
+                    [0x44; 32],
+                    encrypted_payload,
+                )
+                .into(),
+            ),
+            (
+                "zk::zk_transfer",
+                ZkTransfer::new(
+                    asset_definition.clone(),
+                    vec![[0x55; 32]],
+                    vec![[0x66; 32]],
+                    proof(),
+                    Some([0x77; 32]),
+                )
+                .into(),
+            ),
+            (
+                "unshield",
+                Unshield::new(
+                    asset_definition.clone(),
+                    alice_id.clone(),
+                    5,
+                    vec![[0x88; 32]],
+                    proof(),
+                    Some([0x99; 32]),
+                )
+                .into(),
+            ),
+            (
+                "register_asset_hidden_zk_pool",
+                RegisterAssetHiddenZkPool::new(
+                    "pool-a".to_owned(),
+                    asset_definition.clone(),
+                    [0xAA; 32],
+                    VerifyingKeyId::new("halo2/ipa", "asset-hidden-vk"),
+                )
+                .into(),
+            ),
+            (
+                "asset_hidden_zk_transfer",
+                AssetHiddenZkTransfer::new(
+                    "pool-a".to_owned(),
+                    vec![[0xBB; 32]],
+                    vec![[0xCC; 32]],
+                    proof(),
+                    Some([0xDD; 32]),
+                )
+                .into(),
+            ),
+        ];
+
+        for (matcher, instruction) in cases {
+            let policy = LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![LaneRoutingRule {
+                    lane: lane_id,
+                    dataspace: Some(dataspace_id),
+                    matcher: LaneRoutingMatcher {
+                        account: None,
+                        instruction: Some(matcher.to_string()),
+                        description: None,
+                    },
+                }],
+            };
+            let router = ConfigLaneRouter::new(
+                policy,
+                dataspace_catalog(&[(dataspace_id, "is")]),
+                catalog_with_lane_dataspaces(&[
+                    (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                    (lane_id, dataspace_id),
+                ]),
+            );
+            let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
+
+            assert_eq!(
+                router
+                    .try_route(&tx)
+                    .unwrap_or_else(|err| panic!("{matcher} should route: {err:?}")),
+                RoutingDecision::new(lane_id, dataspace_id),
+                "{matcher} should match the native ZK instruction"
+            );
+        }
+    }
+
+    #[test]
+    fn native_zk_asset_instruction_routes_to_asset_definition_dataspace_without_explicit_rule() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let lane_id = LaneId::new(2);
+        let dataspace_id = DataSpaceId::new(10);
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "is").expect("asset definition domain"),
+            "unit".parse().expect("asset definition name"),
+        );
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog(&[(dataspace_id, "is")]),
+            catalog_with_lane_dataspaces(&[
+                (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                (lane_id, dataspace_id),
+            ]),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Shield::new(
+                asset_definition,
+                alice_id.clone(),
+                10,
+                [0x44; 32],
+                ConfidentialEncryptedPayload::new([0x11; 32], [0x22; 24], vec![0x33; 16]),
+            ))],
+        );
+
+        assert_eq!(
+            router
+                .try_route(&tx)
+                .expect("Shield should route from its asset definition dataspace"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
     }
 
     #[test]

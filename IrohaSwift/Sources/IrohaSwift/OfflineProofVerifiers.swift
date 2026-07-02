@@ -44,7 +44,7 @@ public struct CounterpartyOfflineProofVerifier: CounterpartyOfflineProofVerifyin
             binding.platform,
             error: OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
         ) {
-        case "ios":
+        case OfflineNoteV2Constants.iosAppAttestPlatform:
             guard let expectedChallengeHashHex else {
                 throw OfflineProofVerifierError.invalidBinding("Missing offline device binding challenge hash.")
             }
@@ -53,7 +53,7 @@ public struct CounterpartyOfflineProofVerifier: CounterpartyOfflineProofVerifyin
                 binding: binding,
                 expectedChallengeHashHex: expectedChallengeHashHex
             )
-        case "android":
+        case OfflineNoteV2Constants.androidKeyMintPlatform:
             try androidVerifier.verifyDeviceBinding(binding)
         default:
             throw OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
@@ -68,9 +68,9 @@ public struct CounterpartyOfflineProofVerifier: CounterpartyOfflineProofVerifyin
             binding.platform,
             error: OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
         ) {
-        case "ios":
+        case OfflineNoteV2Constants.iosAppAttestPlatform:
             try iosVerifier.verifyDeviceProof(binding: binding, proof: proof)
-        case "android":
+        case OfflineNoteV2Constants.androidKeyMintPlatform:
             try androidVerifier.verifyDeviceProof(binding: binding, proof: proof)
         default:
             throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
@@ -86,7 +86,8 @@ public struct CounterpartyOfflineProofVerifier: CounterpartyOfflineProofVerifyin
             throw error
         }
         switch value {
-        case "ios", "android":
+        case OfflineNoteV2Constants.iosAppAttestPlatform,
+             OfflineNoteV2Constants.androidKeyMintPlatform:
             return value
         default:
             throw error
@@ -650,7 +651,7 @@ public struct IosOfflineProofVerifier {
     -----END CERTIFICATE-----
     """
 
-    private static let platform = "ios"
+    private static let platform = OfflineNoteV2Constants.iosAppAttestPlatform
     private static let formatAppleAppAttest = "apple-appattest"
     private static let keyFormat = "fmt"
     private static let keyAuthData = "authData"
@@ -835,27 +836,6 @@ public struct AndroidOfflineProofVerifier {
 
         switch proof.platform {
         case Self.platform:
-            let publicKey = try OfflineProofVerifierSupport.decodeRawEd25519PublicKey(
-                binding.offlinePublicKey,
-                error: "Offline device binding public key is invalid."
-            )
-            guard attestationKeyIdMatches(
-                binding.attestationKeyId,
-                expectedPublicKey: publicKey,
-                platform: proof.platform
-            ) else {
-                throw OfflineProofVerifierError.invalidProof(
-                    "Offline device proof does not match the device binding."
-                )
-            }
-            guard try OfflineProofVerifierSupport.verifyEd25519Signature(
-                payload: challengeBytes,
-                signature: signatureBytes,
-                rawPublicKey: publicKey
-            ) else {
-                throw OfflineProofVerifierError.invalidProof("Offline device proof assertion is invalid.")
-            }
-        case Self.keyMintPlatform:
             let publicKey = try keyMintAssertionPublicKey(for: binding)
             guard attestationKeyIdMatches(
                 binding.attestationKeyId,
@@ -881,11 +861,6 @@ public struct AndroidOfflineProofVerifier {
     private func expectedAttestedPublicKey(for binding: ToriiOfflineDeviceBinding) throws -> Data {
         switch binding.platform {
         case Self.platform:
-            return try OfflineProofVerifierSupport.decodeRawEd25519PublicKey(
-                binding.offlinePublicKey,
-                error: "Offline device binding public key is invalid."
-            )
-        case Self.keyMintPlatform:
             return try keyMintAssertionPublicKey(for: binding)
         default:
             throw OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
@@ -998,8 +973,7 @@ public struct AndroidOfflineProofVerifier {
         OfflineProofVerifierSupport.pemCertificate(androidKeyAttestationCAPEM),
     ].compactMap { $0 }
 
-    private static let platform = "android"
-    private static let keyMintPlatform = "android-keymint"
+    private static let platform = OfflineNoteV2Constants.androidKeyMintPlatform
     private static let uitestInsecureReportPrefix = "e2e-offline-insecure:"
     private static let keyAttestationOID = "1.3.6.1.4.1.11129.2.1.17"
     private static let securityLevelTrustedEnvironment = 1
@@ -1007,7 +981,7 @@ public struct AndroidOfflineProofVerifier {
 
     private static func isSupportedPlatform(_ platform: String) -> Bool {
         switch platform {
-        case Self.platform, Self.keyMintPlatform:
+        case Self.platform:
             return true
         default:
             return false

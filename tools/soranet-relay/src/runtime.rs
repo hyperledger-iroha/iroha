@@ -4529,6 +4529,7 @@ fn pow_failure_reason(error: &pow::Error) -> SoranetPowFailureReasonV1 {
         pow::Error::DifficultyMismatch { .. } => SoranetPowFailureReasonV1::DifficultyMismatch,
         pow::Error::Expired(_, _) => SoranetPowFailureReasonV1::Expired,
         pow::Error::FutureSkewExceeded(_) => SoranetPowFailureReasonV1::FutureSkewExceeded,
+        pow::Error::ExpiryTimestampOverflow(_) => SoranetPowFailureReasonV1::ClockError,
         pow::Error::ExpiryWindowTooSmall(_) => SoranetPowFailureReasonV1::TtlTooShort,
         pow::Error::InvalidSolution => SoranetPowFailureReasonV1::InvalidSolution,
         pow::Error::RelayMismatch | pow::Error::TranscriptMismatch => {
@@ -5327,6 +5328,12 @@ mod tests {
             pow_failure_reason(&malformed),
             SoranetPowFailureReasonV1::UnsupportedVersion
         );
+
+        let overflow = pow::Error::ExpiryTimestampOverflow(u64::MAX);
+        assert_eq!(
+            pow_failure_reason(&overflow),
+            SoranetPowFailureReasonV1::ClockError
+        );
     }
 
     #[test]
@@ -5475,7 +5482,8 @@ mod tests {
                 jitter_p95_ms: 4,
                 confidence_per_mille: 900,
             },
-            signature: Signature::from_bytes(&[0x55; 64]),
+            signature: Signature::try_from_bytes(&[0x55; 64])
+                .expect("relay bandwidth fixture signature is non-empty and nonzero"),
             metadata: Metadata::default(),
         }
     }

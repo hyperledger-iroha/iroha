@@ -52,6 +52,21 @@ fn ensure_bls_seed_material_not_all_zero(context: &str, seed: &[u8]) -> Result<(
     Ok(())
 }
 
+fn bls_signature_material_is_all_zero(signature: &[u8]) -> bool {
+    !signature.is_empty() && signature.iter().all(|&byte| byte == 0)
+}
+
+fn bls_public_key_material_is_all_zero(public_key: &[u8]) -> bool {
+    !public_key.is_empty() && public_key.iter().all(|&byte| byte == 0)
+}
+
+fn ensure_bls_signature_material_not_all_zero(signature: &[u8]) -> Result<(), Error> {
+    if bls_signature_material_is_all_zero(signature) {
+        return Err(ParseError("BLS signature material must not be all zero".to_string()).into());
+    }
+    Ok(())
+}
+
 pub trait BlsConfiguration {
     const ALGORITHM: Algorithm;
     // true: Normal (pk in G1, sig in G2); false: Small (pk in G2, sig in G1)
@@ -289,6 +304,11 @@ impl<C: BlsConfiguration> BlsImpl<C> {
     }
 
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey<C>, ParseError> {
+        if bls_public_key_material_is_all_zero(payload) {
+            return Err(ParseError(
+                "BLS public key material must not be all zero".to_string(),
+            ));
+        }
         // Just validate compression length and decompress once
         if C::NORMAL {
             to_g1_public_key(payload)
@@ -325,6 +345,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
 }
 
 fn parse_w3f_signature<E: EngineBLS>(bytes: &[u8]) -> Result<W3fSignature<E>, Error> {
+    ensure_bls_signature_material_not_all_zero(bytes)?;
     let signature = W3fSignature::<E>::from_bytes(bytes)
         .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
     let canonical = signature.to_bytes();
@@ -339,6 +360,9 @@ fn parse_w3f_signature<E: EngineBLS>(bytes: &[u8]) -> Result<W3fSignature<E>, Er
 }
 
 fn parse_w3f_public_key<E: EngineBLS>(bytes: &[u8]) -> Result<W3fPublicKey<E>, Error> {
+    if bls_public_key_material_is_all_zero(bytes) {
+        return Err(ParseError("BLS public key material must not be all zero".to_string()).into());
+    }
     let public_key =
         W3fPublicKey::<E>::from_bytes(bytes).map_err(|err| ParseError(err.to_string()))?;
     let canonical = public_key.to_bytes();

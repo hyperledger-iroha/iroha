@@ -849,7 +849,8 @@ fn verify_council_signature(signature: &Value, payload: &[u8]) -> EyreResult<()>
             signature_bytes.len()
         ));
     }
-    let signature = Signature::from_bytes(&signature_bytes);
+    let signature = Signature::try_from_bytes(&signature_bytes)
+        .wrap_err("invalid council signature material")?;
     signature
         .verify(&public_key, payload)
         .wrap_err("council signature did not verify")
@@ -1314,7 +1315,8 @@ pub fn verify_attestation_envelope(
     let signature_hex = attestation_str_field(attestation, "signature_hex")?;
     let signature_bytes =
         hex::decode(signature_hex).wrap_err("attestation signature is not valid hex")?;
-    let signature = Signature::from_bytes(&signature_bytes);
+    let signature = Signature::try_from_bytes(&signature_bytes)
+        .wrap_err("invalid attestation signature material")?;
     signature
         .verify(&public_key, &report_json)
         .wrap_err("attestation signature did not verify")?;

@@ -1,11 +1,17 @@
 # Roadmap
 
-Last updated: 2026-07-01
+Last updated: 2026-07-02
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
 [`docs/source/engineering_backlog.md`](./docs/source/engineering_backlog.md),
 and completed history lives in [`status.md`](./status.md).
+
+## SCCP Launch Scope
+
+The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. SCCP
+will not support Sub&#115;trate/Pol&#107;adot networks for now; do not track those
+networks as remaining launch work for this release.
 
 ## Release and Stabilization
 
@@ -21,6 +27,127 @@ and completed history lives in [`status.md`](./status.md).
   objects without private keys, raw payloads, or root compatibility fields.
   Before release, finish focused ABI hash/syscall golden, host, Torii, CLI, and
   Kotodama compiler validation for this surface.
+
+- Continue the crypto-boundary audit after the completed signature decoder
+  hardening: `Signature` JSON and Norito admission now rejects empty/all-zero
+  payloads centrally, `BlockSignature` wire decoding routes through the checked
+  path, explicit `BlockSignatureWire` conversion is now fallible and checked,
+  direct BLS signature parsers reject all-zero signature bytes before backend
+  parsing, Torii offline issuer/operator WebAuthn/ISO20022 P-256
+  verifier paths reject zero-coordinate SEC1 public-key material before backend
+  parsing, the legacy Offline Notes P-256 helper rejects high-S DER signatures
+  before backend verification, ES256 COSE registration validates keys before
+  persistence, IVM ML-DSA
+  helper/syscall/opcode/circuit verifier paths reject all-zero public-key
+  material before backend parsing, IVM ECDSA circuit verification rejects
+  all-zero public-key and signature buffers before k256 parsing,
+  ML-DSA public-key recovery from a typed secret rejects all-zero secret-key
+  material before unsafe unpacking,
+  BLS/GOST/secp256k1/SM2/hybrid/blinding raw imports now reject inert all-zero
+  material, hybrid ML-KEM public-key, secret-key, and ciphertext constructors
+  reject all-zero component bytes before backend validation, BLS normal/small
+  public-key parsers and aggregate verifier admission reject all-zero
+  public-key bytes before backend parsing across both
+  w3f and blstrs backends, VRF normal/small proof parsing rejects all-zero
+  compressed proof bytes before `blstrs` decompression, IVM VRF verify syscalls
+  reject all-zero, identity, and non-canonical G1/G2 public-key/proof encodings
+  before pairing, IVM Ed25519 helper,
+  VM, CUDA/Metal, and Halo2 verifier paths reject inert public-key material
+  before Dalek parsing, and
+  CUDA single/stub admission also fails closed on malformed or weak Ed25519
+  public-key bytes,
+  the IVM SM2 syscall pins all-zero signature rejection through the typed SM2
+  parser, shared SM2 SEC1 public-key
+  parsing rejects uncompressed all-zero coordinate material before backend
+  parsing, central Ed25519 public-key parsing rejects all-zero material before
+  curve decompression, the shared Ed25519 single verifier rejects noncanonical
+  or small-order signature `R` encodings before dalek `verify_strict`, SoraNet
+  SRCv2 certificate verification now routes Ed25519 signatures through that
+		  strict `R` parser before backend verification, SoraFS manifest Ed25519
+			  verifier helpers reject noncanonical or small-order signature `R` material
+			  plus noncanonical, all-zero, or small-order public-key encodings with
+			  distinct diagnostics, provider-advert CLI verification pins the same
+					  malformed-`R` boundary, PoTR receipt validation routes Ed25519 receipt
+					  signatures, provider-admission council signatures, and repair signed-auditor
+					  signatures through the same malformed-`R` preflight, gateway GAR compact-JWS
+					  signatures use the same preflight, alias-proof council signatures reject
+					  inert all-zero payloads and malformed `R` encodings before bundle
+					  verification, Connect wallet Ed25519 signature helpers route raw bytes through
+					  the central malformed-`R` parser before storing opaque signatures,
+					  SoraFS CLI manifest signature verification rejects
+					  noncanonical/small-order signature `R` and public-key encodings before
+			  Dalek verification, CAR manifest-stub and chunker vector-exporter
+			  signature-file verification pin the same malformed `R` rejection for
+			  council signatures, SoraFS proof-token minting parses its nonzero
+  scratch signature through the strict `R` helper before attaching the real
+  Ed25519 token signature, proof-token binary decode routes frame
+  signatures through the strict `R` parser, and proof-token raw-byte
+  verification routes public keys through central Ed25519 admission, Torii
+  proof-token verify requests route supplied `verifying_key_hex` through the
+  same central Ed25519 admission path, SoraFS CAR proof-token verifier raw-byte
+  construction routes supplied Ed25519 keys through that admission path,
+  SoraNet
+  guard-directory and relay-tool issuer public keys route through the same
+  central admission before relay certificate verification, xtask SoraNet
+  gateway PQ readiness parses SRCv2 identity keys through central Ed25519
+  admission, Torii
+  SoraFS manifest-envelope validation rejects noncanonical or small-order
+  envelope signature `R` encodings through the same verifier path,
+  SCCP EVM/BSC recoverable-signature codecs require canonical recovery ids plus
+  nonzero in-range `r` and low nonzero `s` before secp256k1 recovery, Torii app
+  API detached `signature_b64` admission rejects short, all-zero,
+  noncanonical, or small-order Ed25519 signature `R` payloads before
+  transaction attachment, Torii app-auth header, body, and multisig witness
+  verification rejects malformed Ed25519 signature `R` payloads after signer
+  algorithm resolution and before backend verification, Torii operator
+  signature headers apply the same Ed25519 `R` preflight after parsing the
+  operator public-key algorithm, Torii
+  Offline Notes and operator WebAuthn Ed25519
+  helpers route through the hardened top-level verifier for the same
+  signature-`R` preflight, Offline Notes V1/V2 issuer JSON/base64 signatures
+  now reject malformed Ed25519 `R` encodings at admission before signature
+  wrapping, alias storage emits a checked nonzero placeholder
+  attestation signature until real alias attestation signing is wired in,
+  query signature archived Norito decoding now has fallible checked
+  `QuerySignature`/`SignedQuery` admission instead of infallible decode
+  expectations, DA receipt signing preimages use a checked nonzero operator
+  signature placeholder before attaching the real receipt signature, Offline
+  Notes V1/V2 key-certificate builders, the shared data-model attestation
+  registration certificate constructor, and the V1/V2 Offline vector generators
+  use checked nonzero transient issuer signature placeholders before attaching
+  the real issuer signature, Torii Shared Connect examples and approve-control
+  fixtures use checked nonzero wallet-signature placeholders, SoraDNS resolver
+  positive RAD fixtures use checked nonzero operator/governance-signature
+  material, xtask DA reconciliation and SoraNet relay positive fixtures use
+  checked nonzero signature material, xtask OpenAPI manifest, rANS table,
+  SoraFS, SoraNet rollout/testnet, FastPQ, Ministry tool verifier paths, the
+  Norito fixture exporter, and the SoraFS DA reconstruction fixture
+  regenerator route decoded or generated signature material through checked
+  admission, Kotlin fixture generation and Iroha/SoraFS
+  examples now verify generated signatures through checked admission, Python
+  native crypto verify now rejects malformed Ed25519 `R` material before
+  backend verification, Connect wallet-signature, and wallet-provided
+  transaction finalization paths now check external signature buffers before
+  storage or backend verification, SoraFS gateway conformance council-envelope
+  and attestation evidence verification now rejects inert decoded signature
+  material before backend verification, RAM-LFE output-opening and
+  execution-receipt verification now re-admits stored signature material
+  through checked admission before typed verification, SoraNet relay PoW
+  expiry-overflow errors map to the clock-error telemetry bucket instead of
+  leaving the failure-reason classifier non-exhaustive, SoraNet relay
+  guard-directory loading, directory tooling, and handshake certificate config
+  parsing now reject all-zero or small-order issuer Ed25519 public-key material
+  before verifier-key construction, SoraNet VPN helper-ticket parsing plus
+  `sora-vpn-helper` metadata decoding now pin all-zero and small-order Ed25519
+  metering public-key rejection before ticket acceptance, data-model
+  account-address canonical single-key and multisig decode now pin all-zero or
+  small-order Ed25519 controller-key rejection, and
+  Offline Notes V2 issuer plus core smart-contract P-256 assertion-key
+  validators reject all-zero coordinate material before backend parsing.
+  Remaining work is to inspect
+  custom protocol codecs that intentionally bypass `Signature`/`SignatureOf<T>`
+  and either prove local prevalidation or route them through checked
+  constructors before release.
 
 - Keep mobile Kagemusha offline payload and issuer-refill entrypoints
   fail-closed for first release: Swift external certificate JSON and
@@ -2334,6 +2461,11 @@ and completed history lives in [`status.md`](./status.md).
     bridge path must come from non-symlinked existing target ancestors, a
     non-symlinked target directory, `debug` directory, and DLL leaf under the
     traced `CARGO_TARGET_DIR`.
+  - Recertify the native .NET EVM receipt-log `removed` exactness regressions
+    on Windows: Ethereum receipt RLP, Ethereum source-event validation, and BSC
+    source-event validation must all accept absent/exact `false`, reject
+    literal `true`, and reject present `null`, numeric, or secret-bearing string
+    values without leaking the hostile value into diagnostics.
   - C# source-level shared ABI-6 archive fixture assertions now pin the
     defaulted `lineage_verifier_records` field and regenerated append request
     hash `60acfd543978123d6bc23904859683ed64d44930a4b74bd1bba635199c60fa57`,
@@ -2356,15 +2488,15 @@ and completed history lives in [`status.md`](./status.md).
   - C# source-level shared ABI-7 archive fixture assertions now pin the
     regenerated current `64x4` profile hashes:
     append-bundle
-    `107b31eb5519d7b02f9011c0c4583365ff0b0e9fe6fc76416e3f72c920cbc8e5`,
+    `e43ab6640942e2298c260556175c216eb652da5a79ab0454b4cc5e31bb7fecb0`,
     verify-request
-    `ec41e04b3cc75bf172ad520d8cba11836da2eb571ee569396153475e1917822d`,
+    `d3246057aca2d9d47378af5f058c688f82a8be5abee60235206906a996235f43`,
     verify-result
     `67eb9b1f7c89bd842dbfb769bb802c60464fba510b4db0ac4c83bcfbd5626d15`,
     redeem-request
-    `f74e9cc1dd6b789cb9926d0f70c09eef840b03b59dff6d8d0dc37ee711b15250`,
+    `f26396b4ac03d38956dc94fa9bb4ec92c6b8f97b7e993f453d36431cfba67a0d`,
     and redeem-instruction
-    `d91a5b95d5d7b3943eb42a79b31a074197b4181475e8aba66dc7c47733f3c838`.
+    `69ff4f0ae0f78c0acbfef9fe91c2ee4087af4f1b1b0ac664a089bf80bf1802c6`.
   - The matrix must keep the C# managed decoder and typed preflight coverage for
     non-canonical compact lengths, invalid UTF-8 circuit ids, unsupported proof
     circuit/backend values, empty proof bytes, invalid accumulator domains and
@@ -5353,7 +5485,7 @@ and completed history lives in [`status.md`](./status.md).
 					  corridors with constructor/schema/profile/advertised-commitment/envelope digest-alias preflights,
 								  release-audit evidence-wide native-payload/key-evidence raw and embedded generated-body digest-alias/signoff/manifest/package/byte-admission preflights, signoff byte-pair and package-byte trusted-reviewer input preflights, artifact-byte record/manifest/package builder signer and audit-digest input preflights, record/manifest and artifact-bundle package audit-artifact byte preflights, combined package/artifact package-byte admission ordering, evidence/artifact evidence-byte admission ordering, signoff/artifact signoff-byte admission ordering, record/artifact record-byte admission ordering, manifest/artifact/record manifest-record byte admission ordering, caller-pinned package generated-body subcommitment alias preflight, and package builders,
 					  reviewed-byte tamper preflights,
-									  external-review marker gates, external report/archive placeholder digest gates, native material/payload/generated-body
+									  external-review marker gates, external report/archive and case-decorated material placeholder digest gates, native material/payload/generated-body
 									  placeholder, proof-key constructor placeholder, expected-circuit preflight before native payload bytes, and raw native-payload/generated-body profile/schema/contract digest-alias preflights and circuit-fingerprint binding, public-opening/native AIR replay
 					  with transcript-seed distinctness, public-opening/AIR-evaluation trace/constraint-bound cross-layer digest-alias preflights, and AIR-evaluation digest-alias
 					  preflight plus admission/full-bootstrap
@@ -8209,8 +8341,9 @@ and completed history lives in [`status.md`](./status.md).
   gate wiring, and stale allowlist markers cannot silently degrade to sampled
   coverage. The active-tree scan also rejects slash-, colon-, table-, shell-,
   punctuation-, backslash-, whitespace-, zero-width-, HTML-entity-,
-  URL-percent-, and Unicode-confusable-spliced retired-family names before they
-  can re-enter SCCP code, SDKs, scripts, or docs.
+  URL-percent-, Unicode-confusable-, compatibility-form-, and
+  combining-mark-spliced retired-family names before they can re-enter SCCP
+  code, SDKs, scripts, or docs.
   Translated public bridge-proof launch-scope docs now carry the same generic
   unsupported-family and not-remaining-work boundary, and the retired-network
   surface guard pins those localized files before release evidence can pass.
@@ -8220,8 +8353,9 @@ and completed history lives in [`status.md`](./status.md).
   quote those strings without weakening the guard. The active-tree scan now
   also rejects separator-obfuscated retired-network names, including hyphen,
   underscore, dot, whitespace-spliced, zero-width-spliced, HTML entity-hidden,
-  URL-percent-encoded, and Unicode-confusable forms, so compatibility wording
-  cannot re-enter public SCCP surfaces by punctuation or homoglyph drift.
+  URL-percent-encoded, Unicode-confusable, fullwidth/compatibility-form, and
+  combining-mark forms, so compatibility wording cannot re-enter public SCCP
+  surfaces by punctuation, normalization, or homoglyph drift.
   Generated release-readiness Markdown and verifier-owned release-bundle
   Markdown must also carry that exact sentence in the Required Release Evidence
   section before public artifacts can satisfy readiness.
@@ -8447,7 +8581,25 @@ and completed history lives in [`status.md`](./status.md).
 	  accepted or rejected.
 	  EVM source-live RPC fixed-hex parser helpers must keep the same exact
 	  boolean `nonzero` controls before zero deployment receipt fields can be
-	  accepted or rejected.
+	  accepted or rejected. EVM source-live CLI parser helpers must also require
+	  exact string values for domain, component hashes, expected chain ids, and
+	  block tags before any string-like helper method can run.
+	  EVM destination-live CLI parser helpers must keep the same exact string
+	  boundary for bridge/component hashes, bridge addresses, expected chain ids,
+	  and block tags before any string-like helper method can run.
+	  Solana live CLI parser helpers must keep the same exact string boundary for
+	  verifier program ids, ProgramData slot pins, and bytes32 evidence hashes
+	  before any string-like helper method can run.
+	  TON live CLI parser helpers must keep the same exact string boundary for
+	  verifier raw addresses and bytes32 evidence hashes before any string-like
+	  helper method can run.
+	  TRON live CLI parser helpers must keep the same exact string boundary for
+	  TRON address payloads and bytes32 evidence hashes before any string-like
+	  helper method can run.
+	  TON destination CLI parser helpers must keep the same exact string boundary
+	  for verifier raw addresses, code BoC text/file path inputs, account status,
+	  last-transaction LT text, and bytes32 evidence hashes before any string-like
+	  helper method can run.
 	  EVM live route-allowlist recomputation must also require an exact boolean
 	  `include_route_canary` gate before including or omitting route-canary
 	  evidence from the recomputed summary.
@@ -8842,7 +8994,56 @@ and completed history lives in [`status.md`](./status.md).
   when that rejection fires. Raw all-lanes evidence now rejects EVM/BSC, TON, and
   TRON route-canary transcript fields that replay built-in source-material
   template hashes directly, and the template-rejection plus route-canary
-  inventories pin those exact regressions. The same source-material template replay paths
+  inventories pin those exact regressions. Direct all-lanes release checklists
+  and copied all-lanes public-summary preflight now also reject those template
+  hashes when copied into destination-binding or route-allowlist actual/expected
+  hash roles, so copied public summaries cannot relabel source templates as
+  governed destination or route-binding evidence. Release-bundle pre-render and
+  strict verification now mirror the same destination/route template boundary
+  for embedded readiness evidence and standalone all-lanes summaries. Strict
+  verification also runs template-only checks before relaxing non-active
+  not-ready lanes, and pre-render validation rejects not-ready source-record and
+  source-gate template replays, so diagnostic lanes cannot park source-template
+  hashes in nested evidence while deferring full readiness. Pre-render
+  validation and strict verification also apply public-schema checks to copied
+  non-active not-ready nested lane evidence before their relaxed exits, so
+  malformed or hostile unknown nested fields, plus missing nested fields in
+  present copied evidence sections, cannot bypass bundle generation or
+  verification. Copied not-ready nested sections must also keep expected
+  destination/route hashes and route-canary lane binding hashes coherent before
+  the relaxed not-ready exit, and their `expected_*_hash_matches` flags must be
+  true when the copied expected hash equals the copied lane hash. Destination
+  `recomputed` must follow the same rule for copied not-ready destination
+  bindings. Copied not-ready destination bindings also preserve lane-specific
+  semantics: EVM-family lanes require canonical non-zero network-id and
+  bridge-address fields, TRON requires a canonical non-zero network id and no
+  bridge-address field, and Solana/TON lanes reject those EVM/TRON-only fields.
+  Copied not-ready route-canary common fields also keep bounded
+  live-evidence semantics: present `status` must be `passed`, present
+  `evidence_source` must match the lane source-adapter class, and present
+  boolean `evidence_bound` must be true. For EVM-family and TRON copied
+  not-ready canaries, present message-proof, finalized-receipt, owner-match,
+  and signature-recovery truth flags must also stay true. Copied not-ready
+  route-canary proof context also preserves lane-specific semantics for
+  EVM-family receipt/log/proof-domain fields, TRON block/log/proof-domain and
+  owner/recovered-owner fields, Solana ProgramData address/slot fields, and TON
+  last-transaction logical time. The all-lanes CLI pins the same copied
+  not-ready proof-context semantics across BSC, Solana, TON, and TRON before
+  returning public summaries, including non-zero canonical base58 Solana
+  ProgramData address validation and canonical non-zero `0x41` TRON
+  owner/recovered-owner address validation. Copied not-ready route-canary hash
+  roles also stay separated from governed source/gate/destination/route hashes
+  and sibling transcript hashes before public summaries can render. Release source
+  inventories now pin those
+  direct, copied-summary, pre-render, strict-verifier, and not-ready
+  template/schema/hash/flag-coherence/destination-domain/proof-context/hash-role/common
+  and truth-semantic helpers and regressions beside the source-record,
+  source-gate, and route-canary guards. Generated
+  Required Release Evidence now names those not-ready nested schema,
+  hash/flag-coherence, and route-canary
+  proof-context/hash-role/common/truth-semantic blockers explicitly, and strict
+  Markdown checks reject public release evidence that drops that phrase.
+  The same source-material template replay paths
   must convert template-loader `SystemExit`, `RuntimeError`, `TypeError`, and
   `ValueError` failures into fixed template-material validation blockers in
   copied all-lanes summaries, release bundle pre-render checks, strict bundle
@@ -9279,7 +9480,8 @@ and completed history lives in [`status.md`](./status.md).
   lane-specific: EVM receipt/log/proof constants, TRON block/log/proof
   constants plus owner/recovered-owner addresses, Solana ProgramData
   address/slot, and TON last-transaction LT must all keep canonical production
-  shapes before live-canary or no-unresolved checklist items can pass. Direct
+  shapes before live-canary or no-unresolved checklist items can pass; TRON
+  addresses must stay non-zero canonical `0x41`-prefixed 21-byte hex. Direct
   checklist validation must also require copied EVM, TRON, and TON route-canary
   transcript hashes to remain canonical non-zero bytes32 values and
   role-separated from governed lane hashes and sibling transcript hashes before
@@ -9327,21 +9529,29 @@ and completed history lives in [`status.md`](./status.md).
   whenever `evidence_bound` is not `true`, even when copied top-level lane
   blockers already mention route-canary work, so copied blockers cannot mask the
   evidence-bound failure. Active EVM
-  route-canary proof metadata must likewise keep
+  route-canary proof metadata now likewise keeps
   target domain, proof version, proof source domain, message-proof usage, and
   finalized receipt state exact in standalone copied summaries and pre-render
-  bundle validation even when the copied active lane is marked not-ready.
-  Active EVM route-canary transcript hashes must also remain canonical,
+  bundle validation even when the copied active lane is marked not-ready, with
+  source-inventory markers pinning the direct readiness and strict-verifier
+  checklist helpers.
+  Active EVM route-canary transcript hashes now also remain canonical,
   non-zero, and role-separated from other transcript hashes and governed lane
   hashes in standalone copied summaries and pre-render bundle validation even
-  when the copied active lane is marked not-ready.
-  Active EVM route-canary scalar metadata must also keep `log_index` within
+  when the copied active lane is marked not-ready. The direct active checklist
+  covers the full EVM transcript set: call-data SHA-256, payload hash,
+  statement hash, commitment root, finality height, finality block hash,
+  transaction hash, receipt block hash, receipts root, and message id.
+  Active EVM route-canary scalar metadata now also keeps `log_index` within
   u32 bounds and receipt block numbers positive in standalone copied summaries
   and pre-render bundle validation even when the copied active lane is marked
-  not-ready.
-  No active EVM route-canary field, including common, scalar, transcript, and
-  proof metadata, may disappear from standalone copied summaries or pre-render
-  bundle validation even when the copied active lane is marked not-ready.
+  not-ready, with direct readiness and strict-verifier checklist coverage for
+  string, boolean, negative, overflow, and missing `log_index` drift.
+  Direct active route-canary checklist validation now also requires copied
+  canary route-allowlist and destination-binding hashes to remain canonical
+  non-zero bytes32 values that match the lane hashes, while pre-render
+  validation still rejects any missing common, scalar, transcript, or proof
+  metadata even when the copied active lane is marked not-ready.
   Copied route-canary evidence hashes must also stay
   distinct from same-lane governed hashes, same-lane canary roles, other lane
   canary evidence hashes, other lane route-canary transcript hashes, and other
@@ -10331,6 +10541,9 @@ and completed history lives in [`status.md`](./status.md).
   public field name. Mixed malformed `cryptographic_evidence` and
   `user_prover_submission_surfaces` roots must still preserve duplicate
   domain/lane diagnostics from inspectable rows before suppressing copied roots.
+  Release-bundle pre-render validation must retain the same copied
+  `cryptographic_evidence` mixed non-object plus duplicate-domain/lane-coverage
+  guard before Markdown is written.
   Unknown top-level report fields, including sensitive and non-string keys, must
   be classified and stripped before output so copied values cannot leak and
   mixed-key reports cannot crash sorted JSON rendering.
@@ -10515,6 +10728,35 @@ and completed history lives in [`status.md`](./status.md).
   `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, the positive
   `SCCP .NET SDK TRX bytes: <positive integer>` marker, and the resulting log
   artifact paths in `status.md`.
+  The local corridor verifier now rejects XML comments, non-declaration XML
+  processing instructions, non-whitespace XML text/tail nodes, namespaced
+  trusted VSTest attributes, unexpected trusted-element attributes,
+  non-printable or non-ASCII ignored metadata attributes even after bounded
+  percent decoding, and raw or bounded-percent-decoded sensitive metadata in
+  schema-known trusted attributes in direct TRX XML before parsing or TRX
+  marker publication. Optional direct-TRX `duration`, `startTime`, and
+  `endTime` metadata must also remain canonical VSTest TimeSpan/ISO timestamp
+  values across raw and bounded-percent-decoded forms. Optional `TestRun.id`,
+  `testListId`, and `testType` metadata must likewise be lowercase non-zero
+  GUIDs across raw and bounded-percent-decoded forms. Optional
+  `relativeResultsDirectory` metadata must remain a single printable leaf with
+  no path separators, URI delimiters, percent-encoded aliases, or empty dotted
+  components. Non-critical VSTest
+  extension XML elements may still appear, but their element names, namespace
+  URIs, attribute names, and attribute values must stay printable ASCII and free
+  of raw or bounded-percent-decoded sensitive metadata; keep those regressions
+  pinned when collecting the Windows handoff evidence. Present `codeBase` and
+  `storage` assembly-reference attributes must also obey the same printable,
+  non-sensitive, non-URI, non-smuggled path-safety envelope and resolve to a
+  single `.dll` leaf with no pre-leaf `.dll` segment even when they name decoy
+  or non-SCCP assemblies. The final direct-TRX inventory also counts symlinked
+  `sccp-dotnet-sdk.trx` matches before marker publication, so hidden nested
+  TestResults symlinks cannot coexist with the expected direct evidence file.
+  The native bridge digest step must compute the freshly built
+  `connect_norito_bridge.dll` digest through the configured Python `hashlib`
+  runner instead of PATH `sha256sum`/`shasum`, require one canonical lowercase
+  SHA-256 digest line, and suppress raw digest-runner diagnostics before
+  emitting `connect_norito_bridge native bridge sha256:`.
   Native .NET proof-request canonical replay is now certified by the
   2026-06-29 stable `.NET 8.0.422` SDK Windows host release evidence. For any
   future recertification on a Windows machine, prefer
@@ -10739,6 +10981,12 @@ and completed history lives in [`status.md`](./status.md).
   Readiness and strict bundle source-inventory tests must keep the exact flag,
   role-reuse, required, gate-hash, audit-key, audit-hash, destination-binding
   replay, and source-adapter gate replay blockers pinned.
+  The active-checklist recomputation also rejects copied source-record hashes,
+  destination-binding hashes, source-adapter gate hashes,
+  `evm_source_gate_hash` audit hashes, active route-allowlist hashes, and
+  active route-canary hash roles that replay built-in template material, so
+  canonical-looking template hashes cannot satisfy governed deployment,
+  destination-binding, route-binding, or live canary evidence.
   Copied active destination-binding summaries must also fail closed if an
   operator or bundle injects a destination rollout `blockers` container:
   missing remains equivalent to an empty list, but scalar, empty-string,
@@ -12360,6 +12608,36 @@ and completed history lives in [`status.md`](./status.md).
   `productionReady` and `postDeployLiveEvidence.fullTomlReady` must be JSON
   booleans, and string/numeric truthy values must be rejected by route-config
   tests plus release-readiness/strict-bundle source inventory.
+  TON TAIRA XOR route-manifest CLI handling must also stay fail-closed:
+  duplicate options are rejected with fixed redacted diagnostics before output
+  is replaced, every non-help option must carry an explicit value, path options
+  must be non-empty and unpadded before filesystem work, unknown commands and
+  unknown named options fail with fixed command-scoped diagnostics before
+  artifacts or manifest reads, command-specific help cannot hide unknown options
+  or carry values, unexpected positional arguments are redacted rather than
+  echoed, and
+  `ton_finalize_message_value_nano` remains a JSON string on the publication
+  path. Publish-route-manifest `--submit` and `--wait-for-commit` options must
+  accept only exact `true` or `false` values before any artifact is replaced or
+  signing path is reached, and `--private-key-env` must be a bounded uppercase
+  environment variable name before runtime secret lookup. Publish `--torii-url`
+  values must use HTTPS unless loopback HTTP and must not carry credentials,
+  query strings, fragments, or whitespace/control-bearing URL text before
+  submission work. Publish `--authority` values must be canonical I105 account
+  ids before runtime secret lookup, so alias, hex/UAID, padded, control-bearing,
+  or secret-looking authority text cannot reach signing. Submit metadata such as
+  `--chain-id`, `--torii-url`, and `--commit-timeout-ms` must be rejected before
+  runtime private-key lookup. Review-only publish artifacts must reject
+  submit-only flags unless `--submit true`, so authority, private-key-env,
+  Torii URL, chain-id, wait-for-commit, or commit-timeout settings cannot be
+  silently ignored. Publish review gas metadata must validate before manifest
+  reads, so invalid gas asset ids or gas limits cannot be masked by missing or
+  malformed route manifests. Route-manifest `--out` paths must also stay
+  distinct from all input evidence paths, and
+  publish-route-manifest `--out` must stay distinct from the manifest being
+  published, before any reviewed evidence can be replaced.
+  Release-readiness and strict-bundle source inventories must pin those
+  Node-script regressions.
   TRON deployment helper operator booleans must stay exact as well: malformed,
   padded, uppercase, alias, boolean-object, or numeric values for
   `--broadcast`, `--force`, `--check-account`, `--require-secret`,
@@ -12817,9 +13095,11 @@ and completed history lives in [`status.md`](./status.md).
   source-event validation as the default collection mode: receipt-only output
   requires an explicit diagnostic opt-in and is labeled separately in the
   emitted evidence, with release inventories pinning both attack shapes and
-  the source-event mode/zero-digest guards; and the release inventory now pins noncanonical
-  `eth_chainId` rejection, including leading-zero `0x01`, across SDK and
-  Python receipt-proof collection tests. The JS/browser
+  the source-event mode/zero-digest guards; the Python receipt-proof CLI
+  parsers now reject non-string transaction-hash, domain, and expected-chain-id
+  values before invoking string methods; and the release inventory now pins
+  noncanonical `eth_chainId` rejection, including leading-zero `0x01`, across
+  SDK and Python receipt-proof collection tests. The JS/browser
   receipt-proof encoder now also rejects all-zero source event digests,
   execution block hashes, execution receipt roots, Beacon finalized roots, and
   sync-committee roots before hashing or local proving callbacks, matching the
@@ -13002,12 +13282,22 @@ and completed history lives in [`status.md`](./status.md).
   ML-DSA backend signatures now validating before wrapper construction, HKDF
   expansion now propagated as `Error::KeyGen` instead of relying on a
   panic-only assertion, and the S2 nonce offset conversion using the same
-  `Error::KeyGen` route, and GOST
-  deterministic nonce generation now feeds the domain tag, private scalar,
-  message scalar, and optional extra entropy into HMAC-Streebog as separate
-  components while preserving the previous contiguous seed transcript, and
+  `Error::KeyGen` route, w3f BLS managed-secret byte import now rejects
+  all-zero secret material before backend secret-key parsing, direct BLS
+  signature parsers now reject all-zero signature bytes before w3f/blstrs
+  backend parsing, GOST public-key parsing and the internal verifier
+  point decoder now reject all-zero serialized verifier keys before curve
+  arithmetic, and GOST deterministic nonce generation now feeds the domain
+  tag, private scalar, message scalar, and optional extra entropy into
+  HMAC-Streebog as separate components while preserving the previous
+  contiguous seed transcript, and
   digest-length mismatches return `Error::Signing` instead of panicking;
-  Ed25519 and secp256k1 now expose checked `try_keypair` paths, and top-level
+  secp256k1 raw public/private-key parsing now explicitly rejects all-zero
+  SEC1/scalar material before backend point or scalar parsing; SM2 raw
+  private-key parsing now
+  explicitly rejects all-zero secret material before backend secret-key
+  parsing; Ed25519 and secp256k1 now expose checked `try_keypair` paths, and
+  top-level
   `KeyPair::try_from_seed` routes their seeded branches through those helpers
   while `KeyPair::try_random_with_algorithm` routes OS-backed Ed25519 seed bytes and
   secp256k1 candidate scalar bytes through `OsRng::try_fill_bytes` so
@@ -13017,6 +13307,8 @@ and completed history lives in [`status.md`](./status.md).
   draws OS-backed private-key bytes through `OsRng::try_fill_bytes`, and routes
   P2P, native Connect bridge, and Python Connect keypair generation through
   fallible error surfaces instead of the infallible compatibility adapter;
+  hybrid X25519/ML-KEM secret-key import now rejects all-zero X25519 secret
+  material before deriving the paired public key or admitting the ML-KEM secret;
   Connect Norito bridge C/Java keypair-from-seed helpers and the Swift parity
   regeneration utility now use `KeyPair::try_from_seed`, returning existing
   bridge/key-derivation errors instead of panic-only seed expansion, while the
@@ -14468,7 +14760,8 @@ and completed history lives in [`status.md`](./status.md).
   SoraNet request blinding nonce generation now also accepts fallible
   `TryCryptoRng` inputs and reports entropy failures through
   `BlindingError::RandomBytes`, while all-zero generated nonces fail through
-  the existing weak-input gate.
+  the existing weak-input gate; raw `RequestNonce::from_bytes` import is now
+  fallible and rejects all-zero request nonces with the same weak-input error.
   AEAD convenience encryption now keeps caller-supplied nonce compatibility
   unchanged while generated `encrypt_easy`/`encrypt_easy_into` nonces reject
   inert all-zero material through `Error::InertNonce`.
@@ -14478,31 +14771,45 @@ and completed history lives in [`status.md`](./status.md).
   checked algorithm accessor for result-returning callers.
   Generic raw signatures now expose `Signature::try_from_bytes` for
   external-input adapters that must reject empty or all-zero signature
-  payloads before verifier backends or replay/state admission. Connect wallet
+  payloads before verifier backends or replay/state admission, raw Ed25519
+  signature callers now have `ed25519_parse_signature` to reject malformed,
+  non-canonical, or small-order `R` components before opaque storage, and
+  `Signature` JSON decoding now uses the checked hex admission path. Connect wallet
   Ed25519 signatures, Torii canonical app-auth headers/body proofs, operator
   signature headers, Torii operator WebAuthn ES256/Ed25519 assertion
-  signatures, Offline V1/V2 issuer signature-base64 decoding, SoraFS
+  signatures and Ed25519 public keys, Torii offline issuer Ed25519 helper
+  public keys plus Offline V1/V2 issuer signature-base64 decoding, SoraFS
   manifest-envelope validation, app API detached transaction signature submit
   flows, data-model `QuerySignature` JSON payloads, Torii ISO20022 XMLDSIG
   P-256 `SignatureValue` payloads, Torii ISO20022 OCSP/X.509/CRL P-256 DER
-  signatures, Nexus app wallet transaction signatures, core fraud-assessment
-  attestation envelopes,
+  signatures, Nexus app wallet transaction signatures, core snapshot signature
+  sidecars, SCCP Nexus finality commit-QC BLS aggregates, core fraud-assessment
+  attestation envelopes, data-model JDG SDN commitment seals,
   `connect_norito_bridge` identifier receipt signed attestations plus generic
   Connect approve/sign-result envelope signatures, Connect C/Java detached
-  verifier signatures, JS host `cryptoVerify` signatures, secp256k1 recoverable
-  prehash signatures, and `sorafs_manifest`
-  GAR, PoTR, alias-proof, provider-admission, signed-auditor, orderbook,
+  verifier signatures, JS host `cryptoVerify` signatures, SM2 SEC1 verifier
+  public keys, secp256k1 recoverable
+  prehash signatures, IVM Ed25519 raw public-key material for CPU, CUDA, Metal,
+  Halo2, and VM opcode verification paths, and `sorafs_manifest`
+  Ed25519 verifier public keys plus GAR, PoTR, alias-proof, provider-admission,
+  signed-auditor, orderbook,
   replication-order, provider-advert, POP credential/root/revocation-list,
   Ed25519 governance-log, and ML-DSA governance-log verifier paths, Torii SoraFS
-  discovery advert-cache signatures, SoraFS node gateway PoR proof signatures,
-  SoraFS orchestrator `manifest verify-signature` detached signatures, SoraFS
+  discovery advert-cache signatures, SoraFS proof-token frame signatures, Torii
+  SoraFS proof-token Ed25519 verifier keys, SoraFS node PoR challenge drand
+  beacon and gateway PoR proof signatures,
+  SoraFS PDP proof signatures, SoraFS manifest PoR
+  challenge drand beacon, PoR proof, and audit-verdict signatures, SoraFS
+  orchestrator `manifest verify-signature` detached signatures and Ed25519
+  public keys, SoraNet guard-directory issuer Ed25519 public keys, SoraFS
   CAR fetch/provider-advert-stub advert signatures, and SoraFS CAR
   manifest-stub signature-file entries, SoraFS chunker manifest-signature
   exporter entries, plus JDG
   simple-threshold attestation signatures, P2P handshake hello
   signatures, and peer trust-gossip signatures, plus POP-backed block aggregate
   BLS signatures, native AMX participant
-  vote/QC BLS signatures, Sumeragi vote, vote-worker, RBC ready/deliver, VRF
+  vote/QC BLS signatures, Sumeragi vote, vote-worker, RBC ready/deliver,
+  persisted RBC READY/DELIVER metadata, VRF
   commit/reveal, merge committee BLS signatures, and Sumeragi vNext
   rechain/view-change aggregate BLS signatures, core SoraFS ISI council-envelope
   signatures, and DeFi oracle attestation signatures, now use that checked path
@@ -14512,8 +14819,18 @@ and completed history lives in [`status.md`](./status.md).
   equivalent all-zero preflight before constructing the dalek signature type.
   IVM Ed25519 and ML-DSA helper, syscall, opcode, batch, Halo2 wrapper, public
   CUDA helper/stub, and accelerator preflight paths now likewise reject
-  all-zero signature buffers before dalek, PQClean, circuit-witness, CUDA, or
-  Metal verifier dispatch.
+  all-zero signature buffers, and IVM Ed25519 rejects noncanonical or
+  small-order signature `R` encodings before dalek, circuit-witness, CUDA, or
+  Metal verifier dispatch. SoraFS manifest Ed25519 verifier paths now share the
+  same noncanonical/small-order signature `R` preflight before constructing
+  dalek signature material and use dalek `verify_strict` for backend
+  verification, while SoraNet SRCv2 certificate Ed25519 verification routes
+  certificate signatures through the shared strict `R` parser before backend
+  verification. SoraFS CLI detached manifest signature verification now uses
+  dalek `verify_strict` so noncanonical or small-order signature `R` encodings
+  fail at the CLI verifier boundary, and SoraFS proof-token binary decode now
+  routes token signatures through the shared strict `R` parser before
+  admitting decoded tokens.
   The scoped IVM transfer syscall now drops its query-state guard before
   queueing the generated transfer instruction, keeping the first-release
   scoped-transfer tests buildable. SCCP outbound message storage now also has a
@@ -16747,6 +17064,10 @@ digest-bound pending-XSD source probe summaries for reviewed
 	  RBC delivered-pending named commit-vote split,
 	  RBC delivered-pending named commit-vote preservation handoff,
 	  RBC delivered-pending named commit-vote finality handoff,
+	  RBC delivered-pending named commit-vote certified-commit envelope,
+	  RBC delivered-pending named classifier committed-certified outcome,
+	  RBC delivered-pending named classifier non-committed wait envelope,
+	  RBC delivered-pending named classifier complete outcome envelope,
 	  RBC delivered-pending named prepare-vote split,
 	  RBC delivered-pending named timeout/NewView handoff,
 	  RBC delivered-pending named NewView-vote split,
@@ -16956,6 +17277,7 @@ digest-bound pending-XSD source probe summaries for reviewed
 	  Byzantine commit-vote pending-step commit-artifact preservation,
 	  Byzantine commit-vote pending-step commit-vote handoff preservation,
 	  pending protocol GST preservation,
+	  top-level end-to-end pending protocol GST preservation composition,
 	  delivered RBC progress-gate closure,
 	  complete-only commit evidence,
   pre-commit stale commit-vote reset across view changes,
@@ -17011,6 +17333,9 @@ digest-bound pending-XSD source probe summaries for reviewed
   RBC finality evidence preservation,
   RBC progress-state evidence causality,
   RBC partial-progress counter causality,
+  RBC progress-state evidence envelope aggregate,
+  RBC live evidence causality envelope aggregate,
+  RBC startup/defensive boundary aggregate,
   RBC corrupted digest invalidation,
   RBC ready-quorum deliver-gate availability,
   RBC delivered-without-finality certificate absence,
@@ -22622,10 +22947,10 @@ ETH evidence cannot lose its finalized-block-tag corridor before public
 readiness. EVM receipt-proof source-event logs now require `removed` to be
 absent or exact `false`; literal `true` and non-boolean copied/RPC values fail
 before receipt-trie or source-event evidence can be accepted. JavaScript/browser,
-Swift, Kotlin/JVM, and Java Android receipt RLP/source-event helpers now mirror
-that exactness and pin explicit `null`, numeric, and secret-bearing string
-regressions; native .NET parity remains on the Windows-machine recertification
-handoff path. EVM live/source-live JSON-RPC errors now redact HTTP bodies,
+Swift, Kotlin/JVM, Java Android, and native .NET receipt RLP/source-event
+helpers now mirror that exactness and pin explicit `null`, numeric, and
+secret-bearing string regressions; native .NET runtime recertification remains
+on the Windows-machine handoff path. EVM live/source-live JSON-RPC errors now redact HTTP bodies,
 transport reasons, duplicate key names, and error objects before public
 diagnostics are emitted. The EVM live helper's
 rendered TOML now preserves the observed RPC chain
@@ -25437,7 +25762,15 @@ validation path.
   commit-evidence branch obligations must stay covered by one continuation
   envelope aggregate, and finalizing commit-vote
   steps from delivered-pending states must install committed finality while
-  preserving delivered RBC evidence; delivered-pending prepare-vote steps must
+  preserving delivered RBC evidence and satisfying the complete delivered-state
+  certified-commit envelope; any committed post-state from the named
+  delivered-pending complete wait-state classifier must be sourced by an exact
+  finalizing honest or Byzantine commit vote and satisfy that same certified
+  envelope, while non-committed classifier outcomes must re-enter the complete
+  delivered-pending wait envelope with commit artifacts absent and the exact
+  consensus/GST/timer surface exposed, and the named classifier complete outcome
+  envelope must compose those committed and non-committed branches into one
+  binary post-state contract; delivered-pending prepare-vote steps must
   preserve delivered evidence and either keep the prepare wait state or enter
   the commit-vote wait state at prepare quorum; delivered-pending timeouts must
   preserve delivered evidence while clearing live vote counters and starting a
@@ -25456,9 +25789,10 @@ validation path.
   every delivered-pending spec step must preserve the exact delivered RBC
   evidence tuple and change commit-certificate artifacts exactly when committed
   finality is reached, and the GST flag may change only through the explicit
-  `GstElapsed` action; delivered-pending view changes must come only from the
-  timeout recovery branch, and delivered-pending view evidence can change only
-  by timeout reset or quorum-forming NewView vote; delivered-pending live vote
+  `GstElapsed` action, with pending protocol GST preservation composed into
+  the top end-to-end safety envelope; delivered-pending view changes must come
+  only from the timeout recovery branch, and delivered-pending view evidence can
+  change only by timeout reset or quorum-forming NewView vote; delivered-pending live vote
   counters must follow the checked handoff/finality branch without stale
   prepare/commit/NewView counter carryover; delivered-pending post-state gates
   must match the resulting handoff phase while RBC progress and Byzantine fault
@@ -25524,13 +25858,17 @@ validation path.
   stable-artifact delivered-pending complete wait states must compose the source,
   counter, phase/gate, timer, view/evidence, finality, and RBC-surface
   obligations into one non-final envelope with commit artifacts absent and only
-  consensus/GST/stutter actions exposed;
-  nonzero
-  CHUNK/READY counters
-  must retain digest validity unless they are in the explicit corrupted repair
-  state, while invalid digests must remain confined to idle or corrupted repair
-  states; the fast/deep/TLC-fast configs must continue checking those obligations alongside the RBC progress-state
-  evidence stack.
+  consensus/GST/stutter actions exposed; RBC progress-state evidence and
+  partial-counter causality must stay composed by the RBC progress-state
+  evidence envelope before the live handoff envelope, and live evidence
+  causality must bundle header/digest, CHUNK, READY, counter, and invalid-digest
+  confinement; startup and defensive boundaries must compose idle exit, init
+  entry, and unreachable `Withheld` constraints into the progress-mutation
+  classifier; nonzero CHUNK/READY counters must retain digest validity unless
+  they are in the explicit corrupted repair state, while invalid digests must
+  remain confined to idle or corrupted repair states; the fast/deep/TLC-fast
+  configs must continue checking those obligations alongside the RBC
+  progress-state evidence stack.
 - Treat the monolithic Apalache `fast` runner as a `Sumeragi.tla` typecheck
   smoke until the full `Next` relation can be bounded-checked without heap
   exhaustion on the pinned local toolchain. Production PR coverage should stay
@@ -25566,10 +25904,11 @@ validation path.
   elements, escaped string-literal bound identifiers and domains, escaped
   string-literal outer-wrapper parentheses, escaped string-literal semantic
   identifier contents, tuple-internal operators and detector helpers, escaped
-  string-literal operators, colons, and branch delimiters, keywords, CASE
-  branch delimiters, and unary-temporal CASE branch results or guards,
-  quantified helper formulas with unused bound identifiers including tuple
-  components, later binding groups, and later tuple-pattern binding groups,
+  string-literal operators, colons, and branch delimiters, tuple literal maplet
+  colons, keywords, CASE branch delimiters, and unary-temporal CASE branch results or guards,
+  quantified helper formulas with duplicate bound identifiers or unused bound
+  identifiers including tuple components, later binding groups, and later
+  tuple-pattern binding groups,
   quantified helper formulas that select predicates with control
   flow, quantified helper formulas below
   top-level negation operands, existential quantified helper formulas,
@@ -25577,7 +25916,8 @@ validation path.
   operands, excluded-middle helper operands, or complementary-equivalence
   helper operands, even when those obligations are nested inside compound
   boolean operands. Quantified-helper formula checks must also traverse
-  boolean operands, negated quantified helper checks must split top-level
+  boolean operands and require scoped binding prefixes before classifying
+  quantified helpers, negated quantified helper checks must split top-level
   boolean operands before peeling negation and unwrap one-line `LET` helper
   aliases, and quantified body checks must unwrap one-line `LET` helper aliases
   before classifying vacuity or control-flow predicate selection; non-transparent
@@ -25604,7 +25944,10 @@ validation path.
   predicate-selection helpers, including one-line `LET` branch aliases and
   one-line `LET` control aliases, and non-branch control operators such as
   `ENABLED`/`CHOOSE`, or whole-body temporal-helper
-  boolean-composition helpers, and must not hide single-helper conjunct aliases.
+  boolean-composition helpers, static action/set/choice quantified formula
+  wrappers, including wrappers around structured operands, structured helper
+  operands that hide quantified formulas or control-flow predicate selection,
+  and must not hide single-helper conjunct aliases.
   Unary-temporal temporal helper wrappers must not hide single-helper conjunct
   aliases.
   Literal-gated temporal helper wrappers such as
@@ -25633,7 +25976,9 @@ validation path.
   operands too. Helper reference traversal must unwrap one-line `LET` helper
   aliases so hidden temporal helper leaves remain visible to vacuity,
   undefined-helper, and alias checks, preserving static unary wrappers around
-  the alias result. Static temporal literal checks split top-level boolean
+  the alias result. Vacuous-helper checks must also inspect static wrapper and
+  structured operands so literal or alias leaves hidden in records, functions,
+  selectors, or calls stay visible. Static temporal literal checks split top-level boolean
   operands before peeling temporal or negated wrappers. Temporal literal checks
   must also unwrap one-line `LET` helper aliases. LET binding scans must
   preserve tuple and escaped string literal definition bodies, and LET alias
@@ -25660,10 +26005,13 @@ validation path.
 	  or transitive helper chains. Transitive exactness predicate chains must also
 	  keep repeated helper conjuncts, undefined helpers including undefined
 	  identifiers hidden inside quantified helper formulas while preserving
-	  quantified binding scope, tuple-pattern quantifier domains, `LET`, `CHOOSE`,
-	  `ENABLED`/`UNCHANGED` operand scope, CASE branch scope, relation operand
-	  scope, operator-call argument scope, arithmetic/set infix operand scope,
-	  explicit set literal element scope, unary set-operator operand scope,
+		  quantified binding scope, unbounded quantified binding scope,
+		  relation-bearing quantified binding prefixes, tuple-pattern quantifier
+		  domains, `LET`, `CHOOSE`, relation-bearing `CHOOSE`/`LAMBDA` binding prefixes,
+		  `ENABLED`/`UNCHANGED` operand scope, CASE branch scope, relation operand
+		  scope, operator-call argument scope, arithmetic/set infix operand scope,
+	  sequence/function infix operand scope, explicit set literal element scope,
+	  unary set-operator operand scope,
 	  set-comprehension, set-comprehension outer enclosure, function-constructor,
 	  function-set domain and range scope, and record-literal field-label binding
 	  scope including comma-shared set/function binders, vacuous quantified
@@ -25676,9 +26024,11 @@ validation path.
   string-literal bound identifiers and domains, escaped string-literal line
   comment markers, escaped string-literal outer-wrapper parentheses, escaped
   string-literal semantic identifier contents in model-obligation checks,
-  control-flow branch extraction, and direct exactness-envelope pairing, and
-  tuple-internal operators and detector helpers, escaped string-literal
-  operators, colons, and branch delimiters, keywords, CASE branch delimiters, and unary-temporal CASE branch results or guards, quantified helper formulas with unused bound identifiers including
+  whole-body control/action relation-scan rejection, control-flow branch
+  extraction, and direct exactness-envelope pairing, and tuple-internal
+  operators and detector helpers, escaped string-literal
+  operators, colons, and branch delimiters, tuple literal maplet colons,
+  keywords, CASE branch delimiters, and unary-temporal CASE branch results or guards, quantified helper formulas with duplicate bound identifiers or unused bound identifiers including
   tuple components, later binding groups, and later tuple-pattern binding groups, quantified helper formulas
   that select predicates with control flow,
   quantified helper formulas below top-level negation operands, existential
@@ -25691,12 +26041,16 @@ validation path.
   whole-body raw-predicate boolean-composition, whole-body
   parameterized-call boolean-composition, whole-body
   quantified-predicate boolean-composition, unary-temporal parameterized helper
-  calls, unary-temporal quantified formula wrappers, literal, self-equality,
-  self-inequality, and alias helper leaves out of named exactness predicate
+  calls, unary-temporal quantified formula wrappers, static action/set/choice
+  quantified formula wrappers, including wrappers around structured operands,
+  structured helper operands that hide quantified formulas or control-flow
+  predicate selection,
+  literal, self-equality, self-inequality, and alias helper leaves out of named exactness predicate
   bundles, including single-helper conjunct aliases and helper operands hidden
   behind top-level negation, including stacked top-level negation, or behind
   unary-temporal wrappers. Quantified-helper formula checks must also traverse
-  boolean operands, negated quantified helper checks must split top-level
+  boolean operands and require scoped binding prefixes before classifying
+  quantified helpers, negated quantified helper checks must split top-level
   boolean operands before peeling negation and unwrap one-line `LET` helper
   aliases, unary-temporal quantified, parameterized-call, and control-flow checks
   must split top-level boolean operands before peeling temporal wrappers,
@@ -25709,11 +26063,20 @@ validation path.
   one-line `LET`
   helper aliases so hidden exactness helper leaves remain visible to vacuity,
   undefined-helper, and alias checks, preserving static unary wrappers around
-  the alias result. Undefined-helper scans also preserve top-level operator
+  the alias result. Vacuous-helper checks must also inspect static wrapper and
+  structured operands so literal or alias leaves hidden in records, functions,
+  selectors, or calls stay visible. Undefined-helper scans also preserve top-level operator
   parameter scope, so helper-like parameters are not mistaken for missing
-  helper obligations. Parameterized local `LET` operator scopes are also
-  preserved, so local operator names and local parameters are not mistaken for
-  missing helpers while free body and call-argument obligations remain visible.
+  helper obligations. Unbounded quantified scopes are preserved too, so
+  helper-like names introduced by `\A MissingHelper: ...` or
+  `\E MissingHelper: ...` stay local, while relation-bearing quantified
+  prefixes are not treated as binders and their prefix/body helper obligations
+  remain visible. Unbounded quantified helpers also remain subject to vacuity
+  and unused-bound checks, so static bodies or unused unbounded binders cannot
+  satisfy exactness/temporal helper obligations. Parameterized local `LET`
+  operator scopes are also preserved, so local operator names and local
+  parameters are not mistaken for missing helpers while free body and
+  call-argument obligations remain visible.
   `LAMBDA` scopes are preserved as well, so lambda parameters stay local while
   domains, applications, and free body obligations remain visible. Standard TLA
   set/operator identifiers such as `STRING`, `BOOLEAN`, `Nat`, `Int`, `Real`,
@@ -25726,14 +26089,21 @@ validation path.
 	  Top-level relation operands and direct operator-call arguments are also
 	  traversed before raw identifier scanning so selector field labels and
 	  record-field labels stay local while missing callees and free helper
-	  obligations remain visible. Arithmetic and set infix operands recurse the
+	  obligations remain visible. Whole-body control/action, unary-temporal, and
+	  negated relation wrappers stay with their wrapper scanners so embedded
+	  relation operators are not counted as direct top-level relation
+	  obligations. Arithmetic and set infix operands recurse the
 	  same way, preserving selector field labels while keeping free arithmetic or
 	  set helper obligations visible. Explicit set literals and unary set
 	  operators such as `DOMAIN`, `SUBSET`, and `UNION` likewise recurse before raw
 	  scanning, preserving nested record labels while keeping element, domain, and
 	  operand helper obligations visible. Function-set expressions such as
 	  `[S -> T]` recurse through both domain and range so nested range labels stay
-	  local while domain and range helper obligations remain visible.
+	  local while domain and range helper obligations remain visible. The
+	  function-set splitter skips top-level `CASE` branch arrows when the domain
+	  is a bare `CASE` expression, and it does not consume record maplet values,
+	  record-set domains, or record-update replacements whose bare `CASE`
+	  branches contain `->` arrows.
   Set-comprehension binding scope only applies when the outer braces enclose the
   full expression, so adjacent brace expressions are split before local binders
   are applied.

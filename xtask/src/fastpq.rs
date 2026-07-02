@@ -1489,9 +1489,12 @@ mod tests {
 
         assert_eq!(signature.algorithm, "ed25519");
         assert_eq!(signature.public_key_hex, hex::encode(expected_public));
-        Signature::from_bytes(&hex::decode(&signature.signature_hex).expect("decode signature"))
-            .verify(expected_key_pair.public_key(), b"bench manifest")
-            .expect("checked manifest signature verifies");
+        Signature::try_from_bytes(
+            &hex::decode(&signature.signature_hex).expect("decode signature"),
+        )
+        .expect("FastPQ manifest signature is non-empty and nonzero")
+        .verify(expected_key_pair.public_key(), b"bench manifest")
+        .expect("checked manifest signature verifies");
     }
 
     #[test]

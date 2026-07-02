@@ -2569,19 +2569,13 @@ fn reconstruct_multisig_account_state(
         .map_err(map_find_error)?;
 
     let home_domain = if let Some(raw) = account.metadata().get(&home_domain_key()) {
-        norito::json::from_str::<Option<iroha_data_model::domain::DomainId>>(raw.as_ref()).map_err(
-            |err| {
-                ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
-                    "multisig home_domain malformed for `{resolved_account}`: {err}"
-                )))
-            },
-        )?
+        decode_multisig_home_domain_metadata(raw, &resolved_account)?
     } else {
         infer_multisig_home_domain(state_transaction, &resolved_account)?
     };
 
     if let Some(raw) = account.metadata().get(&spec_key()) {
-        let spec = norito::json::from_str::<MultisigSpec>(raw.as_ref()).map_err(|err| {
+        let spec = raw.try_into_any_norito::<MultisigSpec>().map_err(|err| {
             ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
                 "multisig spec malformed for `{resolved_account}`: {err}"
             )))
@@ -2632,6 +2626,25 @@ fn reconstruct_multisig_account_state(
             transaction_ttl_ms,
         },
     )))
+}
+
+fn decode_multisig_home_domain_metadata(
+    raw: &Json,
+    multisig_account: &AccountId,
+) -> Result<Option<iroha_data_model::domain::DomainId>, ValidationFail> {
+    match raw.try_into_any_norito::<Option<iroha_data_model::domain::DomainId>>() {
+        Ok(home_domain) => Ok(home_domain),
+        Err(primary_err) => {
+            let literal = raw.get().trim();
+            iroha_data_model::DomainId::parse_fully_qualified(literal)
+                .map(Some)
+                .map_err(|legacy_err| {
+                    ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
+                        "multisig home_domain malformed for `{multisig_account}`: {primary_err}; legacy literal parse failed: {legacy_err}"
+                    )))
+                })
+        }
+    }
 }
 
 fn infer_multisig_home_domain(
@@ -5103,6 +5116,91 @@ mod tests {
                 .expect("infer home domain"),
             Some(retail_domain),
             "alias inference should preserve the dataspace-qualified home domain",
+        );
+    }
+
+    #[test]
+    fn multisig_state_reconstruction_accepts_legacy_literal_home_domain_metadata() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-legacy-literal-home-domain"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        let domain_id = DomainId::try_new("bsp", "cbsi").expect("parse FI domain");
+        let owner_id = new_account_id(&checked_keypair());
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
+        register_account_in_domain(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &owner_id,
+            "register owner",
+        );
+
+        let signer_id = new_account_id(&checked_keypair());
+        register_account_in_domain(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            &signer_id,
+            "register signer",
+        );
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer_id.clone(), 1)]),
+            quorum: NonZeroU16::new(1).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        };
+        execute_register(
+            &mut state_transaction,
+            &owner_id,
+            MultisigRegister::with_account(
+                new_account_id(&checked_keypair()),
+                domain_id.clone(),
+                spec.clone(),
+            ),
+        )
+        .expect("register multisig");
+
+        let registered_multisig_id =
+            AccountId::new_multisig(multisig_policy_from_spec(&spec).expect("policy"));
+        state_transaction
+            .world
+            .smart_contract_state
+            .remove(multisig_account_state_key(&registered_multisig_id));
+        state_transaction
+            .world
+            .accounts
+            .get_mut(&registered_multisig_id)
+            .expect("registered multisig account")
+            .metadata
+            .insert(
+                home_domain_key(),
+                Json::from_string_unchecked(domain_id.to_string()),
+            );
+
+        execute_propose(
+            &mut state_transaction,
+            &signer_id,
+            &MultisigPropose::new(registered_multisig_id.clone(), Vec::new(), None),
+        )
+        .expect("proposal should materialize state from legacy home-domain metadata");
+
+        assert_eq!(
+            multisig_home_domain(&state_transaction, &registered_multisig_id)
+                .expect("home domain should decode after reconstruction"),
+            Some(domain_id),
         );
     }
 

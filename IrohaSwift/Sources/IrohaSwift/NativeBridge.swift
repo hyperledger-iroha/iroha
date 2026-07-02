@@ -73,14 +73,16 @@ enum NoritoBridgeLoader {
         expectedBridgeAbiVersion(for: currentIdentifier())
     }
     private static let expectedHashes: [String: String] = [
-        "macos-arm64": "2f38fb6148149d0aa553ddc85152b9549a6bb2cd4a656595122d8061fca2eb77",
-        "ios-arm64": "3d7fa50896516294ccea5cd10f1e9b7e0e5121ab982388fa351debb8377adf95",
-        "ios-arm64_x86_64-simulator": "be078b0de44bec3e835dba2618d738c7cd280a78b730966eca3db032ec6e2e88"
+        "macos-arm64": "8e55486f3f923faa51267bfd8135b646306f88fa10d2aab361202b0612f3eb84",
+        "ios-arm64": "4fe82654eea21bfeabe393e9bafd2dd9fd8a3797fda2db8cddfc4deaa533cb02",
+        "ios-arm64_x86_64-simulator": "f833d7ebaf99ccfc5c4ee36d3f86cde752fdc749f7ba4a1723e1fa3406a3100e"
     ]
     private static let requiredSymbols = [
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
-        "connect_norito_encode_transfer_signed_transaction"
+        "connect_norito_encode_transfer_signed_transaction",
+        "connect_norito_encode_transfer_instruction_box",
+        "connect_norito_encode_validation_fee_transfer_signed_transaction"
     ]
 
     private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32
@@ -91,7 +93,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 13
+        return 14
     }
 
     static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
@@ -834,6 +836,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UInt8>?,
         UInt
+    ) -> Int32
+    private typealias EncodeTransferInstructionBoxFn = @convention(c) (
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?
     ) -> Int32
     private typealias EncodeValidationFeeTransferFn = @convention(c) (
         UnsafePointer<CChar>?, UInt,
@@ -2036,6 +2046,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeTransferWithFeeSponsorFn: EncodeTransferWithFeeSponsorFn? = nil
     private var encodeTransferWithAlgFn: EncodeTransferWithAlgFn? = nil
     private var encodeTransferWithFeeSponsorWithAlgFn: EncodeTransferWithFeeSponsorWithAlgFn? = nil
+    private var encodeTransferInstructionBoxFn: EncodeTransferInstructionBoxFn? = nil
     private var encodeValidationFeeTransferFn: EncodeValidationFeeTransferFn? = nil
     private var encodeMintFn: EncodeMintFn? = nil
     private var encodeMintWithAlgFn: EncodeMintWithAlgFn? = nil
@@ -2400,6 +2411,16 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.encodeMintFn = connect_norito_encode_mint_signed_transaction
         self.encodeMintWithAlgFn = connect_norito_encode_mint_signed_transaction_alg
         let staticHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL)
+        if let instructionBoxSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_encode_transfer_instruction_box")
+        }) {
+            self.encodeTransferInstructionBoxFn = unsafeBitCast(
+                instructionBoxSymbol,
+                to: EncodeTransferInstructionBoxFn.self
+            )
+        } else {
+            self.encodeTransferInstructionBoxFn = nil
+        }
         loadPrivacySymbols(from: staticHandle)
         if let issueNoteSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_issue_offline_note_signed_transaction") }) {
             self.encodeIssueOfflineNoteFn = unsafeBitCast(issueNoteSymbol, to: EncodeOfflineNoteTxFn.self)
@@ -2727,6 +2748,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 )
             } else {
                 self.encodeTransferWithFeeSponsorWithAlgFn = nil
+            }
+            if let encodeInstructionBoxSymbol = dlsym(handle, "connect_norito_encode_transfer_instruction_box") {
+                self.encodeTransferInstructionBoxFn = unsafeBitCast(
+                    encodeInstructionBoxSymbol,
+                    to: EncodeTransferInstructionBoxFn.self
+                )
+            } else {
+                self.encodeTransferInstructionBoxFn = nil
             }
             if let encodeValidationFeeSymbol = dlsym(handle, "connect_norito_encode_validation_fee_transfer_signed_transaction") {
                 self.encodeValidationFeeTransferFn = unsafeBitCast(
@@ -3543,6 +3572,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeTransferWithFeeSponsorFn = nil
             self.encodeTransferWithAlgFn = nil
             self.encodeTransferWithFeeSponsorWithAlgFn = nil
+            self.encodeTransferInstructionBoxFn = nil
             self.encodeValidationFeeTransferFn = nil
             self.encodeMintFn = nil
             self.encodeMintWithAlgFn = nil
@@ -5259,6 +5289,60 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         freeFn(signedPtr)
         let hashData = Data(hashBytes)
         return NativeSignedTransaction(signedBytes: signedData, hash: hashData)
+        #else
+        return nil
+        #endif
+    }
+
+    public func encodeTransferInstructionBox(
+        authority: String,
+        assetDefinitionId: String,
+        quantity: String,
+        destination: String
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let freeFn, let encodeTransferInstructionBoxFn else { return nil }
+
+        var instructionPtr: UnsafeMutablePointer<UInt8>? = nil
+        var instructionLen: UInt = 0
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            authority.withCString { authorityPtr in
+                assetDefinitionId.withCString { assetPtr in
+                    quantity.withCString { quantityPtr in
+                        destination.withCString { destinationPtr in
+                            self.withSignedOutputs(
+                                signedPtr: &instructionPtr,
+                                signedLen: &instructionLen
+                            ) { instructionPtrPtr, instructionLenPtr in
+                                encodeTransferInstructionBoxFn(
+                                    authorityPtr,
+                                    UInt(authority.utf8.count),
+                                    assetPtr,
+                                    UInt(assetDefinitionId.utf8.count),
+                                    quantityPtr,
+                                    UInt(quantity.utf8.count),
+                                    destinationPtr,
+                                    UInt(destination.utf8.count),
+                                    instructionPtrPtr,
+                                    instructionLenPtr
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if status != 0 {
+            if let instructionPtr { freeFn(instructionPtr) }
+            try throwOnStatus(status)
+            return nil
+        }
+        guard let instructionPtr else { return nil }
+
+        let data = Data(bytes: instructionPtr, count: Int(instructionLen))
+        freeFn(instructionPtr)
+        return data
         #else
         return nil
         #endif

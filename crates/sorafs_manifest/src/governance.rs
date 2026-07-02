@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use blake3::Hasher;
-use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Verifier, VerifyingKey};
+use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
@@ -2046,7 +2046,11 @@ pub struct GovernanceLogSignatureV1 {
 
 impl GovernanceLogSignatureV1 {
     fn validate(&self) -> Result<(), GovernanceLogValidationError> {
-        if self.public_key.is_empty() || self.signature.is_empty() {
+        if self.public_key.is_empty()
+            || crate::inert_bytes(&self.public_key)
+            || self.signature.is_empty()
+            || crate::inert_bytes(&self.signature)
+        {
             return Err(GovernanceLogValidationError::InvalidSignature);
         }
         Ok(())
@@ -2216,22 +2220,16 @@ fn verify_ed25519_governance_signature(
 
     let mut public_key = [0u8; PUBLIC_KEY_LENGTH];
     public_key.copy_from_slice(&publisher_signature.public_key);
-    let verifying_key = VerifyingKey::from_bytes(&public_key).map_err(|err| {
-        GovernanceLogSignatureVerificationError::InvalidPublicKey {
-            reason: err.to_string(),
-        }
-    })?;
+    let verifying_key = crate::checked_ed25519_verifying_key_from_bytes(&public_key)
+        .map_err(|err| GovernanceLogSignatureVerificationError::InvalidPublicKey { reason: err })?;
 
     let mut signature = [0u8; SIGNATURE_LENGTH];
     signature.copy_from_slice(&publisher_signature.signature);
-    let signature = crate::checked_ed25519_signature_from_bytes(&signature).ok_or_else(|| {
-        GovernanceLogSignatureVerificationError::Verification {
-            reason: "signature payload must not be all zero".to_owned(),
-        }
-    })?;
+    let signature = crate::checked_ed25519_signature_from_bytes(&signature)
+        .map_err(|reason| GovernanceLogSignatureVerificationError::Verification { reason })?;
 
     verifying_key
-        .verify(payload_bytes, &signature)
+        .verify_strict(payload_bytes, &signature)
         .map_err(
             |err| GovernanceLogSignatureVerificationError::Verification {
                 reason: err.to_string(),
@@ -3132,6 +3130,28 @@ mod tests {
             public_key: Vec::new(),
             signature: Vec::new(),
         }
+    }
+
+    #[test]
+    fn governance_signature_validate_rejects_all_zero_material() {
+        let mut signature = GovernanceLogSignatureV1 {
+            algorithm: GovernanceSignatureAlgorithm::Ed25519,
+            public_key: vec![0x11; 32],
+            signature: vec![0; 64],
+        };
+
+        assert!(matches!(
+            signature.validate(),
+            Err(GovernanceLogValidationError::InvalidSignature)
+        ));
+
+        signature.signature = vec![0x22; 64];
+        signature.public_key = vec![0; 32];
+
+        assert!(matches!(
+            signature.validate(),
+            Err(GovernanceLogValidationError::InvalidSignature)
+        ));
     }
 
     fn sign_governance_block(block: &mut GovernanceDagBlockV1, seed: &[u8; 32]) {

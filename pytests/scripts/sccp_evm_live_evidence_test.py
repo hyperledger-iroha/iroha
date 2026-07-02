@@ -2240,6 +2240,63 @@ def test_live_evm_expected_rpc_chain_id_parser_requires_canonical_decimal():
             raise AssertionError(f"noncanonical EVM exact hex {value!r} was accepted")
 
 
+def test_evm_live_cli_parsers_reject_non_string_values_without_stringification():
+    module = load_live_module()
+
+    class HostileEvmLiveParserValue:
+        def __str__(self):
+            raise AssertionError("secret-token-evm-live-parser-value stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token-evm-live-parser-value repr leaked")
+
+        def strip(self):
+            raise AssertionError("secret-token-evm-live-parser-value strip called")
+
+        def startswith(self, _prefix):
+            raise AssertionError(
+                "secret-token-evm-live-parser-value startswith called"
+            )
+
+        def lower(self):
+            raise AssertionError("secret-token-evm-live-parser-value lower called")
+
+        def isascii(self):
+            raise AssertionError("secret-token-evm-live-parser-value isascii called")
+
+        def isdecimal(self):
+            raise AssertionError("secret-token-evm-live-parser-value isdecimal called")
+
+    hostile = HostileEvmLiveParserValue()
+    cases = (
+        (
+            lambda value: module._parse_hex32(value, label="expected bridge code hash"),
+            "expected bridge code hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda value: module._parse_address_text(value, label="bridge address"),
+            "bridge address must be canonical lowercase 0x hex",
+        ),
+        (
+            module._parse_rpc_chain_id,
+            "--expected-rpc-chain-id must be a canonical decimal integer",
+        ),
+        (
+            module.parse_block_tag,
+            "--block-tag must be latest, safe, finalized, or a positive canonical "
+            "lowercase 0x block number",
+        ),
+    )
+
+    for parser, expected_message in cases:
+        try:
+            parser(hostile)
+        except module.argparse.ArgumentTypeError as exc:
+            assert str(exc) == expected_message
+        else:
+            raise AssertionError("non-string EVM live parser value was accepted")
+
+
 def test_evm_live_hex_parsers_redact_typeerror_parser_causes(monkeypatch):
     module = load_live_module()
 

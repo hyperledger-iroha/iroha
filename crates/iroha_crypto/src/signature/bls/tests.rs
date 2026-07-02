@@ -146,6 +146,55 @@ fn test_signature_verification_different_keys<
         .expect_err("Signature verification for wrong public key should fail");
 }
 
+fn test_verify_rejects_all_zero_signature_material<
+    C: BlsConfiguration + PreparedPublicKeyCacheAccess,
+>() {
+    let (pk, sk) = BlsImpl::<C>::keypair(KeyGenOption::Random).expect("BLS keypair");
+    let valid_signature = BlsImpl::<C>::sign(MESSAGE_1, &sk).expect("BLS sign");
+    let all_zero_signature = vec![0u8; valid_signature.len()];
+
+    let err = BlsImpl::<C>::verify(MESSAGE_1, &all_zero_signature, &pk)
+        .expect_err("all-zero BLS signature material must fail before backend parsing");
+
+    assert!(matches!(err, Error::Parse(_)));
+    assert!(
+        err.to_string().contains("all zero"),
+        "unexpected all-zero BLS signature error: {err:?}"
+    );
+}
+
+fn test_parse_public_key_rejects_all_zero_material<C: BlsConfiguration>() {
+    let (pk, _sk) = BlsImpl::<C>::keypair(KeyGenOption::Random).expect("BLS keypair");
+    let all_zero_public_key = vec![0u8; pk.to_bytes().len()];
+
+    let err = match BlsImpl::<C>::parse_public_key(&all_zero_public_key) {
+        Ok(_) => panic!("all-zero BLS public key material must fail before backend parsing"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.to_string().contains("all zero"),
+        "unexpected all-zero BLS public-key error: {err:?}"
+    );
+}
+
+fn test_aggregate_rejects_all_zero_public_key_material<C: BlsConfiguration>() {
+    let (pk, sk) = BlsImpl::<C>::keypair(KeyGenOption::Random).expect("BLS keypair");
+    let msg = b"aggregate-all-zero-pk";
+    let sig = BlsImpl::<C>::sign(msg, &sk).expect("BLS sign");
+    let all_zero_public_key = vec![0u8; pk.to_bytes().len()];
+    let signatures: [&[u8]; 1] = [sig.as_slice()];
+    let public_keys: [&[u8]; 1] = [all_zero_public_key.as_slice()];
+
+    let err = BlsImpl::<C>::verify_aggregate_same_message(msg, &signatures, &public_keys)
+        .expect_err("all-zero BLS aggregate public key must fail before backend parsing");
+
+    assert!(
+        err.to_string().contains("all zero"),
+        "unexpected all-zero BLS aggregate public-key error: {err:?}"
+    );
+}
+
 fn test_aggregate_rejects_duplicate_public_key_content<C: BlsConfiguration>() {
     let (pk, sk) = BlsImpl::<C>::keypair(KeyGenOption::Random).expect("BLS keypair");
     let msg = b"aggregate-duplicate-pk-content";
@@ -219,6 +268,11 @@ mod normal {
     #[test]
     fn signature_verification() {
         test_signature_verification::<NormalConfiguration>();
+    }
+
+    #[test]
+    fn verify_rejects_all_zero_signature_material() {
+        test_verify_rejects_all_zero_signature_material::<NormalConfiguration>();
     }
 
     #[test]
@@ -318,9 +372,19 @@ mod normal {
     }
 
     #[test]
+    fn aggregate_same_message_rejects_all_zero_public_key_material() {
+        test_aggregate_rejects_all_zero_public_key_material::<NormalConfiguration>();
+    }
+
+    #[test]
     fn parse_public_key_rejects_identity() {
         let identity = G1Affine::identity().to_compressed();
         assert!(BlsImpl::<NormalConfiguration>::parse_public_key(identity.as_ref()).is_err());
+    }
+
+    #[test]
+    fn parse_public_key_rejects_all_zero_material() {
+        test_parse_public_key_rejects_all_zero_material::<NormalConfiguration>();
     }
 
     #[test]
@@ -551,6 +615,11 @@ mod small {
     }
 
     #[test]
+    fn verify_rejects_all_zero_signature_material() {
+        test_verify_rejects_all_zero_signature_material::<SmallConfiguration>();
+    }
+
+    #[test]
     fn checked_random_keypair_signs_and_verifies() {
         test_checked_random_keypair_signs_and_verifies::<SmallConfiguration>();
     }
@@ -579,6 +648,11 @@ mod small {
     fn parse_public_key_rejects_identity() {
         let identity = G2Affine::identity().to_compressed();
         assert!(BlsImpl::<SmallConfiguration>::parse_public_key(identity.as_ref()).is_err());
+    }
+
+    #[test]
+    fn parse_public_key_rejects_all_zero_material() {
+        test_parse_public_key_rejects_all_zero_material::<SmallConfiguration>();
     }
 
     #[test]
@@ -643,6 +717,11 @@ mod small {
     #[test]
     fn aggregate_same_message_rejects_duplicate_public_key_content() {
         test_aggregate_rejects_duplicate_public_key_content::<SmallConfiguration>();
+    }
+
+    #[test]
+    fn aggregate_same_message_rejects_all_zero_public_key_material() {
+        test_aggregate_rejects_all_zero_public_key_material::<SmallConfiguration>();
     }
 
     #[test]

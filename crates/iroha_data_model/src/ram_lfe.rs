@@ -221,7 +221,9 @@ impl RamLfeOutputOpening {
     /// # Errors
     /// Returns an error when the signature is invalid for the opening payload.
     pub fn verify_signature(&self, public_key: &PublicKey) -> Result<(), iroha_crypto::Error> {
-        SignatureOf::<RamLfeOutputOpeningPayload>::from_signature(self.signature.clone())
+        let signature = Signature::try_from_bytes(self.signature.payload())
+            .map_err(|_| iroha_crypto::Error::BadSignature)?;
+        SignatureOf::<RamLfeOutputOpeningPayload>::from_signature(signature)
             .verify(public_key, &self.payload)
     }
 }
@@ -287,13 +289,14 @@ impl RamLfeExecutionReceipt {
     /// # Errors
     /// Returns an error when the signature is missing or invalid.
     pub fn verify_signature(&self, public_key: &PublicKey) -> Result<(), iroha_crypto::Error> {
-        SignatureOf::<RamLfeExecutionReceiptPayload>::from_signature(
-            self.attestation
-                .signature()
-                .cloned()
-                .ok_or(iroha_crypto::Error::BadSignature)?,
-        )
-        .verify(public_key, &self.payload)
+        let signature = self
+            .attestation
+            .signature()
+            .ok_or(iroha_crypto::Error::BadSignature)?;
+        let signature = Signature::try_from_bytes(signature.payload())
+            .map_err(|_| iroha_crypto::Error::BadSignature)?;
+        SignatureOf::<RamLfeExecutionReceiptPayload>::from_signature(signature)
+            .verify(public_key, &self.payload)
     }
 }
 
@@ -410,6 +413,20 @@ mod tests {
     }
 
     #[test]
+    fn signed_receipt_rejects_all_zero_signature_material() {
+        let signer = checked_random_keypair();
+        let mut receipt = signed_receipt(&signer, receipt_payload());
+        receipt.attestation = RamLfeReceiptAttestation::Signed(Signature::from_bytes(&[0u8; 64]));
+
+        assert_eq!(
+            receipt
+                .verify_signature(signer.public_key())
+                .expect_err("all-zero RAM-LFE receipt signature must fail admission"),
+            iroha_crypto::Error::BadSignature
+        );
+    }
+
+    #[test]
     fn signed_receipt_rejects_tampered_ciphertext_binding() {
         let signer = checked_random_keypair();
         let mut receipt = signed_receipt(&signer, receipt_payload());
@@ -488,6 +505,20 @@ mod tests {
         opening
             .verify_signature(signer.public_key())
             .expect_err("mutating opened output binding must invalidate opening signature");
+    }
+
+    #[test]
+    fn output_opening_rejects_all_zero_signature_material() {
+        let signer = checked_random_keypair();
+        let mut opening = signed_opening(&signer, opening_payload());
+        opening.signature = Signature::from_bytes(&[0u8; 64]);
+
+        assert_eq!(
+            opening
+                .verify_signature(signer.public_key())
+                .expect_err("all-zero RAM-LFE opening signature must fail admission"),
+            iroha_crypto::Error::BadSignature
+        );
     }
 
     #[test]

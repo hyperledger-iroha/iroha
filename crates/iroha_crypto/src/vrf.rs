@@ -290,6 +290,9 @@ fn to_g1(bytes: &[u8]) -> Option<blstrs::G1Affine> {
     if bytes.len() != 48 {
         return None;
     }
+    if bytes.iter().all(|&byte| byte == 0) {
+        return None;
+    }
     let mut arr = [0u8; 48];
     arr.copy_from_slice(bytes);
     let point = blstrs::G1Affine::from_compressed(&arr).into_option()?;
@@ -304,6 +307,9 @@ fn to_g1(bytes: &[u8]) -> Option<blstrs::G1Affine> {
 
 fn to_g2(bytes: &[u8]) -> Option<blstrs::G2Affine> {
     if bytes.len() != 96 {
+        return None;
+    }
+    if bytes.iter().all(|&byte| byte == 0) {
         return None;
     }
     let mut arr = [0u8; 96];
@@ -488,6 +494,26 @@ mod tests {
         let proof = VrfProof::SigInG1(sig);
         let out = verify_small_with_chain(&pk, b"chain", b"input", &proof);
         assert!(out.is_none(), "identity signature must be rejected");
+    }
+
+    #[test]
+    fn vrf_rejects_all_zero_signature_material_normal() {
+        let (pk, _sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]))
+            .expect("BLS keypair");
+        let proof = VrfProof::SigInG2([0u8; 96]);
+
+        assert!(to_g2(&[0u8; 96]).is_none());
+        assert!(verify_normal_with_chain(&pk, b"chain", b"input", &proof).is_none());
+    }
+
+    #[test]
+    fn vrf_rejects_all_zero_signature_material_small() {
+        let (pk, _sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]))
+            .expect("BLS keypair");
+        let proof = VrfProof::SigInG1([0u8; 48]);
+
+        assert!(to_g1(&[0u8; 48]).is_none());
+        assert!(verify_small_with_chain(&pk, b"chain", b"input", &proof).is_none());
     }
 
     #[test]

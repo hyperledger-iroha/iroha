@@ -1,6 +1,6 @@
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::halo2::Sha256BlockCircuit;
-use rand_core::{OsRng, RngCore};
+use rand_core::{OsRng, TryRngCore};
 
 fn sha256_compress_ref(state: [u32; 8], block: &[u8; 64]) -> [u32; 8] {
     const K: [u32; 64] = [
@@ -87,10 +87,13 @@ fn test_sha256block_circuit_known_vector() {
 fn test_sha256block_circuit_random() {
     let mut rng = OsRng;
     let mut block = [0u8; 64];
-    rng.fill_bytes(&mut block);
+    rng.try_fill_bytes(&mut block)
+        .expect("OS RNG must fill SHA-256 circuit block fixture");
     let mut state = [0u32; 8];
     for s in &mut state {
-        *s = rng.next_u32();
+        *s = rng
+            .try_next_u32()
+            .expect("OS RNG must fill SHA-256 circuit state fixture");
     }
     let expected = sha256_compress_ref(state, &block);
     let circuit = Sha256BlockCircuit {

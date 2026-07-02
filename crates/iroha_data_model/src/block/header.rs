@@ -78,7 +78,7 @@ mod model {
         #[norito(default)]
         #[norito(skip_serializing_if = "Option::is_none")]
         pub npos_effects_hash: Option<HashOf<NposConsensusEffects>>,
-        /// Optional SCCP commitment root finalized after transaction execution in this block.
+        /// Optional SCCP commitment root finalized before signing this block.
         #[getset(get_copy = "pub", set = "pub")]
         pub sccp_commitment_root: Option<[u8; 32]>,
         /// Creation timestamp as Unix time in milliseconds.
@@ -502,11 +502,23 @@ impl From<BlockSignature> for wire::BlockSignatureWire {
     }
 }
 
-impl From<wire::BlockSignatureWire> for BlockSignature {
-    fn from(value: wire::BlockSignatureWire) -> Self {
-        let signature = Signature::from_bytes(&value.1);
-        BlockSignature::new(value.0, SignatureOf::from_signature(signature))
+impl TryFrom<wire::BlockSignatureWire> for BlockSignature {
+    type Error = ncore::Error;
+
+    fn try_from(value: wire::BlockSignatureWire) -> Result<Self, Self::Error> {
+        checked_block_signature_from_wire(value)
     }
+}
+
+fn checked_block_signature_from_wire(
+    value: wire::BlockSignatureWire,
+) -> Result<BlockSignature, ncore::Error> {
+    let signature = Signature::try_from_bytes(&value.1)
+        .map_err(|err| ncore::Error::Message(format!("invalid block signature payload: {err}")))?;
+    Ok(BlockSignature::new(
+        value.0,
+        SignatureOf::from_signature(signature),
+    ))
 }
 
 #[derive(Encode)]
@@ -632,18 +644,20 @@ impl BlockHeader {
         Duration::from_millis(self.creation_time_ms)
     }
 
-    /// Returns the consensus-level hash of the block header, excluding
-    /// post-execution roots which are validated after transaction execution.
+    /// Returns the consensus-level hash of the block header.
+    ///
+    /// `result_merkle_root` is validated after execution and remains outside
+    /// the consensus hash. `sccp_commitment_root` is included so block
+    /// signatures and commit QCs authenticate exported SCCP proofs.
     #[inline]
     pub fn hash(&self) -> HashOf<BlockHeader> {
         self.hash_without_execution_results()
     }
 
-    /// Computes the header hash without including post-execution roots.
+    /// Computes the header hash used by consensus signatures.
     #[inline]
     fn hash_without_execution_results(&self) -> HashOf<BlockHeader> {
-        let mut legacy = BlockHeaderForConsensusLegacy::from(self);
-        legacy.sccp_commitment_root = None;
+        let legacy = BlockHeaderForConsensusLegacy::from(self);
         if let Some(npos_effects_hash) = self.npos_effects_hash {
             let header = BlockHeaderForConsensusWithNposEffects {
                 height: legacy.height,
@@ -718,13 +732,12 @@ impl ncore::NoritoSerialize for BlockSignature {
 
 impl<'de> ncore::NoritoDeserialize<'de> for BlockSignature {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
-        let wire_repr = wire::BlockSignatureWire::deserialize(archived.cast());
-        wire_repr.into()
+        Self::try_deserialize(archived).expect("BlockSignature decode")
     }
 
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let wire_repr = wire::BlockSignatureWire::try_deserialize(archived.cast())?;
-        Ok(wire_repr.into())
+        checked_block_signature_from_wire(wire_repr)
     }
 }
 
@@ -787,21 +800,25 @@ mod tests {
         HashOf::new(&context)
     }
 
-    fn assert_sccp_commitment_root_ignored_by_hash(mut header: BlockHeader) {
+    fn assert_sccp_commitment_root_captured_by_hash(mut header: BlockHeader) {
         let base = header.hash();
 
         header.set_sccp_commitment_root(Some([0x42; 32]));
-        assert_eq!(
-            base,
-            header.hash(),
-            "SCCP commitment root is a post-execution root and must not affect consensus hash"
+        let first_root_hash = header.hash();
+        assert_ne!(
+            base, first_root_hash,
+            "SCCP commitment root must affect the consensus hash"
         );
 
         header.set_sccp_commitment_root(Some([0x7A; 32]));
-        assert_eq!(
-            base,
-            header.hash(),
-            "changing SCCP commitment root must not affect consensus hash"
+        let second_root_hash = header.hash();
+        assert_ne!(
+            base, second_root_hash,
+            "changing SCCP commitment root must keep affecting the consensus hash"
+        );
+        assert_ne!(
+            first_root_hash, second_root_hash,
+            "different SCCP commitment roots must produce different consensus hashes"
         );
     }
 
@@ -815,7 +832,10 @@ mod tests {
         assert_eq!(block_signature.index(), 42);
         assert_eq!(block_signature.signature(), &signature);
         let wire_repr = wire::BlockSignatureWire::from(&block_signature);
-        assert_eq!(BlockSignature::from(wire_repr.clone()), block_signature);
+        assert_eq!(
+            BlockSignature::try_from(wire_repr.clone()).expect("checked block signature wire"),
+            block_signature
+        );
 
         let encoded = norito::to_bytes(&block_signature).expect("encode block signature");
         let payload = &encoded[norito::core::Header::SIZE..];
@@ -842,6 +862,33 @@ mod tests {
             .signature()
             .verify_hash(keypair.public_key(), header.hash());
         assert!(ok.is_ok(), "decoded signature must verify the header hash");
+    }
+
+    #[test]
+    fn block_signature_try_deserialize_rejects_all_zero_payload() {
+        let invalid_wire = wire::BlockSignatureWire(0, vec![0_u8; 64]);
+        BlockSignature::try_from(invalid_wire.clone())
+            .expect_err("all-zero block signature wire must fail closed");
+        let invalid = BlockSignature::new(
+            0,
+            SignatureOf::from_signature(Signature::from_bytes(&[0_u8; 64])),
+        );
+        let encoded = norito::to_bytes(&invalid).expect("encode invalid block signature fixture");
+        let archived =
+            norito::from_bytes::<BlockSignature>(&encoded).expect("archive block signature");
+
+        let err =
+            <BlockSignature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived)
+                .expect_err("all-zero block signature payload must fail closed");
+        match err {
+            norito::core::Error::Message(message) => {
+                assert!(
+                    message.contains("all zero"),
+                    "unexpected block signature decode error: {message}"
+                );
+            }
+            other => panic!("unexpected block signature decode error: {other:?}"),
+        }
     }
 
     #[test]
@@ -1074,8 +1121,8 @@ mod tests {
     }
 
     #[test]
-    fn header_hash_ignores_sccp_commitment_root_for_all_consensus_hash_branches() {
-        assert_sccp_commitment_root_ignored_by_hash(BlockHeader::new(
+    fn header_hash_captures_sccp_commitment_root_for_all_consensus_hash_branches() {
+        assert_sccp_commitment_root_captured_by_hash(BlockHeader::new(
             nonzero!(7_u64),
             None,
             None,
@@ -1086,12 +1133,12 @@ mod tests {
 
         let mut with_context = BlockHeader::new(nonzero!(7_u64), None, None, None, 123, 0);
         with_context.set_execution_context_hash(Some(sample_execution_context_hash()));
-        assert_sccp_commitment_root_ignored_by_hash(with_context);
+        assert_sccp_commitment_root_captured_by_hash(with_context);
 
         let mut with_npos = BlockHeader::new(nonzero!(7_u64), None, None, None, 123, 0);
         with_npos.set_execution_context_hash(Some(sample_execution_context_hash()));
         with_npos.set_npos_effects_hash(Some(HashOf::new(&NposConsensusEffects::default())));
-        assert_sccp_commitment_root_ignored_by_hash(with_npos);
+        assert_sccp_commitment_root_captured_by_hash(with_npos);
     }
 
     #[test]
