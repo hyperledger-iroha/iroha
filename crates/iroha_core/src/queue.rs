@@ -6466,6 +6466,184 @@ pub mod tests {
     }
 
     #[test]
+    fn apply_lane_lifecycle_error_preserves_router_and_limits() {
+        let NexusFeeFixture { mut state, .. } =
+            nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let lane_catalog =
+            LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.lane_catalog = lane_catalog;
+        state
+            .set_nexus(nexus.clone())
+            .expect("apply initial Nexus config");
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
+            nexus.routing_policy.clone(),
+            nexus.dataspace_catalog.clone(),
+            nexus.lane_catalog.clone(),
+        ));
+        let lane_catalog = Arc::new(nexus.lane_catalog.clone());
+        let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
+        let mut queue = Queue::from_config_with_router_limits_and_catalogs(
+            Config {
+                transaction_time_to_live: Duration::from_secs(60),
+                capacity: nonzero!(8_usize),
+                capacity_per_user: nonzero!(4_usize),
+                ..Config::default()
+            },
+            tokio::sync::broadcast::Sender::new(1),
+            router,
+            QueueLimits::from_nexus(&nexus),
+            &lane_catalog,
+            &dataspace_catalog,
+            None,
+        );
+        queue.time_source = time_source;
+
+        let before_state_catalog = state.nexus_snapshot().lane_catalog;
+        let before_queue_catalog = queue.lane_catalog.read().as_ref().clone();
+        let before_limits = queue.queue_limits();
+
+        let mut forged_metadata = BTreeMap::new();
+        forged_metadata.insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        forged_metadata.insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "2".to_owned());
+        forged_metadata.insert("scheduler.teu_capacity".to_string(), "1".to_string());
+        let plan = LaneLifecyclePlan {
+            additions: vec![LaneConfig {
+                id: LaneId::new(1),
+                alias: "forged-elastic".to_string(),
+                metadata: forged_metadata,
+                ..LaneConfig::default()
+            }],
+            retire: Vec::new(),
+        };
+
+        let err = queue
+            .apply_lane_lifecycle(&mut state, &plan)
+            .expect_err("reserved autoscale metadata must reject before queue reconfiguration");
+        assert!(matches!(
+            err,
+            LaneLifecycleError::ReservedAutoscaleManagedLane(id) if id == LaneId::new(1)
+        ));
+        assert_eq!(
+            state.nexus_snapshot().lane_catalog,
+            before_state_catalog,
+            "rejected lifecycle plan must not mutate the committed catalog"
+        );
+        assert_eq!(
+            queue.lane_catalog.read().as_ref(),
+            &before_queue_catalog,
+            "rejected lifecycle plan must not refresh queue catalogs"
+        );
+        assert_eq!(
+            queue.queue_limits(),
+            before_limits,
+            "forged scheduler metadata from a rejected plan must not enter queue limits"
+        );
+        assert_eq!(
+            queue.queue_limits().for_lane(LaneId::new(1)),
+            before_limits.fallback,
+            "rejected lane-specific TEU capacity must keep falling back"
+        );
+    }
+
+    #[test]
+    fn apply_lane_lifecycle_repair_retire_clears_queue_limits() {
+        let retired_lane = LaneId::new(1);
+        let stale_teu_capacity = 321;
+        let mut state = state_with_future_created_autoscale_lane(7, 0);
+        {
+            let nexus = state.nexus.get_mut();
+            let mut lanes = nexus.lane_catalog.lanes().to_vec();
+            lanes
+                .iter_mut()
+                .find(|lane| lane.id == retired_lane)
+                .expect("future-created autoscale lane exists")
+                .metadata
+                .insert(
+                    "scheduler.teu_capacity".to_string(),
+                    stale_teu_capacity.to_string(),
+                );
+            nexus.lane_catalog =
+                LaneCatalog::new(nexus.lane_catalog.lane_count(), lanes).expect("lane catalog");
+            nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
+        }
+
+        let nexus = state.nexus_snapshot();
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
+            nexus.routing_policy.clone(),
+            nexus.dataspace_catalog.clone(),
+            nexus.lane_catalog.clone(),
+        ));
+        let lane_catalog = Arc::new(nexus.lane_catalog.clone());
+        let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
+        let mut queue = Queue::from_config_with_router_limits_and_catalogs(
+            Config {
+                transaction_time_to_live: Duration::from_secs(60),
+                capacity: nonzero!(8_usize),
+                capacity_per_user: nonzero!(4_usize),
+                ..Config::default()
+            },
+            tokio::sync::broadcast::Sender::new(1),
+            router,
+            QueueLimits::from_nexus(&nexus),
+            &lane_catalog,
+            &dataspace_catalog,
+            None,
+        );
+        queue.time_source = time_source;
+        assert_eq!(
+            queue.queue_limits().for_lane(retired_lane).teu_capacity,
+            stale_teu_capacity,
+            "test setup must expose the stale lane-specific TEU override"
+        );
+        assert!(
+            queue.queue_limits().per_lane.contains_key(&retired_lane),
+            "test setup must cache a lane-specific queue limit before repair"
+        );
+
+        let plan = LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: vec![retired_lane],
+        };
+        queue
+            .apply_lane_lifecycle(&mut state, &plan)
+            .expect("future-created autoscale lane should be explicitly repair-retirable");
+
+        assert!(
+            state
+                .nexus_snapshot()
+                .lane_catalog
+                .lanes()
+                .iter()
+                .all(|lane| lane.id != retired_lane),
+            "repair retire must remove the future-created autoscale lane from state"
+        );
+        assert!(
+            queue
+                .lane_catalog
+                .read()
+                .lanes()
+                .iter()
+                .all(|lane| lane.id != retired_lane),
+            "repair retire must refresh queue catalogs from accepted state"
+        );
+        let limits = queue.queue_limits();
+        assert!(
+            !limits.per_lane.contains_key(&retired_lane),
+            "repair retire must remove the stale lane-specific queue limit"
+        );
+        assert_eq!(
+            limits.for_lane(retired_lane),
+            limits.fallback,
+            "retired lane capacity must fall back after queue reconfiguration"
+        );
+    }
+
+    #[test]
     fn reroute_pending_transactions_with_state_rejects_pending_transactions_that_no_longer_route() {
         let NexusFeeFixture {
             mut state,

@@ -69,6 +69,13 @@ def local_conformance() -> dict:
 
 
 def staging_load(*, duration: int = 3_600, p95: int = 1_200) -> dict:
+    streams = [{"name": f"stream-{index:04d}"} for index in range(1_200)]
+    providers = [
+        {"name": "provider-a"},
+        {"name": "provider-b"},
+        {"name": "provider-c"},
+        {"name": "provider-d"},
+    ]
     payload = base("sorafs.gateway_load.staging_load.v1")
     payload.update(
         {
@@ -80,8 +87,10 @@ def staging_load(*, duration: int = 3_600, p95: int = 1_200) -> dict:
             "hardware_profile": {"name": "staging-c6i-2xlarge"},
             "cache_state": {"mode": "cold-cache"},
             "duration_seconds": duration,
-            "stream_count": 1_200,
-            "provider_count": 4,
+            "stream_count": len(streams),
+            "streams": streams,
+            "provider_count": len(providers),
+            "providers": providers,
             "success_rate_bps": 9_950,
             "error_rate_bps": 50,
             "p95_latency_ms": p95,
@@ -254,6 +263,66 @@ def test_local_conformance_scenarios_must_not_duplicate(tmp_path: Path) -> None:
     artifact = payload["required"]["local_conformance"]["artifacts"][0]
     assert "scenarios must not contain duplicate values" in artifact["errors"]
     assert "scenario_count must match unique scenarios count" in artifact["errors"]
+
+
+def test_staging_load_stream_count_must_match_unique_streams(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["stream_count"] += 1
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert "stream_count must match unique streams count" in artifact["errors"]
+
+
+def test_staging_load_streams_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["streams"].append({"name": "stream-0000"})
+    payload["stream_count"] = len(payload["streams"])
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert "streams must not contain duplicate values" in artifact["errors"]
+    assert "stream_count must match unique streams count" in artifact["errors"]
+
+
+def test_staging_load_provider_count_must_match_unique_providers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["provider_count"] += 1
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert "provider_count must match unique providers count" in artifact["errors"]
+
+
+def test_staging_load_providers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["providers"].append({"name": "provider-a"})
+    payload["provider_count"] = len(payload["providers"])
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert "providers must not contain duplicate values" in artifact["errors"]
+    assert "provider_count must match unique providers count" in artifact["errors"]
 
 
 def test_http3_committed_requires_passed_scenarios(tmp_path: Path) -> None:

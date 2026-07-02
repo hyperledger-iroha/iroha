@@ -18,6 +18,10 @@ production
 provider-a
 --provider-count
 2
+--provider-name
+provider-a
+--provider-name
+provider-b
 --snapshot-age-seconds
 120
 --ingest-lag-seconds

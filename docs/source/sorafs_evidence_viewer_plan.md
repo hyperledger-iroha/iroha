@@ -19,7 +19,11 @@ strict CSP/offline-mode controls, watermark metadata hashing, append-only access
 logs, anomaly events, audit digests, legal-hold binding, Governance DAG and
 transparency-ledger export coverage, and payload-free digest preimages for the
 session manifest, watermark metadata, access log, legal-hold receipt, and
-transparency report. It also rejects raw evidence, signed URLs, session tokens,
+transparency report. Evidence-viewer canaries also bind `session_count` to the
+unique canonical `sessions[].name` inventory, require `attested_session_count`
+and `logged_session_count` to match the `sessions[].attested` and
+`sessions[].logged` partitions, and reject duplicate session entries before
+promotion can report ready. It also rejects raw evidence, signed URLs, session tokens,
 response bodies, raw access logs, legal-hold receipt payloads, transparency
 report payloads, or watermark secrets.
 The moderation-panel rollout summary publishes the payload-free
@@ -48,7 +52,9 @@ missing viewer service.
 - `scripts/build_sorafs_evidence_viewer_canary.py` builds the payload-free
   `evidence_viewer` canary from reviewed deployment facts, requires every
   positive control claim explicitly, forces raw evidence/session-token/signed
-  URL/watermark-secret/body flags to `false`, validates the generated JSON with
+  URL/watermark-secret/body flags to `false`, requires reviewed
+  `--viewer-session` labels whose unique inventory matches `--session-count`,
+  validates the generated JSON with
   the same SFM-4b checker contract before writing, and writes atomically. It
   helps operators prepare reviewable canary evidence, but it still does not
   replace the browser viewer, streaming backend, watermark engine, WebAuthn
@@ -110,8 +116,8 @@ python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
   payloads must never enter rollout archives.
 - Use the payload-free `evidence_viewer` canary builder for staged review
   packets so every required role, viewer control, access-event kind, export
-  target, digest field, and positive control claim is explicit before the SFM-4b
-  rollout gate runs.
+  target, digest field, reviewed viewer session label, and positive control
+  claim is explicit before the SFM-4b rollout gate runs.
 - Add end-to-end security tests for unauthorized access, replay, stale URLs,
   audit-log tampering, and watermark metadata mismatch.
 - Collect a passing payload-free `evidence_viewer` canary through the SFM-4b

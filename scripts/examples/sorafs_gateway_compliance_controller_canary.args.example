@@ -8,6 +8,13 @@
 --bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --controller-instance-id compliance-controller-prod-a
 --feed-count 7
+--feed ofac
+--feed eu-sanctions
+--feed malware
+--feed csam-hash
+--feed legal-hold
+--feed regional-blocklist
+--feed appeal-overrides
 --verified-claim iroha_config_bound
 --verified-claim controller_service_enabled
 --verified-claim scheduler_config_bound

@@ -191,6 +191,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "revocation_list_digest_hex",
         "credential_count",
         "signed_credential_count",
+        "credentials",
         "canonical_norito_verified",
         "issuer_signature_verified",
         "issuer_key_policy_verified",
@@ -248,6 +249,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "proof_probe_count",
         "accepted_valid_proof_count",
         "rejected_invalid_proof_count",
+        "probes",
         "expired_proof_rejected",
         "revoked_proof_rejected",
         "replay_nullifier_rejected",
@@ -265,7 +267,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "revocation_list_digest_hex",
         "pop_snapshot_digest_hex",
         "sortition_probe_count",
+        "sortition_probes",
         "commit_reveal_probe_count",
+        "commit_reveal_probes",
         "juror_pool_bound",
         "moderation_case_binding_verified",
         "duplicate_nullifier_rejected",
@@ -357,6 +361,16 @@ def validate_issuer_bundle(payload: dict[str, Any], errors: list[str]) -> None:
         payload, "credential_count", "signed_credential_count", errors
     )
     require_minimum_value(credential_count, "credential_count", 1, errors)
+    require_string_inventory_count_match(
+        payload,
+        "credentials",
+        "credential_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "credentials", errors):
+        require_string(record, "name", errors)
     require_bool_true(payload, "canonical_norito_verified", errors)
     require_bool_true(payload, "issuer_signature_verified", errors)
     require_bool_true(payload, "issuer_key_policy_verified", errors)
@@ -455,6 +469,38 @@ def validate_verifier_service(
         errors,
         skip_zero_total=True,
     )
+    require_string_inventory_count_match(
+        payload,
+        "probes",
+        "proof_probe_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    accepted_probe_count = 0
+    rejected_probe_count = 0
+    for index, record in require_object_array(payload, "probes", errors):
+        require_string(record, "name", errors)
+        accepted_value = record.get("accepted")
+        if isinstance(accepted_value, bool):
+            if accepted_value:
+                accepted_probe_count += 1
+            else:
+                rejected_probe_count += 1
+        else:
+            errors.append(f"probes[{index}].accepted must be a boolean")
+    if (
+        isinstance(accepted, int)
+        and not isinstance(accepted, bool)
+        and accepted != accepted_probe_count
+    ):
+        errors.append("accepted_valid_proof_count must match accepted probes count")
+    if (
+        isinstance(rejected, int)
+        and not isinstance(rejected, bool)
+        and rejected != rejected_probe_count
+    ):
+        errors.append("rejected_invalid_proof_count must match rejected probes count")
     require_bool_true(payload, "expired_proof_rejected", errors)
     require_bool_true(payload, "revoked_proof_rejected", errors)
     require_bool_true(payload, "replay_nullifier_rejected", errors)
@@ -483,7 +529,27 @@ def validate_moderation_integration(payload: dict[str, Any], errors: list[str]) 
     require_hex(payload, "revocation_list_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "pop_snapshot_digest_hex", HEX64_LEN, errors)
     require_positive_int(payload, "sortition_probe_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "sortition_probes",
+        "sortition_probe_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "sortition_probes", errors):
+        require_string(record, "name", errors)
     require_positive_int(payload, "commit_reveal_probe_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "commit_reveal_probes",
+        "commit_reveal_probe_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "commit_reveal_probes", errors):
+        require_string(record, "name", errors)
     require_bool_true(payload, "juror_pool_bound", errors)
     require_bool_true(payload, "moderation_case_binding_verified", errors)
     require_bool_true(payload, "duplicate_nullifier_rejected", errors)

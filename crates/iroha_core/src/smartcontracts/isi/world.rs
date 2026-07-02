@@ -8,7 +8,8 @@ use crate::{
     prelude::*,
     state::{
         WorldTransaction, nexus_active_lane_dataspace, nexus_active_lane_dataspace_at_height,
-        nexus_catalog_geometry_lane_dataspace, public_lane_validator_record_matches_key,
+        nexus_catalog_geometry_lane_dataspace, public_lane_reward_record_matches_key,
+        public_lane_validator_record_matches_key,
     },
 };
 
@@ -15955,7 +15956,10 @@ pub mod isi {
                     .world
                     .public_lane_rewards
                     .iter()
-                    .find(|(_, record)| record.asset.definition() == asset_definition_id)
+                    .find(|(key, record)| {
+                        public_lane_reward_record_matches_key(key, record)
+                            && record.asset.definition() == asset_definition_id
+                    })
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
@@ -23036,6 +23040,66 @@ pub mod isi {
             assert!(
                 stx.world.asset_definitions.get(&cash_def).is_some(),
                 "asset definition should remain after rejected unregister"
+            );
+        }
+
+        #[test]
+        fn unregister_domain_ignores_mismatched_public_lane_reward_record_for_domain_asset() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register cleanup domain");
+            let reward_def = AssetDefinitionId::new(domain_id.clone(), "fee".parse().unwrap());
+            Register::asset_definition({
+                let __asset_definition_id = reward_def.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register cleanup-domain reward definition");
+            stx.world.public_lane_rewards.insert(
+                (LaneId::SINGLE, 1),
+                iroha_data_model::nexus::PublicLaneRewardRecord {
+                    lane_id: LaneId::new(1),
+                    epoch: 1,
+                    asset: AssetId::new(reward_def.clone(), ALICE_ID.clone()),
+                    total_reward: Numeric::new(1, 0),
+                    shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
+                        account: ALICE_ID.clone(),
+                        role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
+                        amount: Numeric::new(1, 0),
+                    }],
+                    metadata: Metadata::default(),
+                },
+            );
+
+            Unregister::domain(domain_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("mismatched public-lane reward row must not block domain unregister");
+
+            assert!(
+                stx.world.domains.get(&domain_id).is_none(),
+                "domain should be removed when only malformed rewards reference its assets"
+            );
+            assert!(
+                stx.world.asset_definitions.get(&reward_def).is_none(),
+                "domain asset definition should be removed"
+            );
+            assert!(
+                stx.world
+                    .public_lane_rewards
+                    .get(&(LaneId::SINGLE, 1))
+                    .is_some(),
+                "malformed reward row remains as stored"
             );
         }
 

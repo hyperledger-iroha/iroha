@@ -27883,6 +27883,15 @@ mod tests {
         }
     }
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        let mut material = [0u8; 32];
+        let domain = b"connect-bridge-test-seed";
+        material[..domain.len()].copy_from_slice(domain);
+        material[31] = seed;
+        KeyPair::try_from_seed(material.to_vec(), Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     fn take_privacy_output_bytes(out_ptr: *mut c_uchar, out_len: c_ulong) -> Vec<u8> {
         assert!(!out_ptr.is_null(), "privacy FFI output pointer must be set");
         assert!(out_len > 0, "privacy FFI output must not be empty");

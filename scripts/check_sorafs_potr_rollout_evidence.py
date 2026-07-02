@@ -172,7 +172,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "proof_stream_replay_verified",
         "trace_correlation_verified",
         "provider_count",
+        "providers",
         "receipt_count",
+        "receipts",
         "max_hot_latency_ms",
         "max_warm_latency_ms",
         "receipt_summary_digest_hex",
@@ -314,7 +316,27 @@ def validate_multi_provider_probe(
     require_bool_true(payload, "proof_stream_replay_verified", errors)
     require_bool_true(payload, "trace_correlation_verified", errors)
     require_minimum_int(payload, "provider_count", options.min_providers, errors)
+    require_string_inventory_count_match(
+        payload,
+        "providers",
+        "provider_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "providers", errors):
+        require_string(record, "name", errors)
     require_minimum_int(payload, "receipt_count", options.min_receipts, errors)
+    require_string_inventory_count_match(
+        payload,
+        "receipts",
+        "receipt_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "receipts", errors):
+        require_string(record, "name", errors)
     require_maximum_number(payload, "max_hot_latency_ms", options.max_hot_latency_ms, errors)
     require_maximum_number(
         payload,

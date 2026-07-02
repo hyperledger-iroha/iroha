@@ -31,6 +31,10 @@ DEPLOYMENT_ID = "sorafs-mainnet-2026-06"
 ENVIRONMENT = "production"
 
 
+def provider_inventory() -> list[dict[str, str]]:
+    return [{"name": "provider-a"}, {"name": "provider-b"}]
+
+
 def write_json(path: Path, payload: dict) -> Path:
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -64,6 +68,7 @@ def snapshot_summary(*, snapshot_id: str = SNAPSHOT_ID, generated_at: int = GENE
         "snapshot_id_hex": snapshot_id,
         "generated_at_unix": generated_at,
         "provider_count": 2,
+        "providers": provider_inventory(),
         "merkle_root_hex": MERKLE_ROOT,
     }
 
@@ -111,6 +116,7 @@ def verify_evidence(provider_id: str = "provider-a") -> dict:
         "snapshot_id_hex": SNAPSHOT_ID,
         "merkle_root_hex": MERKLE_ROOT,
         "provider_count": 2,
+        "providers": provider_inventory(),
         "valid": True,
         "provider_id": provider_id,
         "provider_score_bps": 9_400,
@@ -129,6 +135,7 @@ def metrics_evidence(*, snapshot_age: int = 120, ingest_lag: int = 60) -> dict:
         "snapshot_age_seconds": snapshot_age,
         "ingest_lag_seconds": ingest_lag,
         "provider_count": 2,
+        "providers": provider_inventory(),
         "response_bodies_included": False,
     }
 
@@ -156,6 +163,7 @@ def consumption_evidence() -> dict:
         "snapshot_id_hex": SNAPSHOT_ID,
         "merkle_root_hex": MERKLE_ROOT,
         "provider_count": 2,
+        "providers": provider_inventory(),
         "routing_score_consumed": True,
         "routing_weight_changed": True,
         "incentive_score_consumed": True,
@@ -343,6 +351,36 @@ def test_snapshot_status_must_be_allowed_when_present(tmp_path: Path) -> None:
         "latest.status must be accepted/published/ready/ok when present"
         in artifact["errors"]
     )
+
+
+def test_snapshot_provider_count_must_match_unique_providers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = snapshot_summary()
+    payload["provider_count"] = 3
+    write_json(tmp_path / "latest.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["latest"]["artifacts"][0]
+    assert "provider_count must match unique providers count" in artifact["errors"]
+
+
+def test_snapshot_providers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = snapshot_summary()
+    payload["providers"].append({"name": "provider-a"})
+    payload["provider_count"] = len(payload["providers"])
+    write_json(tmp_path / "latest.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["latest"]["artifacts"][0]
+    assert "providers must not contain duplicate values" in artifact["errors"]
+    assert "provider_count must match unique providers count" in artifact["errors"]
 
 
 def test_events_must_carry_positive_limit(tmp_path: Path) -> None:

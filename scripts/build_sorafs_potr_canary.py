@@ -86,6 +86,29 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    count_option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return reviewed unique inventory labels whose count matches a CLI count."""
+
+    items = list(values)
+    if not items:
+        errors.append(f"{option} is required for multi_provider_probe")
+    for index, item in enumerate(items):
+        validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+    unique_items = set(items)
+    if len(unique_items) != len(items):
+        errors.append(f"{option} must not contain duplicates")
+    if len(unique_items) != expected_count:
+        errors.append(f"{option} unique values must match {count_option}")
+    return items
+
+
 def validate_output_path(path: Path, errors: list[str]) -> None:
     """Reject unsafe output targets before writing a canary artifact."""
 
@@ -169,6 +192,12 @@ def build_route_records(args: argparse.Namespace, routes: Sequence[str]) -> list
     ]
 
 
+def build_inventory_records(names: Sequence[str]) -> list[dict[str, str]]:
+    """Build reviewed payload-free inventory records."""
+
+    return [{"name": name} for name in names]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free PoTR rollout canary payload."""
 
@@ -183,7 +212,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "proof_stream_replay_verified": True,
                 "trace_correlation_verified": True,
                 "provider_count": args.provider_count,
+                "providers": build_inventory_records(args.providers),
                 "receipt_count": args.receipt_count,
+                "receipts": build_inventory_records(args.receipts),
                 "max_hot_latency_ms": args.hot_latency_ms,
                 "max_warm_latency_ms": args.warm_latency_ms,
                 "receipt_summary_digest_hex": args.receipt_summary_digest_hex,
@@ -312,6 +343,20 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             split_csv_values(args.tier),
             allowed=REQUIRED_TIERS,
             option="--tier",
+            errors=errors,
+        )
+        args.providers = validate_reviewed_inventory(
+            split_csv_values(args.provider),
+            expected_count=args.provider_count,
+            option="--provider",
+            count_option="--provider-count",
+            errors=errors,
+        )
+        args.receipts = validate_reviewed_inventory(
+            split_csv_values(args.receipt),
+            expected_count=args.receipt_count,
+            option="--receipt",
+            count_option="--receipt-count",
             errors=errors,
         )
     elif args.kind == "receipt_validation":
@@ -486,6 +531,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pq-key-roster-digest-hex")
     parser.add_argument("--reputation-weight-policy-digest-hex")
     parser.add_argument("--tier", action="append", default=[])
+    parser.add_argument("--provider", action="append", default=[])
+    parser.add_argument("--receipt", action="append", default=[])
     parser.add_argument("--route", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)

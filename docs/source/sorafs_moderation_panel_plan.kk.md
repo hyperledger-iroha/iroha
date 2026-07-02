@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_moderation_panel_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7ca9ebd98c684453f4a1b429784df51a36d76d00cb042dfbe4c6a3007a7e57fc
-source_last_modified: "2026-06-25T17:11:06+00:00"
-translation_last_reviewed: 2026-06-25
-source_mtime: 2026-07-01T19:51:07.208607+00:00
+source_hash: ebafcf5e29c2e62abdfc5d8dabeb1f50a2a142bad2c4280f23a8d3bd97e11585
+source_last_modified: "2026-07-02T10:33:51.542605+00:00"
+translation_last_reviewed: 2026-07-02
+source_mtime: 2026-07-02T10:33:51.542605+00:00
 ---
 
 # Moderation Appeals & Sortition Panels
@@ -191,14 +191,26 @@ input for positive safety claims, complete intake/operator/ballot/decision
 route, viewer role/security/event/export, commit-reveal scenario, publication
 target, outcome, and metric coverage where applicable, shared
 case/roster/tally digest bindings, and threshold-bounded route, event-lag,
-viewer-URL, panel-size, peer-count, and reviewed end-to-end/governance
-policy-digest facts. It forces raw evidence,
+viewer-URL, panel-size, peer-count, validator-count, reviewed peer/validator
+labels, reviewed appeal-intake `--case` labels whose unique inventory matches
+`--case-count`, reviewed sortition-roster `--roster-juror` labels whose unique
+inventory matches `--panel-size`, reviewed evidence-viewer `--viewer-session` labels whose unique
+inventory matches `--session-count`, reviewed juror-notification
+`--notification` and `--juror` labels whose unique inventories match the
+notification and juror counts, reviewed commit/reveal `--commit` and `--reveal`
+labels whose unique inventories match the commit and reveal counts, and
+reviewed settlement-integration `--settlement` labels whose unique inventory
+matches `--settlement-count`, reviewed end-to-end `--panel-case` labels whose
+unique inventory matches `--case-count`, and reviewed end-to-end/governance policy-digest
+facts. It forces raw
+evidence,
 commit/reveal payload, decision, transaction, ledger, response body, signed URL,
 session token, private juror data, and watermark secret inclusion flags to
 `false`, prevalidates the generated artifact with
 `check_sorafs_moderation_panel_rollout_evidence.py`, and writes the JSON
 atomically without following output symlinks. Example argfiles are checked in
-for the appeal-intake anchor and commit/reveal tally evidence:
+for the appeal-intake anchor, commit/reveal tally, and end-to-end panel
+evidence:
 
 ```sh
 python3 scripts/build_sorafs_moderation_panel_canary.py \
@@ -206,6 +218,9 @@ python3 scripts/build_sorafs_moderation_panel_canary.py \
 
 python3 scripts/build_sorafs_moderation_panel_canary.py \
   @scripts/examples/sorafs_moderation_panel_commit_reveal_canary.args.example
+
+python3 scripts/build_sorafs_moderation_panel_canary.py \
+  @scripts/examples/sorafs_moderation_panel_e2e_canary.args.example
 ```
 
 The checker recognizes `sorafs.moderation_panel.*` SFM-4b rollout schemas for
@@ -224,9 +239,41 @@ and every tally-bound artifact shares a valid roster-bound commit/reveal
 `case_digest_hex`/`roster_hash_hex`/`tally_digest_hex` tuple. Sortition rosters
 that fail appeal-intake binding and commit/reveal runs that fail roster binding
 do not anchor downstream rollout evidence.
+Appeal-intake artifacts also bind `case_count` to the unique canonical
+`cases[].name` inventory, require `accepted_case_count` to match the
+`cases[].accepted` partition, and reject duplicate case entries before
+promotion can report ready.
+Sortition-roster artifacts also bind `panel_size` to the unique canonical
+`jurors[].name` inventory, require `panel_size` to match the
+`jurors[].eligible` partition, and reject duplicate roster juror entries before
+promotion can report ready.
 Appeal-intake, operator-workflow, commit/reveal, and decision-publication
 artifacts also bind `route_count` to the unique canonical `routes[].name`
 inventory and reject duplicate route entries before promotion can report ready.
+Evidence-viewer artifacts also bind `session_count` to the unique canonical
+`sessions[].name` inventory, require `attested_session_count` and
+`logged_session_count` to match the `sessions[].attested` and
+`sessions[].logged` partitions, and reject duplicate session entries before
+promotion can report ready.
+Juror-notification artifacts also bind `notification_count` and `juror_count`
+to the unique canonical `notifications[].name` and `jurors[].name`
+inventories, require `delivered_notification_count` to match the
+`notifications[].delivered` partition, and reject duplicate notification or
+juror entries before promotion can report ready.
+Commit/reveal artifacts also bind `commit_count` and `reveal_count` to the
+unique canonical `commits[].name` and `reveals[].name` inventories, reject
+duplicate commit or reveal entries, and reject reveal totals above the reviewed
+commit total before promotion can report ready.
+Settlement-integration artifacts also bind `settlement_count` to the unique
+canonical `settlements[].name` inventory and reject duplicate settlement
+entries before promotion can report ready.
+End-to-end panel artifacts also bind `peer_count` and `validator_count` to the
+unique canonical `peers[].name` and `validators[].name` inventories and reject
+duplicate peer or validator entries before promotion can report ready.
+End-to-end panel artifacts also bind `case_count` to the unique canonical
+`cases[].name` inventory, require `case_count` to match the `cases[].passed`
+partition, and reject duplicate end-to-end case entries before promotion can
+report ready.
 The gate also requires end-to-end panel evidence to carry `policy_digest_hex`,
 publishes those values as `valid_policy_digests`, and requires governance
 approval `policy_digest_hex` to match one of those valid panel policy digests.

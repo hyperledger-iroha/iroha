@@ -10427,11 +10427,20 @@ mod stake_snapshot_tests {
         let revivable_record_owned_kp = crate::state::checked_keypair();
         let terminal_key_owned_kp = crate::state::checked_keypair();
         let unrelated_kp = crate::state::checked_keypair();
+        let mismatched_key_owned_kp = crate::state::checked_keypair();
+        let mismatched_key_record_kp = crate::state::checked_keypair();
+        let mismatched_record_key_kp = crate::state::checked_keypair();
+        let mismatched_record_owned_kp = crate::state::checked_keypair();
         let revivable_key_owned = DMAccountId::of(revivable_key_owned_kp.public_key().clone());
         let revivable_record_owned =
             DMAccountId::of(revivable_record_owned_kp.public_key().clone());
         let terminal_key_owned = DMAccountId::of(terminal_key_owned_kp.public_key().clone());
         let unrelated = DMAccountId::of(unrelated_kp.public_key().clone());
+        let mismatched_key_owned = DMAccountId::of(mismatched_key_owned_kp.public_key().clone());
+        let mismatched_key_record = DMAccountId::of(mismatched_key_record_kp.public_key().clone());
+        let mismatched_record_key = DMAccountId::of(mismatched_record_key_kp.public_key().clone());
+        let mismatched_record_owned =
+            DMAccountId::of(mismatched_record_owned_kp.public_key().clone());
         let record_for = |lane_id: LaneId,
                           validator: AccountId,
                           peer_id: PeerId,
@@ -10472,6 +10481,24 @@ mod stake_snapshot_tests {
                 ),
             );
             block.insert(
+                (reset_lane, mismatched_key_owned.clone()),
+                record_for(
+                    retained_lane,
+                    mismatched_key_record.clone(),
+                    PeerId::from(mismatched_key_record_kp.public_key().clone()),
+                    PublicLaneValidatorStatus::Active,
+                ),
+            );
+            block.insert(
+                (retained_lane, mismatched_record_key.clone()),
+                record_for(
+                    reset_lane,
+                    mismatched_record_owned.clone(),
+                    PeerId::from(mismatched_record_owned_kp.public_key().clone()),
+                    PublicLaneValidatorStatus::Active,
+                ),
+            );
+            block.insert(
                 (reset_lane, terminal_key_owned.clone()),
                 record_for(
                     reset_lane,
@@ -10498,8 +10525,8 @@ mod stake_snapshot_tests {
 
         assert_eq!(
             updates.len(),
-            2,
-            "only revivable records owned by the reset lane key or embedded lane should update"
+            4,
+            "only revivable records owned by the reset lane key or embedded lane should update, even when the embedded validator account is stale"
         );
         for (key, record) in &updates {
             assert!(
@@ -10518,6 +10545,18 @@ mod stake_snapshot_tests {
                 .iter()
                 .any(|(key, _)| key == &(retained_lane, revivable_record_owned.clone())),
             "embedded record-lane ownership must be treated as reset ownership"
+        );
+        assert!(
+            updates
+                .iter()
+                .any(|(key, _)| key == &(reset_lane, mismatched_key_owned.clone())),
+            "storage-key reset ownership must terminalize stale rows even when the embedded validator account differs"
+        );
+        assert!(
+            updates
+                .iter()
+                .any(|(key, _)| key == &(retained_lane, mismatched_record_key.clone())),
+            "embedded record-lane reset ownership must terminalize stale rows even when the storage-key validator differs"
         );
         assert!(
             updates
@@ -26846,6 +26885,26 @@ impl State {
         Ok(())
     }
 
+    fn prune_committed_lane_lifecycle_state(&self, update: &LaneLifecycleCatalogUpdate) {
+        if !update.lanes_to_reset.is_empty() {
+            self.prune_axt_replay_ledger_for_lanes(&update.lanes_to_reset);
+            self.prune_da_pin_intent_world_indexes_for_lanes(&update.lanes_to_reset);
+            self.prune_public_lane_economic_state_for_lanes(&update.lanes_to_reset);
+            self.prune_verified_lane_relay_contract_state_for_lanes(&update.lanes_to_reset);
+            self.deactivate_public_lane_validators_for_reset_lanes(&update.lanes_to_reset);
+        }
+        let active_lane_ids: BTreeSet<_> = update
+            .updated_catalog
+            .lanes()
+            .iter()
+            .map(|lane| lane.id)
+            .collect();
+        self.prune_lane_relay_emergency_validators_for_reset_or_inactive_lanes(
+            &update.lanes_to_reset,
+            &active_lane_ids,
+        );
+    }
+
     fn apply_committed_autoscale_lane_geometry(
         &self,
         pending: &PendingAutoscaleLaneLifecycle,
@@ -31927,19 +31986,26 @@ impl<'state> StateBlock<'state> {
                 tx_validate_result,
             )
         };
+        let staged_block_runtime_effects = pending_autoscale_lifecycle.is_some()
+            || pending_da_commitments.is_some()
+            || pending_da_pin_intents.is_some()
+            || !verified_lane_relay_records.is_empty();
+        let tx_validate_accepted = tx_validate_result.is_ok();
         let mut preflight_error = None;
         if let Err(err) = tx_validate_result {
-            if !matches!(err, TransactionsBlockError::MissingInsertBlock) {
+            if !matches!(err, TransactionsBlockError::MissingInsertBlock)
+                || staged_block_runtime_effects
+            {
                 preflight_error = Some(err);
             }
         }
         let autoscale_lifecycle_guard =
-            if preflight_error.is_none() && pending_autoscale_lifecycle.is_some() {
+            if tx_validate_accepted && pending_autoscale_lifecycle.is_some() {
                 Some(state_ref.lane_lifecycle_lock.lock())
             } else {
                 None
             };
-        let autoscale_storage_hold = if preflight_error.is_none() {
+        let autoscale_storage_hold = if tx_validate_accepted {
             if let Some(pending) = &pending_autoscale_lifecycle {
                 let autoscale_start = Instant::now();
                 if let Err(err) =
@@ -31963,6 +32029,7 @@ impl<'state> StateBlock<'state> {
             return Err(err);
         }
         block_hashes.prepare_commit();
+        let mut block_metadata_committed = false;
         {
             let state_write_lock_wait_start = Instant::now();
             let _state_write_lock = state_write_lock.lock();
@@ -31971,7 +32038,23 @@ impl<'state> StateBlock<'state> {
             let _view_generation = state_ref.begin_state_view_write();
             let state_write_lock_hold_start = Instant::now();
             let mut commit_error = None;
-            let autoscale_hold = if commit_error.is_none() {
+            let tx_commit_start = Instant::now();
+            let tx_commit_result = transactions.commit();
+            let tx_commit_hold = tx_commit_start.elapsed();
+            let tx_commit_accepted = tx_commit_result.is_ok();
+            if let Err(err) = tx_commit_result {
+                if !matches!(err, TransactionsBlockError::MissingInsertBlock)
+                    || staged_block_runtime_effects
+                {
+                    commit_error = Some(err);
+                }
+            }
+            let publish_block_runtime_effects = commit_error.is_none() && tx_commit_accepted;
+            // Publish block-level runtime side effects only after the transaction
+            // batch is accepted; aborted transaction commits must not leak lane
+            // lifecycle, DA indexes, or commit-topology changes into the
+            // committed state view.
+            let autoscale_hold = if publish_block_runtime_effects {
                 if let Some(pending) = &pending_autoscale_lifecycle {
                     let autoscale_start = Instant::now();
                     if let Err(err) = state_ref.apply_committed_autoscale_lane_lifecycle(pending) {
@@ -31989,7 +32072,7 @@ impl<'state> StateBlock<'state> {
             } else {
                 Duration::ZERO
             };
-            let da_commitments_hold = if commit_error.is_none() {
+            let da_commitments_hold = if publish_block_runtime_effects {
                 if let Some(pending) = &pending_da_commitments {
                     let da_start = Instant::now();
                     state_ref.apply_committed_da_commitment_bundle(pending);
@@ -32000,7 +32083,7 @@ impl<'state> StateBlock<'state> {
             } else {
                 Duration::ZERO
             };
-            let da_pin_intents_hold = if commit_error.is_none() {
+            let da_pin_intents_hold = if publish_block_runtime_effects {
                 if let Some(pending) = &pending_da_pin_intents {
                     let pin_start = Instant::now();
                     state_ref.apply_committed_da_pin_intent_bundle(
@@ -32015,23 +32098,20 @@ impl<'state> StateBlock<'state> {
             } else {
                 Duration::ZERO
             };
-            if let Some(err) = commit_error.take() {
-                return Err(err);
-            }
-            let prev_topology_start = Instant::now();
-            prev_committed_topology.commit();
-            let prev_topology_hold = prev_topology_start.elapsed();
-            let commit_topology_start = Instant::now();
-            committed_topology.commit();
-            let commit_topology_hold = commit_topology_start.elapsed();
-            let tx_commit_start = Instant::now();
-            let tx_commit_result = transactions.commit();
-            let tx_commit_hold = tx_commit_start.elapsed();
-            if let Err(err) = tx_commit_result {
-                if !matches!(err, TransactionsBlockError::MissingInsertBlock) {
-                    commit_error = Some(err);
-                }
-            }
+            let prev_topology_hold = if publish_block_runtime_effects {
+                let prev_topology_start = Instant::now();
+                prev_committed_topology.commit();
+                prev_topology_start.elapsed()
+            } else {
+                Duration::ZERO
+            };
+            let commit_topology_hold = if publish_block_runtime_effects {
+                let commit_topology_start = Instant::now();
+                committed_topology.commit();
+                commit_topology_start.elapsed()
+            } else {
+                Duration::ZERO
+            };
             let world_hold = if commit_error.is_none() {
                 let world_start = Instant::now();
                 *state_ref.sccp_route_manifests.write() = zk.sccp_route_manifests.clone();
@@ -32040,13 +32120,17 @@ impl<'state> StateBlock<'state> {
                 // first and then world storage transactions; committing block hashes first can
                 // invert that order and deadlock under contention.
                 world.commit();
+                if let Some(pending) = &pending_autoscale_lifecycle {
+                    state_ref.prune_committed_lane_lifecycle_state(&pending.catalog_update);
+                }
                 world_start.elapsed()
             } else {
                 Duration::ZERO
             };
-            let block_hashes_hold = if commit_error.is_none() {
+            let block_hashes_hold = if publish_block_runtime_effects {
                 let block_hashes_start = Instant::now();
                 block_hashes.commit();
+                block_metadata_committed = true;
                 block_hashes_start.elapsed()
             } else {
                 Duration::ZERO
@@ -32117,7 +32201,7 @@ impl<'state> StateBlock<'state> {
             }
         }
         drop(autoscale_lifecycle_guard);
-        if !verified_lane_relay_records.is_empty() {
+        if block_metadata_committed && !verified_lane_relay_records.is_empty() {
             let hydrated =
                 state_ref.hydrate_verified_lane_relay_records(verified_lane_relay_records);
             debug!(
@@ -32125,7 +32209,9 @@ impl<'state> StateBlock<'state> {
                 hydrated, "hydrated verified lane relay records after block commit"
             );
         }
-        state_ref.update_latest_block_header_cache(_curr_block);
+        if block_metadata_committed {
+            state_ref.update_latest_block_header_cache(_curr_block);
+        }
         if confidential_registry_dirty {
             state_ref.confidential_digest_cache.bump();
         }
@@ -32173,11 +32259,14 @@ impl<'state> StateBlock<'state> {
                 record_tiered_snapshot_metrics(&backend, &state_ref.telemetry);
             }
         }
-        state_ref.enforce_nexus_storage_budget(block_height);
-        if replay_compatibility {
-            state_ref.set_query_index_status(block_height, state_ref.latest_block_hash_fast());
-        } else {
-            state_ref.persist_query_index_status(block_height, state_ref.latest_block_hash_fast());
+        if block_metadata_committed {
+            state_ref.enforce_nexus_storage_budget(block_height);
+            if replay_compatibility {
+                state_ref.set_query_index_status(block_height, state_ref.latest_block_hash_fast());
+            } else {
+                state_ref
+                    .persist_query_index_status(block_height, state_ref.latest_block_hash_fast());
+            }
         }
         Ok(())
     }
@@ -43718,6 +43807,12 @@ mod tests {
         let mut world = World::default();
         let validator = ALICE_ID.clone();
         let staker = BOB_ID.clone();
+        let mismatched_validator_keypair = crate::state::checked_keypair();
+        let mismatched_validator =
+            AccountId::new(mismatched_validator_keypair.public_key().clone());
+        let mismatched_staker_keypair = crate::state::checked_keypair();
+        let mismatched_staker = AccountId::new(mismatched_staker_keypair.public_key().clone());
+        let mismatched_lane = LaneId::new(99);
         let stake_asset_definition = AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").expect("stake asset domain"),
             "stake".parse().expect("stake asset name"),
@@ -43732,6 +43827,22 @@ mod tests {
                 validator: validator.clone(),
                 peer_id: PeerId::from(validator.signatory().clone()),
                 stake_account: validator.clone(),
+                total_stake: Numeric::new(2_000, 0),
+                self_stake: Numeric::new(1_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: Some(0),
+                activation_height: Some(1),
+                last_reward_epoch: Some(7),
+            },
+        );
+        world.public_lane_validators.insert(
+            (LaneId::SINGLE, mismatched_validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: mismatched_lane,
+                validator: mismatched_validator.clone(),
+                peer_id: PeerId::from(mismatched_validator.signatory().clone()),
+                stake_account: mismatched_validator.clone(),
                 total_stake: Numeric::new(2_000, 0),
                 self_stake: Numeric::new(1_000, 0),
                 metadata: Metadata::default(),
@@ -43759,6 +43870,17 @@ mod tests {
                 metadata: Metadata::default(),
             },
         );
+        world.public_lane_stake_shares.insert(
+            (LaneId::SINGLE, validator.clone(), mismatched_staker.clone()),
+            PublicLaneStakeShare {
+                lane_id: mismatched_lane,
+                validator: validator.clone(),
+                staker: mismatched_staker.clone(),
+                bonded: Numeric::new(400, 0),
+                pending_unbonds: BTreeMap::new(),
+                metadata: Metadata::default(),
+            },
+        );
         world.public_lane_rewards.insert(
             (LaneId::SINGLE, 7),
             PublicLaneRewardRecord {
@@ -43770,6 +43892,21 @@ mod tests {
                     account: validator.clone(),
                     role: PublicLaneRewardRole::Validator,
                     amount: Numeric::new(77, 0),
+                }],
+                metadata: Metadata::default(),
+            },
+        );
+        world.public_lane_rewards.insert(
+            (LaneId::SINGLE, 8),
+            PublicLaneRewardRecord {
+                lane_id: mismatched_lane,
+                epoch: 9,
+                asset: reward_asset.clone(),
+                total_reward: Numeric::new(88, 0),
+                shares: vec![PublicLaneRewardShare {
+                    account: validator.clone(),
+                    role: PublicLaneRewardRole::Validator,
+                    amount: Numeric::new(88, 0),
                 }],
                 metadata: Metadata::default(),
             },
@@ -43827,6 +43964,42 @@ mod tests {
             view.public_lane_reward_claims()
                 .get(&(LaneId::SINGLE, validator, reward_asset)),
             Some(&6)
+        );
+        assert!(
+            view.public_lane_validators()
+                .get(&(LaneId::SINGLE, mismatched_validator.clone()))
+                .is_none(),
+            "snapshot restore must not preserve stale validator storage key rows"
+        );
+        assert!(
+            view.public_lane_validators()
+                .get(&(mismatched_lane, mismatched_validator))
+                .is_none(),
+            "snapshot restore must not normalize mismatched validator rows to embedded keys"
+        );
+        assert!(
+            view.public_lane_stake_shares()
+                .get(&(LaneId::SINGLE, ALICE_ID.clone(), mismatched_staker.clone()))
+                .is_none(),
+            "snapshot restore must not preserve stale stake-share storage key rows"
+        );
+        assert!(
+            view.public_lane_stake_shares()
+                .get(&(mismatched_lane, ALICE_ID.clone(), mismatched_staker))
+                .is_none(),
+            "snapshot restore must not normalize mismatched stake-share rows to embedded keys"
+        );
+        assert!(
+            view.public_lane_rewards()
+                .get(&(LaneId::SINGLE, 8))
+                .is_none(),
+            "snapshot restore must not preserve stale reward storage key rows"
+        );
+        assert!(
+            view.public_lane_rewards()
+                .get(&(mismatched_lane, 9))
+                .is_none(),
+            "snapshot restore must not normalize mismatched reward rows to embedded keys"
         );
     }
     use crate::{
@@ -47463,6 +47636,121 @@ mod tests {
         );
         assert_eq!(nexus.autoscale.last_transition_height, 0);
         assert_eq!(state.transactions.view().latest_height_for_tests(), 0);
+    }
+
+    #[test]
+    fn missing_insert_block_does_not_publish_staged_autoscale_runtime_effects() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let cold_root = temp_dir.path().join("cold");
+        let initial_config = RuntimeLaneConfig::default();
+        let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                3,
+                100,
+            ))
+            .expect("apply autoscale test nexus config");
+        *state.tiered_backend.lock() =
+            TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
+
+        let elastic_lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 2);
+        let updated_catalog =
+            LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+                .expect("autoscale updated catalog");
+        let updated_config = RuntimeLaneConfig::from_catalog(&updated_catalog);
+        let elastic_entry = updated_config
+            .entry(LaneId::new(1))
+            .expect("elastic lane entry");
+        let elastic_blocks_dir = elastic_entry.blocks_dir(&store_root);
+        let elastic_snapshot_dir = cold_root.join("lanes").join(&elastic_entry.kura_segment);
+
+        let stale_lane = LaneId::new(9);
+        let retained_lane = LaneId::SINGLE;
+        let override_set = LaneRelayEmergencyValidatorSet {
+            peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+            expires_at_height: 10,
+            metadata: Metadata::default(),
+        };
+        {
+            let mut world_block = state.world.block();
+            world_block
+                .lane_relay_emergency_validators
+                .insert(stale_lane, override_set.clone());
+            world_block
+                .lane_relay_emergency_validators
+                .insert(retained_lane, override_set);
+            world_block.commit();
+        }
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        kura.store_block(Arc::new(first.clone()))
+            .expect("store previous autoscale block");
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        let mut state_block = state.block(second.header());
+        state_block.add_committed_fragments(20);
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        state_block.maybe_apply_nexus_autoscale(&committed_second);
+
+        assert!(
+            state_block.pending_autoscale_lifecycle.is_some(),
+            "hot block should stage autoscale before transaction insertion is checked"
+        );
+        assert!(
+            state_block
+                .world
+                .lane_relay_emergency_validators
+                .get(&stale_lane)
+                .is_none(),
+            "staged autoscale cleanup should be visible only in the block-local world"
+        );
+
+        let err = state_block
+            .commit()
+            .expect_err("missing inserted transaction block must reject staged autoscale effects");
+        assert!(matches!(err, TransactionsBlockError::MissingInsertBlock));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::SINGLE],
+            "missing insert must not publish the staged autoscale lane"
+        );
+        assert_eq!(nexus.autoscale.last_transition_height, 0);
+        assert_eq!(state.transactions.view().latest_height_for_tests(), 0);
+        assert!(
+            !elastic_blocks_dir.exists(),
+            "missing insert must reject before creating Kura storage"
+        );
+        assert!(
+            !elastic_snapshot_dir.exists(),
+            "missing insert must reject before creating tiered storage"
+        );
+
+        let view = state.world.view();
+        assert!(
+            view.lane_relay_emergency_validators()
+                .get(&stale_lane)
+                .is_some(),
+            "missing insert must not commit block-local stale-lane cleanup"
+        );
+        assert!(
+            view.lane_relay_emergency_validators()
+                .get(&retained_lane)
+                .is_some(),
+            "missing insert must preserve active-lane emergency overrides"
+        );
     }
 
     #[test]
@@ -52443,16 +52731,38 @@ mod tests {
 
         let validator = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let retired_staker = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let embedded_retired_staker =
+            AccountId::new(crate::state::checked_keypair().public_key().clone());
         let retained_staker = AccountId::new(crate::state::checked_keypair().public_key().clone());
         let reward_asset_definition = AssetDefinitionId::new(
             DomainId::try_new("sameblockrewards", "universal").expect("reward asset domain"),
             "autoscale".parse().expect("reward asset name"),
         );
         let reward_asset = AssetId::new(reward_asset_definition, validator.clone());
+        let embedded_reward_asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("sameblockembeddedrewards", "universal")
+                .expect("embedded reward asset domain"),
+            "autoscale".parse().expect("embedded reward asset name"),
+        );
+        let embedded_reward_asset =
+            AssetId::new(embedded_reward_asset_definition, validator.clone());
         let retired_keys = (
             (retired_lane_id, validator.clone(), retired_staker.clone()),
             (retired_lane_id, 7),
             (retired_lane_id, validator.clone(), reward_asset.clone()),
+        );
+        let embedded_retired_keys = (
+            (
+                LaneId::SINGLE,
+                validator.clone(),
+                embedded_retired_staker.clone(),
+            ),
+            (LaneId::SINGLE, 9),
+            (
+                LaneId::SINGLE,
+                validator.clone(),
+                embedded_reward_asset.clone(),
+            ),
         );
         let retained_keys = (
             (LaneId::SINGLE, validator.clone(), retained_staker.clone()),
@@ -52507,6 +52817,18 @@ mod tests {
             .public_lane_reward_claims
             .insert(retired_keys.2.clone(), 6);
         state_block.world.public_lane_stake_shares.insert(
+            embedded_retired_keys.0.clone(),
+            stake_record(retired_lane_id, embedded_retired_staker),
+        );
+        state_block.world.public_lane_rewards.insert(
+            embedded_retired_keys.1,
+            reward_record(retired_lane_id, embedded_retired_keys.1.1),
+        );
+        state_block
+            .world
+            .public_lane_reward_claims
+            .insert(embedded_retired_keys.2.clone(), 8);
+        state_block.world.public_lane_stake_shares.insert(
             retained_keys.0.clone(),
             stake_record(LaneId::SINGLE, retained_staker),
         );
@@ -52534,6 +52856,14 @@ mod tests {
                 .get(&retired_keys.0)
                 .is_some(),
             "test setup must stage same-block retired-lane economics"
+        );
+        assert!(
+            state_block
+                .world
+                .public_lane_stake_shares
+                .get(&embedded_retired_keys.0)
+                .is_some(),
+            "test setup must stage same-block economics with a surviving key and retired embedded lane"
         );
 
         let committed_second = ValidBlock::new_unverified_for_tests(second)
@@ -52577,6 +52907,30 @@ mod tests {
             state_block
                 .world
                 .public_lane_stake_shares
+                .get(&embedded_retired_keys.0)
+                .is_none(),
+            "autoscale scale-in must prune same-block stake shares whose embedded lane is retired"
+        );
+        assert!(
+            state_block
+                .world
+                .public_lane_rewards
+                .get(&embedded_retired_keys.1)
+                .is_none(),
+            "autoscale scale-in must prune same-block rewards whose embedded lane is retired"
+        );
+        assert!(
+            state_block
+                .world
+                .public_lane_reward_claims
+                .get(&embedded_retired_keys.2)
+                .is_some(),
+            "same-block reward claims carry no embedded lane and must remain owned by their surviving key"
+        );
+        assert!(
+            state_block
+                .world
+                .public_lane_stake_shares
                 .get(&retained_keys.0)
                 .is_some(),
             "autoscale scale-in must retain same-block surviving-lane economics"
@@ -52594,6 +52948,24 @@ mod tests {
             "committed state must not retain same-block retired-lane emergency overrides"
         );
         assert_public_lane_economic_state_presence(&state, &retired_keys, false);
+        assert!(
+            view.public_lane_stake_shares()
+                .get(&embedded_retired_keys.0)
+                .is_none(),
+            "committed state must not retain same-block stake shares whose embedded lane was retired"
+        );
+        assert!(
+            view.public_lane_rewards()
+                .get(&embedded_retired_keys.1)
+                .is_none(),
+            "committed state must not retain same-block rewards whose embedded lane was retired"
+        );
+        assert!(
+            view.public_lane_reward_claims()
+                .get(&embedded_retired_keys.2)
+                .is_some(),
+            "committed state must retain surviving-key reward claims because they have no embedded lane"
+        );
         assert_public_lane_economic_state_presence(&state, &retained_keys, true);
     }
 
@@ -52825,6 +53197,328 @@ mod tests {
             view.axt_replay_ledger().get(&retained_replay_key).is_some(),
             "committed state must retain same-block surviving-lane replay state"
         );
+    }
+
+    #[test]
+    fn committed_autoscale_lifecycle_prunes_persistent_reset_lane_state() {
+        let _status_guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus status test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let retired_lane_id = LaneId::new(1);
+        let elastic_lane =
+            autoscale_elastic_lane_config(retired_lane_id, DataSpaceId::UNIVERSAL, 1);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                2,
+                200,
+            ))
+            .expect("apply autoscale test nexus config");
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![elastic_lane],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed internally managed elastic lane");
+
+        {
+            let mut block = state.world.block();
+            block.lane_relay_emergency_validators.insert(
+                retired_lane_id,
+                LaneRelayEmergencyValidatorSet {
+                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    expires_at_height: 10,
+                    metadata: Metadata::default(),
+                },
+            );
+            block.lane_relay_emergency_validators.insert(
+                LaneId::SINGLE,
+                LaneRelayEmergencyValidatorSet {
+                    peers: vec![PeerId::from(BOB_ID.signatory().clone())],
+                    expires_at_height: 10,
+                    metadata: Metadata::default(),
+                },
+            );
+            block.commit();
+        }
+        let (retired_validator, retired_peer) = seed_public_lane_validator_for_lifecycle_test(
+            &state,
+            retired_lane_id,
+            PublicLaneValidatorStatus::Active,
+        );
+        let (retained_validator, retained_peer) = seed_public_lane_validator_for_lifecycle_test(
+            &state,
+            LaneId::SINGLE,
+            PublicLaneValidatorStatus::Active,
+        );
+        let (embedded_retired_validator, embedded_retired_peer) =
+            seed_public_lane_validator_with_key_and_record_lanes_for_lifecycle_test(
+                &state,
+                LaneId::SINGLE,
+                retired_lane_id,
+                PublicLaneValidatorStatus::Active,
+            );
+        let retired_economic_keys =
+            seed_public_lane_economic_state_for_lifecycle_test(&state, retired_lane_id, 211);
+        let retained_economic_keys =
+            seed_public_lane_economic_state_for_lifecycle_test(&state, LaneId::SINGLE, 212);
+        let embedded_retired_economic_keys =
+            seed_public_lane_economic_state_with_key_and_record_lanes_for_lifecycle_test(
+                &state,
+                LaneId::SINGLE,
+                retired_lane_id,
+                213,
+            );
+        let retired_status_bonded = Numeric::new(811, 0);
+        let retained_status_bonded = Numeric::new(812, 0);
+        record_public_lane_staking_status_for_test(retired_lane_id, &retired_status_bonded);
+        record_public_lane_staking_status_for_test(LaneId::SINGLE, &retained_status_bonded);
+
+        let retired_replay_key =
+            AxtHandleReplayKey::from_parts([0xF1; 32], 2, 211, retired_lane_id);
+        let retained_replay_key =
+            AxtHandleReplayKey::from_parts([0xF2; 32], 2, 212, LaneId::SINGLE);
+        {
+            let mut block = state.world.axt_replay_ledger.block();
+            block.insert(
+                retired_replay_key,
+                AxtReplayRecord {
+                    dataspace: DataSpaceId::UNIVERSAL,
+                    used_slot: 1,
+                    retain_until_slot: 100,
+                },
+            );
+            block.insert(
+                retained_replay_key,
+                AxtReplayRecord {
+                    dataspace: DataSpaceId::UNIVERSAL,
+                    used_slot: 1,
+                    retain_until_slot: 100,
+                },
+            );
+            block.commit();
+        }
+
+        let mut retired_pin_intent = DaPinIntent::new(
+            retired_lane_id,
+            9,
+            0,
+            StorageTicketId::new([0xF3; 32]),
+            ManifestDigest::new([0xF4; 32]),
+        );
+        retired_pin_intent.alias = Some("committed-autoscale-retired-pin".to_owned());
+        let mut retained_pin_intent = DaPinIntent::new(
+            LaneId::SINGLE,
+            9,
+            1,
+            StorageTicketId::new([0xF5; 32]),
+            ManifestDigest::new([0xF6; 32]),
+        );
+        retained_pin_intent.alias = Some("committed-autoscale-retained-pin".to_owned());
+        seed_da_pin_intent_world_indexes_for_test(&state, retired_pin_intent.clone(), 9, 0);
+        seed_da_pin_intent_world_indexes_for_test(&state, retained_pin_intent.clone(), 9, 1);
+
+        let (_, validator_keypairs) = bls_accounts_in("validators", 4);
+        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
+        let retired_relay =
+            sample_lane_relay_envelope(2, retired_lane_id, &signers, full_signer_bitmap(4))
+                .with_manifest_root(Some([0xF7; 32]));
+        let retired_relay_key =
+            State::verified_lane_relay_state_key(&retired_relay).expect("retired state key");
+        seed_verified_lane_relay_record(&state, &retired_relay);
+        let retained_relay =
+            sample_lane_relay_envelope(3, LaneId::SINGLE, &signers, full_signer_bitmap(4))
+                .with_manifest_root(Some([0xF8; 32]));
+        let retained_relay_key =
+            State::verified_lane_relay_state_key(&retained_relay).expect("retained state key");
+        seed_verified_lane_relay_record(&state, &retained_relay);
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        kura.store_block(Arc::new(first))
+            .expect("store previous autoscale block");
+
+        let mut state_block = state.block(second.header());
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        state_block.maybe_apply_nexus_autoscale(&committed_second);
+        let pending = state_block
+            .pending_autoscale_lifecycle
+            .as_ref()
+            .expect("cold window should stage committed autoscale scale-in");
+        assert_eq!(
+            pending.transition,
+            PendingAutoscaleTransition::ScaleIn {
+                lane: retired_lane_id,
+                active_lanes: 2,
+                autoscale_capacity_lanes: 2,
+                in_latency_ratio_permille: 500,
+                in_utilization_p95_permille: 0,
+            },
+            "test setup must exercise the real autoscale scale-in transition"
+        );
+        state_block
+            .commit()
+            .expect("committed autoscale lifecycle must publish and prune persistent state");
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::SINGLE],
+            "committed autoscale lifecycle must publish the scale-in catalog"
+        );
+        assert_eq!(nexus.autoscale.last_transition_height, 2);
+
+        let view = state.world.view();
+        assert!(
+            view.lane_relay_emergency_validators()
+                .get(&retired_lane_id)
+                .is_none(),
+            "committed autoscale lifecycle must prune retired-lane emergency overrides"
+        );
+        assert!(
+            view.lane_relay_emergency_validators()
+                .get(&LaneId::SINGLE)
+                .is_some(),
+            "committed autoscale lifecycle must preserve active-lane emergency overrides"
+        );
+        let retired_record = view
+            .public_lane_validators()
+            .get(&(retired_lane_id, retired_validator))
+            .expect("retired validator audit record");
+        assert!(matches!(
+            retired_record.status,
+            PublicLaneValidatorStatus::Exited
+        ));
+        let retained_record = view
+            .public_lane_validators()
+            .get(&(LaneId::SINGLE, retained_validator))
+            .expect("retained validator record");
+        assert!(matches!(
+            retained_record.status,
+            PublicLaneValidatorStatus::Active
+        ));
+        let embedded_retired_record = view
+            .public_lane_validators()
+            .get(&(LaneId::SINGLE, embedded_retired_validator))
+            .expect("embedded retired-lane validator audit record");
+        assert!(matches!(
+            embedded_retired_record.status,
+            PublicLaneValidatorStatus::Exited
+        ));
+        assert_eq!(
+            validator_lane_ids_for_peers(
+                &view,
+                [&retired_peer, &embedded_retired_peer, &retained_peer],
+            ),
+            BTreeSet::from([LaneId::SINGLE]),
+            "committed autoscale lifecycle must remove exact and embedded retired-lane validator scope"
+        );
+        drop(view);
+
+        assert_public_lane_economic_state_presence(&state, &retired_economic_keys, false);
+        let view = state.world.view();
+        assert!(
+            view.public_lane_stake_shares()
+                .get(&embedded_retired_economic_keys.0)
+                .is_none(),
+            "committed autoscale lifecycle must prune surviving-key stake shares whose embedded lane was reset"
+        );
+        assert!(
+            view.public_lane_rewards()
+                .get(&embedded_retired_economic_keys.1)
+                .is_none(),
+            "committed autoscale lifecycle must prune surviving-key rewards whose embedded lane was reset"
+        );
+        assert!(
+            view.public_lane_reward_claims()
+                .get(&embedded_retired_economic_keys.2)
+                .is_some(),
+            "committed autoscale lifecycle must retain surviving-key reward claims because they carry no embedded lane"
+        );
+        drop(view);
+        assert_public_lane_economic_state_presence(&state, &retained_economic_keys, true);
+        assert_public_lane_staking_status_absent(
+            retired_lane_id,
+            "committed autoscale lifecycle must clear retired-lane operator staking status",
+        );
+        assert_public_lane_staking_status_bonded(
+            LaneId::SINGLE,
+            &retained_status_bonded,
+            "committed autoscale lifecycle must preserve active-lane operator staking status",
+        );
+
+        let view = state.world.view();
+        assert!(
+            view.axt_replay_ledger().get(&retired_replay_key).is_none(),
+            "committed autoscale lifecycle must prune retired-lane AXT replay records"
+        );
+        assert!(
+            view.axt_replay_ledger().get(&retained_replay_key).is_some(),
+            "committed autoscale lifecycle must preserve active-lane AXT replay records"
+        );
+        assert!(
+            view.da_pin_intents_by_ticket()
+                .get(&retired_pin_intent.storage_ticket)
+                .is_none(),
+            "committed autoscale lifecycle must prune retired-lane pin intent tickets"
+        );
+        assert!(
+            view.da_pin_intents_by_alias()
+                .get("committed-autoscale-retired-pin")
+                .is_none(),
+            "committed autoscale lifecycle must prune retired-lane pin intent aliases"
+        );
+        assert!(
+            view.da_pin_intents_by_manifest()
+                .get(&retired_pin_intent.manifest_hash)
+                .is_none(),
+            "committed autoscale lifecycle must prune retired-lane pin intent manifests"
+        );
+        assert!(
+            view.da_pin_intents_by_lane_epoch()
+                .get(&(
+                    retired_pin_intent.lane_id,
+                    retired_pin_intent.epoch,
+                    retired_pin_intent.sequence,
+                ))
+                .is_none(),
+            "committed autoscale lifecycle must prune retired-lane pin intent lane indexes"
+        );
+        assert!(
+            view.da_pin_intents_by_ticket()
+                .get(&retained_pin_intent.storage_ticket)
+                .is_some(),
+            "committed autoscale lifecycle must preserve active-lane pin intent tickets"
+        );
+        assert!(
+            view.smart_contract_state()
+                .get(&retired_relay_key)
+                .is_none(),
+            "committed autoscale lifecycle must prune retired-lane verified relay state"
+        );
+        assert!(
+            view.smart_contract_state()
+                .get(&retained_relay_key)
+                .is_some(),
+            "committed autoscale lifecycle must preserve active-lane verified relay state"
+        );
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
     }
 
     #[test]
@@ -57883,6 +58577,37 @@ mod tests {
             nexus.lane_catalog = lane_catalog;
             nexus.lane_config = RuntimeLaneConfig::from_catalog(&nexus.lane_catalog);
         }
+        let mut future_pin_intent = DaPinIntent::new(
+            LaneId::new(1),
+            7,
+            0,
+            StorageTicketId::new([0x65; 32]),
+            ManifestDigest::new([0x75; 32]),
+        );
+        future_pin_intent.alias = Some("future-created-repair-pin".to_owned());
+        let mut retained_pin_intent = DaPinIntent::new(
+            LaneId::SINGLE,
+            7,
+            1,
+            StorageTicketId::new([0x66; 32]),
+            ManifestDigest::new([0x76; 32]),
+        );
+        retained_pin_intent.alias = Some("future-created-retained-pin".to_owned());
+        seed_da_pin_intent_world_indexes_for_test(&state, future_pin_intent.clone(), 5, 0);
+        seed_da_pin_intent_world_indexes_for_test(&state, retained_pin_intent.clone(), 5, 1);
+        let override_set = LaneRelayEmergencyValidatorSet {
+            peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+            expires_at_height: 10,
+            metadata: Metadata::default(),
+        };
+        {
+            let mut wb = state.world.block();
+            wb.lane_relay_emergency_validators
+                .insert(LaneId::new(1), override_set.clone());
+            wb.lane_relay_emergency_validators
+                .insert(LaneId::SINGLE, override_set);
+            wb.commit();
+        }
 
         let unrelated = iroha_data_model::nexus::LaneLifecyclePlan {
             additions: vec![LaneConfig {
@@ -57901,6 +58626,21 @@ mod tests {
                 if lane == LaneId::new(1)
                     && reason == "autoscale.created_height must not exceed the current block height"
         ));
+        {
+            let view = state.world.view();
+            assert!(
+                view.da_pin_intents_by_ticket()
+                    .get(&future_pin_intent.storage_ticket)
+                    .is_some(),
+                "rejected unrelated lifecycle plan must preserve stale future-lane pin indexes"
+            );
+            assert!(
+                view.lane_relay_emergency_validators()
+                    .get(&LaneId::new(1))
+                    .is_some(),
+                "rejected unrelated lifecycle plan must preserve stale future-lane emergency overrides"
+            );
+        }
 
         let repair = iroha_data_model::nexus::LaneLifecyclePlan {
             additions: Vec::new(),
@@ -57913,6 +58653,53 @@ mod tests {
             state.nexus_snapshot().lane_catalog.lanes(),
             &[LaneConfig::default()],
             "repair retire must remove the future-created autoscale lane"
+        );
+        let view = state.world.view();
+        assert!(
+            view.da_pin_intents_by_ticket()
+                .get(&future_pin_intent.storage_ticket)
+                .is_none(),
+            "repair retire must prune stale future-lane pin intent tickets"
+        );
+        assert!(
+            view.da_pin_intents_by_alias()
+                .get("future-created-repair-pin")
+                .is_none(),
+            "repair retire must prune stale future-lane pin intent aliases"
+        );
+        assert!(
+            view.da_pin_intents_by_manifest()
+                .get(&future_pin_intent.manifest_hash)
+                .is_none(),
+            "repair retire must prune stale future-lane pin intent manifests"
+        );
+        assert!(
+            view.da_pin_intents_by_lane_epoch()
+                .get(&(
+                    future_pin_intent.lane_id,
+                    future_pin_intent.epoch,
+                    future_pin_intent.sequence,
+                ))
+                .is_none(),
+            "repair retire must prune stale future-lane pin intent lane-epoch indexes"
+        );
+        assert!(
+            view.da_pin_intents_by_ticket()
+                .get(&retained_pin_intent.storage_ticket)
+                .is_some(),
+            "repair retire must preserve active-lane pin intent tickets"
+        );
+        assert!(
+            view.lane_relay_emergency_validators()
+                .get(&LaneId::new(1))
+                .is_none(),
+            "repair retire must prune stale future-lane emergency overrides"
+        );
+        assert!(
+            view.lane_relay_emergency_validators()
+                .get(&LaneId::SINGLE)
+                .is_some(),
+            "repair retire must preserve active-lane emergency overrides"
         );
     }
 
@@ -62975,6 +63762,122 @@ mod tests {
                 retained_intent.lane_id,
                 retained_intent.epoch,
                 retained_intent.sequence
+            )),
+            Some(&retained_intent.storage_ticket)
+        );
+    }
+
+    #[test]
+    fn set_nexus_retire_prunes_da_pin_intent_world_indexes() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let retired_lane_id = LaneId::new(1);
+        let initial_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: retired_lane_id,
+                    alias: "set-nexus-pin-lane".to_string(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("initial lane catalog");
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: initial_catalog,
+                ..Default::default()
+            })
+            .expect("seed pin test lane through set_nexus");
+
+        let mut retired_intent = DaPinIntent::new(
+            retired_lane_id,
+            5,
+            0,
+            StorageTicketId::new([0x63; 32]),
+            ManifestDigest::new([0x73; 32]),
+        );
+        retired_intent.alias = Some("set-nexus-retired-pin".to_owned());
+        let mut retained_intent = DaPinIntent::new(
+            LaneId::SINGLE,
+            5,
+            1,
+            StorageTicketId::new([0x64; 32]),
+            ManifestDigest::new([0x74; 32]),
+        );
+        retained_intent.alias = Some("set-nexus-retained-pin".to_owned());
+        seed_da_pin_intent_world_indexes_for_test(&state, retired_intent.clone(), 4, 0);
+        seed_da_pin_intent_world_indexes_for_test(&state, retained_intent.clone(), 4, 1);
+
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: LaneCatalog::default(),
+                ..Default::default()
+            })
+            .expect("retire pin test lane through set_nexus");
+
+        let view = state.view();
+        let world = view.world();
+        assert!(
+            world
+                .da_pin_intents_by_ticket()
+                .get(&retired_intent.storage_ticket)
+                .is_none(),
+            "set_nexus lane retirement must remove stale pin intent tickets"
+        );
+        assert!(
+            world
+                .da_pin_intents_by_alias()
+                .get("set-nexus-retired-pin")
+                .is_none(),
+            "set_nexus lane retirement must remove stale pin intent aliases"
+        );
+        assert!(
+            world
+                .da_pin_intents_by_manifest()
+                .get(&retired_intent.manifest_hash)
+                .is_none(),
+            "set_nexus lane retirement must remove stale pin intent manifests"
+        );
+        assert!(
+            world
+                .da_pin_intents_by_lane_epoch()
+                .get(&(
+                    retired_intent.lane_id,
+                    retired_intent.epoch,
+                    retired_intent.sequence,
+                ))
+                .is_none(),
+            "set_nexus lane retirement must remove stale pin intent lane-epoch indexes"
+        );
+        assert!(
+            world
+                .da_pin_intents_by_ticket()
+                .get(&retained_intent.storage_ticket)
+                .is_some(),
+            "set_nexus lane retirement must preserve active-lane pin intent tickets"
+        );
+        assert_eq!(
+            world
+                .da_pin_intents_by_alias()
+                .get("set-nexus-retained-pin"),
+            Some(&retained_intent.storage_ticket)
+        );
+        assert_eq!(
+            world
+                .da_pin_intents_by_manifest()
+                .get(&retained_intent.manifest_hash),
+            Some(&retained_intent.storage_ticket)
+        );
+        assert_eq!(
+            world.da_pin_intents_by_lane_epoch().get(&(
+                retained_intent.lane_id,
+                retained_intent.epoch,
+                retained_intent.sequence,
             )),
             Some(&retained_intent.storage_ticket)
         );
@@ -73180,6 +74083,67 @@ mod tests {
     }
 
     #[test]
+    fn missing_insert_world_only_commit_does_not_publish_block_metadata() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let account_id = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        state_block.world.accounts.insert(
+            account_id.clone(),
+            AccountValue::new(iroha_data_model::account::AccountDetails::default()),
+        );
+
+        state_block
+            .commit()
+            .expect("world-only state commit should still persist WSV changes");
+
+        assert!(
+            state.view().world().accounts().get(&account_id).is_some(),
+            "world-only commits must still persist WSV mutations"
+        );
+        assert!(
+            state.latest_block_header_fast().is_none(),
+            "a missing inserted transaction block must not publish the latest-header cache"
+        );
+        assert!(
+            state.latest_block_hash_fast().is_none(),
+            "a missing inserted transaction block must not append the block-hash log"
+        );
+        assert_eq!(state.transactions.view().latest_height_for_tests(), 0);
+        assert_eq!(
+            state.query_index_status_snapshot(),
+            QueryIndexStatus::default()
+        );
+    }
+
+    #[test]
+    fn missing_insert_block_does_not_hydrate_staged_verified_lane_relays() {
+        let (state, validator_keypairs) = setup_lane_relay_burn_state();
+        let envelope =
+            sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs)
+                .with_manifest_root(Some([0x44; 32]));
+        let record = sample_verified_lane_relay_record(&envelope);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        state_block.verified_lane_relay_records.push(record);
+
+        let err = state_block
+            .commit()
+            .expect_err("missing inserted transaction block must reject staged relay hydration");
+        assert!(matches!(err, TransactionsBlockError::MissingInsertBlock));
+        assert!(
+            state.lane_relay_snapshot().is_empty(),
+            "missing inserted transaction block must not hydrate staged verified relay records"
+        );
+        assert!(
+            state.latest_block_hash_fast().is_none(),
+            "rejected staged relay block must not append block metadata"
+        );
+    }
+
+    #[test]
     fn state_commit_persists_query_index_status_journal() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let store_root = temp_dir.path().join("kura");
@@ -82919,6 +83883,84 @@ mod tests {
         assert_eq!(actual, expected);
         let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
         assert_eq!(prev, base_topology);
+
+        crate::sumeragi::status::set_mode_tags("", None, None);
+    }
+
+    #[test]
+    fn height_mismatch_does_not_publish_staged_commit_topology() {
+        let _mode_guard = crate::sumeragi::status::mode_tags_test_guard();
+        crate::sumeragi::status::set_mode_tags(
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            None,
+            None,
+        );
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+        let keypairs = configure_commit_topology(&state, 4);
+        let base_topology: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        assert_eq!(state.commit_topology_snapshot(), base_topology);
+        assert!(
+            state.prev_commit_topology_snapshot().is_empty(),
+            "test setup should start with no previous commit topology"
+        );
+
+        let new_peer = PeerId::new(
+            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        {
+            let mut world_block = state.world.block();
+            {
+                let mut peers = world_block.peers_mut_for_testing().transaction();
+                peers.clear();
+                peers.extend(base_topology.clone());
+                peers.push(new_peer);
+                peers.apply();
+            }
+            world_block.commit();
+        }
+
+        let first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {})
+            .into();
+        let second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, Some(&first_block))
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {})
+            .into();
+        let mut state_block = state.block(second_block.header());
+        let valid = ValidBlock::validate_unchecked(second_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed, base_topology.clone());
+
+        let err = state_block
+            .commit()
+            .expect_err("height mismatch must abort staged topology updates");
+        assert!(matches!(
+            err,
+            TransactionsBlockError::HeightMismatch {
+                expected_current_height: 1,
+                actual_current_height: 2
+            }
+        ));
+        assert_eq!(
+            state.commit_topology_snapshot(),
+            base_topology,
+            "height mismatch must not publish staged commit topology updates"
+        );
+        assert!(
+            state.prev_commit_topology_snapshot().is_empty(),
+            "height mismatch must not publish staged previous-topology updates"
+        );
 
         crate::sumeragi::status::set_mode_tags("", None, None);
     }

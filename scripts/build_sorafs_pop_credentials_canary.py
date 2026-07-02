@@ -169,6 +169,30 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    kind: str,
+    count_option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return reviewed unique inventory labels whose count matches a CLI count."""
+
+    items = list(values)
+    if not items:
+        errors.append(f"{option} is required for {kind}")
+    for index, item in enumerate(items):
+        validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+    unique_items = set(items)
+    if len(unique_items) != len(items):
+        errors.append(f"{option} must not contain duplicates")
+    if len(unique_items) != expected_count:
+        errors.append(f"{option} unique values must match {count_option}")
+    return items
+
+
 def validate_output_path(path: Path, errors: list[str]) -> None:
     """Reject unsafe output targets before writing a canary artifact."""
 
@@ -272,6 +296,24 @@ def build_route_records(args: argparse.Namespace) -> list[dict[str, Any]]:
     ]
 
 
+def build_inventory_records(names: Sequence[str]) -> list[dict[str, str]]:
+    """Build reviewed payload-free inventory records."""
+
+    return [{"name": name} for name in names]
+
+
+def build_proof_probe_records(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Build reviewed payload-free verifier proof probe records."""
+
+    return [
+        {"name": name, "accepted": True}
+        for name in args.accepted_proof_probes
+    ] + [
+        {"name": name, "accepted": False}
+        for name in args.rejected_proof_probes
+    ]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free PoP credential rollout canary payload."""
 
@@ -283,6 +325,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "issuer_id": args.issuer_id,
                 "bundle_id_hex": args.bundle_id_hex,
                 "credential_count": args.credential_count,
+                "credentials": build_inventory_records(args.credentials),
                 "signed_credential_count": args.credential_count,
             }
         )
@@ -312,13 +355,14 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         )
     elif args.kind == "verifier_service":
         routes = build_route_records(args)
+        probes = build_proof_probe_records(args)
         payload.update(
             {
                 "policy_digest_hex": args.policy_digest_hex,
-                "proof_probe_count": args.accepted_valid_proof_count
-                + args.rejected_invalid_proof_count,
+                "proof_probe_count": len(probes),
                 "accepted_valid_proof_count": args.accepted_valid_proof_count,
                 "rejected_invalid_proof_count": args.rejected_invalid_proof_count,
+                "probes": probes,
                 "max_verify_latency_ms": args.max_verify_latency_ms,
                 "max_service_lag_seconds": args.max_service_lag_seconds,
                 "routes": routes,
@@ -329,7 +373,11 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "pop_snapshot_digest_hex": args.pop_snapshot_digest_hex,
                 "sortition_probe_count": args.sortition_probe_count,
+                "sortition_probes": build_inventory_records(args.sortition_probes),
                 "commit_reveal_probe_count": args.commit_reveal_probe_count,
+                "commit_reveal_probes": build_inventory_records(
+                    args.commit_reveal_probes
+                ),
             }
         )
     elif args.kind == "metrics_alerts":
@@ -374,6 +422,14 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
         )
         validate_canonical_string(args.issuer_id, label="--issuer-id", errors=errors)
         validate_hex64(args.bundle_id_hex, option="--bundle-id-hex", errors=errors)
+        args.credentials = validate_reviewed_inventory(
+            split_csv_values(args.credential),
+            expected_count=args.credential_count or 0,
+            option="--credential",
+            kind="issuer_bundle",
+            count_option="--credential-count",
+            errors=errors,
+        )
     elif args.kind == "commitment_root":
         require_kind_options(
             args,
@@ -419,6 +475,27 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             ),
         )
         validate_hex64(args.policy_digest_hex, option="--policy-digest-hex", errors=errors)
+        args.accepted_proof_probes = validate_reviewed_inventory(
+            split_csv_values(args.accepted_proof_probe),
+            expected_count=args.accepted_valid_proof_count or 0,
+            option="--accepted-proof-probe",
+            kind="verifier_service",
+            count_option="--accepted-valid-proof-count",
+            errors=errors,
+        )
+        args.rejected_proof_probes = validate_reviewed_inventory(
+            split_csv_values(args.rejected_proof_probe),
+            expected_count=args.rejected_invalid_proof_count or 0,
+            option="--rejected-proof-probe",
+            kind="verifier_service",
+            count_option="--rejected-invalid-proof-count",
+            errors=errors,
+        )
+        proof_probe_names = args.accepted_proof_probes + args.rejected_proof_probes
+        if len(set(proof_probe_names)) != len(proof_probe_names):
+            errors.append(
+                "--accepted-proof-probe and --rejected-proof-probe must not overlap"
+            )
     elif args.kind == "moderation_integration":
         require_kind_options(
             args,
@@ -432,6 +509,22 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
         validate_hex64(
             args.pop_snapshot_digest_hex,
             option="--pop-snapshot-digest-hex",
+            errors=errors,
+        )
+        args.sortition_probes = validate_reviewed_inventory(
+            split_csv_values(args.sortition_probe),
+            expected_count=args.sortition_probe_count or 0,
+            option="--sortition-probe",
+            kind="moderation_integration",
+            count_option="--sortition-probe-count",
+            errors=errors,
+        )
+        args.commit_reveal_probes = validate_reviewed_inventory(
+            split_csv_values(args.commit_reveal_probe),
+            expected_count=args.commit_reveal_probe_count or 0,
+            option="--commit-reveal-probe",
+            kind="moderation_integration",
+            count_option="--commit-reveal-probe-count",
             errors=errors,
         )
     elif args.kind == "metrics_alerts":
@@ -563,6 +656,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--issuer-id")
     parser.add_argument("--bundle-id-hex")
     parser.add_argument("--credential-count", type=positive_int_arg)
+    parser.add_argument("--credential", action="append", default=[])
     parser.add_argument("--tree-version", type=positive_int_arg)
     parser.add_argument("--revocation-list-version", type=positive_int_arg)
     parser.add_argument("--published-at-unix", type=positive_int_arg)
@@ -571,11 +665,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
     parser.add_argument("--accepted-valid-proof-count", type=positive_int_arg)
     parser.add_argument("--rejected-invalid-proof-count", type=positive_int_arg)
+    parser.add_argument("--accepted-proof-probe", action="append", default=[])
+    parser.add_argument("--rejected-proof-probe", action="append", default=[])
     parser.add_argument("--max-verify-latency-ms", type=positive_int_arg)
     parser.add_argument("--max-service-lag-seconds", type=non_negative_int_arg)
     parser.add_argument("--pop-snapshot-digest-hex")
     parser.add_argument("--sortition-probe-count", type=positive_int_arg)
+    parser.add_argument("--sortition-probe", action="append", default=[])
     parser.add_argument("--commit-reveal-probe-count", type=positive_int_arg)
+    parser.add_argument("--commit-reveal-probe", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--privacy-proof-system")
     raw_args = sys.argv[1:] if argv is None else argv

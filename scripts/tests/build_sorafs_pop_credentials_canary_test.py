@@ -85,6 +85,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 "3",
             ]
         )
+        for index in range(3):
+            args.extend(["--credential", f"credential-{index:02d}"])
     elif kind == "commitment_root":
         args.extend(
             [
@@ -119,6 +121,14 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 "1",
                 "--rejected-invalid-proof-count",
                 "3",
+                "--accepted-proof-probe",
+                "valid-proof-00",
+                "--rejected-proof-probe",
+                "invalid-proof-00",
+                "--rejected-proof-probe",
+                "invalid-proof-01",
+                "--rejected-proof-probe",
+                "invalid-proof-02",
                 "--max-verify-latency-ms",
                 "250",
                 "--max-service-lag-seconds",
@@ -132,8 +142,16 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 SNAPSHOT_DIGEST,
                 "--sortition-probe-count",
                 "2",
+                "--sortition-probe",
+                "sortition-probe-00",
+                "--sortition-probe",
+                "sortition-probe-01",
                 "--commit-reveal-probe-count",
                 "2",
+                "--commit-reveal-probe",
+                "commit-reveal-probe-00",
+                "--commit-reveal-probe",
+                "commit-reveal-probe-01",
             ]
         )
     elif kind == "metrics_alerts":
@@ -161,6 +179,14 @@ def test_builds_payload_free_verifier_service_canary(tmp_path: Path) -> None:
     assert payload["revocation_list_digest_hex"] == REVOCATION_DIGEST
     assert payload["policy_digest_hex"] == POLICY_DIGEST
     assert payload["proof_probe_count"] == 4
+    assert payload["accepted_valid_proof_count"] == 1
+    assert payload["rejected_invalid_proof_count"] == 3
+    assert payload["probes"] == [
+        {"name": "valid-proof-00", "accepted": True},
+        {"name": "invalid-proof-00", "accepted": False},
+        {"name": "invalid-proof-01", "accepted": False},
+        {"name": "invalid-proof-02", "accepted": False},
+    ]
     assert [route["name"] for route in payload["routes"]] == list(
         MODULE.REQUIRED_VERIFIER_ROUTES
     )
@@ -170,6 +196,29 @@ def test_builds_payload_free_verifier_service_canary(tmp_path: Path) -> None:
         assert payload[field] is False
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "verifier_service"
+    assert errors == []
+
+
+def test_builds_payload_free_moderation_integration_canary(tmp_path: Path) -> None:
+    assert MODULE.main(args_for("moderation_integration", tmp_path)) == 0
+
+    payload = json.loads(
+        canary_path(tmp_path, "moderation_integration").read_text("utf-8")
+    )
+
+    assert payload["schema"] == "sorafs.pop.moderation_integration_canary.v1"
+    assert payload["sortition_probe_count"] == 2
+    assert payload["sortition_probes"] == [
+        {"name": "sortition-probe-00"},
+        {"name": "sortition-probe-01"},
+    ]
+    assert payload["commit_reveal_probe_count"] == 2
+    assert payload["commit_reveal_probes"] == [
+        {"name": "commit-reveal-probe-00"},
+        {"name": "commit-reveal-probe-01"},
+    ]
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "moderation_integration"
     assert errors == []
 
 
@@ -213,6 +262,40 @@ def test_response_file_can_build_issuer_bundle_canary(tmp_path: Path) -> None:
     payload = json.loads(canary_path(tmp_path, "issuer_bundle").read_text("utf-8"))
     assert payload["issuer_id"] == "issuer-prod-a"
     assert payload["credential_count"] == payload["signed_credential_count"] == 3
+    assert [credential["name"] for credential in payload["credentials"]] == [
+        "credential-00",
+        "credential-01",
+        "credential-02",
+    ]
+
+
+def test_issuer_credential_inventory_must_match_credential_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("issuer_bundle", tmp_path)
+    args[args.index("--credential-count") + 1] = "4"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--credential unique values must match --credential-count" in captured.err
+    assert not canary_path(tmp_path, "issuer_bundle").exists()
+
+
+def test_issuer_credential_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("issuer_bundle", tmp_path)
+    first_credential = args.index("--credential") + 1
+    args.extend(["--credential", args[first_credential]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--credential must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "issuer_bundle").exists()
 
 
 def test_missing_verified_claim_fails_closed(tmp_path: Path, capsys) -> None:
@@ -249,6 +332,89 @@ def test_verifier_service_requires_policy_digest(tmp_path: Path, capsys) -> None
     captured = capsys.readouterr()
     assert "--policy-digest-hex is required for verifier_service" in captured.err
     assert not canary_path(tmp_path, "verifier_service").exists()
+
+
+def test_verifier_accepted_probe_inventory_must_match_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("verifier_service", tmp_path)
+    args[args.index("--accepted-valid-proof-count") + 1] = "2"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--accepted-proof-probe unique values must match "
+        "--accepted-valid-proof-count"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "verifier_service").exists()
+
+
+def test_verifier_rejected_probe_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("verifier_service", tmp_path)
+    first_rejected = args.index("--rejected-proof-probe") + 1
+    args.extend(["--rejected-proof-probe", args[first_rejected]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--rejected-proof-probe must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "verifier_service").exists()
+
+
+def test_verifier_probe_inventories_must_not_overlap(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("verifier_service", tmp_path)
+    args.extend(["--accepted-proof-probe", "invalid-proof-00"])
+    args[args.index("--accepted-valid-proof-count") + 1] = "2"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--accepted-proof-probe and --rejected-proof-probe must not overlap"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "verifier_service").exists()
+
+
+def test_moderation_sortition_probe_inventory_must_match_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("moderation_integration", tmp_path)
+    args[args.index("--sortition-probe-count") + 1] = "3"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--sortition-probe unique values must match --sortition-probe-count"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "moderation_integration").exists()
+
+
+def test_moderation_commit_reveal_probe_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("moderation_integration", tmp_path)
+    first_commit_probe = args.index("--commit-reveal-probe") + 1
+    args.extend(["--commit-reveal-probe", args[first_commit_probe]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--commit-reveal-probe must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "moderation_integration").exists()
 
 
 def test_transcript_digest_privacy_backend_fails_before_write(

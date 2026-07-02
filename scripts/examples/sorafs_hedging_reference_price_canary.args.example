@@ -8,6 +8,9 @@
 --decision-id-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --reference-price-micro-usd 4200000
 --feed-count 3
+--feed feed-primary
+--feed feed-secondary
+--feed feed-tertiary
 --divergence-bps 50
 --decision-lag-seconds 60
 --verified-claim feed_quorum_met

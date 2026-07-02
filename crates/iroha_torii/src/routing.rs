@@ -81759,6 +81759,100 @@ fn public_lane_reward_record_matches_key_rejects_mismatched_rows() {
 }
 
 #[cfg(all(test, feature = "app_api"))]
+#[test]
+fn collect_pending_public_lane_rewards_ignores_mismatched_reward_rows() {
+    let account = AccountId::new(
+        checked_routing_fixture_keypair(
+            0x7C,
+            Algorithm::Ed25519,
+            "derive public lane pending reward account fixture",
+        )
+        .public_key()
+        .clone(),
+    );
+    let lane_id = LaneId::new(16);
+    let asset = AssetId::new(
+        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400bb"),
+        account.clone(),
+    );
+    let other_asset = AssetId::new(
+        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400bc"),
+        account.clone(),
+    );
+
+    let mut claims = BTreeMap::new();
+    claims.insert((lane_id, account.clone(), asset.clone()), 1);
+
+    let valid_reward = |epoch, amount| PublicLaneRewardRecord {
+        lane_id,
+        epoch,
+        asset: asset.clone(),
+        total_reward: iroha_primitives::numeric::Numeric::new(amount, 0),
+        shares: vec![PublicLaneRewardShare {
+            account: account.clone(),
+            role: PublicLaneRewardRole::Nominator,
+            amount: iroha_primitives::numeric::Numeric::new(amount, 0),
+        }],
+        metadata: Metadata::default(),
+    };
+    let mismatched_reward = |record_lane_id, record_epoch, amount| PublicLaneRewardRecord {
+        lane_id: record_lane_id,
+        epoch: record_epoch,
+        asset: asset.clone(),
+        total_reward: iroha_primitives::numeric::Numeric::new(amount, 0),
+        shares: vec![PublicLaneRewardShare {
+            account: account.clone(),
+            role: PublicLaneRewardRole::Nominator,
+            amount: iroha_primitives::numeric::Numeric::new(amount, 0),
+        }],
+        metadata: Metadata::default(),
+    };
+
+    let mut rewards = BTreeMap::new();
+    rewards.insert((lane_id, 2), valid_reward(2, 5));
+    rewards.insert((lane_id, 3), mismatched_reward(LaneId::new(17), 3, 99));
+    rewards.insert((lane_id, 4), mismatched_reward(lane_id, 40, 99));
+    rewards.insert((lane_id, 5), valid_reward(5, 7));
+    rewards.insert((lane_id, 6), valid_reward(6, 13));
+    rewards.insert(
+        (LaneId::new(18), 1),
+        PublicLaneRewardRecord {
+            lane_id: LaneId::new(18),
+            epoch: 1,
+            asset: other_asset,
+            total_reward: iroha_primitives::numeric::Numeric::new(111, 0),
+            shares: vec![PublicLaneRewardShare {
+                account: account.clone(),
+                role: PublicLaneRewardRole::Nominator,
+                amount: iroha_primitives::numeric::Numeric::new(111, 0),
+            }],
+            metadata: Metadata::default(),
+        },
+    );
+
+    let pending = collect_pending_public_lane_rewards(
+        lane_id,
+        &account,
+        5,
+        None,
+        claims.iter(),
+        rewards.iter(),
+    )
+    .expect("pending reward collection should succeed");
+
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].lane_id, lane_id);
+    assert_eq!(&pending[0].account, &account);
+    assert_eq!(&pending[0].asset, &asset);
+    assert_eq!(pending[0].last_claimed_epoch, 1);
+    assert_eq!(pending[0].pending_through_epoch, 5);
+    assert_eq!(
+        &pending[0].amount,
+        &iroha_primitives::numeric::Numeric::new(12, 0)
+    );
+}
+
+#[cfg(all(test, feature = "app_api"))]
 async fn public_lane_items_payload(response: Response) -> Value {
     let body = http_body_util::BodyExt::collect(response.into_body())
         .await

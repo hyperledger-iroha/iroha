@@ -44,7 +44,8 @@ pub mod isi {
     use crate::{
         alias::authority_can_manage_account_alias,
         state::{
-            WorldReadOnly as _, account_label_is_pii, public_lane_validator_record_matches_key,
+            WorldReadOnly as _, account_label_is_pii, public_lane_reward_record_matches_key,
+            public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
         },
     };
 
@@ -1453,11 +1454,12 @@ pub mod isi {
                 .world
                 .public_lane_stake_shares
                 .iter()
-                .find(|((_, validator, staker), record)| {
-                    validator == &account_id
-                        || staker == &account_id
-                        || record.validator == account_id
-                        || record.staker == account_id
+                .find(|(key, record)| {
+                    public_lane_stake_share_matches_key(key, record)
+                        && (key.1 == account_id
+                            || key.2 == account_id
+                            || record.validator == account_id
+                            || record.staker == account_id)
                 })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -1472,12 +1474,13 @@ pub mod isi {
                 .world
                 .public_lane_rewards
                 .iter()
-                .find(|(_, record)| {
-                    record.asset.account() == &account_id
-                        || record
-                            .shares
-                            .iter()
-                            .any(|share| share.account == account_id)
+                .find(|(key, record)| {
+                    public_lane_reward_record_matches_key(key, record)
+                        && (record.asset.account() == &account_id
+                            || record
+                                .shares
+                                .iter()
+                                .any(|share| share.account == account_id))
                 })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -2287,7 +2290,10 @@ pub mod isi {
                 .world
                 .public_lane_rewards
                 .iter()
-                .find(|(_, record)| record.asset.definition() == &asset_definition_id)
+                .find(|(key, record)| {
+                    public_lane_reward_record_matches_key(key, record)
+                        && record.asset.definition() == &asset_definition_id
+                })
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -7041,6 +7047,75 @@ mod tests {
     }
 
     #[test]
+    fn unregister_account_ignores_mismatched_public_lane_economic_rows() {
+        let mut state = test_state();
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let keypair = checked_keypair();
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
+        tx.world.public_lane_stake_shares.insert(
+            (LaneId::SINGLE, account_id.clone(), authority.clone()),
+            iroha_data_model::nexus::PublicLaneStakeShare {
+                lane_id: LaneId::new(1),
+                validator: account_id.clone(),
+                staker: authority.clone(),
+                bonded: Numeric::new(1, 0),
+                pending_unbonds: std::collections::BTreeMap::new(),
+                metadata: Metadata::default(),
+            },
+        );
+        tx.world.public_lane_rewards.insert(
+            (LaneId::SINGLE, 1),
+            iroha_data_model::nexus::PublicLaneRewardRecord {
+                lane_id: LaneId::new(1),
+                epoch: 1,
+                asset: AssetId::new(
+                    AssetDefinitionId::new(domain_id.clone(), "fee".parse().unwrap()),
+                    account_id.clone(),
+                ),
+                total_reward: Numeric::new(1, 0),
+                shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
+                    account: account_id.clone(),
+                    role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
+                    amount: Numeric::new(1, 0),
+                }],
+                metadata: Metadata::default(),
+            },
+        );
+
+        Unregister::account(account_id.clone())
+            .execute(&authority, &mut tx)
+            .expect("mismatched public-lane economic rows must not block account unregister");
+
+        assert!(
+            tx.world.accounts.get(&account_id).is_none(),
+            "account should be unregistered when only malformed economic rows reference it"
+        );
+        assert!(
+            tx.world
+                .public_lane_stake_shares
+                .get(&(LaneId::SINGLE, account_id.clone(), authority))
+                .is_some(),
+            "malformed stake-share row remains as stored"
+        );
+        assert!(
+            tx.world
+                .public_lane_rewards
+                .get(&(LaneId::SINGLE, 1))
+                .is_some(),
+            "malformed reward row remains as stored"
+        );
+    }
+
+    #[test]
     fn unregister_account_rejects_when_account_has_repo_agreement_state() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
@@ -10076,6 +10151,62 @@ mod tests {
                 .get(&asset_definition_id)
                 .is_some(),
             "asset definition should remain after rejected unregister"
+        );
+    }
+
+    #[test]
+    fn unregister_asset_definition_ignores_mismatched_public_lane_reward_record() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let domain_id: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
+        let asset_definition_id = AssetDefinitionId::new(domain_id, "fee".parse().unwrap());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        Register::asset_definition({
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .execute(&authority, &mut tx)
+        .expect("register asset definition");
+        tx.world.public_lane_rewards.insert(
+            (LaneId::SINGLE, 1),
+            iroha_data_model::nexus::PublicLaneRewardRecord {
+                lane_id: LaneId::new(1),
+                epoch: 1,
+                asset: AssetId::new(asset_definition_id.clone(), account_id.clone()),
+                total_reward: Numeric::new(1, 0),
+                shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
+                    account: account_id,
+                    role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
+                    amount: Numeric::new(1, 0),
+                }],
+                metadata: Metadata::default(),
+            },
+        );
+
+        Unregister::asset_definition(asset_definition_id.clone())
+            .execute(&authority, &mut tx)
+            .expect("mismatched public-lane reward row must not block asset definition unregister");
+
+        assert!(
+            tx.world
+                .asset_definitions
+                .get(&asset_definition_id)
+                .is_none(),
+            "asset definition should be removed when only malformed rewards reference it"
+        );
+        assert!(
+            tx.world
+                .public_lane_rewards
+                .get(&(LaneId::SINGLE, 1))
+                .is_some(),
+            "malformed reward row remains as stored"
         );
     }
 

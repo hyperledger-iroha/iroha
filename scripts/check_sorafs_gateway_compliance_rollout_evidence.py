@@ -202,7 +202,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "merkle_root_bound",
         "update_history_persisted",
         "gateway_ack_count",
+        "gateways",
         "denylist_entry_count",
+        "denylist_entries",
         "bundle_digest_hex",
         "policy_digest_hex",
         "raw_feeds_included",
@@ -218,6 +220,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "fetched_feed_count",
         "normalized_feed_count",
         "signed_feed_count",
+        "feeds",
         "controller_service_enabled",
         "scheduler_config_bound",
         "external_feeds_fetched",
@@ -238,6 +241,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "toggle_api_url",
         "toggle_count",
         "approved_toggle_count",
+        "toggles",
         "toggle_digest_hex",
         "iroha_config_bound",
         "config_source",
@@ -254,6 +258,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     + (
         "bundle_digest_hex",
         "reload_ack_count",
+        "gateways",
         "max_reload_latency_ms",
         "hot_reload_verified",
         "cache_version_bound",
@@ -283,6 +288,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     + (
         "bundle_digest_hex",
         "honey_probe_count",
+        "probes",
         "denied_response_verified",
         "cache_version_binding_verified",
         "proof_token_verified",
@@ -413,12 +419,32 @@ def validate_feed_promotion(
     require_bool_true(payload, "merkle_root_bound", errors)
     require_bool_true(payload, "update_history_persisted", errors)
     require_minimum_int(payload, "gateway_ack_count", options.min_gateways, errors)
+    require_string_inventory_count_match(
+        payload,
+        "gateways",
+        "gateway_ack_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _, record in require_object_array(payload, "gateways", errors):
+        require_string(record, "name", errors)
     require_minimum_int(
         payload,
         "denylist_entry_count",
         options.min_denylist_entries,
         errors,
     )
+    require_string_inventory_count_match(
+        payload,
+        "denylist_entries",
+        "denylist_entry_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _, record in require_object_array(payload, "denylist_entries", errors):
+        require_string(record, "name", errors)
     require_hex(payload, "bundle_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
     require_false(payload, "raw_feeds_included", errors)
@@ -432,6 +458,16 @@ def validate_controller_runtime(payload: dict[str, Any], errors: list[str]) -> N
     require_count_equal(payload, "external_feed_count", "fetched_feed_count", errors)
     require_count_equal(payload, "external_feed_count", "normalized_feed_count", errors)
     require_count_equal(payload, "external_feed_count", "signed_feed_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "feeds",
+        "external_feed_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _, record in require_object_array(payload, "feeds", errors):
+        require_string(record, "name", errors)
     require_bool_true(payload, "controller_service_enabled", errors)
     require_bool_true(payload, "scheduler_config_bound", errors)
     require_bool_true(payload, "external_feeds_fetched", errors)
@@ -451,6 +487,16 @@ def validate_moderation_toggle(payload: dict[str, Any], errors: list[str]) -> No
     require_hex(payload, "bundle_digest_hex", HEX64_LEN, errors)
     require_string(payload, "toggle_api_url", errors)
     require_count_equal(payload, "toggle_count", "approved_toggle_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "toggles",
+        "toggle_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _, record in require_object_array(payload, "toggles", errors):
+        require_string(record, "name", errors)
     require_hex(payload, "toggle_digest_hex", HEX64_LEN, errors)
     require_iroha_config_binding(payload, errors)
     require_bool_true(payload, "operator_role_enforced", errors)
@@ -470,6 +516,16 @@ def validate_gateway_reload(
 ) -> None:
     require_hex(payload, "bundle_digest_hex", HEX64_LEN, errors)
     require_minimum_int(payload, "reload_ack_count", options.min_gateways, errors)
+    require_string_inventory_count_match(
+        payload,
+        "gateways",
+        "reload_ack_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _, record in require_object_array(payload, "gateways", errors):
+        require_string(record, "name", errors)
     require_maximum_number(
         payload,
         "max_reload_latency_ms",
@@ -510,6 +566,16 @@ def validate_honey_audit(
 ) -> None:
     require_hex(payload, "bundle_digest_hex", HEX64_LEN, errors)
     require_minimum_int(payload, "honey_probe_count", options.min_honey_probes, errors)
+    require_string_inventory_count_match(
+        payload,
+        "probes",
+        "honey_probe_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _, record in require_object_array(payload, "probes", errors):
+        require_string(record, "name", errors)
     require_bool_true(payload, "denied_response_verified", errors)
     require_bool_true(payload, "cache_version_binding_verified", errors)
     require_bool_true(payload, "proof_token_verified", errors)

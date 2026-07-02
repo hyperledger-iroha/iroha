@@ -156,6 +156,42 @@ def validate_canonical_string(value: str | None, *, option: str, errors: list[st
         errors.append(f"{option} must be a non-empty canonical string")
 
 
+def validate_feed_names(args: argparse.Namespace, errors: list[str]) -> None:
+    """Validate reviewed feed names and bind the optional count cross-check."""
+
+    feed_names = split_csv_values(args.feed)
+    if not feed_names:
+        errors.append("--feed is required for controller_runtime")
+    for name in feed_names:
+        validate_canonical_string(name, option="--feed", errors=errors)
+    if len(set(feed_names)) != len(feed_names):
+        errors.append("--feed must not contain duplicates")
+    unique_feed_count = len(set(feed_names))
+    if args.feed_count is None:
+        errors.append("--feed-count is required for controller_runtime")
+    elif unique_feed_count != args.feed_count:
+        errors.append("--feed-count must match the number of unique --feed values")
+    args.feeds = feed_names
+
+
+def validate_toggle_names(args: argparse.Namespace, errors: list[str]) -> None:
+    """Validate reviewed moderation toggle names and bind the count cross-check."""
+
+    toggle_names = split_csv_values(args.toggle)
+    if not toggle_names:
+        errors.append("--toggle is required for moderation_toggle")
+    for name in toggle_names:
+        validate_canonical_string(name, option="--toggle", errors=errors)
+    if len(set(toggle_names)) != len(toggle_names):
+        errors.append("--toggle must not contain duplicates")
+    unique_toggle_count = len(set(toggle_names))
+    if args.toggle_count is None:
+        errors.append("--toggle-count is required for moderation_toggle")
+    elif unique_toggle_count != args.toggle_count:
+        errors.append("--toggle-count must match the number of unique --toggle values")
+    args.toggles = toggle_names
+
+
 def build_common_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build fields shared by gateway compliance canary payloads."""
 
@@ -180,10 +216,11 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "controller_instance_id": args.controller_instance_id,
-                "external_feed_count": args.feed_count,
-                "fetched_feed_count": args.feed_count,
-                "normalized_feed_count": args.feed_count,
-                "signed_feed_count": args.feed_count,
+                "external_feed_count": len(args.feeds),
+                "fetched_feed_count": len(args.feeds),
+                "normalized_feed_count": len(args.feeds),
+                "signed_feed_count": len(args.feeds),
+                "feeds": [{"name": name} for name in args.feeds],
             }
         )
         for claim in CONTROLLER_TRUE_CLAIMS:
@@ -192,8 +229,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "toggle_api_url": args.toggle_api_url,
-                "toggle_count": args.toggle_count,
-                "approved_toggle_count": args.toggle_count,
+                "toggle_count": len(args.toggles),
+                "approved_toggle_count": len(args.toggles),
+                "toggles": [{"name": name} for name in args.toggles],
                 "toggle_digest_hex": args.toggle_digest_hex,
             }
         )
@@ -213,8 +251,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--controller-instance-id",
             errors=errors,
         )
-        if args.feed_count is None:
-            errors.append("--feed-count is required for controller_runtime")
+        validate_feed_names(args, errors)
         args.verified_claims = validate_name_set(
             split_csv_values(args.verified_claim),
             allowed=CONTROLLER_TRUE_CLAIMS,
@@ -229,8 +266,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--toggle-api-url",
             errors=errors,
         )
-        if args.toggle_count is None:
-            errors.append("--toggle-count is required for moderation_toggle")
+        validate_toggle_names(args, errors)
         validate_hex64(args.toggle_digest_hex, option="--toggle-digest-hex", errors=errors)
         args.verified_claims = validate_name_set(
             split_csv_values(args.verified_claim),
@@ -335,8 +371,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verified-claim", action="append", default=[])
     parser.add_argument("--controller-instance-id")
     parser.add_argument("--feed-count", type=positive_int_arg)
+    parser.add_argument("--feed", action="append", default=[])
     parser.add_argument("--toggle-api-url")
     parser.add_argument("--toggle-count", type=positive_int_arg)
+    parser.add_argument("--toggle", action="append", default=[])
     parser.add_argument("--toggle-digest-hex")
     raw_args = sys.argv[1:] if argv is None else argv
     try:

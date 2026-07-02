@@ -147,6 +147,27 @@ def require_kind_options(
             errors.append(f"{option} is required for {args.kind}")
 
 
+def generated_stream_inventory(stream_count: int) -> list[dict[str, str]]:
+    """Build stable per-stream labels for payload-free staging-load evidence."""
+
+    return [{"name": f"stream-{index:04d}"} for index in range(stream_count)]
+
+
+def validate_provider_names(args: argparse.Namespace, errors: list[str]) -> None:
+    """Validate reviewed staging provider names and bind the count cross-check."""
+
+    provider_names = split_csv_values(args.provider)
+    if not provider_names:
+        errors.append("--provider is required for staging_load")
+    for name in provider_names:
+        validate_canonical_string(name, label="--provider", errors=errors)
+    if len(set(provider_names)) != len(provider_names):
+        errors.append("--provider must not contain duplicates")
+    if args.provider_count != len(set(provider_names)):
+        errors.append("--provider-count must match the number of unique --provider values")
+    args.providers = provider_names
+
+
 def common_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build fields shared by gateway load canary payloads."""
 
@@ -192,7 +213,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "cache_state": {"mode": args.cache_state},
                 "duration_seconds": args.duration_seconds,
                 "stream_count": args.stream_count,
+                "streams": generated_stream_inventory(args.stream_count),
                 "provider_count": args.provider_count,
+                "providers": [{"name": name} for name in args.providers],
                 "success_rate_bps": args.success_rate_bps,
                 "error_rate_bps": args.error_rate_bps,
                 "p95_latency_ms": args.p95_latency_ms,
@@ -335,6 +358,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors=errors,
         )
         validate_canonical_string(args.cache_state, label="--cache-state", errors=errors)
+        validate_provider_names(args, errors)
         validate_thresholds(args, errors)
     elif args.kind == "telemetry_slo":
         args.metrics = validate_name_set(
@@ -441,6 +465,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--duration-seconds", type=positive_int_arg, default=3_600)
     parser.add_argument("--stream-count", type=positive_int_arg, default=1_200)
     parser.add_argument("--provider-count", type=positive_int_arg, default=4)
+    parser.add_argument("--provider", action="append", default=[])
     parser.add_argument("--success-rate-bps", type=positive_int_arg, default=9_950)
     parser.add_argument("--error-rate-bps", type=non_negative_int_arg, default=50)
     parser.add_argument("--p95-latency-ms", type=positive_int_arg, default=1_200)

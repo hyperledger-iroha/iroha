@@ -90,6 +90,29 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    count_option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return reviewed unique inventory labels whose count matches a CLI count."""
+
+    items = list(values)
+    if not items:
+        errors.append(f"{option} is required for randomness")
+    for index, item in enumerate(items):
+        validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+    unique_items = set(items)
+    if len(unique_items) != len(items):
+        errors.append(f"{option} must not contain duplicates")
+    if len(unique_items) != expected_count:
+        errors.append(f"{option} unique values must match {count_option}")
+    return items
+
+
 def validate_output_path(path: Path, errors: list[str]) -> None:
     """Reject unsafe output targets before writing a canary artifact."""
 
@@ -174,6 +197,12 @@ def build_route_records(args: argparse.Namespace, routes: Sequence[str]) -> list
     ]
 
 
+def build_inventory_records(names: Sequence[str]) -> list[dict[str, str]]:
+    """Build reviewed payload-free inventory records."""
+
+    return [{"name": name} for name in names]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free PoR rollout canary payload."""
 
@@ -189,6 +218,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "deterministic_seed_replay_verified": True,
                 "forced_challenge_policy_verified": True,
                 "provider_count": args.provider_count,
+                "providers": build_inventory_records(args.providers),
                 "challenge_count": args.challenge_count,
                 "seed_replay_digest_hex": args.seed_replay_digest_hex,
                 "policy_digest_hex": args.policy_digest_hex,
@@ -313,7 +343,15 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             option="--seed-replay-digest-hex",
             errors=errors,
         )
-    if args.kind == "scheduler_runtime":
+    if args.kind == "randomness":
+        args.providers = validate_reviewed_inventory(
+            split_csv_values(args.provider),
+            expected_count=args.provider_count,
+            option="--provider",
+            count_option="--provider-count",
+            errors=errors,
+        )
+    elif args.kind == "scheduler_runtime":
         args.runtime_routes = validate_name_set(
             split_csv_values(args.runtime_route),
             allowed=REQUIRED_RUNTIME_ROUTES,
@@ -467,6 +505,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--validation-bundle-digest-hex")
     parser.add_argument("--report-digest-hex")
     parser.add_argument("--policy-digest-hex")
+    parser.add_argument("--provider", action="append", default=[])
     parser.add_argument("--runtime-route", action="append", default=[])
     parser.add_argument("--reporting-route", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])

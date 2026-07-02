@@ -16,6 +16,12 @@ production
 2222222222222222222222222222222222222222222222222222222222222222
 --provider-id
 provider-a
+--provider-count
+2
+--provider-name
+provider-a
+--provider-name
+provider-b
 --provider-score-bps
 9400
 --leaf-index

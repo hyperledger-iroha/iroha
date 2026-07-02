@@ -92,6 +92,10 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             [
                 "--deposit-probe-count",
                 "2",
+                "--confirmed-deposit-probe",
+                "deposit-probe-00",
+                "--confirmed-deposit-probe",
+                "deposit-probe-01",
                 "--confirmed-deposit-count",
                 "2",
                 "--max-route-latency-ms",
@@ -113,8 +117,16 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             [
                 "--configured-signer-count",
                 "2",
+                "--signer",
+                "submitter-signer-00",
+                "--signer",
+                "submitter-signer-01",
                 "--queued-step-count",
                 "2",
+                "--submitted-step",
+                "settlement-step-00",
+                "--submitted-step",
+                "settlement-step-01",
                 "--submitted-step-count",
                 "2",
                 "--max-settlement-lag-seconds",
@@ -135,10 +147,20 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             [
                 "--report-count",
                 "2",
+                "--report",
+                "appeal-finance-report-00",
+                "--report",
+                "appeal-finance-report-01",
                 "--weekly-rollup-count",
                 "1",
+                "--weekly-rollup",
+                "appeal-finance-weekly-rollup-00",
                 "--settlement-receipt-count",
                 "2",
+                "--settlement-receipt",
+                "appeal-finance-settlement-receipt-00",
+                "--settlement-receipt",
+                "appeal-finance-settlement-receipt-01",
             ]
         )
         for payload_kind in MODULE.REQUIRED_PAYLOAD_KINDS:
@@ -157,6 +179,18 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 str(CHECKER.DEFAULT_MIN_PEERS),
                 "--case-count",
                 "2",
+            ]
+        )
+        for index in range(CHECKER.DEFAULT_MIN_PEERS):
+            args.extend(["--peer", f"peer-{index:02d}"])
+        for index in range(CHECKER.DEFAULT_MIN_PEERS):
+            args.extend(["--validator", f"validator-{index:02d}"])
+        args.extend(
+            [
+                "--reconciliation-case",
+                "appeal-finance-case-00",
+                "--reconciliation-case",
+                "appeal-finance-case-01",
             ]
         )
     elif kind == "governance_approval":
@@ -181,6 +215,80 @@ def test_builds_payload_free_dashboard_metrics_canary(tmp_path: Path) -> None:
         assert payload[field] is False
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "dashboard_metrics"
+    assert errors == []
+
+
+def test_builds_payload_free_deposit_lifecycle_canary(tmp_path: Path) -> None:
+    assert MODULE.main(args_for("deposit_lifecycle", tmp_path)) == 0
+
+    payload = json.loads(
+        canary_path(tmp_path, "deposit_lifecycle").read_text("utf-8")
+    )
+
+    assert payload["schema"] == "sorafs.appeal_finance.deposit_lifecycle_canary.v1"
+    assert payload["deposit_probe_count"] == 2
+    assert payload["confirmed_deposit_count"] == 2
+    assert payload["deposit_probes"] == [
+        {"name": "deposit-probe-00", "confirmed": True},
+        {"name": "deposit-probe-01", "confirmed": True},
+    ]
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "deposit_lifecycle"
+    assert errors == []
+
+
+def test_builds_payload_free_settlement_submitter_canary(tmp_path: Path) -> None:
+    assert MODULE.main(args_for("settlement_submitter", tmp_path)) == 0
+
+    payload = json.loads(
+        canary_path(tmp_path, "settlement_submitter").read_text("utf-8")
+    )
+
+    assert payload["schema"] == "sorafs.appeal_finance.settlement_submitter_canary.v1"
+    assert payload["configured_signer_count"] == 2
+    assert payload["signers"] == [
+        {"name": "submitter-signer-00"},
+        {"name": "submitter-signer-01"},
+    ]
+    assert payload["queued_step_count"] == 2
+    assert payload["submitted_step_count"] == 2
+    assert payload["steps"] == [
+        {"name": "settlement-step-00", "submitted": True},
+        {"name": "settlement-step-01", "submitted": True},
+    ]
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "settlement_submitter"
+    assert errors == []
+
+
+def test_builds_payload_free_governance_dag_publication_canary(
+    tmp_path: Path,
+) -> None:
+    assert MODULE.main(args_for("governance_dag_publication", tmp_path)) == 0
+
+    payload = json.loads(
+        canary_path(tmp_path, "governance_dag_publication").read_text("utf-8")
+    )
+
+    assert payload["schema"] == (
+        "sorafs.appeal_finance.governance_dag_publication_canary.v1"
+    )
+    assert payload["report_count"] == 2
+    assert payload["reports"] == [
+        {"name": "appeal-finance-report-00"},
+        {"name": "appeal-finance-report-01"},
+    ]
+    assert payload["weekly_rollup_count"] == 1
+    assert payload["weekly_rollups"] == [
+        {"name": "appeal-finance-weekly-rollup-00"},
+    ]
+    assert payload["settlement_receipt_count"] == 2
+    assert payload["settlement_receipts"] == [
+        {"name": "appeal-finance-settlement-receipt-00"},
+        {"name": "appeal-finance-settlement-receipt-01"},
+    ]
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "governance_dag_publication"
     assert errors == []
 
 
@@ -212,6 +320,19 @@ def test_generated_canaries_pass_full_appeal_finance_gate(tmp_path: Path) -> Non
             "case_count": 2,
             "config_digest_hex": CONFIG_DIGEST,
         }
+    ]
+    reconciliation_payload = json.loads(
+        canary_path(tmp_path, "multi_peer_reconciliation").read_text("utf-8")
+    )
+    assert [peer["name"] for peer in reconciliation_payload["peers"]] == [
+        f"peer-{index:02d}" for index in range(CHECKER.DEFAULT_MIN_PEERS)
+    ]
+    assert [validator["name"] for validator in reconciliation_payload["validators"]] == [
+        f"validator-{index:02d}" for index in range(CHECKER.DEFAULT_MIN_PEERS)
+    ]
+    assert reconciliation_payload["cases"] == [
+        {"name": "appeal-finance-case-00", "reconciled": True},
+        {"name": "appeal-finance-case-01", "reconciled": True},
     ]
     for kind in MODULE.CANARY_KINDS:
         assert payload["required"][kind]["artifact_count"] == 1
@@ -282,6 +403,247 @@ def test_under_replicated_multi_peer_run_fails_before_write(
     captured = capsys.readouterr()
     assert f"--peer-count must be >= {CHECKER.DEFAULT_MIN_PEERS}" in captured.err
     assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
+
+
+def test_multi_peer_peer_inventory_must_match_peer_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_peer_reconciliation", tmp_path)
+    args[args.index("--peer-count") + 1] = str(CHECKER.DEFAULT_MIN_PEERS + 1)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--peer unique values must match --peer-count" in captured.err
+    assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
+
+
+def test_multi_peer_peer_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_peer_reconciliation", tmp_path)
+    first_peer = args.index("--peer") + 1
+    args.extend(["--peer", args[first_peer]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--peer must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
+
+
+def test_multi_peer_validator_inventory_must_match_validator_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_peer_reconciliation", tmp_path)
+    args[args.index("--validator-count") + 1] = str(CHECKER.DEFAULT_MIN_PEERS + 1)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--validator unique values must match --validator-count" in captured.err
+    assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
+
+
+def test_multi_peer_validator_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_peer_reconciliation", tmp_path)
+    first_validator = args.index("--validator") + 1
+    args.extend(["--validator", args[first_validator]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--validator must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
+
+
+def test_multi_peer_case_inventory_must_match_case_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_peer_reconciliation", tmp_path)
+    args[args.index("--case-count") + 1] = "3"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--reconciliation-case unique values must match --case-count" in captured.err
+    assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
+
+
+def test_multi_peer_case_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_peer_reconciliation", tmp_path)
+    first_case = args.index("--reconciliation-case") + 1
+    args.extend(["--reconciliation-case", args[first_case]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--reconciliation-case must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
+
+
+def test_deposit_confirmed_probe_inventory_must_match_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("deposit_lifecycle", tmp_path)
+    args[args.index("--confirmed-deposit-count") + 1] = "1"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--confirmed-deposit-probe unique values must match "
+        "--confirmed-deposit-count"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "deposit_lifecycle").exists()
+
+
+def test_deposit_unconfirmed_probe_inventory_is_required_for_unconfirmed_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("deposit_lifecycle", tmp_path)
+    args[args.index("--deposit-probe-count") + 1] = "3"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--unconfirmed-deposit-probe is required for deposit_lifecycle" in captured.err
+    assert not canary_path(tmp_path, "deposit_lifecycle").exists()
+
+
+def test_deposit_probe_inventories_must_not_overlap(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("deposit_lifecycle", tmp_path)
+    args[args.index("--deposit-probe-count") + 1] = "3"
+    args.extend(["--unconfirmed-deposit-probe", "deposit-probe-00"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--confirmed-deposit-probe and --unconfirmed-deposit-probe must not overlap"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "deposit_lifecycle").exists()
+
+
+def test_submitter_signer_inventory_must_match_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("settlement_submitter", tmp_path)
+    args[args.index("--configured-signer-count") + 1] = "3"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--signer unique values must match --configured-signer-count" in captured.err
+    assert not canary_path(tmp_path, "settlement_submitter").exists()
+
+
+def test_submitter_submitted_step_inventory_must_match_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("settlement_submitter", tmp_path)
+    args[args.index("--submitted-step-count") + 1] = "1"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--submitted-step unique values must match --submitted-step-count"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "settlement_submitter").exists()
+
+
+def test_submitter_queued_only_step_inventory_is_required_for_pending_steps(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("settlement_submitter", tmp_path)
+    args[args.index("--queued-step-count") + 1] = "3"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--queued-only-step is required for settlement_submitter" in captured.err
+    assert not canary_path(tmp_path, "settlement_submitter").exists()
+
+
+def test_submitter_step_inventories_must_not_overlap(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("settlement_submitter", tmp_path)
+    args[args.index("--queued-step-count") + 1] = "3"
+    args.extend(["--queued-only-step", "settlement-step-00"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--submitted-step and --queued-only-step must not overlap" in captured.err
+    assert not canary_path(tmp_path, "settlement_submitter").exists()
+
+
+def test_governance_dag_report_inventory_must_match_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_dag_publication", tmp_path)
+    args[args.index("--report-count") + 1] = "3"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--report unique values must match --report-count" in captured.err
+    assert not canary_path(tmp_path, "governance_dag_publication").exists()
+
+
+def test_governance_dag_weekly_rollup_inventory_is_required(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_dag_publication", tmp_path)
+    index = args.index("--weekly-rollup")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--weekly-rollup is required for governance_dag_publication" in captured.err
+    assert not canary_path(tmp_path, "governance_dag_publication").exists()
+
+
+def test_governance_dag_settlement_receipt_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_dag_publication", tmp_path)
+    first_receipt = args.index("--settlement-receipt") + 1
+    args.extend(["--settlement-receipt", args[first_receipt]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--settlement-receipt must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "governance_dag_publication").exists()
 
 
 def test_excessive_settlement_lag_fails_before_write(tmp_path: Path, capsys) -> None:

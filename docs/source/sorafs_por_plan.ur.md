@@ -4,10 +4,9 @@ direction: rtl
 source: docs/source/sorafs_por_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f302a29f7275a746caac5de1051110ffbfee60ad6956e2402c8783a823501655
-source_last_modified: "2026-06-25T17:41:33+00:00"
-translation_last_reviewed: 2026-06-25
-source_mtime: 2026-07-01T19:42:54.666167+00:00
+source_hash: f0787cf555f6c9dc09ff306b9c8b44deb8a1145f3ec42b8c2e9e2c3664bd8f31
+source_last_modified: "2026-07-02T07:55:00.613722+00:00"
+translation_last_reviewed: 2026-07-02
 ---
 
 # SoraFS PoR Challenge Scheduler & Randomness Integration
@@ -57,10 +56,11 @@ artifacts for randomness, scheduler runtime, validator replay,
 reporting/archive, observability, and governance approval evidence. The
 builder requires reviewed deployment context, complete runtime/reporting route
 and metric coverage where applicable, seed-replay digest bindings, provider
-and challenge minimum counts, route, scheduler-lag, and report-latency
-threshold facts, the SQL/Parquet archive backend selection, the manual-trigger
-route decision, config-backed governance metadata, reviewed policy digest input
-for randomness and governance-approval canaries, and validates every generated
+and challenge minimum counts, reviewed provider names whose unique inventory
+matches `provider_count`, route, scheduler-lag, and report-latency threshold
+facts, the SQL/Parquet archive backend selection, the manual-trigger route
+decision, config-backed governance metadata, reviewed policy digest input for
+randomness and governance-approval canaries, and validates every generated
 artifact through `scripts/check_sorafs_por_rollout_evidence.py` before writing.
 Checked-in response-file examples cover randomness and scheduler-runtime
 canaries.
@@ -336,9 +336,11 @@ to `iroha_config`. Governance approval evidence must also carry a
 `policy_digest_hex` matching a valid randomness artifact. Seed-replay binding
 failures are attached to the offending artifact in the emitted summary, and
 policy binding failures are attached to the governance approval artifact.
-Scheduler-runtime and reporting/archive artifacts also bind `route_count` to
-the unique canonical `routes[].name` inventory and reject duplicate route
-entries before promotion can report ready.
+Randomness artifacts also bind `provider_count` to the unique canonical
+`providers[].name` inventory and reject duplicate provider entries before
+promotion can report ready. Scheduler-runtime and reporting/archive artifacts
+also bind `route_count` to the unique canonical `routes[].name` inventory and
+reject duplicate route entries before promotion can report ready.
 
 ## Rollout Status
 Implemented locally:
@@ -356,15 +358,16 @@ Implemented locally:
   templates, payload-free canary builder, and focused tests, including
   cross-artifact seed replay digest binding with per-artifact summary
   invalidation and dry-run export of the checker-backed evidence contract.
-  Policy digest binding from randomness to governance approval is now covered
-  by the same evidence gate.
+  Randomness provider inventory binding and policy digest binding from
+  randomness to governance approval are now covered by the same evidence gate.
 
 Remaining production gates:
 - Archive a live drand/VRF/auditor run showing deterministic challenge
   generation and verdict replay that passes the SF-9 rollout evidence gate with
   all runtime/replay/reporting/governance evidence bound to the same seed replay
-  digest, governance approval bound to the randomness policy digest, and any
-  binding failure marked on the offending artifact in the emitted summary.
+  digest, randomness evidence bound to a reviewed provider inventory, governance
+  approval bound to the randomness policy digest, and any binding failure marked
+  on the offending artifact in the emitted summary.
 - Capture each deployment's reviewed SQL/Parquet archive backend selection in
   the SF-9 reporting/archive evidence packet.
 - Capture governance DAG archive handoff evidence for production operators and

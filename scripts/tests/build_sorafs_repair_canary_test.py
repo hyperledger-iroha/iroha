@@ -61,7 +61,11 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(["--evidence-bundle-digest-hex", FAILURE_DIGEST])
     if kind in MODULE.POLICY_DIGEST_KINDS:
         args.extend(["--policy-digest-hex", POLICY_DIGEST])
-    if kind == "failure_capture":
+    if kind == "auditor_roster":
+        args.extend(["--auditor-count", str(CHECKER.DEFAULT_MIN_AUDITORS)])
+        for index in range(CHECKER.DEFAULT_MIN_AUDITORS):
+            args.extend(["--auditor", f"auditor-{index:02d}"])
+    elif kind == "failure_capture":
         for source in MODULE.REQUIRED_FAILURE_SOURCES:
             args.extend(["--failure-source", source])
     elif kind == "auditor_api":
@@ -154,7 +158,40 @@ def test_response_file_can_build_auditor_roster_canary(tmp_path: Path) -> None:
 
     payload = json.loads(canary_path(tmp_path, "auditor_roster").read_text("utf-8"))
     assert payload["auditor_count"] == CHECKER.DEFAULT_MIN_AUDITORS
+    assert [auditor["name"] for auditor in payload["auditors"]] == [
+        f"auditor-{index:02d}" for index in range(CHECKER.DEFAULT_MIN_AUDITORS)
+    ]
     assert payload["raw_roster_included"] is False
+
+
+def test_auditor_roster_inventory_must_match_auditor_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("auditor_roster", tmp_path)
+    auditor_count_index = args.index("--auditor-count")
+    args[auditor_count_index + 1] = str(CHECKER.DEFAULT_MIN_AUDITORS + 1)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--auditor unique values must match --auditor-count" in captured.err
+    assert not canary_path(tmp_path, "auditor_roster").exists()
+
+
+def test_auditor_roster_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("auditor_roster", tmp_path)
+    first_auditor = args.index("--auditor") + 1
+    args.extend(["--auditor", args[first_auditor]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--auditor must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "auditor_roster").exists()
 
 
 def test_missing_worker_route_coverage_fails_closed(tmp_path: Path, capsys) -> None:

@@ -214,10 +214,12 @@ def observability(*, critical: bool = False) -> dict:
 
 
 def reconciliation(*, peer_count: int = 4, mismatch_count: int = 0) -> dict:
+    peers = [{"name": f"peer-{index:02d}"} for index in range(peer_count)]
     payload = base("sorafs.orderbook.reconciliation_canary.v1")
     payload.update(
         {
             "peer_count": peer_count,
+            "peers": peers,
             "contract_digest_hex": DIGEST,
             "source_count": 5,
             "sources": [
@@ -506,6 +508,36 @@ def test_reconciliation_sources_must_not_duplicate(tmp_path: Path) -> None:
     artifact = result["required"]["reconciliation"]["artifacts"][0]
     assert "sources must not contain duplicate values" in artifact["errors"]
     assert "source_count must match unique sources count" in artifact["errors"]
+
+
+def test_reconciliation_peer_count_must_match_unique_peers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["peer_count"] += 1
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reconciliation"]["artifacts"][0]
+    assert "peer_count must match unique peers count" in artifact["errors"]
+
+
+def test_reconciliation_peers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["peers"].append(dict(payload["peers"][0]))
+    payload["peer_count"] = len(payload["peers"])
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reconciliation"]["artifacts"][0]
+    assert "peers must not contain duplicate values" in artifact["errors"]
+    assert "peer_count must match unique peers count" in artifact["errors"]
 
 
 def test_policy_bound_subset_requires_contract_surface_anchor(tmp_path: Path) -> None:

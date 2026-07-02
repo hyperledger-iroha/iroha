@@ -203,6 +203,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "runbook_published",
         "auditor_notifications_configured",
         "auditor_count",
+        "auditors",
         "roster_digest_hex",
         "raw_roster_included",
     ),
@@ -374,6 +375,16 @@ def validate_auditor_roster(
     require_bool_true(payload, "runbook_published", errors)
     require_bool_true(payload, "auditor_notifications_configured", errors)
     require_minimum_int(payload, "auditor_count", options.min_auditors, errors)
+    require_string_inventory_count_match(
+        payload,
+        "auditors",
+        "auditor_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "auditors", errors):
+        require_string(record, "name", errors)
     require_hex(payload, "roster_digest_hex", HEX64_LEN, errors)
     require_false(payload, "raw_roster_included", errors)
 
