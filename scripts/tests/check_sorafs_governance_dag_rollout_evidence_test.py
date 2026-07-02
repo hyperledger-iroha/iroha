@@ -80,6 +80,7 @@ def publisher_service(*, head_age: int = 300, block_count: int = 6) -> dict:
             "parent_chain_verified": True,
             "car_segments_pinned": True,
             "public_head_cid_hex": DIGEST,
+            "policy_digest_hex": DIGEST,
             "pin_lag_seconds": 120,
             "head_age_seconds": head_age,
             "block_count": block_count,
@@ -251,7 +252,9 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["schema"] == "sorafs.governance_dag.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
     assert payload["required"]["publisher_service"]["valid"] is True
+    assert payload["valid_checkpoint_digests"] == [DIGEST]
     assert payload["valid_public_head_cids"] == [DIGEST]
+    assert payload["valid_policy_digests"] == [DIGEST]
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -299,6 +302,61 @@ def test_ipfs_e2e_public_head_binding_must_match_publisher(tmp_path: Path) -> No
         "ipfs_ipns_e2e public_head_cid_hex must match a valid "
         "publisher_service public_head_cid_hex"
     ]
+
+
+def test_publisher_policy_digest_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publisher_service()
+    payload.pop("policy_digest_hex")
+    write_json(tmp_path / "publisher-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["publisher_service"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+    assert payload["valid_policy_digests"] == []
+
+
+def test_operator_recovery_checkpoint_digest_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = operator_recovery()
+    payload.pop("checkpoint_digest_hex")
+    write_json(tmp_path / "operator-recovery.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["operator_recovery"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "checkpoint_digest_hex must be a non-empty string" in artifact["errors"]
+    assert payload["valid_checkpoint_digests"] == []
+
+
+def test_governance_approval_policy_digest_must_match_publisher(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert payload["valid_policy_digests"] == [DIGEST]
+    assert (
+        "governance_approval policy_digest_hex must match a valid "
+        "publisher_service policy_digest_hex"
+    ) in artifact["errors"]
 
 
 def test_stale_publisher_head_does_not_anchor_bound_evidence(tmp_path: Path) -> None:

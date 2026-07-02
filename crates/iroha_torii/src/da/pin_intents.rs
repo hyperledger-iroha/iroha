@@ -268,7 +268,12 @@ fn request_matches_pin_intent(
 }
 
 fn pin_intent_lane_is_active(nexus: &Nexus, proof: &DaPinIntentWithLocation) -> bool {
-    iroha_core::da::active_lane_proof_policy(nexus, proof.intent.lane_id).is_ok()
+    iroha_core::da::active_lane_proof_policy_at_height(
+        nexus,
+        proof.intent.lane_id,
+        proof.location.block_height,
+    )
+    .is_ok()
 }
 
 fn verify_against_store(
@@ -293,7 +298,10 @@ mod tests {
 
     use iroha_data_model::{
         da::{commitment::DaCommitmentLocation, pin_intent::DaPinIntent, types::StorageTicketId},
-        nexus::{LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
+        nexus::{
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceId, LaneCatalog,
+            LaneConfig as ModelLaneConfig, LaneId,
+        },
     };
 
     use super::*;
@@ -391,6 +399,39 @@ mod tests {
             nexus.lane_config.entry(stale_lane).is_some(),
             "fixture must retain stale runtime geometry for the removed lane"
         );
+    }
+
+    fn install_future_created_autoscale_lane(
+        app: &crate::SharedAppState,
+        lane_id: LaneId,
+        created_height: u64,
+    ) {
+        let mut elastic_lane = ModelLaneConfig {
+            id: lane_id,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            alias: format!("elastic-lane-{}", lane_id.as_u32()),
+            ..ModelLaneConfig::default()
+        };
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        elastic_lane.metadata.insert(
+            AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            created_height.to_string(),
+        );
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(lane_id.as_u32().saturating_add(1)).expect("nonzero lane count"),
+            vec![ModelLaneConfig::default(), elastic_lane],
+        )
+        .expect("future-created autoscale lane catalog");
+        let mut nexus = app.state.nexus.write();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+        nexus.lane_catalog = lane_catalog;
     }
 
     fn seed_pin_store(app: &mut crate::SharedAppState, store: DaPinStore) {
@@ -692,6 +733,57 @@ mod tests {
         assert!(
             proof.is_none(),
             "stale runtime-only lane pin intents must not produce proofs"
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_list_prove_verify_ignore_future_created_autoscale_lane() {
+        let mut app = crate::mk_app_state_for_tests();
+        enable_nexus_with_lane_ids(&mut app, &[0]);
+        let future = DaPinIntentWithLocation {
+            intent: sample_intent(1, 5, 9),
+            location: DaCommitmentLocation {
+                block_height: 6,
+                index_in_bundle: 0,
+            },
+        };
+        seed_pin_store(
+            &mut app,
+            DaPinStore::from_intents(std::slice::from_ref(&future)),
+        );
+        install_future_created_autoscale_lane(&app, future.intent.lane_id, 7);
+
+        let JsonBody(items) = super::handler_list_pin_intents(
+            State(app.clone()),
+            NoritoJson(DaPinIntentQueryRequest::default()),
+        )
+        .await
+        .expect("pin intent list should succeed");
+        assert!(
+            items.is_empty(),
+            "future-created autoscale lane pin intents must not be listed before creation height"
+        );
+
+        let JsonBody(proof) = super::handler_prove_pin_intent(
+            State(app.clone()),
+            NoritoJson(DaPinIntentQueryRequest {
+                storage_ticket: Some(future.intent.storage_ticket),
+                ..DaPinIntentQueryRequest::default()
+            }),
+        )
+        .await
+        .expect("pin intent proof lookup should succeed");
+        assert!(
+            proof.is_none(),
+            "future-created autoscale lane pin intents must not produce public proofs"
+        );
+
+        let JsonBody(response) = super::handler_verify_pin_intent(State(app), NoritoJson(future))
+            .await
+            .expect("pin intent verification should succeed");
+        assert!(
+            !response.valid,
+            "verify must reject pin intents before the autoscale lane creation height"
         );
     }
 }

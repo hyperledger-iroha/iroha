@@ -1882,6 +1882,43 @@ def test_transfer_helper_accepts_configured_chain_discriminant_account_ids() -> 
     assert captured["kwargs"]["private_key_hex"] == "22" * 32
 
 
+def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
+    client = ToriiClient(
+        "http://torii.example",
+        session=FakeSession([]),
+        max_retries=0,
+        chain_discriminant=0x0171,
+    )
+    captured: dict[str, object] = {}
+    source = account_address(0x48, 0x0171)
+    destination = account_address(0x49, 0x0171)
+    native_source = account_address(0x48)
+    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
+    scope = "dataspace:6647857470246403404"
+
+    def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
+        captured["draft"] = draft
+        captured["kwargs"] = kwargs
+        return {"hash": "transfer-taira-scoped"}
+
+    client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
+
+    assert client.transfer_asset_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="23" * 32,
+        asset_id=f"{asset_definition_id}#{source}#{scope}",
+        destination=destination,
+        quantity=Decimal("3"),
+        wait=False,
+    ) == {"hash": "transfer-taira-scoped"}
+
+    draft = captured["draft"]
+    assert draft.config.authority == native_source
+    assert len(draft) == 1
+    assert captured["kwargs"]["private_key_hex"] == "23" * 32
+
+
 def test_zk_instruction_helpers_serialize_full_surface() -> None:
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
     source = account_address(0x61)
@@ -2762,6 +2799,115 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
     assert captured[0][1]["wait"] is False
     assert captured[1][1]["private_key_hex"] == "22" * 32
     assert captured[10][1]["private_key_hex"] == "bb" * 32
+
+
+def test_zk_ace_waited_helpers_enrich_receipts_from_asset_metadata() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
+    source = account_address(0x63)
+    destination = account_address(0x64)
+    verifier_key = "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0"
+    submit_calls: list[dict[str, object]] = []
+    metadata_payloads = [
+        {
+            "metadata": {
+                "zk.ace.identity.last": {
+                    "identity_commitment": "11" * 32,
+                    "policy_hash": "22" * 32,
+                }
+            }
+        },
+        {
+            "metadata": {
+                "zk.ace.transfer.last": {
+                    "identity_commitment": "11" * 32,
+                    "tx_digest": "33" * 32,
+                    "replay_nullifier": "44" * 32,
+                    "policy_hash": "55" * 32,
+                }
+            }
+        },
+    ]
+
+    def fake_submit(_draft: object, **kwargs: object) -> dict[str, object]:
+        submit_calls.append(kwargs)
+        return {"hash": f"{len(submit_calls):02x}" * 32}
+
+    client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
+    client.get_asset_definition = (  # type: ignore[method-assign]
+        lambda _asset_definition_id: metadata_payloads.pop(0)
+    )
+
+    registration = client.register_zk_ace_identity_commitment_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="55" * 32,
+        asset_definition_id=asset_definition_id,
+        identity_commitment="11" * 32,
+        policy_hash="22" * 32,
+        allowed_accounts=[source],
+        verifier_key=verifier_key,
+        action_class="transparent_asset_transfer",
+        domain_tag="iroha:zk-ace:pq-authorization:v0",
+        wait=True,
+    )
+    assert registration["identity_commitment_state"] == {
+        "identity_commitment": "11" * 32,
+        "policy_hash": "22" * 32,
+        "chain_id": "chain",
+        "domain_tag": "iroha:zk-ace:pq-authorization:v0",
+        "action_class": "transparent_asset_transfer",
+        "verifier_key_id": {
+            "backend": "stark/fri/sha256-goldilocks",
+            "name": "zk_ace_pq_authorization_v0",
+        },
+        "allowed_accounts": [source],
+        "commitment_status": "active",
+        "revoked": False,
+        "revocation_status": "not_revoked",
+        "rotation_state": "current",
+    }
+
+    transfer = client.zk_ace_authorized_transfer_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="88" * 32,
+        from_account_id=source,
+        to_account_id=destination,
+        asset_definition_id=asset_definition_id,
+        amount="7",
+        identity_commitment="11" * 32,
+        tx_digest="33" * 32,
+        domain_tag="iroha:zk-ace:pq-authorization:v0",
+        action_class="transparent_asset_transfer",
+        replay_nullifier="44" * 32,
+        policy_hash="55" * 32,
+        proof={
+            "backend": "stark/fri/sha256-goldilocks",
+            "proof_bytes": b"zk-ace-proof",
+            "verifying_key_ref": verifier_key,
+        },
+        wait=True,
+    )
+    assert transfer["replay_state"] == {
+        "identity_commitment": "11" * 32,
+        "tx_digest": "33" * 32,
+        "replay_nullifier": "44" * 32,
+        "policy_hash": "55" * 32,
+        "chain_id": "chain",
+        "domain_tag": "iroha:zk-ace:pq-authorization:v0",
+        "action_class": "transparent_asset_transfer",
+        "verifier_key_id": {
+            "backend": "stark/fri/sha256-goldilocks",
+            "name": "zk_ace_pq_authorization_v0",
+        },
+        "source_account": source,
+        "source_account_allowed": True,
+        "replay_status": "fresh",
+        "duplicate": False,
+        "already_seen": False,
+    }
+    assert [call["wait"] for call in submit_calls] == [True, True]
 
 
 def test_zk_ace_transaction_amount_normalizer_matches_proof_builder_boundary() -> None:

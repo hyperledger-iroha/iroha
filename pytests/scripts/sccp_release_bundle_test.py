@@ -3032,6 +3032,46 @@ def test_release_bundle_verifier_guards_tron_route_config_canonical_manifest_inv
         assert checked_markers > 0
 
 
+def test_release_bundle_verifier_guards_ton_route_manifest_cli_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin TON route-manifest CLI guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ton_route_manifest_cli_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.TON_ROUTE_MANIFEST_CLI_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ton-route-manifest-cli-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._ton_route_manifest_cli_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP TON route-manifest CLI source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+
 def test_release_bundle_verifier_guards_tron_runtime_route_manifest_inventory(
     tmp_path: Path,
 ) -> None:
@@ -35076,6 +35116,37 @@ def test_release_bundle_verifier_rejects_missing_tron_route_config_canonical_man
     assert (
         "readiness report source_inventory missing required gate: "
         "tron_route_config_canonical_manifest_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ton_route_manifest_cli_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the TON route-manifest CLI gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ton_route_manifest_cli_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ton_route_manifest_cli_gate"
     ) in verified.stdout
 
 

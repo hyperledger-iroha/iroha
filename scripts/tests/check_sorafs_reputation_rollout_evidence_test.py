@@ -314,6 +314,21 @@ def test_provider_proof_provider_id_must_match_provider(tmp_path: Path) -> None:
     assert "proof.provider_id must match provider.provider_id" in artifact["errors"]
 
 
+def test_provider_proof_siblings_must_be_unique(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = provider_evidence()
+    payload["proof"]["siblings_hex"].append(payload["proof"]["siblings_hex"][0])
+    write_json(tmp_path / "provider-provider-a.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "proof.siblings_hex[1] must be unique" in artifact["errors"]
+
+
 def test_invalid_duplicate_artifact_fails_even_with_valid_artifact(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(

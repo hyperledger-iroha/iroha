@@ -6547,18 +6547,19 @@ fn transparency_proof_token_verification_response(
             "invalid SoraFS proof-token verifying_key_hex: public key material must not be all zero",
         ));
     }
-    let verifying_key = Ed25519VerifyingKey::from_bytes(&verifying_key_bytes).map_err(|err| {
+    let parsed_key =
+        iroha_crypto::ed25519_parse_public_key(&verifying_key_bytes).map_err(|err| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid SoraFS proof-token verifying_key_hex: {err}"),
+            )
+        })?;
+    let verifying_key = Ed25519VerifyingKey::from_bytes(parsed_key.as_bytes()).map_err(|err| {
         json_error(
             StatusCode::BAD_REQUEST,
             format!("invalid SoraFS proof-token verifying_key_hex: {err}"),
         )
     })?;
-    if verifying_key.is_weak() {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "invalid SoraFS proof-token verifying_key_hex: public key is small-order (weak); rejected",
-        ));
-    }
     let digest_inputs = match (
         req.digest_key_hex.as_deref(),
         req.evidence_digest_hex.as_deref(),
@@ -28439,7 +28440,10 @@ mod advert_tests {
             value.get("returned_entry_count").and_then(Value::as_u64),
             Some(6)
         );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
         assert_eq!(
             value.get("truncated_entries").and_then(Value::as_bool),
             Some(false)
@@ -28724,6 +28728,36 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn transparency_proof_token_verify_rejects_noncanonical_verifying_key() {
+        const ED25519_NONCANONICAL_IDENTITY: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let mut request = valid_transparency_proof_token_verify_request(0xA9);
+        request.verifying_key_hex = hex::encode(ED25519_NONCANONICAL_IDENTITY);
+
+        let app = mk_app_state_for_tests();
+        let response = handle_post_sorafs_transparency_token_verify(
+            State(app),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
+            JsonOnly(request),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect noncanonical proof-token verification body");
+        let body_text = String::from_utf8_lossy(&body_bytes);
+        assert!(
+            body_text.contains("non-canonical ed25519 public key encoding"),
+            "unexpected proof-token verification error body: {body_text}"
+        );
     }
 
     #[tokio::test]
@@ -29185,7 +29219,10 @@ mod advert_tests {
             value.get("returned_token_count").and_then(Value::as_u64),
             Some(1)
         );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            value.get("limit").and_then(Value::as_u64),
+            Some(DEFAULT_LIST_LIMIT as u64)
+        );
         assert_eq!(value.get("truncated").and_then(Value::as_bool), Some(false));
         assert_eq!(
             value.get("distinct_token_count").and_then(Value::as_u64),
@@ -29984,7 +30021,7 @@ mod advert_tests {
         let response = handle_get_sorafs_governance_dag_publish_digest(
             State(app),
             HeaderMap::new(),
-            Path("ff".repeat(32)),
+            Path("99".repeat(32)),
             axum::extract::RawQuery(None),
         )
         .await;

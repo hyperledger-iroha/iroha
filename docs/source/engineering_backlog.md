@@ -257,6 +257,10 @@ addresses and bytes32 evidence hashes before delegated TON parser helpers can
 run string-like hooks. The Python TRON live CLI parser helpers now apply the
 same boundary to TRON address payloads and bytes32 evidence hashes before
 delegated address or hex parser helpers can run string-like hooks.
+The Python TON destination CLI parser helpers now apply the exact-string
+boundary to verifier raw addresses, code BoC text/file path inputs, account
+status, last-transaction LT text, and bytes32 evidence hashes before delegated
+TON parser helpers can run string-like hooks.
 EVM destination/source live collectors, EVM receipt-proof collection, and
 Solana live evidence collection also require JSON-RPC response IDs to be exact
 integer `1`, so boolean response IDs cannot alias the request ID during
@@ -1539,6 +1543,40 @@ rejections, including bounded public response previews, before attempting any
 JSON fallback that depends on local native decoding. BSC native prover bundle
 admission now treats `remote_prover` markers in proof artifacts as forbidden
 local-prover dependency evidence instead of accepting them as inert bytes.
+TON TAIRA XOR route-manifest publication now keeps its CLI and manifest scalar
+boundary explicit: duplicate options fail with fixed redacted diagnostics before
+artifacts are written, every non-help option must carry an explicit value,
+path options must be non-empty and unpadded before filesystem work,
+unknown commands and unknown named options fail with fixed command-scoped
+diagnostics before artifacts or manifest reads, command-specific help cannot
+carry values or hide unknown options, unexpected positional arguments are
+redacted, and published
+`ton_finalize_message_value_nano` values must remain JSON strings instead of
+numeric aliases, and publish `--submit`/`--wait-for-commit` options must use
+exact `true`/`false` values rather than truthy or padded aliases.
+Publish-time `--private-key-env` values must also be bounded uppercase
+environment variable names, so malformed or secret-looking option text is
+rejected without echoing it before runtime secret lookup.
+TON publish `--torii-url` values must use HTTPS except loopback HTTP, and must
+not carry credentials, query strings, fragments, or whitespace/control-bearing
+URL text before the submission path can write artifacts.
+Publish `--authority` values must be canonical I105 account ids before runtime
+secret lookup, so aliases, hex/UAID literals, padded values, control-bearing
+text, and secret-looking authority values fail with a fixed diagnostic.
+Submit metadata such as `--chain-id`, `--torii-url`, and
+`--commit-timeout-ms` must be rejected before runtime private-key lookup, so
+operator metadata mistakes cannot force secret reads before local validation.
+Review-only publish artifacts must also reject submit-only flags unless
+`--submit true`, so authority, private-key-env, Torii URL, chain-id,
+wait-for-commit, or commit-timeout settings cannot be silently ignored.
+Publish review gas metadata must also be validated before manifest reads, so
+invalid gas asset ids or gas limits cannot be masked by missing or malformed
+route manifests.
+Route-manifest outputs must also stay distinct from input evidence files and
+publish outputs must stay distinct from the reviewed manifest, so operator
+typos cannot replace deployment evidence or approved manifest artifacts. The
+readiness report and strict bundle source inventories pin those guards so they
+cannot disappear from release evidence.
 TRON route-config handoff also rejects duplicate camelCase/snake_case aliases
 for required route-manifest containers and scalars, including production flags,
 post-deploy evidence, destination rollout/binding domains and hashes, fixed

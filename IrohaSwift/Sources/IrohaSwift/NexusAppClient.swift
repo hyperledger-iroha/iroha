@@ -275,7 +275,23 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
     }
 
     public func buildTransferInstructionBox(input: NexusTransferInput) throws -> Data {
-        try SwiftNexusTransferPayloadEncoder.encodeInstructionBox(input: input)
+        if let parsed = OfflineNorito.parsePublicAssetIdLiteral(input.sourceAssetID) {
+            let nativeAssetDefinitionId: String
+            if let dataspaceId = parsed.dataspaceId {
+                nativeAssetDefinitionId = "\(parsed.assetDefinitionId)#dataspace:\(dataspaceId)"
+            } else {
+                nativeAssetDefinitionId = parsed.assetDefinitionId
+            }
+            if let nativeInstruction = try NoritoNativeBridge.shared.encodeTransferInstructionBox(
+                authority: parsed.accountId,
+                assetDefinitionId: nativeAssetDefinitionId,
+                quantity: input.quantity,
+                destination: input.destinationAccountID
+            ) {
+                return nativeInstruction
+            }
+        }
+        return try SwiftNexusTransferPayloadEncoder.encodeInstructionBox(input: input)
     }
 
     public func finalizeSignedTransaction(signable: NexusSignableTransaction,
@@ -726,16 +742,17 @@ private enum SwiftNexusTransferPayloadEncoder {
         return try OfflineNorito.canonicalAssetIdLiteral(candidate)
     }
 
-    private static func normalizedValidationFeePolicyHash(_ value: String) throws -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hexDigits = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
-        guard trimmed == value,
-              trimmed.count == 64,
-              trimmed.unicodeScalars.allSatisfy({ hexDigits.contains($0) }) else {
-            throw ValidationFeeTransferRequestError.malformedPolicyHash(value)
-        }
-        return trimmed.lowercased()
+}
+
+fileprivate func normalizedValidationFeePolicyHash(_ value: String) throws -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    let hexDigits = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+    guard trimmed == value,
+          trimmed.count == 64,
+          trimmed.unicodeScalars.allSatisfy({ hexDigits.contains($0) }) else {
+        throw ValidationFeeTransferRequestError.malformedPolicyHash(value)
     }
+    return trimmed.lowercased()
 }
 
 extension SwiftTransactionEncoder {
@@ -779,8 +796,7 @@ extension SwiftTransactionEncoder {
         }
         let destination = ids.accountIds["destination"] ?? principal.destination
         let treasury = ids.accountIds["treasury"] ?? request.treasuryAccountId
-        let normalizedPolicyHash = try SwiftNexusTransferPayloadEncoder
-            .normalizedValidationFeePolicyHash(request.policyHashHex)
+        let normalizedPolicyHash = try normalizedValidationFeePolicyHash(request.policyHashHex)
         guard request.policyVersion > 0 else {
             throw ValidationFeeTransferRequestError.invalidPolicyVersion
         }

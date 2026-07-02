@@ -328,6 +328,96 @@ def test_ton_destination_direct_parsers_redact_parser_causes(tmp_path):
             raise AssertionError("TON destination parser leaked nested details")
 
 
+def test_ton_destination_cli_parsers_reject_non_string_values_without_stringification():
+    module = load_evidence_module()
+
+    class HostileTonDestinationParserValue:
+        def __str__(self):
+            raise AssertionError(
+                "secret-token-ton-destination-parser-value stringified"
+            )
+
+        def __repr__(self):
+            raise AssertionError(
+                "secret-token-ton-destination-parser-value repr leaked"
+            )
+
+        def strip(self):
+            raise AssertionError(
+                "secret-token-ton-destination-parser-value strip called"
+            )
+
+        def startswith(self, _prefix):
+            raise AssertionError(
+                "secret-token-ton-destination-parser-value startswith called"
+            )
+
+        def lower(self):
+            raise AssertionError(
+                "secret-token-ton-destination-parser-value lower called"
+            )
+
+        def isascii(self):
+            raise AssertionError(
+                "secret-token-ton-destination-parser-value isascii called"
+            )
+
+        def isdecimal(self):
+            raise AssertionError(
+                "secret-token-ton-destination-parser-value isdecimal called"
+            )
+
+    hostile = HostileTonDestinationParserValue()
+    cases = (
+        (
+            lambda value: module.parse_hex_bytes(
+                value,
+                label="verifier code hash",
+                byte_length=32,
+            ),
+            "verifier code hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda value: module.parse_code_boc_hex(value, label="code BoC"),
+            "code BoC must be hex",
+        ),
+        (
+            lambda value: module.parse_code_boc_base64(value, label="code BoC"),
+            "code BoC must be base64 or base64url",
+        ),
+        (
+            lambda value: module.parse_code_boc_file(value, label="code BoC"),
+            "code BoC file cannot be read",
+        ),
+        (
+            lambda value: module.parse_positive_decimal_text(
+                value,
+                label="last transaction LT",
+            ),
+            "last transaction LT must be a positive decimal",
+        ),
+        (
+            lambda value: module.parse_account_status(value, label="account status"),
+            "account status must be active",
+        ),
+        (
+            lambda value: module.normalize_ton_raw_address(
+                value,
+                label="verifier contract address",
+            ),
+            "verifier contract address must be workchain:account_hex",
+        ),
+    )
+
+    for parser, expected_message in cases:
+        try:
+            parser(hostile)
+        except module.argparse.ArgumentTypeError as exc:
+            assert str(exc) == expected_message
+        else:
+            raise AssertionError("non-string TON destination parser value was accepted")
+
+
 def test_ton_destination_direct_parsers_redact_helper_exit_parser_causes(monkeypatch):
     module = load_evidence_module()
 

@@ -222,6 +222,20 @@ fn signed_transaction_from_sccp_entrypoint(
     }
 }
 
+fn entrypoint_has_successful_or_pending_result(
+    block: &SignedBlock,
+    entrypoint_index: usize,
+) -> bool {
+    if !block.has_results() {
+        return true;
+    }
+
+    block
+        .results()
+        .nth(entrypoint_index)
+        .is_some_and(|result| result.as_ref().is_ok())
+}
+
 fn collect_sccp_messages_from_executable<F>(
     tx_index: usize,
     executable: &Executable,
@@ -285,9 +299,33 @@ pub fn collect_new_sccp_messages_from_accepted_transactions<F>(
 where
     F: Fn(&SccpOutboundMessageKey) -> bool,
 {
+    collect_new_sccp_messages_from_accepted_transactions_where(
+        transactions,
+        |_| true,
+        is_already_recorded,
+    )
+}
+
+/// Extract newly recordable SCCP message records from selected accepted signed entrypoints.
+///
+/// The transaction-index filter preserves canonical block entrypoint indices in
+/// the returned messages while letting proposal assembly exclude transactions
+/// whose refreshed routing context cannot execute outbound SCCP records.
+pub(crate) fn collect_new_sccp_messages_from_accepted_transactions_where<F, G>(
+    transactions: &[AcceptedTransaction<'_>],
+    include_transaction_index: F,
+    is_already_recorded: G,
+) -> Vec<RecordedSccpMessage>
+where
+    F: Fn(usize) -> bool,
+    G: Fn(&SccpOutboundMessageKey) -> bool,
+{
     let mut messages = Vec::new();
     let mut seen = BTreeSet::new();
     for (tx_index, transaction) in transactions.iter().enumerate() {
+        if !include_transaction_index(tx_index) {
+            continue;
+        }
         if let Some(signed) = signed_transaction_from_sccp_entrypoint(transaction.entrypoint()) {
             collect_sccp_messages_from_executable(
                 tx_index,
@@ -314,7 +352,7 @@ pub fn collect_sccp_messages_from_signed_block(block: &SignedBlock) -> Vec<Recor
             | TransactionEntrypoint::PrivateKaigi(_)
             | TransactionEntrypoint::Time(_) => continue,
         };
-        if block.error(entrypoint_index).is_some() {
+        if !entrypoint_has_successful_or_pending_result(block, entrypoint_index) {
             continue;
         }
         collect_sccp_messages_from_executable(
@@ -1296,6 +1334,27 @@ mod tests {
         block
     }
 
+    fn signed_block_without_results(
+        transactions: Vec<SignedTransaction>,
+        height: u64,
+    ) -> SignedBlock {
+        let keypair = checked_keypair();
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                .expect("test block signing should succeed"),
+        );
+        SignedBlock::presigned(signature, header, transactions)
+    }
+
     #[test]
     fn build_finality_proof_uses_persisted_qc_when_status_history_misses_height() {
         let height = 987_654;
@@ -1393,31 +1452,30 @@ mod tests {
             .parse()
             .expect("chain id");
         let validator_keypair = checked_bls_keypair();
+        let validator_public_keys = vec![validator_keypair.public_key().to_string()];
         let validator_set = vec![PeerId::new(validator_keypair.public_key().clone())];
-        let validator_set_hash = {
-            let hash = HashOf::new(&validator_set);
-            let mut out = [0u8; 32];
-            out.copy_from_slice(hash.as_ref().as_ref());
-            out
-        };
-        let commitment_root = [8; 32];
-        let mut block_header = BlockHeader::new(
-            core::num::NonZeroU64::new(7).expect("non-zero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
+        let validator_set_hash = HashOf::new(&validator_set);
+        let mut validator_set_hash_bytes = [0u8; 32];
+        validator_set_hash_bytes.copy_from_slice(validator_set_hash.as_ref().as_ref());
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            7,
+            b"0x0000000000000000000000000000000000000007",
+        ));
+        let (block, _) = signed_block_with_sccp_payloads(&[payload], 7);
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        let commitment_root =
+            sccp_commitment_root_from_messages(&messages).expect("commitment root");
+        let mut block_header = block.header().clone();
         block_header.set_sccp_commitment_root(Some(commitment_root));
         let block_hash = sccp_block_hash_to_h256(&block_header.hash());
+        let block_header_bytes = norito::to_bytes(&block_header).expect("encode block header");
         let finality = NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: chain_id.to_string(),
             height: 7,
             block_hash,
             commitment_root,
-            block_header_bytes: norito::to_bytes(&block_header).expect("encode block header"),
+            block_header_bytes,
             commit_qc: iroha_sccp::NexusCommitQcV1 {
                 version: 1,
                 phase: NexusConsensusPhaseV1::Commit,
@@ -1431,9 +1489,9 @@ mod tests {
                 chain_order_hash: [3; 32],
                 rechain_seq: 0,
                 highest_qc: None,
-                validator_set_hash,
                 validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                validator_public_keys: vec![validator_keypair.public_key().to_string()],
+                validator_set_hash: validator_set_hash_bytes,
+                validator_public_keys,
                 validator_set_pops: vec![vec![1; 48]],
                 signers_bitmap: vec![0b0000_0001],
                 bls_aggregate_signature: vec![2; 96],
@@ -1477,6 +1535,30 @@ mod tests {
         assert_eq!(
             sccp_commitment_root_from_messages(&messages),
             iroha_sccp::commitment_merkle_root(&commitments)
+        );
+    }
+
+    #[test]
+    fn collect_sccp_messages_from_block_without_results_keeps_preexecution_records() {
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            15,
+            b"0x0000000000000000000000000000000000000999",
+        ));
+        let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
+            InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                payload.clone(),
+            )),
+        ]));
+        let block = signed_block_without_results(vec![tx], 13);
+
+        assert!(!block.has_results());
+        let messages = collect_sccp_messages_from_signed_block(&block);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].tx_index, 0);
+        assert_eq!(
+            messages[0].payload,
+            iroha_sccp::decode_canonical_sccp_payload_bytes(&payload).expect("payload decodes")
         );
     }
 
@@ -1892,6 +1974,38 @@ mod tests {
                 iroha_sccp::decode_canonical_sccp_payload_bytes(&payload).expect("payload decodes")
             );
         }
+    }
+
+    #[test]
+    fn collect_sccp_messages_from_accepted_transactions_filter_preserves_entry_indices() {
+        let skipped_payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            8,
+            b"0x0000000000000000000000000000000000000225",
+        ));
+        let included_payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            9,
+            b"0x0000000000000000000000000000000000000226",
+        ));
+        let skipped = accepted_transaction_with_sccp_payload(skipped_payload);
+        let included = accepted_transaction_with_sccp_payload(included_payload.clone());
+
+        let messages = collect_new_sccp_messages_from_accepted_transactions_where(
+            &[skipped, included],
+            |tx_index| tx_index == 1,
+            |_| false,
+        );
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].tx_index, 1,
+            "route filtering must not renumber canonical transaction indices"
+        );
+        assert_eq!(messages[0].instruction_index, 0);
+        assert_eq!(
+            messages[0].payload,
+            iroha_sccp::decode_canonical_sccp_payload_bytes(&included_payload)
+                .expect("payload decodes")
+        );
     }
 
     #[test]

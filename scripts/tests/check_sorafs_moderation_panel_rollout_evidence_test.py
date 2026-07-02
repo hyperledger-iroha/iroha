@@ -319,6 +319,7 @@ def e2e_panel(*, peer_count: int = 4) -> dict:
         "case_digest_hex": DIGEST,
         "roster_hash_hex": DIGEST,
         "tally_digest_hex": DIGEST,
+        "policy_digest_hex": DIGEST,
         "peer_count": peer_count,
         "validator_count": peer_count,
         "case_count": 2,
@@ -422,6 +423,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
             "tally_digest_hex": DIGEST,
         }
     ]
+    assert payload["valid_policy_digests"] == [DIGEST]
     assert payload["required"]["appeal_intake"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
@@ -492,6 +494,69 @@ def test_missing_e2e_panel_fails(tmp_path: Path) -> None:
     (tmp_path / "e2e-panel.json").unlink()
 
     assert run_gate(tmp_path) == 1
+
+
+def test_e2e_panel_requires_policy_digest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = e2e_panel()
+    del payload["policy_digest_hex"]
+    write_json(tmp_path / "e2e-panel.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["e2e_panel"]["artifacts"][0]
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+    assert result["valid_policy_digests"] == []
+
+
+def test_governance_approval_policy_digest_must_match_e2e_panel(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    required = result["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert result["valid_policy_digests"] == [DIGEST]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval policy_digest_hex must match a valid "
+        "e2e_panel policy_digest_hex"
+    ]
+
+
+def test_policy_bound_subset_requires_e2e_panel_anchor(tmp_path: Path) -> None:
+    write_json(tmp_path / "governance-approval.json", governance_approval())
+    summary = tmp_path / "summary.json"
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-kind",
+            "governance_approval",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert result["valid_policy_digests"] == []
+    assert artifact["valid"] is False
+    assert (
+        "governance_approval policy_digest_hex must match a valid "
+        "e2e_panel policy_digest_hex"
+    ) in artifact["errors"]
 
 
 def test_stale_appeal_intake_fails(tmp_path: Path) -> None:

@@ -1,0 +1,753 @@
+#!/usr/bin/env python3
+"""Build payload-free SoraFS appeal finance rollout canary artifacts."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import secrets
+import sys
+from collections.abc import Iterable, Sequence
+from pathlib import Path
+from typing import Any
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from check_sorafs_appeal_finance_rollout_evidence import (  # noqa: E402
+    DEFAULT_MAX_CANARY_AGE_SECS,
+    DEFAULT_MAX_DASHBOARD_AGE_SECS,
+    DEFAULT_MAX_ROUTE_LATENCY_MS,
+    DEFAULT_MAX_SETTLEMENT_LAG_SECS,
+    DEFAULT_MIN_PEERS,
+    KIND_BY_NAME,
+    REQUIRED_APPEAL_CLASSES,
+    REQUIRED_DEPOSIT_ROUTES,
+    REQUIRED_METRICS,
+    REQUIRED_OUTCOMES,
+    REQUIRED_PAYLOAD_KINDS,
+    REQUIRED_QUOTE_ROUTES,
+    REQUIRED_RECONCILIATION_STATUSES,
+    REQUIRED_SETTLEMENT_ROUTES,
+    REQUIRED_URGENCIES,
+    ValidationOptions,
+    validate_evidence_payload,
+)
+from sorafs_checker_preflight import (  # noqa: E402
+    emit_checker_error_block,
+    emit_checker_error_lines,
+    emit_checker_exception,
+    validate_checker_output_parent,
+)
+from sorafs_path_identity import path_diagnostic_label  # noqa: E402
+from sorafs_response_args import (  # noqa: E402
+    EvidenceArgumentParser,
+    expand_response_args,
+    non_negative_int_arg,
+    positive_int_arg,
+)
+
+
+CANARY_KINDS = tuple(KIND_BY_NAME)
+HEX64_LEN = 64
+POLICY_DIGEST_KINDS = ("pricing_config", "governance_approval")
+TRUE_CLAIMS: dict[str, tuple[str, ...]] = {
+    "pricing_config": (
+        "pricing_config_present",
+        "settlement_config_present",
+        "quote_ttl_present",
+        "default_panel_size_present",
+        "config_route_2xx",
+        "status_route_2xx",
+    ),
+    "quote_api": (
+        "deterministic_replay_passed",
+        "deposit_bounds_enforced",
+    ),
+    "deposit_lifecycle": (
+        "payer_auth_enforced",
+        "participant_status_gate_enforced",
+        "mismatched_escrow_rejected",
+        "unconfirmed_ballot_rejected",
+        "ledger_lock_confirmed",
+        "idempotency_key_bound",
+        "evidence_hashes_bound",
+    ),
+    "settlement_execution": (
+        "drawdown_instruction_present",
+        "cancel_instruction_present",
+        "required_signer_bound",
+        "deterministic_reconciliation_digest",
+        "treasury_reconciliation_passed",
+        "mismatched_ledger_rejected",
+    ),
+    "settlement_submitter": (
+        "receipt_published",
+        "required_authority_matched",
+        "missing_signer_rejected",
+        "wrong_authority_rejected",
+        "rejected_or_expired_retry_verified",
+    ),
+    "moderation_worker": (
+        "worker_enabled",
+        "storage_configured",
+        "submitter_keys_configured",
+        "live_event_subscription_verified",
+        "deposit_fingerprint_reconstructed",
+        "evidence_hashes_verified",
+        "runtime_ledger_validated",
+        "pending_step_queued",
+        "idempotent_rescan_verified",
+        "retry_cap_enforced",
+    ),
+    "governance_dag_publication": (
+        "publish_index_verified",
+        "canonical_to_payloads_verified",
+        "json_sidecars_verified",
+        "blake3_sidecars_verified",
+        "car_queue_verified",
+        "runtime_signed_dag_verified",
+        "report_publish_auth_enforced",
+        "rollup_publish_auth_enforced",
+    ),
+    "dashboard_metrics": (
+        "metrics_scrape_success",
+        "dashboard_provisioned",
+        "alert_rules_installed",
+        "hosted_public_dashboard_verified",
+    ),
+    "multi_peer_reconciliation": (
+        "deposit_posted",
+        "decision_ingested",
+        "settlement_submitted",
+        "disbursement_verified",
+        "treasury_reconciliation_passed",
+        "governance_dag_receipt_verified",
+        "all_peers_reconciled",
+        "qc_quorum_satisfied",
+    ),
+    "governance_approval": (
+        "approved",
+        "governance_vote_recorded",
+        "iroha_config_bound",
+        "pricing_policy_present",
+        "settlement_policy_present",
+        "deposit_custody_policy_present",
+        "settlement_submitter_policy_present",
+        "worker_retry_policy_present",
+        "public_dashboard_rollout_accepted",
+        "multi_peer_reconciliation_accepted",
+    ),
+}
+FORCED_FALSE_FIELDS: dict[str, tuple[str, ...]] = {
+    "pricing_config": ("config_payload_included", "response_bodies_included"),
+    "quote_api": ("payloads_included", "response_bodies_included"),
+    "deposit_lifecycle": (
+        "raw_instruction_included",
+        "deposit_payloads_included",
+        "response_bodies_included",
+    ),
+    "settlement_execution": (
+        "raw_instruction_included",
+        "signed_transaction_included",
+        "response_bodies_included",
+    ),
+    "settlement_submitter": ("raw_receipt_included", "signed_transaction_included"),
+    "moderation_worker": (
+        "raw_ballot_included",
+        "deposit_confirmation_payload_included",
+    ),
+    "governance_dag_publication": (
+        "raw_report_included",
+        "raw_rollup_included",
+        "raw_receipt_included",
+    ),
+    "dashboard_metrics": ("critical_alerts_firing", "response_bodies_included"),
+    "multi_peer_reconciliation": (
+        "raw_ledger_included",
+    ),
+    "governance_approval": (),
+}
+
+
+def split_csv_values(values: Sequence[str]) -> list[str]:
+    """Split repeated comma-separated CLI values into canonical strings."""
+
+    items: list[str] = []
+    for value in values:
+        for item in value.split(","):
+            stripped = item.strip()
+            if stripped:
+                items.append(stripped)
+    return items
+
+
+def validate_name_set(
+    values: Iterable[str],
+    *,
+    allowed: Sequence[str],
+    option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return allowed-order values, requiring complete known non-duplicate coverage."""
+
+    values = tuple(values)
+    allowed_set = frozenset(allowed)
+    value_set = frozenset(values)
+    if len(value_set) != len(values):
+        errors.append(f"{option} must not contain duplicates")
+    if any(name not in allowed_set for name in value_set):
+        errors.append(f"{option} contains an unknown value")
+    missing = [name for name in allowed if name not in value_set]
+    if missing:
+        errors.append(f"{option} must include every required value")
+    return [name for name in allowed if name in value_set]
+
+
+def validate_output_path(path: Path, errors: list[str]) -> None:
+    """Reject unsafe output targets before writing a canary artifact."""
+
+    if not isinstance(path, Path):
+        errors.append(f"--out `{path_diagnostic_label(path)}` must be a path")
+        return
+    try:
+        if path.is_symlink():
+            errors.append(f"--out `{path_diagnostic_label(path)}` must not be a symlink")
+            return
+        if path.exists() and path.is_dir():
+            errors.append(f"--out `{path_diagnostic_label(path)}` must not be a directory")
+            return
+    except (OSError, RuntimeError) as error:
+        del error
+        errors.append(f"--out `{path_diagnostic_label(path)}` cannot be inspected")
+        return
+    validate_checker_output_parent(path, errors, label="--out")
+
+
+def validate_hex64(value: str | None, *, option: str, errors: list[str]) -> None:
+    """Validate an exact lowercase 32-byte digest hex string."""
+
+    if (
+        not isinstance(value, str)
+        or len(value) != HEX64_LEN
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        errors.append(f"{option} must be exact lowercase 32-byte hex")
+
+
+def validate_canonical_string(value: str | None, *, label: str, errors: list[str]) -> None:
+    """Require a non-empty canonical string without control characters."""
+
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value != value.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        errors.append(f"{label} must be a non-empty canonical string")
+
+
+def require_kind_options(
+    args: argparse.Namespace,
+    errors: list[str],
+    required: Sequence[tuple[str, Any]],
+) -> None:
+    """Require kind-specific options by stable CLI flag."""
+
+    for option, value in required:
+        if value is None:
+            errors.append(f"{option} is required for {args.kind}")
+
+
+def build_common_payload(args: argparse.Namespace) -> dict[str, Any]:
+    """Build fields shared by appeal finance canary payloads."""
+
+    return {
+        "schema": KIND_BY_NAME[args.kind].schema,
+        "status": "passed",
+        "deployment_id": args.deployment_id,
+        "environment": args.environment,
+        "deployment_context_reviewed": True,
+        "generated_at_unix": args.generated_at_unix,
+        "config_digest_hex": args.config_digest_hex,
+    }
+
+
+def apply_verified_claims(payload: dict[str, Any], args: argparse.Namespace) -> None:
+    """Populate explicitly verified true claims and forced payload-free false flags."""
+
+    for claim in TRUE_CLAIMS[args.kind]:
+        payload[claim] = claim in args.verified_claims
+    for field in FORCED_FALSE_FIELDS[args.kind]:
+        payload[field] = False
+
+
+def build_route_records(
+    args: argparse.Namespace,
+    routes: Sequence[str],
+    *,
+    authz_enforced: bool,
+) -> list[dict[str, Any]]:
+    """Build payload-free finance route probe records."""
+
+    return [
+        {
+            "name": route,
+            "passed": True,
+            "status_code": args.route_status_code,
+            "authz_enforced": authz_enforced,
+            "signature_verified": True,
+            "latency_ms": args.route_latency_ms,
+        }
+        for route in routes
+    ]
+
+
+def build_payload(args: argparse.Namespace) -> dict[str, Any]:
+    """Build a payload-free appeal finance rollout canary payload."""
+
+    payload = build_common_payload(args)
+    apply_verified_claims(payload, args)
+    if args.kind == "pricing_config":
+        payload.update(
+            {
+                "config_version": args.config_version,
+                "config_source": "iroha_config",
+                "policy_digest_hex": args.policy_digest_hex,
+                "class_count": args.class_count,
+            }
+        )
+    elif args.kind == "quote_api":
+        routes = build_route_records(args, args.quote_routes, authz_enforced=False)
+        payload.update(
+            {
+                "route_count": len(routes),
+                "passed_route_count": len(routes),
+                "routes": routes,
+                "quote_count": args.quote_count,
+                "passed_quote_count": args.quote_count,
+                "classes": args.appeal_classes,
+                "urgencies": args.urgencies,
+                "max_route_latency_ms": args.max_route_latency_ms,
+            }
+        )
+    elif args.kind == "deposit_lifecycle":
+        routes = build_route_records(args, args.deposit_routes, authz_enforced=True)
+        payload.update(
+            {
+                "route_count": len(routes),
+                "passed_route_count": len(routes),
+                "routes": routes,
+                "deposit_probe_count": args.deposit_probe_count,
+                "confirmed_deposit_count": args.confirmed_deposit_count,
+                "max_route_latency_ms": args.max_route_latency_ms,
+            }
+        )
+    elif args.kind == "settlement_execution":
+        routes = build_route_records(args, args.settlement_routes, authz_enforced=True)
+        payload.update(
+            {
+                "route_count": len(routes),
+                "passed_route_count": len(routes),
+                "routes": routes,
+                "settlement_probe_count": args.settlement_probe_count,
+                "instruction_step_count": args.instruction_step_count,
+                "outcomes": args.outcomes,
+                "reconciliation_statuses": args.reconciliation_statuses,
+            }
+        )
+    elif args.kind == "settlement_submitter":
+        payload.update(
+            {
+                "configured_signer_count": args.configured_signer_count,
+                "queued_step_count": args.queued_step_count,
+                "submitted_step_count": args.submitted_step_count,
+                "max_settlement_lag_seconds": args.max_settlement_lag_seconds,
+            }
+        )
+    elif args.kind == "moderation_worker":
+        payload.update(
+            {
+                "ballot_replay_count": args.ballot_replay_count,
+                "max_settlement_lag_seconds": args.max_settlement_lag_seconds,
+            }
+        )
+    elif args.kind == "governance_dag_publication":
+        payload.update(
+            {
+                "report_count": args.report_count,
+                "weekly_rollup_count": args.weekly_rollup_count,
+                "settlement_receipt_count": args.settlement_receipt_count,
+                "payload_kinds": args.payload_kinds,
+            }
+        )
+    elif args.kind == "dashboard_metrics":
+        payload.update(
+            {
+                "metrics": args.metrics,
+                "payload_kinds": args.payload_kinds,
+            }
+        )
+    elif args.kind == "multi_peer_reconciliation":
+        payload.update(
+            {
+                "peer_count": args.peer_count,
+                "validator_count": args.validator_count,
+                "case_count": args.case_count,
+                "mismatch_count": 0,
+                "unexpected_failure_count": 0,
+            }
+        )
+    elif args.kind == "governance_approval":
+        payload.update(
+            {
+                "config_source": "iroha_config",
+                "policy_digest_hex": args.policy_digest_hex,
+            }
+        )
+    return payload
+
+
+def validate_route_thresholds(args: argparse.Namespace, errors: list[str]) -> None:
+    """Validate route and settlement thresholds before payload construction."""
+
+    if args.route_latency_ms > DEFAULT_MAX_ROUTE_LATENCY_MS:
+        errors.append(f"--route-latency-ms must be <= {DEFAULT_MAX_ROUTE_LATENCY_MS}")
+    if (
+        args.max_route_latency_ms is not None
+        and args.max_route_latency_ms > DEFAULT_MAX_ROUTE_LATENCY_MS
+    ):
+        errors.append(f"--max-route-latency-ms must be <= {DEFAULT_MAX_ROUTE_LATENCY_MS}")
+    if (
+        args.max_settlement_lag_seconds is not None
+        and args.max_settlement_lag_seconds > DEFAULT_MAX_SETTLEMENT_LAG_SECS
+    ):
+        errors.append(
+            f"--max-settlement-lag-seconds must be <= {DEFAULT_MAX_SETTLEMENT_LAG_SECS}"
+        )
+
+
+def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
+    """Validate kind-specific reviewed operator inputs."""
+
+    args.verified_claims = validate_name_set(
+        split_csv_values(args.verified_claim),
+        allowed=TRUE_CLAIMS[args.kind],
+        option="--verified-claim",
+        errors=errors,
+    )
+    if args.kind == "pricing_config":
+        require_kind_options(
+            args,
+            errors,
+            (
+                ("--config-version", args.config_version),
+                ("--class-count", args.class_count),
+            ),
+        )
+        validate_canonical_string(args.config_version, label="--config-version", errors=errors)
+    elif args.kind == "quote_api":
+        require_kind_options(
+            args,
+            errors,
+            (
+                ("--quote-count", args.quote_count),
+                ("--max-route-latency-ms", args.max_route_latency_ms),
+            ),
+        )
+        args.quote_routes = validate_name_set(
+            split_csv_values(args.quote_route),
+            allowed=REQUIRED_QUOTE_ROUTES,
+            option="--quote-route",
+            errors=errors,
+        )
+        args.appeal_classes = validate_name_set(
+            split_csv_values(args.appeal_class),
+            allowed=REQUIRED_APPEAL_CLASSES,
+            option="--appeal-class",
+            errors=errors,
+        )
+        args.urgencies = validate_name_set(
+            split_csv_values(args.urgency),
+            allowed=REQUIRED_URGENCIES,
+            option="--urgency",
+            errors=errors,
+        )
+    elif args.kind == "deposit_lifecycle":
+        require_kind_options(
+            args,
+            errors,
+            (
+                ("--deposit-probe-count", args.deposit_probe_count),
+                ("--confirmed-deposit-count", args.confirmed_deposit_count),
+                ("--max-route-latency-ms", args.max_route_latency_ms),
+            ),
+        )
+        args.deposit_routes = validate_name_set(
+            split_csv_values(args.deposit_route),
+            allowed=REQUIRED_DEPOSIT_ROUTES,
+            option="--deposit-route",
+            errors=errors,
+        )
+    elif args.kind == "settlement_execution":
+        require_kind_options(
+            args,
+            errors,
+            (
+                ("--settlement-probe-count", args.settlement_probe_count),
+                ("--instruction-step-count", args.instruction_step_count),
+            ),
+        )
+        args.settlement_routes = validate_name_set(
+            split_csv_values(args.settlement_route),
+            allowed=REQUIRED_SETTLEMENT_ROUTES,
+            option="--settlement-route",
+            errors=errors,
+        )
+        args.outcomes = validate_name_set(
+            split_csv_values(args.outcome),
+            allowed=REQUIRED_OUTCOMES,
+            option="--outcome",
+            errors=errors,
+        )
+        args.reconciliation_statuses = validate_name_set(
+            split_csv_values(args.reconciliation_status),
+            allowed=REQUIRED_RECONCILIATION_STATUSES,
+            option="--reconciliation-status",
+            errors=errors,
+        )
+    elif args.kind == "settlement_submitter":
+        require_kind_options(
+            args,
+            errors,
+            (
+                ("--configured-signer-count", args.configured_signer_count),
+                ("--queued-step-count", args.queued_step_count),
+                ("--submitted-step-count", args.submitted_step_count),
+                ("--max-settlement-lag-seconds", args.max_settlement_lag_seconds),
+            ),
+        )
+    elif args.kind == "moderation_worker":
+        require_kind_options(
+            args,
+            errors,
+            (
+                ("--ballot-replay-count", args.ballot_replay_count),
+                ("--max-settlement-lag-seconds", args.max_settlement_lag_seconds),
+            ),
+        )
+    elif args.kind == "governance_dag_publication":
+        require_kind_options(
+            args,
+            errors,
+            (
+                ("--report-count", args.report_count),
+                ("--weekly-rollup-count", args.weekly_rollup_count),
+                ("--settlement-receipt-count", args.settlement_receipt_count),
+            ),
+        )
+        args.payload_kinds = validate_name_set(
+            split_csv_values(args.payload_kind),
+            allowed=REQUIRED_PAYLOAD_KINDS,
+            option="--payload-kind",
+            errors=errors,
+        )
+    elif args.kind == "dashboard_metrics":
+        args.metrics = validate_name_set(
+            split_csv_values(args.metric),
+            allowed=REQUIRED_METRICS,
+            option="--metric",
+            errors=errors,
+        )
+        args.payload_kinds = validate_name_set(
+            split_csv_values(args.payload_kind),
+            allowed=REQUIRED_PAYLOAD_KINDS,
+            option="--payload-kind",
+            errors=errors,
+        )
+    elif args.kind == "multi_peer_reconciliation":
+        require_kind_options(
+            args,
+            errors,
+            (
+                ("--peer-count", args.peer_count),
+                ("--validator-count", args.validator_count),
+                ("--case-count", args.case_count),
+            ),
+        )
+        if args.peer_count is not None and args.peer_count < DEFAULT_MIN_PEERS:
+            errors.append(f"--peer-count must be >= {DEFAULT_MIN_PEERS}")
+        if args.validator_count is not None and args.validator_count < DEFAULT_MIN_PEERS:
+            errors.append(f"--validator-count must be >= {DEFAULT_MIN_PEERS}")
+    if args.kind in POLICY_DIGEST_KINDS:
+        require_kind_options(
+            args,
+            errors,
+            (("--policy-digest-hex", args.policy_digest_hex),),
+        )
+        validate_hex64(args.policy_digest_hex, option="--policy-digest-hex", errors=errors)
+
+
+def validate_inputs(args: argparse.Namespace) -> list[str]:
+    """Validate reviewed operator inputs before building the canary."""
+
+    errors: list[str] = []
+    validate_output_path(args.out, errors)
+    validate_canonical_string(args.deployment_id, label="--deployment-id", errors=errors)
+    validate_canonical_string(args.environment, label="--environment", errors=errors)
+    validate_hex64(args.config_digest_hex, option="--config-digest-hex", errors=errors)
+    validate_route_thresholds(args, errors)
+    validate_kind_inputs(args, errors)
+    return errors
+
+
+def validation_options(args: argparse.Namespace) -> ValidationOptions:
+    """Return checker options used to prevalidate the generated canary."""
+
+    return ValidationOptions(
+        now_unix=args.now_unix or args.generated_at_unix,
+        max_canary_age_secs=DEFAULT_MAX_CANARY_AGE_SECS,
+        max_dashboard_age_secs=DEFAULT_MAX_DASHBOARD_AGE_SECS,
+        max_route_latency_ms=DEFAULT_MAX_ROUTE_LATENCY_MS,
+        max_settlement_lag_secs=DEFAULT_MAX_SETTLEMENT_LAG_SECS,
+        min_peers=DEFAULT_MIN_PEERS,
+    )
+
+
+def validate_generated_payload(
+    payload: dict[str, Any],
+    args: argparse.Namespace,
+) -> list[str]:
+    """Validate the generated canary through the appeal finance gate contract."""
+
+    kind, errors = validate_evidence_payload(payload, validation_options(args))
+    if kind != args.kind:
+        errors.append(f"generated canary must validate as {args.kind}")
+    return errors
+
+
+def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
+    """Write the canary JSON atomically without following output symlinks."""
+
+    text = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    parent = path.parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except (OSError, RuntimeError) as error:
+        del error
+        return [f"--out parent `{path_diagnostic_label(parent)}` cannot be created"]
+    tmp_name = f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    tmp_path = parent / tmp_name
+    fd = -1
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        if nofollow:
+            flags |= nofollow
+        fd = os.open(tmp_path, flags, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except (OSError, RuntimeError) as error:
+        del error
+        try:
+            if fd >= 0:
+                os.close(fd)
+        finally:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+            except (OSError, RuntimeError):
+                pass
+        return [f"--out `{path_diagnostic_label(path)}` cannot be written"]
+    return []
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = EvidenceArgumentParser(
+        description="Build payload-free SoraFS SFM-4b2 appeal finance canary JSON.",
+    )
+    parser.add_argument("--kind", choices=CANARY_KINDS, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--deployment-id", required=True)
+    parser.add_argument("--environment", required=True)
+    parser.add_argument("--generated-at-unix", type=positive_int_arg, required=True)
+    parser.add_argument("--now-unix", type=positive_int_arg)
+    parser.add_argument("--config-digest-hex", required=True)
+    parser.add_argument("--verified-claim", action="append", default=[])
+    parser.add_argument("--config-version")
+    parser.add_argument("--class-count", type=positive_int_arg)
+    parser.add_argument("--quote-route", action="append", default=[])
+    parser.add_argument("--appeal-class", action="append", default=[])
+    parser.add_argument("--urgency", action="append", default=[])
+    parser.add_argument("--quote-count", type=positive_int_arg)
+    parser.add_argument("--deposit-route", action="append", default=[])
+    parser.add_argument("--deposit-probe-count", type=positive_int_arg)
+    parser.add_argument("--confirmed-deposit-count", type=positive_int_arg)
+    parser.add_argument("--settlement-route", action="append", default=[])
+    parser.add_argument("--settlement-probe-count", type=positive_int_arg)
+    parser.add_argument("--instruction-step-count", type=positive_int_arg)
+    parser.add_argument("--outcome", action="append", default=[])
+    parser.add_argument("--reconciliation-status", action="append", default=[])
+    parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
+    parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=30)
+    parser.add_argument("--max-route-latency-ms", type=positive_int_arg)
+    parser.add_argument("--configured-signer-count", type=positive_int_arg)
+    parser.add_argument("--queued-step-count", type=positive_int_arg)
+    parser.add_argument("--submitted-step-count", type=positive_int_arg)
+    parser.add_argument("--max-settlement-lag-seconds", type=non_negative_int_arg)
+    parser.add_argument("--ballot-replay-count", type=positive_int_arg)
+    parser.add_argument("--report-count", type=positive_int_arg)
+    parser.add_argument("--weekly-rollup-count", type=positive_int_arg)
+    parser.add_argument("--settlement-receipt-count", type=positive_int_arg)
+    parser.add_argument("--payload-kind", action="append", default=[])
+    parser.add_argument("--metric", action="append", default=[])
+    parser.add_argument("--peer-count", type=positive_int_arg)
+    parser.add_argument("--validator-count", type=positive_int_arg)
+    parser.add_argument("--case-count", type=positive_int_arg)
+    parser.add_argument("--policy-digest-hex")
+    raw_args = sys.argv[1:] if argv is None else argv
+    try:
+        expanded_args = expand_response_args(raw_args, parser)
+        return parser.parse_args(expanded_args)
+    except ValueError as error:
+        emit_checker_exception(error)
+        raise SystemExit(2) from error
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        args = parse_args(argv)
+    except SystemExit as error:
+        return error.code if isinstance(error.code, int) else 1
+
+    errors = validate_inputs(args)
+    if errors:
+        emit_checker_error_block(
+            "ERROR: SoraFS appeal finance canary inputs are incomplete:",
+            errors,
+        )
+        return 2
+
+    payload = build_payload(args)
+    payload_errors = validate_generated_payload(payload, args)
+    if payload_errors:
+        emit_checker_error_lines(payload_errors)
+        return 2
+
+    write_errors = write_payload_atomic(args.out, payload)
+    if write_errors:
+        emit_checker_error_lines(write_errors)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

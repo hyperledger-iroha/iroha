@@ -124,6 +124,7 @@ def complete_payloads() -> dict[str, dict[str, object]]:
             "revoked_proof_rejected": True,
             "replay_nullifier_rejected": True,
             "root_binding_verified": True,
+            "policy_digest_hex": HEX,
             "max_verify_latency_ms": 250,
             "max_service_lag_seconds": 20,
             "raw_proofs_included": False,
@@ -238,8 +239,16 @@ def test_complete_evidence_is_ready(tmp_path: Path, capsys) -> None:
     assert payload["status"] == "ready"
     assert payload["required_kinds"] == list(MODULE.DEFAULT_REQUIRED_KINDS)
     assert payload["recognized_artifact_count"] == len(MODULE.DEFAULT_REQUIRED_KINDS)
+    assert payload["valid_juror_sync_bindings"] == [
+        {
+            "synced_root_digest_hex": HEX,
+            "synced_revocation_list_digest_hex": HEX_2,
+        }
+    ]
+    assert payload["valid_pop_snapshot_digests"] == [HEX]
     assert payload["valid_root_digests"] == [HEX]
     assert payload["valid_revocation_list_digests"] == [HEX_2]
+    assert payload["valid_policy_digests"] == [HEX]
     assert payload["required"]["issuer_bundle"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
@@ -359,6 +368,101 @@ def test_transcript_digest_backend_cannot_pass_governance(tmp_path: Path, capsys
     )
 
 
+def test_verifier_service_requires_policy_digest(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    verifier = complete_payloads()["verifier_service"]
+    del verifier["policy_digest_hex"]
+    write_json(evidence_dir / "verifier_service.json", verifier)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["verifier_service"]["artifacts"][0]
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+    assert payload["valid_policy_digests"] == []
+
+
+def test_governance_policy_digest_must_match_verifier_service(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    governance = complete_payloads()["governance_approval"]
+    governance["policy_digest_hex"] = HEX_2
+    write_json(evidence_dir / "governance_approval.json", governance)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["governance_approval"]["artifacts"][0]
+    assert payload["valid_policy_digests"] == [HEX]
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval policy_digest_hex must match a valid "
+        "verifier_service policy_digest_hex"
+    ]
+
+
+def test_policy_bound_subset_requires_verifier_service_anchor(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / "evidence"
+    evidence_dir.mkdir()
+    write_json(
+        evidence_dir / "governance_approval.json",
+        complete_payloads()["governance_approval"],
+    )
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--require-kind",
+                "governance_approval",
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["governance_approval"]["artifacts"][0]
+    assert payload["valid_policy_digests"] == []
+    assert artifact["valid"] is False
+    assert (
+        "governance_approval policy_digest_hex must match a valid "
+        "verifier_service policy_digest_hex"
+    ) in artifact["errors"]
+
+
 def test_payload_leakage_blocks_rollout(tmp_path: Path, capsys) -> None:
     evidence_dir = write_complete_evidence(tmp_path)
     issuer = complete_payloads()["issuer_bundle"]
@@ -448,6 +552,7 @@ def test_juror_root_binding_must_match_published_root(tmp_path: Path, capsys) ->
     assert "juror_client root binding must match" in capsys.readouterr().err
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["valid_root_digests"] == [HEX]
+    assert payload["valid_juror_sync_bindings"] == []
     assert payload["required"]["juror_client"]["valid"] is False
 
 

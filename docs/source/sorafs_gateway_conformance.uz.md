@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_conformance.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: cbf63ac52586868a49b6105d333ea01a9bc31e9388b6fb4e6c8d39cb56e17cae
+source_hash: c1f86f7d7722d5010aa4adff391d35494a32ec2649560e50473096f5d0ec50c6
 source_last_modified: "2026-01-22T16:26:46.592530+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS Gateway Conformance Harness

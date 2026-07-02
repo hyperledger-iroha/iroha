@@ -232,6 +232,8 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_id",
     "environment",
     "deployment_context_reviewed",
+    "provider_count",
+    "provider_id",
 )
 
 
@@ -452,6 +454,7 @@ def validate_provider(evidence: LoadedEvidence, errors: list[str]) -> tuple[str,
         HEX64_LEN,
         errors,
         path="proof.siblings_hex",
+        unique=True,
     )
     return snapshot_id, merkle_root, provider_id
 
@@ -604,6 +607,7 @@ def validate_evidence_set(
         snapshot_id = ""
         merkle_root = ""
         provider_count = 0
+        provider_id = ""
         validate_common_rollout_context(payload, errors)
 
         if evidence.kind in SNAPSHOT_ANCHOR_KINDS:
@@ -652,6 +656,15 @@ def validate_evidence_set(
         )
         record_observed_evidence_value(provider_counts, provider_count)
 
+        fingerprint_values = {
+            "snapshot_id_hex": snapshot_id,
+            "merkle_root_hex": merkle_root,
+        }
+        if provider_count > 0:
+            fingerprint_values["provider_count"] = provider_count
+        if provider_id != "":
+            fingerprint_values["provider_id"] = provider_id
+
         record = build_kinded_evidence_artifact(
             kind_name=record_kind,
             path=archive_artifact_path_label(evidence.path, evidence_dirs or []),
@@ -659,10 +672,7 @@ def validate_evidence_set(
             payload=payload,
             validation_errors=errors,
             fingerprint_fields=FINGERPRINT_FIELDS,
-            fingerprint_values={
-                "snapshot_id_hex": snapshot_id,
-                "merkle_root_hex": merkle_root,
-            },
+            fingerprint_values=fingerprint_values,
         )
         record_snapshot_bound_evidence_artifact(
             kind_name=record_kind,

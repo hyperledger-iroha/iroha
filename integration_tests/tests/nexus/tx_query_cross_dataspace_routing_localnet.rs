@@ -625,10 +625,7 @@ fn routed_submit_response_is_transient(response: &RoutedTransactionSubmitRespons
     if routed_json_empty_body_is_transient(response.status, response.body_text.as_bytes()) {
         return true;
     }
-    if response.status == HttpStatusCode::NOT_FOUND
-        && response.body_text.is_empty()
-        && response.routed_by.as_deref() == Some("proxy")
-    {
+    if response.status == HttpStatusCode::NOT_FOUND && response.body_text.is_empty() {
         return true;
     }
     matches!(
@@ -662,6 +659,10 @@ fn encode_versioned_signed_transaction(transaction: &SignedTransaction) -> Vec<u
     bytes
 }
 
+fn routed_http_client() -> reqwest::Client {
+    integration_tests::http::client_with_timeout(iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT)
+}
+
 async fn torii_json_get(
     client: &Client,
     path_segments: &[String],
@@ -685,7 +686,7 @@ async fn torii_json_get(
         }
     }
 
-    let request = integration_tests::http::client()
+    let request = routed_http_client()
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json");
     let response = add_client_headers(client, request, true, true)
@@ -752,7 +753,7 @@ async fn torii_json_get_as_account(
         canonical_request_signature_message(&Method::GET, &uri, &[], timestamp_ms, &nonce);
     let signature = Signature::try_new(client.key_pair.private_key(), &message)
         .wrap_err("sign canonical app-api request")?;
-    let response = integration_tests::http::client()
+    let response = routed_http_client()
         .get(url)
         .header(reqwest::header::ACCEPT, "application/json")
         .header(HEADER_ACCOUNT, account.to_string())
@@ -850,12 +851,12 @@ async fn submit_transaction_raw(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<RoutedTransactionSubmitResponse> {
-    let request = integration_tests::http::client()
+    let request = routed_http_client()
         .post(
             client
                 .torii_url
-                .join("transaction")
-                .wrap_err("compose /transaction URL")?,
+                .join("v1/pipeline/transactions")
+                .wrap_err("compose /v1/pipeline/transactions URL")?,
         )
         .header(reqwest::header::CONTENT_TYPE, "application/x-norito")
         .body(encode_versioned_signed_transaction(transaction));
@@ -2434,6 +2435,20 @@ mod tests {
             routed_by: Some("proxy".to_owned()),
             route_lane_id: Some(DS2_LANE_INDEX.to_string()),
             route_dataspace_id: Some(DS2_ID_U64.to_string()),
+        };
+
+        assert!(super::routed_submit_response_is_transient(&response));
+    }
+
+    #[test]
+    fn routed_submit_response_is_transient_for_unmarked_empty_not_found() {
+        let response = RoutedTransactionSubmitResponse {
+            status: HttpStatusCode::NOT_FOUND,
+            receipt: None,
+            body_text: String::new(),
+            routed_by: None,
+            route_lane_id: None,
+            route_dataspace_id: None,
         };
 
         assert!(super::routed_submit_response_is_transient(&response));

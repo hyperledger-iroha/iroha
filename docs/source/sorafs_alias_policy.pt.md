@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_alias_policy.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 075295bc420dce026e0f02b42db5f39eaf4c30002f246d2a5d11f922b605bb9d
+source_hash: a27f6de05a787b3f9dee58350eb2a325767b0f94c8983bea6f89f20d743da7ae
 source_last_modified: "2026-01-03T18:07:57.762285+00:00"
 translation_last_reviewed: 2026-01-30
 ---

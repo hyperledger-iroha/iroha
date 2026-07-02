@@ -38985,6 +38985,13 @@ fn bfv_full_bootstrap_placeholder_material_digests_v1() -> &'static [Hash] {
             let mut digests = Vec::new();
             for &preimage in BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_PREIMAGES {
                 push_bfv_full_bootstrap_placeholder_material_digests_v1(&mut digests, preimage);
+                if preimage.iter().any(u8::is_ascii_lowercase) {
+                    let uppercase = preimage.to_ascii_uppercase();
+                    push_bfv_full_bootstrap_placeholder_material_digests_v1(
+                        &mut digests,
+                        &uppercase,
+                    );
+                }
             }
             digests
         })
@@ -46039,6 +46046,41 @@ mod tests {
                 ),
                 "placeholder",
                 "material digest validation must reject delayed binary-framed placeholder preimages",
+            );
+        }
+
+        for sentinel in [
+            b"PLACEHOLDER BFV FULL-BOOTSTRAP NATIVE PROOF KEY PAYLOAD".as_slice(),
+            b"PENDING BFV FULL-BOOTSTRAP EXECUTION WITNESS DIGEST".as_slice(),
+            b"REPLACE BEFORE PRODUCTION".as_slice(),
+            b"NOT PRODUCTION READY".as_slice(),
+        ] {
+            assert_error_contains(
+                validate_no_full_bootstrap_placeholder_material_digest(
+                    "case-decorated full-bootstrap digest",
+                    &Hash::new(sentinel),
+                ),
+                "placeholder",
+                "material digest validation must reject case-decorated placeholder preimages",
+            );
+            assert_error_contains(
+                validate_no_full_bootstrap_placeholder_material_digest(
+                    "delayed case-decorated full-bootstrap digest",
+                    &Hash::new_from_chunks(&[
+                        BFV_FULL_BOOTSTRAP_PLACEHOLDER_MATERIAL_DIGEST_DELAY_PREFIXES[0],
+                        sentinel,
+                    ]),
+                ),
+                "placeholder",
+                "material digest validation must reject delayed case-decorated placeholder preimages",
+            );
+            assert_error_contains(
+                validate_no_full_bootstrap_placeholder_material_digest(
+                    "binary-framed case-decorated full-bootstrap digest",
+                    &Hash::new_from_chunks(&[b"\xff", sentinel]),
+                ),
+                "placeholder",
+                "material digest validation must reject binary-framed case-decorated placeholder preimages",
             );
         }
 

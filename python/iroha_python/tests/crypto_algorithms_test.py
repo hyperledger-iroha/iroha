@@ -322,6 +322,55 @@ def test_native_verify_rejects_empty_and_all_zero_signatures_before_backend() ->
         assert not verify(ED25519_ALGORITHM, keypair.public_key, message, signature)
         assert not verify_ed25519(keypair.public_key, message, signature)
 
+    signature = bytearray(keypair.sign(message))
+    malformed_r_cases = (
+        (
+            "small-order",
+            bytes(
+                [
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                ]
+            ),
+        ),
+        ("noncanonical", bytes.fromhex("ee" + ("ff" * 30) + "7f")),
+    )
+    for _label, replacement_r in malformed_r_cases:
+        malformed = bytearray(signature)
+        malformed[:32] = replacement_r
+        assert not verify(ED25519_ALGORITHM, keypair.public_key, message, bytes(malformed))
+        assert not verify_ed25519(keypair.public_key, message, bytes(malformed))
+
 
 def _privacy_norito_frame(schema_byte: int) -> bytes:
     frame = bytearray(40)

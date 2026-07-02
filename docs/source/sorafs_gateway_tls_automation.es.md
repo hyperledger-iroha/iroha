@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_tls_automation.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b27f68f386cb284bc209a4ab7ee204a85f8df1b681fac5ac757344fe7d427025
+source_hash: e15a94ab40ca2ad0a110845c9af116ee4d020906c8daa43a04cadf99af593ad3
 source_last_modified: "2025-11-23T08:11:54.840116+00:00"
 translation_last_reviewed: "2026-01-30"
 ---

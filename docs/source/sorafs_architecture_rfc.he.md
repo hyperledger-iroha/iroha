@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_architecture_rfc.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 649b3ad6308653d59f80b730866f53e655196fca335c7f2d58903b50cff684bf
+source_hash: 26bed4beeaaff2699e643b281511b72522a68ce482352540507ef1c1b8f2b047
 source_last_modified: "2026-01-21T10:28:29.393065+00:00"
 translation_last_reviewed: 2026-01-30
 ---

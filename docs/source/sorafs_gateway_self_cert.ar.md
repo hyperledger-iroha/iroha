@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_gateway_self_cert.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: dea5a18153f27d4ff7d6f334c915591841900561d37d53ea104986fd0d3c26ef
+source_hash: fb868d824e72963116a84527d622fabc041e5587db1f87c9085987dc58329ddc
 source_last_modified: "2026-01-03T18:07:57.602009+00:00"
 translation_last_reviewed: 2026-01-30
 ---

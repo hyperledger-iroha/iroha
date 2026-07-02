@@ -13100,6 +13100,11 @@ Temporal properties:
   progress evidence shape: idle and init states carry no stale chunk/READY
   counters, chunking stays below full chunk coverage, chunk-complete states have
   no READY votes yet, and partial READY states remain below commit quorum.
+- The aggregate `RbcProgressStateEvidenceAlwaysMatchesEnvelope` theorem composes
+  the full and partial RBC progress evidence predicates plus the live evidence
+  causality envelope, so the lifecycle proof carries both the positive evidence
+  required by initialized/covered/quorum states and the absence, boundedness,
+  and confinement of premature CHUNK/READY counters.
 - `RbcCorruptedDigestNeverValid` proves that once RBC enters the corrupted
   repair path, any retained RBC evidence is paired with an invalidated digest
   until the protocol repairs through RBC INIT.
@@ -13129,15 +13134,16 @@ Temporal properties:
   increase, or reset classifier for the field that moved.
 - The aggregate `RbcProgressMutationAlwaysMatchesLocalClassification` theorem
   composes the already checked RBC state/evidence provenance, local
-  state/evidence classifiers, delivered-entry classifier, corrupted-entry
-  classifier, and corrupted-repair exit classifier. The fast, deep, and
-  TLC-fast configs wire the aggregate alongside those constituent obligations so
-  both the local classifiers and their combined progress-mutation frame stay
-  checked.
+  state/evidence classifiers, startup/defensive boundary envelope,
+  delivered-entry classifier, corrupted-entry classifier, and corrupted-repair
+  exit classifier. The fast, deep, and TLC-fast configs wire the aggregate
+  alongside those constituent obligations so both the local classifiers and
+  their combined progress-mutation frame stay checked.
 - The aggregate `RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope` theorem
-  composes the progress-mutation classifier with the live header/digest, CHUNK,
-  and READY handoff-envelope invariants, so any reachable RBC progress mutation
-  stays tied to the proved evidence-causality envelope.
+  composes the progress-state evidence envelope and progress-mutation classifier
+  with the live header/digest, CHUNK, and READY handoff-envelope invariants, so
+  any reachable RBC progress mutation stays tied to the proved evidence-causality
+  envelope.
 - `RbcHeaderInstallationOnlyByProposalOrInit` proves that RBC header evidence
   can move from absent to present only through an honest proposal starting RBC
   from `Idle` or an explicit RBC INIT repair/recovery step.
@@ -13204,6 +13210,10 @@ Temporal properties:
   is confined to the initial idle state or the explicit corrupted repair state,
   so every non-corrupted RBC progress or delivery state keeps validated digest
   evidence.
+- The aggregate `RbcLiveEvidenceCausalityAlwaysMatchesEnvelope` theorem composes
+  the live RBC header/digest, CHUNK, READY, counter, and invalid-digest
+  causality predicates so the lifecycle proof carries one evidence-causality
+  contract before it reasons about progress mutation or handoff preservation.
 - `RbcWithheldNeverReached` proves that the main Sumeragi model never reaches
   the defensive `Withheld` RBC state from its initial state; `Withheld` remains
   available only to gate repair/recovery branches if a future model explicitly
@@ -13254,6 +13264,11 @@ Temporal properties:
   only be a proposal starting RBC from `Idle` or an explicit RBC INIT repair
   from `Idle`, `Withheld`, or `Corrupted`, with header/digest evidence
   installed and chunk/READY counters reset.
+- The aggregate `RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope` theorem
+  composes the startup boundary (`Idle` exit and `Init` entry) with the
+  defensive `Withheld` exclusion boundary, so the progress-mutation classifier
+  carries both normal session start provenance and unreachable defensive-state
+  constraints.
 - `RbcChunkGateNeverBypassesHeaderDigestEvidence` proves that the live RBC
   CHUNK transition is enabled exactly when the session is in an INIT,
   CHUNKING, or post-GST withheld recovery state carrying header evidence,
@@ -13714,6 +13729,12 @@ Temporal properties:
   finality certificate stack with exact vote/stake witnesses for the current
   view, and closes every post-commit progress, timeout, RBC, and fault gate
   except the pre-GST `GstElapsed` observation surface.
+- `DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysMatchesCertifiedCommitEnvelope`
+  proves that the same finalizing commit-vote branch satisfies the complete
+  delivered-state certified-commit envelope: commit-vote provenance, exact
+  witness installation, delivered RBC evidence preservation, finality
+  certificate stack, committed post-state invariants, and the pre/post-GST gate
+  split all match the delivered finality proof surface.
 - `DeliveredPendingCompleteWaitStatePrepareVoteStepAlwaysSplits` proves that
   an honest prepare vote from the named delivered-pending complete wait state
   preserves delivered RBC evidence and absent commit witnesses, increments the
@@ -13761,11 +13782,27 @@ Temporal properties:
   commit-vote, timeout, NewView, proposal, or GST branch with RBC/fault actions
   closed, while stuttering steps keep the full delivered-pending complete
   wait-state envelope unchanged.
+- `DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCommittedCertifiedEnvelope`
+  proves the committed side of that classifier: any committed post-state from
+  the named delivered-pending complete wait state must be a real `Next` step
+  from the exact finalizing honest or Byzantine commit-vote source and must
+  satisfy the delivered-state certified-commit envelope.
+- `DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesNonCommittedWaitEnvelope`
+  proves the non-committed side of that classifier: every non-final post-state
+  re-enters the named delivered-pending complete wait state with delivered RBC
+  evidence, absent commit artifacts, closed RBC/fault gates, and the exact
+  consensus/GST/timer action surface.
+- `DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteOutcomeEnvelope`
+  proves the complete classifier outcome envelope: every spec step from the
+  named delivered-pending wait state either installs the committed certified
+  envelope with exact commit artifacts or re-enters the non-committed complete
+  wait envelope with commit artifacts absent.
 - The aggregate
   `DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope` theorem
   composes the named delivered-pending complete wait-state closure,
   commit-vote, prepare-vote, timeout/NewView, NewView-vote, proposal, GST,
-  stutter, and branch-classifier obligations into one continuation envelope.
+  stutter, branch-classifier, committed-certified outcome, and non-committed
+  wait-envelope obligations into one complete continuation envelope.
 - The aggregate `RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope`
   theorem composes the full delivered-state lifecycle surface: delivered
   evidence stability, no commit certificate before finality, certified
@@ -13800,7 +13837,8 @@ Temporal properties:
   theorem composes the main consensus safety surface: terminal committed-state
   closure, post-finality stability, timeout/view-change recovery, certified
   finality installation, pre-commit and commit-vote handoffs, finalized
-  certificate/evidence retention, and the full RBC lifecycle envelope.
+  certificate/evidence retention, pending protocol GST preservation, and the
+  full RBC lifecycle envelope.
 - The aggregate `SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`
   theorem composes the full fast/deep state-invariant surface under `[]` with
   the end-to-end temporal safety envelope, giving one checkable consensus-core

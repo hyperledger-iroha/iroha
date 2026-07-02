@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_profile.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 065a894f4a420fd361477390c9f494b86f6cfe0d313caba761aba77b6de2444f
+source_hash: 11081071960ab01357b3aac3f257a38be62912c36d8eda44a94a6378455e0c06
 source_last_modified: "2026-01-05T09:28:12.085159+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS Gateway Trustless Profile

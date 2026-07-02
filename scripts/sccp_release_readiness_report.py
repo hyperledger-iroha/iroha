@@ -1270,6 +1270,27 @@ def _tron_route_config_canonical_manifest_gate_inventory_errors(
         ]
 
 
+def _ton_route_manifest_cli_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for TON route-manifest CLI guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_ton_route_manifest_cli_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP TON route-manifest CLI source inventory "
+            "cannot run release-bundle verifier helper"
+        ]
+
+
 def _tron_runtime_route_manifest_gate_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -8625,6 +8646,9 @@ def _build_report(
     tron_route_config_canonical_manifest_gate_blockers = (
         _tron_route_config_canonical_manifest_gate_inventory_errors()
     )
+    ton_route_manifest_cli_gate_blockers = (
+        _ton_route_manifest_cli_gate_inventory_errors()
+    )
     tron_runtime_route_manifest_gate_blockers = (
         _tron_runtime_route_manifest_gate_inventory_errors()
     )
@@ -8844,6 +8868,12 @@ def _build_report(
             "validation_blockers": (
                 tron_route_config_canonical_manifest_gate_blockers
             ),
+        },
+        "ton_route_manifest_cli_gate": {
+            "validation_status": (
+                "passed" if not ton_route_manifest_cli_gate_blockers else "blocked"
+            ),
+            "validation_blockers": ton_route_manifest_cli_gate_blockers,
         },
         "tron_runtime_route_manifest_gate": {
             "validation_status": (
@@ -9372,6 +9402,7 @@ def _build_report(
         and not tron_inbound_adversarial_gate_blockers
         and not bsc_route_config_canonical_manifest_gate_blockers
         and not tron_route_config_canonical_manifest_gate_blockers
+        and not ton_route_manifest_cli_gate_blockers
         and not tron_runtime_route_manifest_gate_blockers
         and not all_lanes_route_canary_scalar_gate_blockers
         and not all_lanes_evidence_root_schema_gate_blockers
@@ -9454,6 +9485,7 @@ def _build_report(
     blockers.extend(tron_inbound_adversarial_gate_blockers)
     blockers.extend(bsc_route_config_canonical_manifest_gate_blockers)
     blockers.extend(tron_route_config_canonical_manifest_gate_blockers)
+    blockers.extend(ton_route_manifest_cli_gate_blockers)
     blockers.extend(tron_runtime_route_manifest_gate_blockers)
     blockers.extend(all_lanes_route_canary_scalar_gate_blockers)
     blockers.extend(all_lanes_evidence_root_schema_gate_blockers)
@@ -10743,6 +10775,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
             "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, raw publish HTTP-error preservation, browser-prover sidecar/reference duplicate-or-malformed-alias rejection, accessor-backed scalar alias suppression, handoff-placeholder, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, duplicate-alias, accessor-backed alias suppression, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP TON route-manifest CLI source inventory must pin redacted duplicate-option rejection, explicit option-value requirements, valued-help rejection, non-empty path preflight, unknown-command and unknown-option rejection, redacted unexpected positional arguments, exact publish booleans, submit-only option rejection, gas metadata preflight before manifest reads, canonical I105 authorities, submit metadata preflight before private-key lookup, bounded private-key env names, HTTPS-or-loopback Torii URLs, output path collision rejection, and string-only nanoTON manifest ingestion before governed TAIRA TON XOR route-manifest artifacts can satisfy production readiness.",
             "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
             "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
             "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, non-string section-key, not-ready nested schema, hash/flag-coherence, and route-canary proof-context/hash-role/common/truth-semantic blockers before all-lanes evidence can satisfy production readiness.",

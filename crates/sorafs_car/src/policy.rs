@@ -238,6 +238,17 @@ mod compliance {
             }
         }
 
+        /// Construct a verifier from raw Ed25519 public-key bytes after canonical key admission.
+        pub fn try_from_verifying_key_bytes(
+            public_key: &[u8],
+        ) -> Result<Self, ProofTokenVerifierKeyError> {
+            let parsed = iroha_crypto::ed25519_parse_public_key(public_key)
+                .map_err(|err| ProofTokenVerifierKeyError::Invalid(err.to_string()))?;
+            let verifying_key = VerifyingKey::from_bytes(parsed.as_bytes())
+                .map_err(|err| ProofTokenVerifierKeyError::Invalid(err.to_string()))?;
+            Ok(Self::new(verifying_key))
+        }
+
         /// Attach the blinded-digest key used by gateways to bind tokens to cache versions.
         #[must_use]
         pub fn with_digest_key(mut self, digest_key: ProofTokenDigestKey) -> Self {
@@ -265,6 +276,14 @@ mod compliance {
                 digest_bound: self.digest_key.is_some(),
             })
         }
+    }
+
+    /// Errors surfaced while admitting proof-token verifier keys.
+    #[derive(Debug, Error)]
+    pub enum ProofTokenVerifierKeyError {
+        /// The Ed25519 verifier key is malformed, weak, all-zero, or non-canonical.
+        #[error("invalid proof-token verifier Ed25519 key: {0}")]
+        Invalid(String),
     }
 
     /// Proof token plus verification results.
@@ -550,6 +569,15 @@ mod compliance_tests {
     const MODERATION_HEADER: &str = "sora-moderation-token";
     const DENYLIST_HEADER: &str = "sora-denylist-version";
     const CACHE_VERSION_HEADER: &str = "sora-cache-version";
+    const ED25519_SMALL_ORDER_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const ED25519_NONCANONICAL_IDENTITY: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
 
     fn sample_payload(len: usize) -> Vec<u8> {
         (0..len).map(|idx| (idx % 251) as u8).collect()
@@ -589,6 +617,35 @@ mod compliance_tests {
 
     fn provider_id_hex() -> String {
         "ab".repeat(32)
+    }
+
+    #[test]
+    fn proof_token_verifier_checked_byte_constructor_admits_only_canonical_keys() {
+        let signing_key = SigningKey::from_bytes(&[8u8; 32]);
+        ProofTokenVerifier::try_from_verifying_key_bytes(&signing_key.verifying_key().to_bytes())
+            .expect("canonical verifier key should be admitted");
+
+        for (label, public_key, expected) in [
+            (
+                "all-zero",
+                [0u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
+                "all zero",
+            ),
+            ("small-order", ED25519_SMALL_ORDER_POINT, "small-order"),
+            (
+                "noncanonical",
+                ED25519_NONCANONICAL_IDENTITY,
+                "non-canonical",
+            ),
+        ] {
+            let err = ProofTokenVerifier::try_from_verifying_key_bytes(&public_key)
+                .expect_err("invalid verifier key should fail admission");
+            let message = err.to_string();
+            assert!(
+                message.contains(expected),
+                "{label} key failed with unexpected message: {message}"
+            );
+        }
     }
 
     #[derive(Clone)]

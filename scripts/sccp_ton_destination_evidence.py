@@ -95,6 +95,8 @@ def parse_hex_bytes(
     if type(nonzero) is not bool:
         raise ValueError("TON destination fixed hex nonzero must be a boolean")
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -112,6 +114,8 @@ def parse_hex_bytes(
 def parse_code_boc_hex(value: str, *, label: str) -> bytes:
     """Parse non-empty TON code BoC bytes from hex text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be hex")
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -131,6 +135,8 @@ def parse_code_boc_hex(value: str, *, label: str) -> bytes:
 def parse_code_boc_base64(value: str, *, label: str) -> bytes:
     """Parse non-empty TON code BoC bytes from base64 or base64url text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be base64 or base64url")
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = value
@@ -183,6 +189,8 @@ def _read_code_boc_file(path: Path, *, label: str) -> bytes:
 def parse_code_boc_file(value: str, *, label: str) -> bytes:
     """Parse non-empty TON code BoC bytes from a raw, hex, or base64 file."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read")
     path = Path(value).expanduser()
     raw = _read_code_boc_file(path, label=label)
     if not raw:
@@ -205,6 +213,8 @@ def parse_code_boc_file(value: str, *, label: str) -> bytes:
 def parse_positive_decimal_text(value: str, *, label: str) -> str:
     """Parse a positive decimal value and preserve canonical text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be a positive decimal")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must be a positive decimal")
     text = value
@@ -222,6 +232,8 @@ def parse_positive_decimal_text(value: str, *, label: str) -> str:
 def parse_account_status(value: str, *, label: str) -> str:
     """Parse a live TON verifier account status for production evidence."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be active")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     if value != "active":
@@ -253,6 +265,8 @@ def _parse_canonical_i32_decimal(value: str, *, label: str) -> int:
 def normalize_ton_raw_address(value: str, *, label: str) -> str:
     """Validate a TON raw address and return its canonical text unchanged."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be workchain:account_hex")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = value

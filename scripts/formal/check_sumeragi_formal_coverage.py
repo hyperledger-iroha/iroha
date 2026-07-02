@@ -17,6 +17,7 @@ APALACHE_RUNNER = ROOT_DIR / "scripts" / "formal" / "sumeragi_apalache.sh"
 TLC_RUNNER = ROOT_DIR / "scripts" / "formal" / "sumeragi_tlc.sh"
 SUMERAGI_DEEP_CFG = SPEC_DIR / "Sumeragi_deep.cfg"
 SUMERAGI_TLC_FAST_CFG = SPEC_DIR / "Sumeragi_tlc_fast.cfg"
+SUMERAGI_ROOT_PROPERTY = "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope"
 FAST_CI = ROOT_DIR / "ci" / "check_sumeragi_formal.sh"
 EXPECTED_FAILURE_CI = ROOT_DIR / "ci" / "check_sumeragi_formal_expected_failures.sh"
 PR_WORKFLOW = ROOT_DIR / ".github" / "workflows" / "pr.yml"
@@ -392,6 +393,9 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Temporal vacuous-helper checks inspect static and structured operands",
     "Exactness and correctness-envelope conjunct references must resolve to zero-arity",
     "Transitive exactness predicate chains must also resolve through zero-arity",
+    "Every top-level Sumeragi property checked by the deep/TLC-fast configs must be reachable",
+    "from `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope` through zero-arity",
+    "operator references",
 )
 # Historical escape hatch for fast envelopes without direct *Exactness coverage.
 # Keep empty; new entries should be justified by an explicit formal debt note.

@@ -986,10 +986,14 @@ fn strip_ansi_escape_codes(input: &str) -> Cow<'_, str> {
 }
 
 fn line_has_single_unsigned_field(line: &str, field: &str) -> bool {
-    matches!(
-        line_unsigned_field_occurrences(line, field).as_slice(),
-        [Some(_)]
-    )
+    line_unique_unsigned_field(line, field).is_some()
+}
+
+fn line_unique_unsigned_field(line: &str, field: &str) -> Option<u64> {
+    match line_unsigned_field_occurrences(line, field).as_slice() {
+        [Some(value)] => Some(*value),
+        _ => None,
+    }
 }
 
 fn line_has_unique_unsigned_field(line: &str, field: &str, expected: u64) -> bool {
@@ -1107,10 +1111,18 @@ fn line_has_lane_field(line: &str, lane_id: u32) -> bool {
 }
 
 fn line_has_autoscale_transition_base_fields(line: &str, lane_id: u32) -> bool {
+    let Some(active_lanes) = line_unique_unsigned_field(line, "active_lanes") else {
+        return false;
+    };
+    let Some(autoscale_capacity_lanes) =
+        line_unique_unsigned_field(line, "autoscale_capacity_lanes")
+    else {
+        return false;
+    };
     line_has_lane_field(line, lane_id)
         && line_has_single_unsigned_field(line, "height")
-        && line_has_single_unsigned_field(line, "active_lanes")
-        && line_has_single_unsigned_field(line, "autoscale_capacity_lanes")
+        && active_lanes > 0
+        && active_lanes == autoscale_capacity_lanes
 }
 
 fn line_has_autoscale_scale_out_transition_fields(line: &str, lane_id: u32) -> bool {
@@ -1291,11 +1303,9 @@ fn peers_with_scale_out_transition(
         .iter()
         .enumerate()
         .filter(|(index, current)| {
-            current.scale_out_transitions
-                > baseline
-                    .get(*index)
-                    .map(|stats| stats.scale_out_transitions)
-                    .unwrap_or_default()
+            baseline
+                .get(*index)
+                .is_some_and(|stats| current.scale_out_transitions > stats.scale_out_transitions)
         })
         .count()
 }
@@ -1308,11 +1318,9 @@ fn peers_with_scale_in_transition(
         .iter()
         .enumerate()
         .filter(|(index, current)| {
-            current.scale_in_transitions
-                > baseline
-                    .get(*index)
-                    .map(|stats| stats.scale_in_transitions)
-                    .unwrap_or_default()
+            baseline
+                .get(*index)
+                .is_some_and(|stats| current.scale_in_transitions > stats.scale_in_transitions)
         })
         .count()
 }
@@ -4204,24 +4212,24 @@ mod tests {
     #[test]
     fn autoscale_transition_stats_parse_lane_specific_log_markers() {
         let log = format!(
-            "INFO \u{1b}[32mheight\u{1b}[0m=2 \u{1b}[32mlane\u{1b}[0m=3 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             INFO height=2 lane=3; active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             INFO height=2 lane=4 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             {{\"height\":2,\"lane\":3,\"active_lanes\":3,\"autoscale_capacity_lanes\":1,\"out_latency_ratio_permille\":1200,\"out_utilization_p95_permille\":700,\"message\":\"{out}\"}}\n\
-             height: 2 lane: 3 active_lanes: 3 autoscale_capacity_lanes: 1 in_latency_ratio_permille: 700 in_utilization_p95_permille: 20 {input}\n\
+            "INFO \u{1b}[32mheight\u{1b}[0m=2 \u{1b}[32mlane\u{1b}[0m=3 active_lanes=3 autoscale_capacity_lanes=3 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3; active_lanes=3 autoscale_capacity_lanes=3 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=4 active_lanes=3 autoscale_capacity_lanes=3 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             {{\"height\":2,\"lane\":3,\"active_lanes\":3,\"autoscale_capacity_lanes\":3,\"out_latency_ratio_permille\":1200,\"out_utilization_p95_permille\":700,\"message\":\"{out}\"}}\n\
+             height: 2 lane: 3 active_lanes: 3 autoscale_capacity_lanes: 3 in_latency_ratio_permille: 700 in_utilization_p95_permille: 20 {input}\n\
              lane=3 {out}\n\
              height=2 lane=3 active_lanes=3 {out}\n\
              height=2 lane=3 autoscale_capacity_lanes=1 {out}\n\
-             height=2 lane=3 active_lanes=3 autoscale_capacity_lanes=1 in_latency_ratio_permille=700 in_utilization_p95_permille=20 {out}\n\
-             height=2 lane=3 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {input}\n\
-             target_lane=3 height=2 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             target-lane=3 height=2 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             height=2 lane=03 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             height=2 lane=3shadow active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             height=2 lane=3_extra active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             height=2 lane=3.0 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             height=2 lane=3-ghost active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             height=2 lane=30 active_lanes=3 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
+             height=2 lane=3 active_lanes=3 autoscale_capacity_lanes=3 in_latency_ratio_permille=700 in_utilization_p95_permille=20 {out}\n\
+             height=2 lane=3 active_lanes=3 autoscale_capacity_lanes=3 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {input}\n\
+             target_lane=3 height=2 active_lanes=3 autoscale_capacity_lanes=3 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             target-lane=3 height=2 active_lanes=3 autoscale_capacity_lanes=3 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             height=2 lane=03 active_lanes=3 autoscale_capacity_lanes=3 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             height=2 lane=3shadow active_lanes=3 autoscale_capacity_lanes=3 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             height=2 lane=3_extra active_lanes=3 autoscale_capacity_lanes=3 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             height=2 lane=3.0 active_lanes=3 autoscale_capacity_lanes=3 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             height=2 lane=3-ghost active_lanes=3 autoscale_capacity_lanes=3 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             height=2 lane=30 active_lanes=3 autoscale_capacity_lanes=3 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
             out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
             input = AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
         );
@@ -4257,6 +4265,50 @@ mod tests {
     }
 
     #[test]
+    fn autoscale_transition_stats_reject_mismatched_capacity_fields() {
+        let log = format!(
+            "INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO {{\"height\":2,\"lane\":3,\"active_lanes\":4,\"autoscale_capacity_lanes\":1,\"in_latency_ratio_permille\":600,\"in_utilization_p95_permille\":20,\"message\":\"{input}\"}}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 in_latency_ratio_permille=600 in_utilization_p95_permille=20 {input}",
+            out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+            input = AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
+        );
+
+        let lane_three = parse_autoscale_transition_stats_for_lane(&log, 3);
+        assert_eq!(
+            lane_three.scale_out_transitions, 1,
+            "scale-out evidence must reject stale logs where active_lanes and autoscale_capacity_lanes disagree"
+        );
+        assert_eq!(
+            lane_three.scale_in_transitions, 1,
+            "scale-in evidence must reject stale logs where active_lanes and autoscale_capacity_lanes disagree"
+        );
+    }
+
+    #[test]
+    fn autoscale_transition_stats_reject_zero_capacity_fields() {
+        let log = format!(
+            "INFO height=2 lane=3 active_lanes=0 autoscale_capacity_lanes=0 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO {{\"height\":2,\"lane\":3,\"active_lanes\":0,\"autoscale_capacity_lanes\":0,\"in_latency_ratio_permille\":600,\"in_utilization_p95_permille\":20,\"message\":\"{input}\"}}\n\
+             INFO height=2 lane=3 active_lanes=1 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=1 autoscale_capacity_lanes=1 in_latency_ratio_permille=600 in_utilization_p95_permille=20 {input}",
+            out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
+            input = AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
+        );
+
+        let lane_three = parse_autoscale_transition_stats_for_lane(&log, 3);
+        assert_eq!(
+            lane_three.scale_out_transitions, 1,
+            "zero active/capacity lane transition markers must not satisfy scale-out evidence"
+        );
+        assert_eq!(
+            lane_three.scale_in_transitions, 1,
+            "zero active/capacity lane transition markers must not satisfy scale-in evidence"
+        );
+    }
+
+    #[test]
     fn autoscale_transition_stats_reject_keyed_tracing_target_spoofing() {
         let log = format!(
             "INFO details: iroha_core::state: {out}, height: 3, lane: 3, active_lanes: 3, autoscale_capacity_lanes: 3, out_latency_ratio_permille: 189, out_utilization_p95_permille: 284\n\
@@ -4272,10 +4324,10 @@ mod tests {
     #[test]
     fn autoscale_transition_stats_reject_ambiguous_lane_fields() {
         let log = format!(
-            "INFO height=2 lane=3 lane=4 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             INFO height=2 lane=4, lane=3 active_lanes=4 autoscale_capacity_lanes=1 in_latency_ratio_permille=600 in_utilization_p95_permille=20 {input}\n\
+            "INFO height=2 lane=3 lane=4 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=4, lane=3 active_lanes=4 autoscale_capacity_lanes=4 in_latency_ratio_permille=600 in_utilization_p95_permille=20 {input}\n\
              INFO {{\"height\":2,\"lane\":4,\"active_lanes\":4,\"autoscale_capacity_lanes\":1,\"out_latency_ratio_permille\":1200,\"out_utilization_p95_permille\":700}} stale lane=3 {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
             out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
             input = AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
         );
@@ -4301,12 +4353,12 @@ mod tests {
     #[test]
     fn autoscale_transition_stats_reject_duplicate_producer_fields() {
         let log = format!(
-            "INFO height=2 height=3 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+            "INFO height=2 height=3 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
              INFO height=2 lane=3 active_lanes=4 active_lanes=5 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 autoscale_capacity_lanes=2 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 in_latency_ratio_permille=600 in_utilization_p95_permille=20 in_utilization_p95_permille=20 {input}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 autoscale_capacity_lanes=2 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 in_latency_ratio_permille=600 in_utilization_p95_permille=20 in_utilization_p95_permille=20 {input}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
             out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
             input = AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
         );
@@ -4325,14 +4377,14 @@ mod tests {
     #[test]
     fn autoscale_transition_stats_reject_malformed_duplicate_producer_fields() {
         let log = format!(
-            "INFO height=2 height=bogus lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             INFO height=2 lane=3 lane=bogus active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+            "INFO height=2 height=bogus lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 lane=bogus active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
              INFO height=2 lane=3 active_lanes=4 active_lanes=bogus autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 autoscale_capacity_lanes=bogus out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_latency_ratio_permille=bogus out_utilization_p95_permille=700 {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 out_utilization_p95_permille=bogus {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 in_latency_ratio_permille=600 in_utilization_p95_permille=20 in_utilization_p95_permille=bogus {input}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 autoscale_capacity_lanes=bogus out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_latency_ratio_permille=bogus out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 out_utilization_p95_permille=bogus {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 in_latency_ratio_permille=600 in_utilization_p95_permille=20 in_utilization_p95_permille=bogus {input}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
             out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
             input = AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER,
         );
@@ -4351,11 +4403,11 @@ mod tests {
     #[test]
     fn autoscale_transition_stats_reject_non_ascii_or_control_numeric_separators() {
         let log = format!(
-            "INFO height=2 lane=\u{00a0}3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             INFO height=2 lane=3\u{00a0} active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200\u{2007} out_utilization_p95_permille=700 {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700\u{1f} {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
+            "INFO height=2 lane=\u{00a0}3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3\u{00a0} active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200\u{2007} out_utilization_p95_permille=700 {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700\u{1f} {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}",
             out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
         );
 
@@ -4370,19 +4422,19 @@ mod tests {
     #[test]
     fn autoscale_transition_stats_reject_quoted_detail_field_spoofing() {
         let log = format!(
-            "INFO detail=\"height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\"\n\
-             INFO message=\"{out}\" detail=\"height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700\"\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail=\"{out}\"\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail={out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail: {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail=( {out} )\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail=[ {out} ]\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 notmessage={out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 notmessage: {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 message=\"{out} forged\"\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}-forged\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             {{\"height\":2,\"lane\":3,\"active_lanes\":4,\"autoscale_capacity_lanes\":1,\"out_latency_ratio_permille\":1200,\"out_utilization_p95_permille\":700,\"message\":\"{out}\"}}",
+            "INFO detail=\"height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\"\n\
+             INFO message=\"{out}\" detail=\"height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700\"\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail=\"{out}\"\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail={out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail: {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail=( {out} )\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 detail=[ {out} ]\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 notmessage={out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 notmessage: {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 message=\"{out} forged\"\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}-forged\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             {{\"height\":2,\"lane\":3,\"active_lanes\":4,\"autoscale_capacity_lanes\":4,\"out_latency_ratio_permille\":1200,\"out_utilization_p95_permille\":700,\"message\":\"{out}\"}}",
             out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
         );
 
@@ -4397,14 +4449,14 @@ mod tests {
     #[test]
     fn autoscale_transition_stats_reject_keyed_container_field_spoofing() {
         let log = format!(
-            "INFO detail=[height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700] {out}\n\
-             INFO detail=(height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700) {out}\n\
-             INFO detail={{height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700}} {out}\n\
-             INFO detail='height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700' message=\"{out}\"\n\
-             INFO message=\"{out}\" detail=[height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700]\n\
-             INFO payload: [height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700] {out}\n\
-             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=1 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
-             {{\"height\":2,\"lane\":3,\"active_lanes\":4,\"autoscale_capacity_lanes\":1,\"out_latency_ratio_permille\":1200,\"out_utilization_p95_permille\":700,\"message\":\"{out}\"}}",
+            "INFO detail=[height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700] {out}\n\
+             INFO detail=(height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700) {out}\n\
+             INFO detail={{height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700}} {out}\n\
+             INFO detail='height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700' message=\"{out}\"\n\
+             INFO message=\"{out}\" detail=[height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700]\n\
+             INFO payload: [height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700] {out}\n\
+             INFO height=2 lane=3 active_lanes=4 autoscale_capacity_lanes=4 out_latency_ratio_permille=1200 out_utilization_p95_permille=700 {out}\n\
+             {{\"height\":2,\"lane\":3,\"active_lanes\":4,\"autoscale_capacity_lanes\":4,\"out_latency_ratio_permille\":1200,\"out_utilization_p95_permille\":700,\"message\":\"{out}\"}}",
             out = AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
         );
 
@@ -4481,6 +4533,52 @@ mod tests {
 
         assert_eq!(peers_with_scale_out_transition(&current, &baseline), 1);
         assert_eq!(peers_with_scale_in_transition(&current, &baseline), 1);
+    }
+
+    #[test]
+    fn autoscale_transition_delta_rejects_missing_baseline_peers() {
+        let baseline = vec![
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 1,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 1,
+                scale_in_transitions: 1,
+            },
+        ];
+        let current = vec![
+            AutoscaleTransitionStats {
+                scale_out_transitions: 2,
+                scale_in_transitions: 2,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 2,
+                scale_in_transitions: 2,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 99,
+                scale_in_transitions: 99,
+            },
+            AutoscaleTransitionStats {
+                scale_out_transitions: 99,
+                scale_in_transitions: 99,
+            },
+        ];
+
+        assert_eq!(
+            peers_with_scale_out_transition(&current, &baseline),
+            2,
+            "peers without a matching baseline entry must not manufacture fresh scale-out quorum"
+        );
+        assert_eq!(
+            peers_with_scale_in_transition(&current, &baseline),
+            2,
+            "peers without a matching baseline entry must not manufacture fresh scale-in quorum"
+        );
+        assert!(!scale_out_transition_observed_on_quorum_peers(
+            &current, &baseline, 3
+        ));
     }
 
     #[test]

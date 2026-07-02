@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_gateway_conformance_backlog.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9d01d4577391cff6d0b4c547866a0f795699fc0c0e86112a91685a98f6d22387
+source_hash: 1a5e5e190eb47001a5e173469f5040d1f50ad0bcc13866e23fcf794b559c13b9
 source_last_modified: "2026-01-03T18:07:58.672420+00:00"
 translation_last_reviewed: 2026-01-30
 ---

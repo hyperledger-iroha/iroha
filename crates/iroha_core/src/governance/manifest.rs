@@ -431,7 +431,12 @@ impl RuntimeUpgradeHook {
                                             .into(),
                                     );
                                 }
-                                ids.insert(trimmed.to_string());
+                                if !ids.insert(trimmed.to_string()) {
+                                    return Err(
+                                        "runtime_upgrade.allowed_ids entries must not duplicate values"
+                                            .into(),
+                                    );
+                                }
                             }
                             _ => {
                                 return Err(
@@ -566,7 +571,11 @@ impl GovernanceRules {
                 }
                 let name = Name::from_str(trimmed)
                     .map_err(|err| format!("invalid protected namespace `{trimmed}`: {err}"))?;
-                protected_namespaces.insert(name);
+                if !protected_namespaces.insert(name) {
+                    return Err(format!(
+                        "duplicate protected namespace `{trimmed}` in lane `{alias}`"
+                    ));
+                }
             }
         }
 
@@ -726,10 +735,11 @@ impl LaneManifestRegistry {
         cache_dir: Option<&Path>,
     ) -> BTreeMap<String, PathBuf> {
         let mut manifests = BTreeMap::new();
+        let mut duplicate_aliases = BTreeSet::new();
 
         if let Some(dir) = manifest_dir {
             if dir.exists() {
-                Self::ingest_manifest_directory(dir, &mut manifests, false);
+                Self::ingest_manifest_directory(dir, &mut manifests, &mut duplicate_aliases, false);
             } else {
                 warn!(
                     path = %dir.display(),
@@ -740,7 +750,7 @@ impl LaneManifestRegistry {
 
         if let Some(dir) = cache_dir {
             if dir.exists() {
-                Self::ingest_manifest_directory(dir, &mut manifests, true);
+                Self::ingest_manifest_directory(dir, &mut manifests, &mut duplicate_aliases, true);
             } else if manifest_dir.is_some() {
                 debug!(
                     path = %dir.display(),
@@ -755,15 +765,37 @@ impl LaneManifestRegistry {
     fn ingest_manifest_directory(
         dir: &Path,
         manifests: &mut BTreeMap<String, PathBuf>,
+        duplicate_aliases: &mut BTreeSet<String>,
         override_existing: bool,
     ) {
         match fs::read_dir(dir) {
             Ok(entries) => {
+                let mut seen_in_directory = BTreeSet::new();
                 for entry in entries.flatten() {
                     let path = entry.path();
                     let Some(alias) = Self::manifest_alias_from_path(&path) else {
                         continue;
                     };
+
+                    if duplicate_aliases.contains(&alias) {
+                        warn!(
+                            lane = %alias,
+                            path = %path.display(),
+                            "manifest alias already invalidated by duplicate source; skipping"
+                        );
+                        continue;
+                    }
+
+                    if !seen_in_directory.insert(alias.clone()) {
+                        warn!(
+                            lane = %alias,
+                            path = %path.display(),
+                            "duplicate manifest alias in directory; invalidating alias"
+                        );
+                        manifests.remove(&alias);
+                        duplicate_aliases.insert(alias);
+                        continue;
+                    }
 
                     if manifests.contains_key(&alias) {
                         if override_existing {
@@ -1483,6 +1515,48 @@ mod tests {
     }
 
     #[test]
+    fn registry_rejects_duplicate_manifest_aliases_in_directory() {
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![LaneConfig {
+                id: LaneId::new(0),
+                alias: "gov".to_string(),
+                governance: Some("parliament".to_string()),
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("valid catalog");
+        let mut governance = GovernanceCatalog::default();
+        governance
+            .modules
+            .insert("parliament".to_string(), ConfigGovernanceModule::default());
+        let dir = tempdir().expect("tmp dir");
+        fs::write(
+            dir.path().join("gov.manifest.json"),
+            r#"{"lane":"gov","governance":"parliament"}"#,
+        )
+        .expect("write manifest");
+        fs::write(
+            dir.path().join("gov.json"),
+            r#"{"lane":"gov","governance":"parliament"}"#,
+        )
+        .expect("write duplicate manifest");
+        let registry_cfg = LaneRegistry {
+            manifest_directory: Some(dir.path().to_path_buf()),
+            ..LaneRegistry::default()
+        };
+
+        let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
+        let err = registry
+            .ensure_lane_ready(LaneId::new(0))
+            .expect_err("duplicate manifest aliases must keep the lane locked");
+        assert_eq!(err.reason(), GovernanceGuardReason::MissingManifest);
+        assert_eq!(registry.missing_entries().len(), 1);
+        let status = registry.status(LaneId::new(0)).expect("lane status");
+        assert!(status.manifest_path.is_none());
+    }
+
+    #[test]
     fn cache_manifest_overrides_primary_directory() {
         let lane_catalog = LaneCatalog::new(
             nonzero!(1_u32),
@@ -1738,6 +1812,64 @@ mod tests {
             .expect("allowed ids present");
         assert!(allowed_ids.contains("upgrade-q1"));
         assert!(rules.hooks.unknown.contains_key("custom_hook"));
+    }
+
+    #[test]
+    fn manifest_rejects_duplicate_protected_namespace() {
+        crate::test_alias::ensure();
+        let mut governance = GovernanceCatalog::default();
+        governance
+            .modules
+            .insert("parliament".to_string(), ConfigGovernanceModule::default());
+        let dir = tempdir().expect("tmp dir");
+        let path = dir.path().join("gov.manifest.json");
+        fs::write(
+            &path,
+            r#"{"lane":"gov","governance":"parliament","protected_namespaces":[" treasury ","treasury"]}"#,
+        )
+        .expect("write manifest");
+
+        let err = LaneManifestRegistry::validate_manifest(
+            &path,
+            LaneId::new(0),
+            "gov",
+            Some("parliament"),
+            &governance,
+        )
+        .expect_err("duplicate protected namespace should fail manifest validation");
+        assert!(
+            err.contains("duplicate protected namespace"),
+            "expected duplicate namespace rejection, got {err}"
+        );
+    }
+
+    #[test]
+    fn manifest_rejects_duplicate_runtime_upgrade_allowed_id() {
+        crate::test_alias::ensure();
+        let mut governance = GovernanceCatalog::default();
+        governance
+            .modules
+            .insert("parliament".to_string(), ConfigGovernanceModule::default());
+        let dir = tempdir().expect("tmp dir");
+        let path = dir.path().join("gov.manifest.json");
+        fs::write(
+            &path,
+            r#"{"lane":"gov","governance":"parliament","hooks":{"runtime_upgrade":{"allowed_ids":["upgrade-q1"," upgrade-q1 "]}}}"#,
+        )
+        .expect("write manifest");
+
+        let err = LaneManifestRegistry::validate_manifest(
+            &path,
+            LaneId::new(0),
+            "gov",
+            Some("parliament"),
+            &governance,
+        )
+        .expect_err("duplicate runtime upgrade allowed id should fail manifest validation");
+        assert!(
+            err.contains("allowed_ids entries must not duplicate values"),
+            "expected duplicate runtime upgrade id rejection, got {err}"
+        );
     }
 
     #[test]

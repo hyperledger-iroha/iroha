@@ -7,8 +7,8 @@ use super::prelude::*;
 use crate::{
     prelude::*,
     state::{
-        WorldTransaction, nexus_active_lane_dataspace, nexus_catalog_geometry_lane_dataspace,
-        public_lane_validator_record_matches_key,
+        WorldTransaction, nexus_active_lane_dataspace, nexus_active_lane_dataspace_at_height,
+        nexus_catalog_geometry_lane_dataspace, public_lane_validator_record_matches_key,
     },
 };
 
@@ -9636,6 +9636,7 @@ pub mod isi {
             destination_verifier_address: None,
             verifier_address: None,
             sccp_bsc_destination_verifier_address: is_bsc.then(|| verifier_address.clone()),
+            ton_finalize_message_value_nano: manifest.ton_finalize_message_value_nano,
             bsc_verifier_address: None,
             evm_verifier_address: None,
             tron_verifier_address: (!is_bsc).then_some(verifier_address),
@@ -9703,6 +9704,23 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
                         "production BSC SCCP route manifest verifier_target must be EvmContract"
+                            .into(),
+                    ),
+                ));
+            }
+        }
+        if actual.production_ready && actual.counterparty_domain == iroha_sccp::SCCP_DOMAIN_TON {
+            if actual.route_id != "taira_ton_xor" || actual.asset_key != "xor" {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "production TON SCCP route manifest must target taira_ton_xor/xor".into(),
+                    ),
+                ));
+            }
+            if actual.verifier_target != "TonContract" {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "production TON SCCP route manifest verifier_target must be TonContract"
                             .into(),
                     ),
                 ));
@@ -14612,7 +14630,14 @@ pub mod isi {
             }
 
             let lane_id = *self.lane_id();
-            if nexus_active_lane_dataspace(lane_id, &state_transaction.nexus).is_none() {
+            let current_height = state_transaction.block_height();
+            if nexus_active_lane_dataspace_at_height(
+                lane_id,
+                &state_transaction.nexus,
+                current_height,
+            )
+            .is_none()
+            {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
                         "unknown lane id {}",
@@ -14637,7 +14662,6 @@ pub mod isi {
                 return Ok(());
             }
 
-            let current_height = state_transaction.block_height();
             let expires_at_height = self.expires_at_height().ok_or_else(|| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                     "lane relay emergency override requires expires_at_height for non-empty peer rosters"
@@ -25439,6 +25463,71 @@ pub mod isi {
                     .get(&stale_lane)
                     .is_none(),
                 "stale-lane override must not be stored"
+            );
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_rejects_future_created_autoscale_lane() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block_at_height(NonZeroU64::new(2).expect("nonzero height"));
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.autoscale.enabled = true;
+            stx.nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+            stx.nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_universal_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
+
+            let future_lane = LaneId::new(1);
+            let mut elastic_lane = LaneConfig {
+                id: future_lane,
+                alias: "elastic-lane-1".to_owned(),
+                ..LaneConfig::default()
+            };
+            elastic_lane.metadata.insert(
+                iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+                "true".to_owned(),
+            );
+            elastic_lane.metadata.insert(
+                iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+                "7".to_owned(),
+            );
+            let catalog = LaneCatalog::new(
+                NonZeroU32::new(2).expect("nonzero lane count"),
+                vec![LaneConfig::default(), elastic_lane],
+            )
+            .expect("future-created autoscale catalog");
+            stx.nexus.lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+            stx.nexus.lane_catalog = catalog;
+
+            let err = SetLaneRelayEmergencyValidators {
+                lane_id: future_lane,
+                peers: vec![peer],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("future-created autoscale lane must not accept emergency validators");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("unknown lane id 1"),
+                "unexpected error message: {msg}"
+            );
+            assert!(
+                stx.world
+                    .lane_relay_emergency_validators
+                    .get(&future_lane)
+                    .is_none(),
+                "future-created autoscale override must not be stored"
             );
         }
 

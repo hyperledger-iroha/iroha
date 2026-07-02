@@ -106,6 +106,8 @@ PROOF_SUMMARY_BOUND_KINDS = (
     "observability",
     "governance_approval",
 )
+POLICY_BOUND_KINDS = ("governance_approval",)
+PROVIDER_ROSTER_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -202,6 +204,8 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "hardware_determinism_reviewed",
         "max_proof_latency_ms",
         "proof_summary_digest_hex",
+        "policy_digest_hex",
+        "provider_roster_digest_hex",
         "raw_challenge_bytes_included",
         "raw_proof_bytes_included",
     ),
@@ -260,6 +264,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "proof_summary_digest_hex",
         "config_source",
         "policy_digest_hex",
+        "provider_roster_digest_hex",
     ),
 }
 
@@ -285,6 +290,8 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "environment",
     "deployment_context_reviewed",
     "proof_summary_digest_hex",
+    "policy_digest_hex",
+    "provider_roster_digest_hex",
 )
 
 
@@ -358,6 +365,8 @@ def validate_proof_generation(
         errors,
     )
     require_hex(payload, "proof_summary_digest_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
+    require_hex(payload, "provider_roster_digest_hex", HEX64_LEN, errors)
     require_false(payload, "raw_challenge_bytes_included", errors)
     require_false(payload, "raw_proof_bytes_included", errors)
 
@@ -413,6 +422,7 @@ def validate_governance_approval(payload: dict[str, Any], errors: list[str]) -> 
     require_bool_true(payload, "governance_dag_bound", errors)
     require_hex(payload, "proof_summary_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
+    require_hex(payload, "provider_roster_digest_hex", HEX64_LEN, errors)
 
 
 def validate_kind_specific(
@@ -474,7 +484,11 @@ def build_summary(
 
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
     valid_proof_summary_digests: set[str] = set()
+    valid_policy_digests: set[str] = set()
+    valid_provider_roster_digests: set[str] = set()
     valid_proof_summary_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_provider_roster_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -509,6 +523,22 @@ def build_summary(
                 valid_proof_summary_digests.add(digest.lower())
             elif kind_name in PROOF_SUMMARY_BOUND_KINDS:
                 valid_proof_summary_bound_artifacts.append((kind_name, artifact))
+            policy_digest = evidence_artifact_fingerprint(artifact).get(
+                "policy_digest_hex"
+            )
+            if kind_name == "proof_generation" and isinstance(policy_digest, str):
+                valid_policy_digests.add(policy_digest.lower())
+            elif kind_name in POLICY_BOUND_KINDS:
+                valid_policy_bound_artifacts.append((kind_name, artifact))
+            provider_roster_digest = evidence_artifact_fingerprint(artifact).get(
+                "provider_roster_digest_hex"
+            )
+            if kind_name == "proof_generation" and isinstance(
+                provider_roster_digest, str
+            ):
+                valid_provider_roster_digests.add(provider_roster_digest.lower())
+            elif kind_name in PROVIDER_ROSTER_BOUND_KINDS:
+                valid_provider_roster_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
@@ -526,6 +556,39 @@ def build_summary(
         missing_anchor_error_template=(
             "{kind_name} proof_summary_digest_hex requires a valid "
             "proof_generation proof_summary_digest_hex"
+        ),
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("proof_generation",) + POLICY_BOUND_KINDS,
+        bound_artifacts=valid_policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must reference a valid "
+            "proof_generation policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex requires a valid "
+            "proof_generation policy_digest_hex"
+        ),
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("proof_generation",)
+        + PROVIDER_ROSTER_BOUND_KINDS,
+        bound_artifacts=valid_provider_roster_bound_artifacts,
+        valid_anchor_digests=valid_provider_roster_digests,
+        digest_field="provider_roster_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} provider_roster_digest_hex must reference a valid "
+            "proof_generation provider_roster_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} provider_roster_digest_hex requires a valid "
+            "proof_generation provider_roster_digest_hex"
         ),
     )
 
@@ -553,6 +616,8 @@ def build_summary(
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_proof_summary_digests": sorted(valid_proof_summary_digests),
+        "valid_policy_digests": sorted(valid_policy_digests),
+        "valid_provider_roster_digests": sorted(valid_provider_roster_digests),
         "required": required,
         "errors": errors,
     }

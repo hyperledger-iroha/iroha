@@ -20,10 +20,13 @@ use iroha_core::{
     queue::{ConfigLaneRouter, Queue, QueueLimits, SingleLaneRouter},
     state::State,
 };
-use iroha_crypto::KeyPair;
-use iroha_data_model::nexus::{
-    AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
-    DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+use iroha_crypto::{Hash, HashOf, KeyPair};
+use iroha_data_model::{
+    block::BlockHeader,
+    nexus::{
+        AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
+        DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+    },
 };
 use iroha_torii::Torii;
 use iroha_torii_shared::{ErrorEnvelope, uri::NEXUS_LANE_LIFECYCLE};
@@ -175,6 +178,7 @@ fn seed_valid_autoscale_lane_with_autoscale(
         created_height.to_string(),
         autoscale_enabled,
     );
+    seed_committed_height(harness, created_height);
 }
 
 fn seed_valid_autoscale_lane_in_dataspace(
@@ -190,6 +194,7 @@ fn seed_valid_autoscale_lane_in_dataspace(
         created_height.to_string(),
         true,
     );
+    seed_committed_height(harness, created_height);
 }
 
 fn seed_invalid_autoscale_lane_with_height(harness: &NexusHarness, lane_id: LaneId, height: &str) {
@@ -243,6 +248,19 @@ fn seed_autoscale_lane(
         iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
 }
 
+fn seed_committed_height(harness: &NexusHarness, height: u64) {
+    let mut block_hashes = harness.state.block_hashes.block();
+    while u64::try_from(block_hashes.len()).unwrap_or(u64::MAX) < height {
+        let next = u8::try_from(block_hashes.len() % usize::from(u8::MAX))
+            .expect("modulo u8::MAX fits u8")
+            .saturating_add(1);
+        block_hashes.push_for_tests(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([next; Hash::LENGTH]),
+        ));
+    }
+    block_hashes.commit_for_tests();
+}
+
 #[tokio::test]
 async fn nexus_lifecycle_applies_plan_and_reports_lane_count() {
     let harness = build_app(true);
@@ -293,6 +311,38 @@ async fn nexus_lifecycle_refreshes_queue_limits_for_add_and_retire() {
         harness.queue.queue_limits().for_lane(lane_id),
         fallback_limits,
         "accepted endpoint retire must clear stale lane-specific queue limits"
+    );
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_rejects_empty_plan_without_mutating_catalog_or_queue() {
+    let harness = build_app(true);
+    let before_catalog = harness.state.nexus_snapshot().lane_catalog;
+    let lane_id = LaneId::new(1);
+    let before_limits = harness.queue.queue_limits().for_lane(lane_id);
+    let body = r#"{"additions":[],"retire":[]}"#;
+
+    let resp = post_lifecycle(&harness, body).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload
+            .message
+            .contains("lane lifecycle plan must add or retire at least one lane"),
+        "expected empty-plan lifecycle error, got {:?}",
+        payload.message
+    );
+    assert_eq!(
+        harness.state.nexus_snapshot().lane_catalog,
+        before_catalog,
+        "rejected empty lifecycle plan must not mutate the committed lane catalog"
+    );
+    assert_eq!(
+        harness.queue.queue_limits().for_lane(lane_id),
+        before_limits,
+        "rejected empty lifecycle plan must not refresh queue limits"
     );
 }
 
@@ -720,8 +770,36 @@ async fn nexus_lifecycle_rejects_reserved_autoscale_metadata() {
     assert!(
         payload
             .message
-            .contains("lane 8 uses reserved autoscale-managed metadata"),
+            .contains("lane 8 uses reserved autoscale metadata"),
         "expected reserved autoscale metadata error, got {:?}",
+        payload.message
+    );
+
+    let rejected_created_height = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"spoofed-autoscale-created-height","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"autoscale.created_height":"42"}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, rejected_created_height).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload
+            .message
+            .contains("lane 8 uses reserved autoscale metadata"),
+        "expected reserved autoscale created-height error, got {:?}",
+        payload.message
+    );
+
+    let rejected_valid_spoof = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"elastic-lane-8","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{"autoscale.managed":"true","autoscale.created_height":"42"}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, rejected_valid_spoof).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload
+            .message
+            .contains("lane 8 uses reserved autoscale metadata"),
+        "expected reserved autoscale valid-spoof error, got {:?}",
         payload.message
     );
 
@@ -749,7 +827,7 @@ async fn nexus_lifecycle_rejects_manual_retire_of_valid_autoscale_lane() {
     assert!(
         payload
             .message
-            .contains("lane 1 uses reserved autoscale-managed metadata"),
+            .contains("lane 1 uses reserved autoscale metadata"),
         "expected reserved autoscale metadata error, got {:?}",
         payload.message
     );
@@ -808,6 +886,48 @@ async fn nexus_lifecycle_allows_repair_retire_of_invalid_autoscale_lane() {
             .message
             .contains("autoscale.created_height must be a positive integer"),
         "expected invalid autoscale metadata error, got {:?}",
+        payload.message
+    );
+
+    let repair = r#"{"additions":[],"retire":[1]}"#;
+    let resp = post_lifecycle(&harness, repair).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(1));
+
+    let accepted = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-manual","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, accepted).await;
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = decode_norito_json(&bytes);
+    assert_eq!(payload["lane_count"].as_u64(), Some(9));
+}
+
+#[tokio::test]
+async fn nexus_lifecycle_allows_repair_retire_of_future_created_autoscale_lane() {
+    let harness = build_app_with_nexus(true, |nexus| {
+        nexus.autoscale.enabled = true;
+    });
+    seed_autoscale_lane(
+        &harness,
+        LaneId::new(1),
+        DataSpaceId::UNIVERSAL,
+        "42".to_owned(),
+        true,
+    );
+
+    let unrelated = r#"{"additions":[{"id":8,"dataspace_id":0,"alias":"outside-range-before-repair","description":null,"visibility":"public","lane_type":null,"governance":null,"settlement":null,"storage":"full_replica","proof_scheme":"merkle_sha256","metadata":{}}],"retire":[]}"#;
+    let resp = post_lifecycle(&harness, unrelated).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&bytes).expect("decode error payload");
+    assert_eq!(payload.code, "lane_lifecycle_error");
+    assert!(
+        payload
+            .message
+            .contains("autoscale.created_height must not exceed the current block height"),
+        "expected future-created autoscale metadata error, got {:?}",
         payload.message
     );
 

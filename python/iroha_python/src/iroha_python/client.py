@@ -452,6 +452,220 @@ def _normalize_32_byte_hex(value: Any, context: str) -> str:
     return _normalize_hex_string(trimmed, context, expected_length=64)
 
 
+def _normalize_zk_ace_hex32(value: Any, context: str) -> str:
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw = bytes(value)
+        if len(raw) != 32:
+            raise ValueError(f"{context} must contain 32 bytes")
+        return raw.hex()
+    return _normalize_32_byte_hex(value, context)
+
+
+def _zk_ace_plain_mapping(value: Any) -> Optional[Mapping[str, Any]]:
+    if isinstance(value, Mapping):
+        return value
+    if not isinstance(value, str) or len(value) > 4096:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, Mapping) else None
+
+
+def _zk_ace_asset_metadata_entry(
+    asset_definition: Optional[Mapping[str, Any]],
+    key: str,
+) -> Optional[Mapping[str, Any]]:
+    if asset_definition is None:
+        return None
+    metadata = _zk_ace_plain_mapping(asset_definition.get("metadata"))
+    if metadata is None:
+        return None
+    return _zk_ace_plain_mapping(metadata.get(key))
+
+
+def _zk_ace_verifier_key_state(verifier_key: Union[str, Mapping[str, Any]]) -> Dict[str, str]:
+    if isinstance(verifier_key, Mapping):
+        backend = _require_production_verify_backend_label(
+            verifier_key.get("backend"),
+            "verifier_key.backend",
+        )
+        name = _require_exact_non_empty_string(verifier_key.get("name"), "verifier_key.name")
+    else:
+        literal = _require_exact_non_empty_string(verifier_key, "verifier_key")
+        if ":" not in literal:
+            raise ValueError("verifier_key must include a backend prefix")
+        backend, name = literal.rsplit(":", 1)
+        backend = _require_production_verify_backend_label(backend, "verifier_key.backend")
+        name = _require_exact_non_empty_string(name, "verifier_key.name")
+    return {"backend": backend, "name": name}
+
+
+def _zk_ace_identity_commitment_state(
+    *,
+    identity_commitment: str,
+    policy_hash: str,
+    allowed_accounts: Sequence[str],
+    chain_id: str,
+    verifier_key: Union[str, Mapping[str, Any]],
+    action_class: Optional[str],
+    domain_tag: Optional[str],
+) -> Dict[str, Any]:
+    return {
+        "identity_commitment": identity_commitment,
+        "policy_hash": policy_hash,
+        "chain_id": chain_id,
+        "domain_tag": domain_tag,
+        "action_class": action_class,
+        "verifier_key_id": _zk_ace_verifier_key_state(verifier_key),
+        "allowed_accounts": [
+            _require_non_empty_string(account_id, f"allowed_accounts[{index}]")
+            for index, account_id in enumerate(allowed_accounts)
+        ],
+        "commitment_status": "active",
+        "revoked": False,
+        "revocation_status": "not_revoked",
+        "rotation_state": "current",
+    }
+
+
+def _zk_ace_transfer_replay_state(
+    *,
+    identity_commitment: str,
+    tx_digest: str,
+    replay_nullifier: str,
+    policy_hash: str,
+    source_account: str,
+    chain_id: str,
+    verifier_key: Union[str, Mapping[str, Any]],
+    action_class: Optional[str],
+    domain_tag: Optional[str],
+) -> Dict[str, Any]:
+    return {
+        "identity_commitment": identity_commitment,
+        "tx_digest": tx_digest,
+        "replay_nullifier": replay_nullifier,
+        "policy_hash": policy_hash,
+        "chain_id": chain_id,
+        "domain_tag": domain_tag,
+        "action_class": action_class,
+        "verifier_key_id": _zk_ace_verifier_key_state(verifier_key),
+        "source_account": source_account,
+        "source_account_allowed": True,
+        "replay_status": "fresh",
+        "duplicate": False,
+        "already_seen": False,
+    }
+
+
+def _zk_ace_committed_identity_state(
+    asset_definition: Optional[Mapping[str, Any]],
+    *,
+    identity_commitment: str,
+    policy_hash: str,
+    allowed_accounts: Sequence[str],
+    chain_id: str,
+    verifier_key: Union[str, Mapping[str, Any]],
+    action_class: Optional[str],
+    domain_tag: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    last_identity = _zk_ace_asset_metadata_entry(
+        asset_definition,
+        "zk.ace.identity.last",
+    )
+    if last_identity is None:
+        return None
+    try:
+        if (
+            _normalize_zk_ace_hex32(
+                last_identity.get("identity_commitment"),
+                "zk.ace.identity.last.identity_commitment",
+            )
+            != identity_commitment
+            or _normalize_zk_ace_hex32(
+                last_identity.get("policy_hash"),
+                "zk.ace.identity.last.policy_hash",
+            )
+            != policy_hash
+        ):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return _zk_ace_identity_commitment_state(
+        identity_commitment=identity_commitment,
+        policy_hash=policy_hash,
+        allowed_accounts=allowed_accounts,
+        chain_id=chain_id,
+        verifier_key=verifier_key,
+        action_class=action_class,
+        domain_tag=domain_tag,
+    )
+
+
+def _zk_ace_committed_transfer_state(
+    asset_definition: Optional[Mapping[str, Any]],
+    *,
+    identity_commitment: str,
+    tx_digest: str,
+    replay_nullifier: str,
+    policy_hash: str,
+    source_account: str,
+    chain_id: str,
+    verifier_key: Union[str, Mapping[str, Any]],
+    action_class: Optional[str],
+    domain_tag: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    last_transfer = _zk_ace_asset_metadata_entry(
+        asset_definition,
+        "zk.ace.transfer.last",
+    )
+    if last_transfer is None:
+        return None
+    expected = {
+        "identity_commitment": identity_commitment,
+        "tx_digest": tx_digest,
+        "replay_nullifier": replay_nullifier,
+        "policy_hash": policy_hash,
+    }
+    try:
+        for field_name, expected_value in expected.items():
+            if (
+                _normalize_zk_ace_hex32(
+                    last_transfer.get(field_name),
+                    f"zk.ace.transfer.last.{field_name}",
+                )
+                != expected_value
+            ):
+                return None
+    except (TypeError, ValueError):
+        return None
+    return _zk_ace_transfer_replay_state(
+        identity_commitment=identity_commitment,
+        tx_digest=tx_digest,
+        replay_nullifier=replay_nullifier,
+        policy_hash=policy_hash,
+        source_account=source_account,
+        chain_id=chain_id,
+        verifier_key=verifier_key,
+        action_class=action_class,
+        domain_tag=domain_tag,
+    )
+
+
+def _zk_ace_enrich_result(
+    result: Mapping[str, Any],
+    *,
+    key: str,
+    state: Optional[Mapping[str, Any]],
+) -> Mapping[str, Any]:
+    if state is None or key in result:
+        return result
+    enriched: Dict[str, Any] = dict(result)
+    enriched[key] = dict(state)
+    return enriched
+
+
 def _normalize_optional_int_field(value: Any, context: str) -> Optional[int]:
     parsed = _coerce_int(value, context, allow_zero=True)
     return parsed if parsed is not None else None
@@ -9037,16 +9251,21 @@ class ToriiClient(_BaseToriiClient):
 
     def _native_transaction_asset_id(self, value: Any, context: str) -> str:
         literal = _require_non_empty_string(value, context)
-        prefix, separator, account_id = literal.rpartition("#")
-        if not separator or not prefix or not account_id:
+        parts = literal.split("#")
+        if len(parts) not in {2, 3} or not all(parts):
             return literal
+        definition, account_id = parts[0], parts[1]
+        scope = parts[2] if len(parts) == 3 else None
         native_account_id = self._native_transaction_account_id(
             account_id,
             f"{context}.account_id",
         )
         if native_account_id == account_id:
             return literal
-        return f"{prefix}#{native_account_id}"
+        result = f"{definition}#{native_account_id}"
+        if scope is not None:
+            result = f"{result}#{scope}"
+        return result
 
     def privacy_capabilities(
         self,
@@ -13278,6 +13497,11 @@ class ToriiClient(_BaseToriiClient):
     ) -> Mapping[str, Any]:
         """Register a ZK-ACE identity commitment for transparent-transfer authorization."""
 
+        normalized_identity_commitment = _normalize_zk_ace_hex32(
+            identity_commitment,
+            "identity_commitment",
+        )
+        normalized_policy_hash = _normalize_zk_ace_hex32(policy_hash, "policy_hash")
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
@@ -13285,8 +13509,8 @@ class ToriiClient(_BaseToriiClient):
         )
         draft.register_zk_ace_identity_commitment(
             asset_definition_id,
-            identity_commitment=identity_commitment,
-            policy_hash=policy_hash,
+            identity_commitment=normalized_identity_commitment,
+            policy_hash=normalized_policy_hash,
             allowed_accounts=[
                 self._native_transaction_account_id(
                     account_id,
@@ -13298,13 +13522,33 @@ class ToriiClient(_BaseToriiClient):
             action_class=action_class,
             domain_tag=domain_tag,
         )
-        return self._submit_transaction_draft_result(
+        result = self._submit_transaction_draft_result(
             draft,
             private_key=private_key,
             private_key_hex=private_key_hex,
             wait=wait,
             timeout=timeout,
             interval=interval,
+        )
+        if not wait:
+            return result
+        try:
+            state = _zk_ace_committed_identity_state(
+                self.get_asset_definition(asset_definition_id),
+                identity_commitment=normalized_identity_commitment,
+                policy_hash=normalized_policy_hash,
+                allowed_accounts=allowed_accounts,
+                chain_id=chain_id,
+                verifier_key=verifier_key,
+                action_class=action_class,
+                domain_tag=domain_tag,
+            )
+        except Exception:
+            state = None
+        return _zk_ace_enrich_result(
+            result,
+            key="identity_commitment_state",
+            state=state,
         )
 
     def rotate_zk_ace_identity_commitment_and_wait(
@@ -13590,6 +13834,16 @@ class ToriiClient(_BaseToriiClient):
     ) -> Mapping[str, Any]:
         """Submit a prepared ZK-ACE-authorized transparent transfer."""
 
+        normalized_identity_commitment = _normalize_zk_ace_hex32(
+            identity_commitment,
+            "identity_commitment",
+        )
+        normalized_tx_digest = _normalize_zk_ace_hex32(tx_digest, "tx_digest")
+        normalized_replay_nullifier = _normalize_zk_ace_hex32(
+            replay_nullifier,
+            "replay_nullifier",
+        )
+        normalized_policy_hash = _normalize_zk_ace_hex32(policy_hash, "policy_hash")
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
@@ -13606,16 +13860,16 @@ class ToriiClient(_BaseToriiClient):
             ),
             asset_definition_id=asset_definition_id,
             amount=amount,
-            identity_commitment=identity_commitment,
-            tx_digest=tx_digest,
+            identity_commitment=normalized_identity_commitment,
+            tx_digest=normalized_tx_digest,
             chain_id=chain_id,
             domain_tag=domain_tag,
             action_class=action_class,
-            replay_nullifier=replay_nullifier,
-            policy_hash=policy_hash,
+            replay_nullifier=normalized_replay_nullifier,
+            policy_hash=normalized_policy_hash,
             proof=proof,
         )
-        return self._submit_transaction_draft_result(
+        result = self._submit_transaction_draft_result(
             draft,
             private_key=private_key,
             private_key_hex=private_key_hex,
@@ -13623,6 +13877,24 @@ class ToriiClient(_BaseToriiClient):
             timeout=timeout,
             interval=interval,
         )
+        if not wait:
+            return result
+        try:
+            state = _zk_ace_committed_transfer_state(
+                self.get_asset_definition(asset_definition_id),
+                identity_commitment=normalized_identity_commitment,
+                tx_digest=normalized_tx_digest,
+                replay_nullifier=normalized_replay_nullifier,
+                policy_hash=normalized_policy_hash,
+                source_account=from_account_id,
+                chain_id=chain_id,
+                verifier_key=proof.get("verifying_key_ref"),
+                action_class=action_class,
+                domain_tag=domain_tag,
+            )
+        except Exception:
+            state = None
+        return _zk_ace_enrich_result(result, key="replay_state", state=state)
 
     # ------------------------------------------------------------------
     # Ledger account and asset convenience helpers
