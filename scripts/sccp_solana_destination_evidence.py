@@ -1548,7 +1548,7 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
         return fallback
     if _decoded_cli_error_text_issue(text):
         return fallback
-    normalized_text = _decoded_public_blocker_text(text).lower()
+    normalized_text = _decoded_public_blocker_text(text).casefold()
     if any(marker in normalized_text for marker in SENSITIVE_CLI_ERROR_MARKERS):
         return fallback
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):

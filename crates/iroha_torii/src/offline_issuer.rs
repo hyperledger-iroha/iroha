@@ -317,46 +317,7 @@ fn verify_ed25519_signature(
 }
 
 fn checked_ed25519_signature_from_bytes(signature: &[u8]) -> Result<Signature, ()> {
-    validate_ed25519_signature_r(signature)?;
-    Signature::try_from_bytes(signature).map_err(|_| ())
-}
-
-fn validate_ed25519_signature_r(signature: &[u8]) -> Result<(), ()> {
-    if signature.len() != ed25519_dalek::SIGNATURE_LENGTH {
-        return Err(());
-    }
-    let r_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = signature
-        .get(..ed25519_dalek::PUBLIC_KEY_LENGTH)
-        .ok_or(())?
-        .try_into()
-        .map_err(|_| ())?;
-    if !ed25519_compressed_y_is_canonical(&r_bytes) {
-        return Err(());
-    }
-    let r_point = ed25519_dalek::VerifyingKey::from_bytes(&r_bytes).map_err(|_| ())?;
-    if r_point.is_weak() {
-        return Err(());
-    }
-    Ok(())
-}
-
-fn ed25519_compressed_y_is_canonical(bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]) -> bool {
-    const ED25519_FIELD_MODULUS_LE: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
-        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0x7f,
-    ];
-
-    let mut y = *bytes;
-    y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
-    for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
-        match y[idx].cmp(&ED25519_FIELD_MODULUS_LE[idx]) {
-            std::cmp::Ordering::Less => return true,
-            std::cmp::Ordering::Greater => return false,
-            std::cmp::Ordering::Equal => {}
-        }
-    }
-    false
+    iroha_crypto::ed25519_parse_signature(signature).map_err(|_| ())
 }
 
 fn verify_p256_signature(
@@ -819,8 +780,8 @@ fn extract_body_auth(
     let account_id = required_string(value, "account_id")?;
     let timestamp_ms = required_u64_with_code(value, "timestamp_ms", "OFFLINE_SIGNATURE_REQUIRED")?;
     let nonce = required_string(value, "nonce")?;
-    let signature_base64 = optional_string(value, "signature_base64");
-    let witness_base64 = optional_string(value, "witness_base64");
+    let signature_base64 = optional_body_auth_proof_string(value, "signature_base64")?;
+    let witness_base64 = optional_body_auth_proof_string(value, "witness_base64")?;
     let proof = match (signature_base64, witness_base64) {
         (Some(signature), None) => app_auth::CanonicalRequestBodyProof::SignatureBase64(signature),
         (None, Some(witness)) => app_auth::CanonicalRequestBodyProof::WitnessBase64(witness),
@@ -884,7 +845,7 @@ fn verify_device_attestation(
             )
         })?;
     let receipt_object = value_object_ref(receipt, "OFFLINE_INVALID_ATTESTATION_RECEIPT")?;
-    let signature = required_string(receipt, "signature_base64")?;
+    let signature = required_raw_string(receipt, "signature_base64")?;
     let mut unsigned_object = receipt_object.clone();
     unsigned_object.remove("signature_base64");
     let unsigned = Value::Object(unsigned_object);
@@ -932,7 +893,7 @@ fn verify_device_attestation(
     }
 
     let request_public_key = decode_note_public_key(&request.offline_public_key)?;
-    let public_key_base64 = required_string(receipt, "offline_public_key_base64")?;
+    let public_key_base64 = required_raw_string(receipt, "offline_public_key_base64")?;
     let public_key = decode_canonical_base64(
         public_key_base64,
         "offline_public_key_base64",
@@ -945,7 +906,7 @@ fn verify_device_attestation(
         ));
     }
 
-    let assertion_public_key_base64 = required_string(receipt, "assertion_public_key_base64")?;
+    let assertion_public_key_base64 = required_raw_string(receipt, "assertion_public_key_base64")?;
     let assertion_public_key = decode_canonical_base64(
         assertion_public_key_base64,
         "assertion_public_key_base64",
@@ -1182,7 +1143,7 @@ fn verify_lineage_state_with_key_policy(
     verify_json_signature(
         issuer.key_pair.public_key(),
         &auth_unsigned,
-        required_string(authorization, "issuer_signature_base64")?,
+        required_raw_string(authorization, "issuer_signature_base64")?,
         "offline_authorization",
         "OFFLINE_LINEAGE_AUTHORIZATION_SIGNATURE_INVALID",
         "Offline Notes lineage authorization signature is invalid.",
@@ -1202,7 +1163,7 @@ fn verify_lineage_state_with_key_policy(
     verify_json_signature(
         issuer.key_pair.public_key(),
         &state_unsigned,
-        required_string(state, "issuer_signature_base64")?,
+        required_raw_string(state, "issuer_signature_base64")?,
         "offline_lineage_state",
         "OFFLINE_LINEAGE_STATE_SIGNATURE_INVALID",
         "Offline Notes lineage state signature is invalid.",
@@ -1640,6 +1601,19 @@ fn required_string<'a>(value: &'a Value, field: &'static str) -> Result<&'a str,
         })
 }
 
+fn required_raw_string<'a>(value: &'a Value, field: &'static str) -> Result<&'a str, Error> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            validation_owned(
+                "OFFLINE_MISSING_FIELD",
+                format!("Offline Notes field `{field}` is required."),
+            )
+        })
+}
+
 fn required_note_commitment(value: &Value) -> Result<Hash, Error> {
     let raw = required_string(value, "note_commitment")?;
     if raw.len() != Hash::LENGTH * 2 || raw.starts_with("0x") || raw.starts_with("0X") {
@@ -1687,6 +1661,37 @@ fn optional_string<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+fn optional_body_auth_proof_string<'a>(
+    value: &'a Value,
+    field: &'static str,
+) -> Result<Option<&'a str>, Error> {
+    let Some(raw) = value.get(field) else {
+        return Ok(None);
+    };
+    let Some(raw) = raw.as_str() else {
+        return Err(Error::AppForbidden {
+            code: "OFFLINE_SIGNATURE_INVALID",
+            message: format!("Offline Notes body proof field `{field}` must be a string."),
+        });
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(Error::AppForbidden {
+            code: "OFFLINE_SIGNATURE_INVALID",
+            message: format!("Offline Notes body proof field `{field}` must not be empty."),
+        });
+    }
+    if raw != trimmed {
+        return Err(Error::AppForbidden {
+            code: "OFFLINE_SIGNATURE_INVALID",
+            message: format!(
+                "Offline Notes body proof field `{field}` must not include leading or trailing whitespace."
+            ),
+        });
+    }
+    Ok(Some(raw))
 }
 
 fn parse_amount(raw: &str, field: &'static str) -> Result<Numeric, Error> {
@@ -1870,8 +1875,7 @@ fn verify_json_signature(
 ) -> Result<(), Error> {
     let bytes =
         json::to_vec(payload).map_err(|source| Error::SerializationFailure { context, source })?;
-    let signature_bytes = BASE64_STANDARD
-        .decode(signature_base64)
+    let signature_bytes = decode_canonical_base64(signature_base64, "signature_base64", code)
         .map_err(|_| validation(code, message))?;
     let signature = if matches!(public_key.try_algorithm(), Ok(Algorithm::Ed25519)) {
         checked_ed25519_signature_from_bytes(&signature_bytes)
@@ -1956,6 +1960,24 @@ mod tests {
     fn checked_signature(key_pair: &KeyPair, message: &[u8]) -> Signature {
         Signature::try_new(key_pair.private_key(), message)
             .expect("sign checked offline issuer fixture")
+    }
+
+    fn noncanonical_standard_base64_pad_bit_alias(canonical: &str) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+        let mut alias = canonical.as_bytes().to_vec();
+        let data_index = canonical
+            .strip_suffix("==")
+            .map(|_| canonical.len() - 3)
+            .or_else(|| canonical.strip_suffix('=').map(|_| canonical.len() - 2))
+            .expect("canonical fixture must include padding");
+        let value = ALPHABET
+            .iter()
+            .position(|byte| *byte == alias[data_index])
+            .expect("canonical fixture must use the standard base64 alphabet");
+        alias[data_index] = ALPHABET[value | 0x01];
+        String::from_utf8(alias).expect("base64 alias remains ASCII")
     }
 
     fn sample_issuer() -> (OfflineIssuerRuntime, KeyPair) {
@@ -2280,6 +2302,43 @@ mod tests {
     }
 
     #[test]
+    fn revocation_bundle_rejects_noncanonical_issuer_signature_base64() {
+        let (issuer, _) = sample_issuer();
+        let bundle = build_revocation_bundle(&issuer, NOW_MS).expect("revocation bundle");
+        let mut unsigned = value_object(bundle).expect("bundle object");
+        let signature = unsigned
+            .remove("issuer_signature_base64")
+            .and_then(|value| value.as_str().map(ToOwned::to_owned))
+            .expect("signature");
+
+        for (label, invalid) in [
+            ("surrounding whitespace", format!(" {signature}")),
+            (
+                "missing padding",
+                signature.trim_end_matches('=').to_string(),
+            ),
+            (
+                "nonzero pad bits",
+                noncanonical_standard_base64_pad_bit_alias(&signature),
+            ),
+        ] {
+            assert_ne!(invalid, signature, "{label} fixture must be noncanonical");
+            assert_eq!(
+                validation_code(verify_json_signature(
+                    issuer.key_pair.public_key(),
+                    &Value::Object(unsigned.clone()),
+                    &invalid,
+                    "offline_revocation_bundle_test",
+                    "OFFLINE_REVOCATION_SIGNATURE_INVALID",
+                    "invalid revocation signature",
+                )),
+                "OFFLINE_REVOCATION_SIGNATURE_INVALID",
+                "{label} must fail closed"
+            );
+        }
+    }
+
+    #[test]
     fn policy_snapshot_normalizes_amounts_and_rejects_empty_revocation_registers() {
         let payload = json_object(vec![
             (
@@ -2362,6 +2421,22 @@ mod tests {
             string_value(BASE64_STANDARD.encode(signature.payload())),
         );
         Value::Object(map)
+    }
+
+    fn resign_attestation_receipt(verifier: &KeyPair, receipt: &mut Value) {
+        let Value::Object(map) = receipt else {
+            panic!("expected attestation receipt object");
+        };
+        map.remove("signature_base64");
+        let unsigned = Value::Object(map.clone());
+        let signature = {
+            let bytes = json::to_vec(&unsigned).expect("receipt json");
+            checked_signature(verifier, &bytes)
+        };
+        map.insert(
+            "signature_base64".to_string(),
+            string_value(BASE64_STANDARD.encode(signature.payload())),
+        );
     }
 
     fn insert_field(value: &mut Value, field: &str, field_value: Value) {
@@ -2667,6 +2742,62 @@ mod tests {
     }
 
     #[test]
+    fn attestation_receipt_rejects_non_exact_base64_fields() {
+        let (issuer, verifier) = sample_issuer();
+
+        let mut signature_request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        let receipt = signature_request
+            .device_binding
+            .get_mut("attestation_receipt")
+            .expect("attestation receipt");
+        let signature = required_raw_string(receipt, "signature_base64")
+            .expect("receipt signature")
+            .to_string();
+        insert_field(
+            receipt,
+            "signature_base64",
+            string_value(format!(" {signature}")),
+        );
+        assert_eq!(
+            validation_code(verify_device_attestation(
+                &issuer,
+                &signature_request,
+                NOW_MS
+            )),
+            "OFFLINE_ATTESTATION_RECEIPT_INVALID",
+            "receipt signature_base64 must reject surrounding whitespace"
+        );
+
+        for (field, code) in [
+            (
+                "offline_public_key_base64",
+                "OFFLINE_INVALID_NOTE_PUBLIC_KEY",
+            ),
+            (
+                "assertion_public_key_base64",
+                "OFFLINE_INVALID_ASSERTION_PUBLIC_KEY",
+            ),
+        ] {
+            let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+            let receipt = request
+                .device_binding
+                .get_mut("attestation_receipt")
+                .expect("attestation receipt");
+            let original = required_raw_string(receipt, field)
+                .unwrap_or_else(|_| panic!("missing receipt field {field}"))
+                .to_string();
+            insert_field(receipt, field, string_value(format!(" {original}")));
+            resign_attestation_receipt(&verifier, receipt);
+
+            assert_eq!(
+                validation_code(verify_device_attestation(&issuer, &request, NOW_MS)),
+                code,
+                "receipt field {field} must reject surrounding whitespace"
+            );
+        }
+    }
+
+    #[test]
     fn body_auth_rejects_missing_and_ambiguous_proofs() {
         let _guard = crate::tests_runtime_handlers::app_auth_test_guard(Default::default());
         let (key_pair, account, account_literal) = signer_account(0x43);
@@ -2712,6 +2843,30 @@ mod tests {
             )),
             "OFFLINE_SIGNATURE_INVALID"
         );
+    }
+
+    #[test]
+    fn body_auth_rejects_non_exact_body_proof_fields() {
+        for (field, field_value) in [
+            ("signature_base64", string_value("\tAA==\n")),
+            ("witness_base64", string_value(" AA==")),
+            ("signature_base64", string_value("")),
+            ("witness_base64", Value::Null),
+            ("signature_base64", number_value(1)),
+        ] {
+            let value = json_object(vec![
+                ("account_id", string_value("account-1")),
+                ("timestamp_ms", number_value(NOW_MS)),
+                ("nonce", string_value("nonce-1")),
+                (field, field_value),
+            ]);
+
+            assert_eq!(
+                app_error_code(extract_body_auth(&value)),
+                "OFFLINE_SIGNATURE_INVALID",
+                "body proof field {field} must be exact when present"
+            );
+        }
     }
 
     #[test]
@@ -3014,6 +3169,93 @@ mod tests {
             validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
             "OFFLINE_LINEAGE_STATE_HASH_MISMATCH"
         );
+    }
+
+    #[test]
+    fn issue_lineage_state_rejects_noncanonical_issuer_signature_base64() {
+        let (issuer, verifier) = sample_issuer();
+        let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        let lineage_id = "lineage-noncanonical-issuer-signature";
+        let state = build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
+            .expect("lineage state");
+        let signature = required_string(&state, "issuer_signature_base64")
+            .expect("lineage state signature")
+            .to_string();
+
+        for (label, invalid) in [
+            ("surrounding whitespace", format!(" {signature}")),
+            (
+                "missing padding",
+                signature.trim_end_matches('=').to_string(),
+            ),
+            (
+                "nonzero pad bits",
+                noncanonical_standard_base64_pad_bit_alias(&signature),
+            ),
+        ] {
+            assert_ne!(invalid, signature, "{label} fixture must be noncanonical");
+            let mut tampered_state = state.clone();
+            insert_field(
+                &mut tampered_state,
+                "issuer_signature_base64",
+                string_value(invalid),
+            );
+            insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
+            insert_field(&mut request.value, "lineage_state", tampered_state);
+
+            assert_eq!(
+                validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
+                "OFFLINE_LINEAGE_STATE_SIGNATURE_INVALID",
+                "{label} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn issue_lineage_authorization_rejects_noncanonical_issuer_signature_base64() {
+        let (issuer, verifier) = sample_issuer();
+        let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        let lineage_id = "lineage-noncanonical-authorization-signature";
+        let state = build_lineage_state(&issuer, &request, lineage_id, "12", "0", 3, NOW_MS, None)
+            .expect("lineage state");
+        let authorization = state
+            .get("authorization")
+            .expect("lineage authorization")
+            .clone();
+        let signature = required_string(&authorization, "issuer_signature_base64")
+            .expect("lineage authorization signature")
+            .to_string();
+
+        for (label, invalid) in [
+            ("surrounding whitespace", format!(" {signature}")),
+            (
+                "missing padding",
+                signature.trim_end_matches('=').to_string(),
+            ),
+            (
+                "nonzero pad bits",
+                noncanonical_standard_base64_pad_bit_alias(&signature),
+            ),
+        ] {
+            assert_ne!(invalid, signature, "{label} fixture must be noncanonical");
+            let mut tampered_state = state.clone();
+            let authorization = tampered_state
+                .get_mut("authorization")
+                .expect("lineage authorization");
+            insert_field(
+                authorization,
+                "issuer_signature_base64",
+                string_value(invalid),
+            );
+            insert_field(&mut request.value, "lineage_id", string_value(lineage_id));
+            insert_field(&mut request.value, "lineage_state", tampered_state);
+
+            assert_eq!(
+                validation_code(verify_lineage_state(&issuer, &request, lineage_id, NOW_MS)),
+                "OFFLINE_LINEAGE_AUTHORIZATION_SIGNATURE_INVALID",
+                "{label} must fail closed"
+            );
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! PQC (Dilithium3) deterministic batch verification tests.
 
-use iroha_crypto::{Algorithm, KeyPair, pqc_verify_batch_deterministic};
+use iroha_crypto::{Algorithm, KeyPair, pqc_verify_aggregate, pqc_verify_batch_deterministic};
 use pqcrypto_mldsa::mldsa65 as dilithium;
 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _, SecretKey as _};
 
@@ -88,5 +88,74 @@ fn pqc_batch_verify_rejects_all_zero_material_before_backend() {
         )
         .is_err(),
         "all-zero ML-DSA public key must fail before backend verification"
+    );
+}
+
+#[test]
+fn pqc_aggregate_wrapper_accepts_valid_and_rejects_adversarial_material() {
+    let kp = KeyPair::try_from_seed(
+        b"iroha:ml-dsa:pqc-aggregate-admission".to_vec(),
+        Algorithm::MlDsa,
+    )
+    .expect("fixture seed derives ML-DSA aggregate keypair");
+    let (_, public_bytes) = kp
+        .public_key()
+        .try_to_bytes()
+        .expect("fixture ML-DSA public key must be well-formed");
+    let public_key = public_bytes.to_vec();
+    let secret = dilithium::SecretKey::from_bytes(&kp.private_key().to_bytes().1)
+        .expect("seeded ML-DSA secret key");
+
+    let messages = [
+        b"iroha:ml-dsa:pqc-aggregate:0".to_vec(),
+        b"iroha:ml-dsa:pqc-aggregate:1".to_vec(),
+    ];
+    let signatures: Vec<Vec<u8>> = messages
+        .iter()
+        .map(|message| {
+            dilithium::detached_sign(message, &secret)
+                .as_bytes()
+                .to_vec()
+        })
+        .collect();
+    let public_keys = vec![public_key.clone(), public_key];
+
+    let message_refs: Vec<&[u8]> = messages.iter().map(Vec::as_slice).collect();
+    let signature_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+    let public_key_refs: Vec<&[u8]> = public_keys.iter().map(Vec::as_slice).collect();
+
+    pqc_verify_aggregate(&message_refs, &signature_refs, &public_key_refs)
+        .expect("valid ML-DSA aggregate wrapper inputs verify");
+
+    let mut tampered_signature = signatures.clone();
+    tampered_signature[0][0] ^= 0x01;
+    let tampered_signature_refs: Vec<&[u8]> =
+        tampered_signature.iter().map(Vec::as_slice).collect();
+    assert!(
+        pqc_verify_aggregate(&message_refs, &tampered_signature_refs, &public_key_refs).is_err(),
+        "tampered ML-DSA signature must fail aggregate wrapper verification"
+    );
+
+    let mut all_zero_signature = signatures.clone();
+    all_zero_signature[1].fill(0);
+    let all_zero_signature_refs: Vec<&[u8]> =
+        all_zero_signature.iter().map(Vec::as_slice).collect();
+    assert!(
+        pqc_verify_aggregate(&message_refs, &all_zero_signature_refs, &public_key_refs).is_err(),
+        "all-zero ML-DSA signature must fail before backend verification"
+    );
+
+    let mut all_zero_public_key = public_keys.clone();
+    all_zero_public_key[0].fill(0);
+    let all_zero_public_key_refs: Vec<&[u8]> =
+        all_zero_public_key.iter().map(Vec::as_slice).collect();
+    assert!(
+        pqc_verify_aggregate(&message_refs, &signature_refs, &all_zero_public_key_refs).is_err(),
+        "all-zero ML-DSA public key must fail before backend verification"
+    );
+
+    assert!(
+        pqc_verify_aggregate(&message_refs[..1], &signature_refs, &public_key_refs).is_err(),
+        "mismatched aggregate wrapper input lengths must fail closed"
     );
 }

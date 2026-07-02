@@ -7,12 +7,29 @@ import {
   noritoEncodeInstruction,
   noritoDecodeInstruction,
   noritoEncodeMultisigProposeRequest,
+  noritoEncodeMultisigContractCallProposeRequest,
+  noritoEncodeMultisigContractCallApproveRequest,
 } from "../src/norito.js";
 import { __resetNativeStateForTests } from "../src/native.js";
 import { makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
 const ACCOUNT_ID = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+
+function canonicalSignatureBase64Fixture() {
+  return Buffer.alloc(64, 0x01).toString("base64");
+}
+
+function noncanonicalStandardBase64PadBitAlias(encoded) {
+  assert.equal(encoded.endsWith("=="), true);
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const chars = [...encoded];
+  const index = chars.length - 3;
+  const value = alphabet.indexOf(chars[index]);
+  assert.notEqual(value, -1);
+  chars[index] = alphabet[value ^ 0x01];
+  return chars.join("");
+}
 
 const REGISTER_DOMAIN = {
   Register: {
@@ -588,6 +605,55 @@ test("native multisig proposal DTO preserves native instruction frames without J
 
   const body = Buffer.from(noritoEncodeMultisigProposeRequest(request));
   assert.ok(body.length > 32);
+});
+
+baseTest("native multisig DTO encoders reject noncanonical signature_b64 text", () => {
+  const canonicalSignature = canonicalSignatureBase64Fixture();
+  const invalidSignatures = [
+    ` ${canonicalSignature} `,
+    canonicalSignature.replace(/=+$/u, ""),
+    noncanonicalStandardBase64PadBitAlias(canonicalSignature),
+  ];
+  for (const signature_b64 of invalidSignatures) {
+    assert.throws(
+      () =>
+        noritoEncodeMultisigProposeRequest({
+          multisig_account_alias: "cbdc@hbl.sbp",
+          signer_account_id: ACCOUNT_ID,
+          signature_b64,
+          instructions: [
+            {
+              Unregister: {
+                Domain: "wonderland.sora",
+              },
+            },
+          ],
+        }),
+      /exact standard-base64/,
+    );
+    assert.throws(
+      () =>
+        noritoEncodeMultisigContractCallProposeRequest({
+          multisig_account_alias: "cbdc@hbl.sbp",
+          signer_account_id: ACCOUNT_ID,
+          signature_b64,
+          contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+          entrypoint: "execute",
+          payload: { probe: true },
+        }),
+      /exact standard-base64/,
+    );
+    assert.throws(
+      () =>
+        noritoEncodeMultisigContractCallApproveRequest({
+          multisig_account_alias: "cbdc@hbl.sbp",
+          signer_account_id: ACCOUNT_ID,
+          signature_b64,
+          instructions_hash: "aa".repeat(32),
+        }),
+      /exact standard-base64/,
+    );
+  }
 });
 
 baseTest("noritoEncodeInstruction requires native binding for unsupported instruction JSON", () => {

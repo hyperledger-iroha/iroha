@@ -282,17 +282,34 @@ PUBLIC_LANE_ROUTE_CANARY_TEMPLATE_HASH_FIELDS_BY_DOMAIN = {
     ),
     SCCP_DOMAIN_TRON: (
         "evidence_hash",
-        "transaction_id",
-        "message_id",
         "call_data_sha256",
+        "message_id",
         "payload_hash",
         "statement_hash",
         "commitment_root",
         "finality_height",
         "finality_block_hash",
+        "transaction_id",
         "signature_sha256",
     ),
 }
+
+
+def _public_lane_route_canary_source_gate_hash_role_fields(
+    domain: Any,
+) -> tuple[str, ...]:
+    """Return route-canary hash roles reserved from source-gate audit hashes."""
+
+    return tuple(
+        field
+        for field in PUBLIC_LANE_ROUTE_CANARY_TEMPLATE_HASH_FIELDS_BY_DOMAIN.get(
+            domain,
+            ("evidence_hash",),
+        )
+        if field != "evidence_hash"
+    )
+
+
 PUBLIC_DOMAIN_LISTS = {
     "required_domains": (
         SCCP_CORE_REMOTE_DOMAINS,
@@ -1397,7 +1414,7 @@ def _decoded_public_blocker_text(value: str) -> str:
 def _decoded_sensitive_public_marker_text(value: str) -> str:
     return _decoded_public_blocker_text(value).translate(
         PUBLIC_SENSITIVE_MARKER_CONFUSABLES
-    ).lower()
+    ).casefold()
 
 
 def _decoded_public_blocker_text_issue(value: str) -> str | None:
@@ -1423,7 +1440,7 @@ def _decoded_public_nested_value_issue(value: str) -> str | None:
 
 
 def _canonical_public_blocker_key(value: str) -> str:
-    return _decoded_public_blocker_text(value).lower()
+    return _decoded_public_blocker_text(value).casefold()
 
 
 def _blocker_text_issue(blocker: Any) -> str | None:
@@ -1637,13 +1654,35 @@ def _source_material_template_hashes(profile: LaneProfile) -> dict[str, bytes]:
     return {}
 
 
+def _active_source_material_template_hash_values() -> tuple[bytes, ...]:
+    """Return built-in source-template hashes for all active launch lanes."""
+
+    module = _load_sibling_module("sccp_source_template_hashes.py")
+    return tuple(
+        template_hash
+        for _lane, _field, template_hash in (
+            module.sccp_active_source_template_component_hashes()
+        )
+    )
+
+
+def _source_material_template_hash_values(profile: LaneProfile) -> tuple[bytes, ...]:
+    """Return local and active-lane template hashes rejected for a lane."""
+
+    values = list(_source_material_template_hashes(profile).values())
+    for template_hash in _active_source_material_template_hash_values():
+        if template_hash not in values:
+            values.append(template_hash)
+    return tuple(values)
+
+
 def _reject_source_material_template_hashes(
     errors: list[str],
     profile: LaneProfile,
     record: dict[str, Any],
 ) -> None:
     template_hashes = _source_material_template_hashes(profile)
-    template_hash_values = tuple(template_hashes.values())
+    template_hash_values = _source_material_template_hash_values(profile)
     for field in template_hashes:
         raw = _hex_bytes(record.get(field), byte_length=32)
         if raw in template_hash_values:
@@ -1658,9 +1697,10 @@ def _reject_source_adapter_deployment_template_hashes(
     record: dict[str, Any],
 ) -> None:
     template_hashes = _source_material_template_hashes(profile)
-    for field, template_hash in template_hashes.items():
+    template_hash_values = _source_material_template_hash_values(profile)
+    for field in template_hashes:
         raw = _hex_bytes(record.get(field), byte_length=32)
-        if raw == template_hash:
+        if raw in template_hash_values:
             errors.append(
                 f"{field} must be deployed source-adapter evidence, "
                 "not built-in template material"
@@ -1669,7 +1709,7 @@ def _reject_source_adapter_deployment_template_hashes(
         raw = _hex_bytes(record.get(field), byte_length=32)
         if raw is None:
             continue
-        if any(raw == template_hash for template_hash in template_hashes.values()):
+        if raw in template_hash_values:
             errors.append(
                 f"{field} must be deployed source-adapter evidence, "
                 "not built-in template material"
@@ -1682,12 +1722,12 @@ def _reject_source_adapter_audit_template_hashes(
     record: dict[str, Any],
     fields: tuple[str, ...],
 ) -> None:
-    template_hashes = _source_material_template_hashes(profile)
+    template_hashes = _source_material_template_hash_values(profile)
     for field in fields:
         raw = _hex_bytes(record.get(field), byte_length=32)
         if raw is None:
             continue
-        if any(raw == template_hash for template_hash in template_hashes.values()):
+        if raw in template_hashes:
             errors.append(
                 f"{field} must be deployed audit evidence, "
                 "not built-in template material"
@@ -1702,7 +1742,7 @@ def _reject_source_material_template_byte_values(
     label: str,
 ) -> None:
     try:
-        template_hashes = tuple(_source_material_template_hashes(profile).values())
+        template_hashes = _source_material_template_hash_values(profile)
     except (
         argparse.ArgumentTypeError,
         AttributeError,
@@ -3161,7 +3201,7 @@ def route_allowlist_hash_for_lane_evidence(
     for label, value in evidence_hashes:
         if len(value) != 32 or not any(value):
             raise ValueError(f"{label} must be a non-zero 32-byte value")
-    template_hashes = tuple(_source_material_template_hashes(profile).values())
+    template_hashes = _source_material_template_hash_values(profile)
     for label, value in evidence_hashes:
         if value in template_hashes:
             raise ValueError(
@@ -3475,18 +3515,10 @@ def _source_adapter_gate_summary(
             route_canary_summary if isinstance(route_canary_summary, dict) else {}
         )
         # Source-inventory marker: source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id
-        for field in sorted(
-            PUBLIC_LANE_ROUTE_CANARY_FIELDS_BY_DOMAIN.get(
-                profile.domain,
-                PUBLIC_LANE_ROUTE_CANARY_COMMON_FIELDS,
-            )
+        # Source-inventory marker: source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.call_data_sha256
+        for field in _public_lane_route_canary_source_gate_hash_role_fields(
+            profile.domain
         ):
-            if field in {
-                "destination_binding_hash",
-                "evidence_hash",
-                "route_allowlist_hash",
-            }:
-                continue
             route_canary_value = route_canary_summary_map.get(field)
             if route_canary_value is None and route_record is not None:
                 comment_fields = [
@@ -6689,7 +6721,7 @@ def _check_route_canary_evidence(
         errors.append(
             "route canary evidence hash metadata must be a non-zero bytes32"
         )
-    elif evidence_hash in tuple(_source_material_template_hashes(profile).values()):
+    elif evidence_hash in _source_material_template_hash_values(profile):
         errors.append(
             "route canary evidence hash must be live evidence, "
             "not built-in template material"
@@ -7121,7 +7153,7 @@ def _source_material_template_hash_values_or_errors(
     """Return source-material template hashes or a bounded public blocker."""
 
     try:
-        return tuple(_source_material_template_hashes(profile).values()), []
+        return _source_material_template_hash_values(profile), []
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
         return (), [f"{label} template material validation failed"]
 
@@ -7353,6 +7385,15 @@ def _source_adapter_gate_release_metadata_blockers(
             ),
         ),
     ]
+    for field in _public_lane_route_canary_source_gate_hash_role_fields(
+        lane.get("domain")
+    ):
+        role_fields.append(
+            (
+                f"route_canary.{field}",
+                _hex_bytes(route_canary.get(field), byte_length=32),
+            )
+        )
     role_fields.extend(
         (
             f"audit_hashes.{field}",
@@ -8671,7 +8712,7 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
         return fallback
     if _decoded_public_blocker_text_issue(text) is not None:
         return fallback
-    normalized_text = _decoded_public_blocker_text(text).lower()
+    normalized_text = _decoded_public_blocker_text(text).casefold()
     if any(marker in normalized_text for marker in SENSITIVE_CLI_ERROR_MARKERS):
         return fallback
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):

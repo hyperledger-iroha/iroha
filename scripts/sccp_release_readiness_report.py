@@ -2138,6 +2138,7 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "-m pytest -q pytests/scripts/check_sccp_production_corridor_test.py",
         "pytests/scripts/sccp_release_bundle_test.py",
         "pytests/scripts/sccp_release_readiness_report_test.py",
+        "pytests/scripts/sccp_source_template_hashes_test.py",
         "pytests/scripts/sccp_all_lanes_evidence_test.py",
         "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
         "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
@@ -3350,7 +3351,7 @@ def _source_adapter_gate_template_hashes(domain: Any) -> tuple[bytes, ...]:
     profile = all_lanes.LANE_PROFILES.get(domain)
     if profile is None:
         return ()
-    return tuple(all_lanes._source_material_template_hashes(profile).values())
+    return all_lanes._source_material_template_hash_values(profile)
 
 
 def _source_adapter_gate_template_hashes_or_errors(
@@ -3889,6 +3890,27 @@ def _safe_public_key_sort_key(value: object) -> tuple[int, str]:
     if isinstance(value, str):
         return (0, value)
     return (1, type(value).__name__)
+
+
+def _public_mapping_string_keys(payload: dict[Any, Any]) -> set[str]:
+    """Return copied public mapping keys that are exactly strings."""
+
+    return {key for key in payload if isinstance(key, str)}
+
+
+def _public_mapping_has_string_key(payload: dict[Any, Any], field: str) -> bool:
+    return field in _public_mapping_string_keys(payload)
+
+
+def _public_mapping_get_string_key(
+    payload: dict[Any, Any],
+    field: str,
+    default: Any = None,
+) -> Any:
+    for key, value in payload.items():
+        if isinstance(key, str) and key == field:
+            return value
+    return default
 
 
 SENSITIVE_PUBLIC_FIELD_NAME_MARKERS = (
@@ -7016,7 +7038,7 @@ def _active_launch_scoped_blocker(
     prefix_unscoped: bool,
 ) -> str | None:
     blocker_key = _canonical_public_blocker_key(blocker)
-    if blocker_key.startswith(prefix.lower()):
+    if blocker_key.startswith(prefix.casefold()):
         return blocker
     if blocker_key.startswith("domain "):
         return None
@@ -7247,7 +7269,7 @@ def _decoded_public_blocker_text(value: str) -> str:
 def _decoded_sensitive_public_marker_text(value: str) -> str:
     return _decoded_public_blocker_text(value).translate(
         PUBLIC_SENSITIVE_MARKER_CONFUSABLES
-    ).lower()
+    ).casefold()
 
 
 def _decoded_public_blocker_text_issue(value: str) -> str | None:
@@ -7262,7 +7284,7 @@ def _decoded_public_blocker_text_issue(value: str) -> str | None:
 
 
 def _canonical_public_blocker_key(value: str) -> str:
-    return _decoded_public_blocker_text(value).lower()
+    return _decoded_public_blocker_text(value).casefold()
 
 
 def _active_launch_blocker_mentions(blocker: str, tokens: tuple[str, ...]) -> bool:
@@ -10759,6 +10781,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping; normalization is only used to classify malformed summary-shaped lines.",
             "- TRX `UnitTestResult` outcome values must be present and literal `Passed`; missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence.",
             "- Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`; truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence.",
+            "- TRX XML metadata percent decoding is bounded and fail-closed: sensitive metadata hidden behind nested percent encoding and values still percent-decodable after eight rounds remain forged evidence.",
             "- Direct `.NET` TRX XML section children must stay canonical: `Results` contains only direct `UnitTestResult` rows whose rows are leaf elements, `TestDefinitions` contains only direct `UnitTest` definitions, each `UnitTest` contains only direct leaf `Execution` and `TestMethod` children, and extra or nested XML children remain forged evidence.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
             f"- {SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE}",
@@ -10773,10 +10796,10 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
             "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
-            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, raw publish HTTP-error preservation, browser-prover sidecar/reference duplicate-or-malformed-alias rejection, accessor-backed scalar alias suppression, handoff-placeholder, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, raw publish HTTP-error preservation, public-DNS BSC RPC, Torii, CLI/runtime traversal-safe browser-module URL rejection, browser-prover sidecar/reference duplicate-or-malformed-alias rejection, accessor-backed scalar alias suppression, handoff-placeholder, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, duplicate-alias, accessor-backed alias suppression, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
-            "- SCCP TON route-manifest CLI source inventory must pin redacted duplicate-option rejection, explicit option-value requirements, valued-help rejection, non-empty path preflight, unknown-command and unknown-option rejection, redacted unexpected positional arguments, exact publish booleans, submit-only option rejection, gas metadata preflight before manifest reads, canonical I105 authorities, submit metadata preflight before private-key lookup, bounded private-key env names, HTTPS-or-loopback Torii URLs, output path collision rejection, and string-only nanoTON manifest ingestion before governed TAIRA TON XOR route-manifest artifacts can satisfy production readiness.",
-            "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
+            "- SCCP TON route-manifest CLI source inventory must pin redacted duplicate-option rejection, explicit option-value requirements, valued-help rejection, exact burn-record VK names, non-empty input/output path preflight, unknown-command and unknown-option rejection, redacted unexpected positional arguments, exact publish booleans, submit-only option rejection, gas metadata preflight before manifest reads, canonical I105 authorities, submit metadata preflight before private-key lookup, bounded private-key env names, public-DNS HTTPS-or-loopback Torii URLs, top-level and post-deploy public DNS explorer plus traversal-safe browser-module URL validation, output path collision rejection, and exact string-only nanoTON decimal manifest ingestion before governed TAIRA TON XOR route-manifest artifacts can satisfy production readiness.",
+            "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, post-deploy anchor rejection, and malformed/non-empty post-deploy blocker-list rejection before runtime config evidence can satisfy production readiness.",
             "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
             "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, non-string section-key, not-ready nested schema, hash/flag-coherence, and route-canary proof-context/hash-role/common/truth-semantic blockers before all-lanes evidence can satisfy production readiness.",
             "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
@@ -10799,7 +10822,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP Ethereum source-event context source inventory must pin receipt-proof evidence guards that bind source-event logs to receipt transaction hash, block hash, and block number before source-event evidence is accepted.",
             "- SCCP Ethereum source-event evidence-mode source inventory must pin receipt-proof evidence guards that require source-bridge validation or an explicit receipt-only mode before receipt proof summaries can be emitted.",
             "- SCCP Ethereum source-event zero-digest source inventory must pin receipt-proof evidence guards that reject all-zero source-event digests before source-event evidence can be accepted.",
-            "- SCCP Ethereum receipt RPC duplicate-JSON source inventory must pin evidence-script guards that reject duplicate JSON-RPC result or receipt keys and redact receipt RPC transport/error details before receipt proof evidence can be parsed.",
+            "- SCCP Ethereum receipt RPC duplicate-JSON source inventory must pin evidence-script guards that reject duplicate JSON-RPC result or receipt keys, reject unsafe receipt RPC URLs, and redact receipt RPC transport/error details before receipt proof evidence can be parsed.",
             "- SCCP Ethereum block receipt transaction-hash source inventory must pin evidence and SDK guards that reject duplicate transaction hashes in block receipt lists before receipt trie proofs can be built.",
             "- SCCP Ethereum JavaScript receipt-admission source inventory must pin source/dist guards for matching block receipts, beacon finality, typed-receipt rejection, and immutable prover-callback evidence before browser local proving can run.",
             "- SCCP Ethereum SDK receipt-metadata source inventory must pin public SDK guards for block-receipt metadata binding and typed-receipt rejection before receipt proof builders can run.",
@@ -10810,15 +10833,15 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP Ethereum sync-committee roster source inventory must pin exact 512-authority mainnet rosters, unit validator weights, 342-participant quorum fixtures, and 81,925-byte next-sync-committee payload vectors across public SDKs before local finality evidence can be accepted.",
             "- SCCP Ethereum source-bridge config source inventory must pin bridge-address/network/code-hash config hashing, source-bridge network-id/code-hash role-reuse rejection, and negative config-drift tests.",
             "- SCCP Ethereum EVM source-adapter deployment source inventory must pin the active deployment gate, source-bridge network/config binding, ETH/BSC deployment helper coverage, and negative drift tests.",
-            "- SCCP source-material template rejection source inventory must pin ETH, BSC, Solana, TON, and TRON evidence-script guards, aggregate all-lanes copied-evidence guards, strict release-bundle public JSON guards, and negative tests that reject built-in template verifier hashes before source material can satisfy production readiness.",
-            "- SCCP source-material role validation source inventory must pin ETH, BSC, Solana, TON, and TRON zero-hash, role-reuse, canonical adapter-verifier, full-light-client audit role-separation, descriptor control-field drift, TRON source-call contract/owner role-separation guards, C#/.NET ETH/BSC source-material vectors, and redacted all-lanes-TOML/source validator/source-record/source-gate/TON-live-accountStates/address/code-BoC/TON-destination-code-BoC/TRON-live-API/metadata/full-TOML/TRON-witness-JSON blockers before source material can satisfy production readiness.",
+            "- SCCP source-material template rejection source inventory must pin the shared active-template denylist, ETH, BSC, Solana, TON, and TRON evidence-script guards, Solana/TON audit-hash guards, aggregate all-lanes direct and copied-evidence guards, strict release-bundle public JSON guards, and negative tests that reject built-in same-lane and foreign-lane template verifier hashes before source material can satisfy production readiness.",
+            "- SCCP source-material role validation source inventory must pin ETH, BSC, Solana, TON, and TRON zero-hash, role-reuse, canonical adapter-verifier, full-light-client audit role-separation, descriptor control-field drift, TRON source-call contract/owner role-separation guards, C#/.NET ETH/BSC source-material vectors, and redacted all-lanes-TOML/source validator/source-record/source-gate/EVM-live-RPC-url/Solana-live-RPC-url/TON-live-API-url/accountStates/address/code-BoC/TON-destination-code-BoC/TRON-live-node-url/API/metadata/full-TOML/TRON-witness-JSON blockers before source material can satisfy production readiness.",
             "- SCCP EVM contract smoke Ethereum mainnet network-id source inventory must pin ETH chain-id vectors, BSC rejection vectors, and accepted-event network-id assertions.",
             "- SCCP EVM contract smoke production-surface source inventory must pin verifier-code/key, destination-binding, domain-overflow, proof-shape, cross-deployment, and replay rejection smoke coverage.",
             "- SCCP Ethereum core range/finality binding source inventory must pin finality-height range binding in Core and negative outer-range replay tests.",
             "- SCCP Ethereum core message replay source inventory must pin durable pinned-record replay protection and negative replay/history tests.",
             "- SCCP Ethereum Torii pinned message proof source inventory must pin pinned message-proof extraction and negative unpinned-record serving tests.",
-            "- Ethereum mainnet live EVM source production source inventory must pin canonical live source RPC chain ids, ETH/BSC source-live lane coverage, finalized block tags, deployment receipt binding, redacted JSON-RPC diagnostics, route canary calldata, and proof tuple drift tests.",
-            "- Ethereum mainnet live EVM destination production source inventory must pin canonical live destination RPC chain ids, ETH/BSC destination-live lane coverage, finalized block tags, runtime bytecode hashes, redacted runtime bytecode parser diagnostics, and destination production TOML evidence before production readiness can pass.",
+            "- Ethereum mainnet live EVM source production source inventory must pin canonical live source RPC chain ids, ETH/BSC source-live lane coverage, public-DNS RPC URL admission, finalized block tags, deployment receipt binding, redacted JSON-RPC diagnostics, route canary calldata, and proof tuple drift tests.",
+            "- Ethereum mainnet live EVM destination production source inventory must pin canonical live destination RPC chain ids, ETH/BSC destination-live lane coverage, public-DNS RPC URL admission, finalized block tags, runtime bytecode hashes, redacted runtime bytecode parser diagnostics, and destination production TOML evidence before production readiness can pass.",
             "- SCCP Ethereum route-canary finalized receipt-block source inventory must pin finalized receipt-block binding, TOML evidence fields, all-lanes comments, runtime hashing, and negative drift tests.",
             "- SCCP Ethereum EVM block-tag metadata source inventory must pin finalized source/destination block-tag evidence and negative drift tests.",
             "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, canonical native EVM prover SDK-id rejection, padded-SDK adversarial tests, BSC proof-artifact remote-prover marker rejection, adversarial manifest coverage, and redacted native payload artifact-path diagnostics.",
@@ -10836,7 +10859,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
             "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
             "- SCCP unready transparent-proof source inventory must pin the diagnostic `allow_unready` toggle as config-owned, reject case-variant, split-token, and source-escaped environment override names on config-owned paths, and reject production-ready BSC/TRON route configs that force the unready toggle back on.",
-            "- SCCP TRON deploy operator boolean source inventory must pin malformed operator-boolean rejection before TRON deploy helper evidence can satisfy production readiness.",
+            "- SCCP TRON deploy operator boolean source inventory must pin malformed operator-boolean and public-DNS endpoint rejection before TRON deploy helper evidence can satisfy production readiness.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
     )
@@ -10988,7 +11011,7 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     markdown_scan_text = markdown_scan_text.replace(" -> ", " to ")
     if _decoded_public_blocker_text_issue(markdown_scan_text) is not None:
         return fallback
-    normalized_text = _decoded_public_blocker_text(text).lower()
+    normalized_text = _decoded_public_blocker_text(text).casefold()
     if any(marker in normalized_text for marker in SENSITIVE_CLI_ERROR_MARKERS):
         return fallback
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
@@ -11953,14 +11976,21 @@ def _public_source_inventory_errors(value: Any) -> list[str]:
 
     if required_gates:
         for gate in sorted(
-            set(value) - required_gates,
+            (
+                gate
+                for gate in value
+                if not isinstance(gate, str) or gate not in required_gates
+            ),
             key=_safe_public_key_sort_key,
         ):
             if _public_source_inventory_gate_error(gate) is None:
                 errors.append(
                     f"readiness report source_inventory contains unknown gate: {gate}"
                 )
-        for gate in sorted(required_gates - set(value)):
+        present_source_inventory_gates = {
+            gate for gate in value if isinstance(gate, str) and gate in required_gates
+        }
+        for gate in sorted(required_gates - present_source_inventory_gates):
             errors.append(
                 f"readiness report source_inventory missing required gate: {gate}"
             )
@@ -11979,7 +12009,8 @@ def _public_source_inventory_errors(value: Any) -> list[str]:
             (
                 field
                 for field in inventory
-                if field not in SOURCE_INVENTORY_PUBLIC_FIELDS
+                if not isinstance(field, str)
+                or field not in SOURCE_INVENTORY_PUBLIC_FIELDS
             ),
             key=_safe_public_key_sort_key,
         ):
@@ -11990,15 +12021,25 @@ def _public_source_inventory_errors(value: Any) -> list[str]:
                     "unknown",
                 )
             )
-        for field in sorted(SOURCE_INVENTORY_PUBLIC_FIELDS - set(inventory)):
+        present_inventory_fields = _public_mapping_string_keys(inventory)
+        for field in sorted(SOURCE_INVENTORY_PUBLIC_FIELDS - present_inventory_fields):
             errors.append(f"{inventory_label} missing field: {field}")
-        validation_status = inventory.get("validation_status")
-        if "validation_status" in inventory and validation_status not in {"passed", "blocked"}:
+        validation_status = _public_mapping_get_string_key(
+            inventory,
+            "validation_status",
+        )
+        if (
+            _public_mapping_has_string_key(inventory, "validation_status")
+            and validation_status not in {"passed", "blocked"}
+        ):
             errors.append(
                 f"{inventory_label} validation_status must be passed or blocked"
             )
-        validation_blockers = inventory.get("validation_blockers")
-        if "validation_blockers" in inventory:
+        validation_blockers = _public_mapping_get_string_key(
+            inventory,
+            "validation_blockers",
+        )
+        if _public_mapping_has_string_key(inventory, "validation_blockers"):
             if not isinstance(validation_blockers, list):
                 errors.append(
                     f"{inventory_label} validation_blockers must be a list of "
@@ -12895,21 +12936,12 @@ def _public_cryptographic_source_adapter_gate_hash_role_errors(
         ),
         ("destination_binding_hash", row.get("destination_binding_hash")),
         ("route_allowlist_hash", row.get("route_allowlist_hash")),
-        ("route_canary_evidence_hash", row.get("route_canary_evidence_hash")),
         # Source-inventory marker: public source_adapter_gate audit hashes must not reuse route_canary_message_id
-        ("route_canary_transaction_hash", row.get("route_canary_transaction_hash")),
-        (
-            "route_canary_receipt_block_hash",
-            row.get("route_canary_receipt_block_hash"),
-        ),
-        (
-            "route_canary_block_receipts_root",
-            row.get("route_canary_block_receipts_root"),
-        ),
-        ("route_canary_message_id", row.get("route_canary_message_id")),
-        ("route_canary_transaction_id", row.get("route_canary_transaction_id")),
-        ("route_canary_signature_sha256", row.get("route_canary_signature_sha256")),
     ]
+    fields.extend(
+        (field, row.get(field))
+        for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
+    )
     fields.extend(
         (f"source_adapter_gate_audit_hashes.{field}", value)
         for field, value in sorted(
@@ -12940,15 +12972,7 @@ def _public_cryptographic_route_canary_hash_role_errors(
 
     errors: list[str] = []
     seen: dict[str, str] = {}
-    for field in (
-        "route_canary_transaction_hash",
-        "route_canary_receipt_block_hash",
-        "route_canary_block_receipts_root",
-        "route_canary_message_id",
-        "route_canary_transaction_id",
-        "route_canary_signature_sha256",
-        "route_canary_evidence_hash",
-    ):
+    for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS:
         value = row.get(field)
         if not _is_nonzero_hex32(value):
             continue

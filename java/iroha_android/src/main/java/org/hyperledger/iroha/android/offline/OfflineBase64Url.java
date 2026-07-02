@@ -18,7 +18,11 @@ final class OfflineBase64Url {
         throw new IllegalArgumentException(field + " must be unpadded base64url");
       }
     }
-    return Base64.getUrlDecoder().decode(payload);
+    final byte[] decoded = Base64.getUrlDecoder().decode(payload);
+    if (!Base64.getUrlEncoder().withoutPadding().encodeToString(decoded).equals(payload)) {
+      throw new IllegalArgumentException(field + " must be canonical unpadded base64url");
+    }
+    return decoded;
   }
 
   private static boolean isBase64UrlCharacter(final char ch) {

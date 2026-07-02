@@ -5,6 +5,8 @@ use super::*;
 use crate::smartcontracts::isi::triggers::set::SetReadOnly;
 use crate::smartcontracts::isi::triggers::specialized::LoadedActionTrait;
 use crate::state::WorldReadOnly;
+#[cfg(test)]
+use crate::state::{StateBlock, StateReadOnly};
 use core::num::{NonZeroU64, NonZeroUsize};
 use iroha_data_model::block::BlockExecutionContextBundle;
 use iroha_data_model::consensus::{
@@ -503,6 +505,7 @@ fn collect_sccp_messages_for_active_proposal_routes<F>(
     tx_batch: &[AcceptedTransaction<'static>],
     routing_batch: &[RoutingDecision],
     nexus: &iroha_config::parameters::actual::Nexus,
+    proposal_height: u64,
     is_already_recorded: F,
 ) -> Result<Vec<crate::bridge::RecordedSccpMessage>>
 where
@@ -521,14 +524,226 @@ where
     Ok(
         crate::bridge::collect_new_sccp_messages_from_accepted_transactions_where(
             tx_batch,
-            |tx_index| {
-                let route = routing_batch[tx_index];
-                crate::state::nexus_active_lane_dataspace(route.lane_id, nexus)
-                    .is_some_and(|dataspace_id| dataspace_id == route.dataspace_id)
-            },
+            |tx_index| proposal_route_is_active(routing_batch[tx_index], nexus, proposal_height),
             is_already_recorded,
         ),
     )
+}
+
+fn proposal_route_is_active(
+    route: RoutingDecision,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    proposal_height: u64,
+) -> bool {
+    crate::state::nexus_active_lane_dataspace_at_height(route.lane_id, nexus, proposal_height)
+        .is_some_and(|dataspace_id| dataspace_id == route.dataspace_id)
+}
+
+#[cfg(test)]
+#[cfg(test)]
+fn collect_sccp_messages_for_committable_proposal_routes(
+    tx_batch: &[AcceptedTransaction<'static>],
+    routing_batch: &[RoutingDecision],
+    nexus: &iroha_config::parameters::actual::Nexus,
+    proposal_height: u64,
+    state: &State,
+    header: BlockHeader,
+) -> Result<Vec<crate::bridge::RecordedSccpMessage>> {
+    if tx_batch.len() != routing_batch.len() {
+        return Err(eyre!(
+            "proposal SCCP routing vector length mismatch: txs={} routes={}",
+            tx_batch.len(),
+            routing_batch.len()
+        ));
+    }
+    if !nexus.enabled {
+        return Ok(Vec::new());
+    }
+
+    let mut candidate_messages = Vec::with_capacity(tx_batch.len());
+    let mut has_candidate = false;
+    for (tx_index, tx) in tx_batch.iter().enumerate() {
+        if !proposal_route_is_active(routing_batch[tx_index], nexus, proposal_height) {
+            candidate_messages.push(None);
+            continue;
+        }
+        let messages = crate::bridge::collect_sccp_messages_from_accepted_transaction(tx_index, tx);
+        if messages.is_empty() {
+            candidate_messages.push(None);
+        } else {
+            has_candidate = true;
+            candidate_messages.push(Some(messages));
+        }
+    }
+    if !has_candidate {
+        return Ok(Vec::new());
+    }
+
+    let mut preflight_block = state.block(header);
+    let accounts = StateReadOnly::accounts_snapshot(&preflight_block);
+    let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::with_capacity(
+        preflight_block.pipeline.cache_size,
+    );
+    Ok(collect_sccp_messages_after_ordered_preflight(
+        tx_batch,
+        routing_batch,
+        candidate_messages,
+        |_, transaction, route| {
+            let Some(tx) = signed_transaction_for_proposal_preflight(transaction) else {
+                return Ok(false);
+            };
+            preflight_proposal_transaction(
+                &mut preflight_block,
+                tx,
+                transaction.hash_as_entrypoint(),
+                transaction.encoded_len(),
+                route,
+                &accounts,
+                &mut ivm_cache,
+            )?;
+            Ok(true)
+        },
+    ))
+}
+
+#[cfg(test)]
+#[cfg(test)]
+fn collect_sccp_messages_after_ordered_preflight<F>(
+    tx_batch: &[AcceptedTransaction<'static>],
+    routing_batch: &[RoutingDecision],
+    candidate_messages: Vec<Option<Vec<crate::bridge::RecordedSccpMessage>>>,
+    mut preflight_transaction: F,
+) -> Vec<crate::bridge::RecordedSccpMessage>
+where
+    F: FnMut(
+        usize,
+        &AcceptedTransaction<'static>,
+        RoutingDecision,
+    ) -> std::result::Result<bool, String>,
+{
+    let mut committable_messages = Vec::new();
+    for (tx_index, ((transaction, route), maybe_messages)) in tx_batch
+        .iter()
+        .zip(routing_batch.iter().copied())
+        .zip(candidate_messages.into_iter())
+        .enumerate()
+    {
+        let candidate_count = maybe_messages.as_ref().map_or(0, Vec::len);
+        match preflight_transaction(tx_index, transaction, route) {
+            Ok(true) => {
+                if let Some(messages) = maybe_messages {
+                    committable_messages.extend(messages);
+                }
+            }
+            Ok(false) => {}
+            Err(reason) => {
+                if candidate_count > 0 {
+                    let entrypoint_hash = transaction.hash_as_entrypoint();
+                    debug!(
+                        tx_index,
+                        tx = %entrypoint_hash,
+                        lane = route.lane_id.as_u32(),
+                        dataspace = route.dataspace_id.as_u64(),
+                        reason,
+                        "excluding SCCP records from proposal commitment root after preflight rejection"
+                    );
+                }
+            }
+        }
+    }
+    committable_messages
+}
+
+#[cfg(test)]
+#[cfg(test)]
+fn signed_transaction_for_proposal_preflight<'a>(
+    transaction: &'a AcceptedTransaction<'_>,
+) -> Option<&'a SignedTransaction> {
+    match transaction.entrypoint() {
+        iroha_data_model::transaction::TransactionEntrypoint::External(tx) => Some(tx),
+        iroha_data_model::transaction::TransactionEntrypoint::SealedReveal(reveal) => {
+            Some(reveal.signed_transaction())
+        }
+        iroha_data_model::transaction::TransactionEntrypoint::SealedCommitment(_)
+        | iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(_)
+        | iroha_data_model::transaction::TransactionEntrypoint::Time(_) => None,
+    }
+}
+
+#[cfg(test)]
+#[cfg(test)]
+fn preflight_proposal_transaction(
+    state_block: &mut StateBlock<'_>,
+    tx: &SignedTransaction,
+    entrypoint_hash: HashOf<iroha_data_model::transaction::TransactionEntrypoint>,
+    encoded_len: usize,
+    routing: RoutingDecision,
+    accounts: &Arc<Vec<AccountId>>,
+    ivm_cache: &mut crate::smartcontracts::ivm::cache::IvmCache,
+) -> std::result::Result<(), String> {
+    let streaming_meta =
+        crate::pipeline::overlay::resolve_streaming_metadata(&*state_block, tx.authority());
+    let prepared =
+        crate::pipeline::overlay::build_prepared_overlay_for_transaction_with_accounts_zk(
+            tx,
+            Arc::clone(accounts),
+            &*state_block,
+            state_block.zk.halo2.enabled || state_block.zk.stark.enabled,
+            &state_block._curr_block,
+            streaming_meta,
+            ivm_cache,
+            state_block.pipeline.dynamic_prepass,
+        )
+        .map_err(|err| err.to_string())?;
+    let overlay = prepared.overlay;
+
+    let max_instrs = state_block.pipeline.overlay_max_instructions;
+    if max_instrs > 0 && overlay.instruction_count() > max_instrs {
+        return Err(format!(
+            "overlay exceeds max instructions: {} > {max_instrs}",
+            overlay.instruction_count()
+        ));
+    }
+    let max_bytes = state_block.pipeline.overlay_max_bytes;
+    let byte_size = overlay.byte_size() as u64;
+    if max_bytes > 0 && byte_size > max_bytes {
+        return Err(format!(
+            "overlay exceeds max bytes: {byte_size} > {max_bytes}"
+        ));
+    }
+
+    let authority = tx.authority().clone();
+    let chunk_size = state_block.pipeline.overlay_chunk_instructions.max(1);
+    let mut state_tx = state_block.transaction();
+    state_tx.current_lane_id = Some(routing.lane_id);
+    state_tx.current_dataspace_id = Some(routing.dataspace_id);
+    state_tx.world.current_dataspace_id = Some(routing.dataspace_id);
+    state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(entrypoint_hash));
+    state_tx.current_tx_hash = Some(tx.hash());
+    let admission = StateBlock::validate_stateful_admission(tx, &mut state_tx, Some(routing))
+        .map_err(|reason| format!("{reason:?}"))?;
+    let executor = state_tx.world.executor.clone();
+    crate::executor::configure_executor_fuel_budget(&executor, &mut state_tx, tx.metadata())
+        .map_err(|err| format!("{err:?}"))?;
+    overlay
+        .apply_with_chunk(&mut state_tx, &authority, chunk_size)
+        .map_err(|err| format!("{err:?}"))?;
+    crate::executor::charge_fees_for_applied_overlay_with_encoded_len(
+        &mut state_tx,
+        &authority,
+        tx,
+        &overlay,
+        encoded_len,
+    )
+    .map_err(|err| format!("{err:?}"))?;
+    state_tx
+        .execute_data_triggers_dfs(&authority)
+        .map_err(|err| format!("{err:?}"))?;
+    if let Some(seq) = admission.sequence_to_commit {
+        state_tx.world.tx_sequences.insert(admission.authority, seq);
+    }
+    state_tx.apply();
+    Ok(())
 }
 
 fn proposal_sccp_commitment_root_after_execution(
@@ -3393,16 +3608,6 @@ impl Actor {
                 let npos_effects =
                     self.build_npos_consensus_effects_for_proposal(proposal_height)?;
                 builder = builder.with_npos_consensus_effects(npos_effects);
-                let proposal_may_record_sccp_messages = {
-                    let world_view = self.state.world_view();
-                    !collect_sccp_messages_for_active_proposal_routes(
-                        &tx_batch,
-                        &routing_batch,
-                        &nexus,
-                        |key| world_view.sccp_outbound_messages().get(key).is_some(),
-                    )?
-                    .is_empty()
-                };
 
                 let receipt_plan = if nexus_enabled {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot_cached();
@@ -3752,6 +3957,17 @@ impl Actor {
                     ));
                 }
                 builder = builder.with_confidential_features(conf_features);
+                let proposal_may_record_sccp_messages = {
+                    let world_view = self.state.world_view();
+                    !collect_sccp_messages_for_active_proposal_routes(
+                        &tx_batch,
+                        &routing_batch,
+                        &nexus,
+                        proposal_height,
+                        |key| world_view.sccp_outbound_messages().get(key).is_some(),
+                    )?
+                    .is_empty()
+                };
                 let sccp_commitment_root = if proposal_may_record_sccp_messages {
                     let private_key = self.common_config.key_pair.private_key();
                     let initial_root = proposal_sccp_commitment_root_after_execution(
@@ -7582,7 +7798,9 @@ mod tests {
         ProposalBackpressure, age_starved_queue_allows_stale_pending_override,
         cached_slot_timeout_hysteresis_remaining, canonicalize_parallel_batch_by_key,
         canonicalize_proposal_batch, canonicalize_proposal_batch_with_plans,
-        collect_sccp_messages_for_active_proposal_routes, consensus_queue_backpressure,
+        collect_sccp_messages_after_ordered_preflight,
+        collect_sccp_messages_for_active_proposal_routes,
+        collect_sccp_messages_for_committable_proposal_routes, consensus_queue_backpressure,
         da_payload_budget, drain_aligned_batch, next_cached_slot_timeout_streak,
         refresh_proposal_routing_from_state, reorder_vec_by_indices, trim_batch_for_size_cap,
         trim_batch_for_size_cap_with_plans,
@@ -7652,8 +7870,18 @@ mod tests {
         let authority = AccountId::new(key_pair.public_key().clone());
         let payload =
             iroha_sccp::canonical_sccp_payload_bytes(&proposal_sccp_transfer_payload(nonce));
+        let mut bytecode = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: ivm::ivm_mode::ZK,
+            vector_length: 0,
+            max_cycles: 1,
+            abi_version: 1,
+        }
+        .encode();
+        bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         let executable = Executable::IvmProved(IvmProved {
-            bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+            bytecode: IvmBytecode::from_compiled(bytecode),
             overlay: vec![InstructionBox::from(
                 iroha_data_model::isi::bridge::RecordSccpMessage::new(payload),
             )]
@@ -7682,6 +7910,17 @@ mod tests {
         }
     }
 
+    fn proposal_test_header() -> iroha_data_model::block::BlockHeader {
+        iroha_data_model::block::BlockHeader::new(
+            nonzero_ext::nonzero!(1_u64),
+            None,
+            None,
+            None,
+            1,
+            0,
+        )
+    }
+
     #[test]
     fn proposal_sccp_collection_ignores_records_when_nexus_disabled() {
         let state = blank_state();
@@ -7690,7 +7929,7 @@ mod tests {
         let nexus = state.nexus_snapshot();
 
         let messages =
-            collect_sccp_messages_for_active_proposal_routes(&[tx], &routing, &nexus, |_| false)
+            collect_sccp_messages_for_active_proposal_routes(&[tx], &routing, &nexus, 1, |_| false)
                 .expect("disabled Nexus should not be a routing error");
 
         assert!(
@@ -7708,7 +7947,7 @@ mod tests {
         let nexus = state.nexus_snapshot();
 
         let messages =
-            collect_sccp_messages_for_active_proposal_routes(&[tx], &routing, &nexus, |_| false)
+            collect_sccp_messages_for_active_proposal_routes(&[tx], &routing, &nexus, 1, |_| false)
                 .expect("active default route should collect");
 
         assert_eq!(messages.len(), 1);
@@ -7732,6 +7971,7 @@ mod tests {
             &[skipped, included],
             &routing,
             &nexus,
+            1,
             |_| false,
         )
         .expect("inactive routed entries should be filtered, not fatal");
@@ -7745,14 +7985,193 @@ mod tests {
     }
 
     #[test]
+    fn proposal_sccp_collection_filters_future_created_autoscale_route() {
+        let mut state = blank_state();
+        let future_lane = LaneId::new(1);
+        let mut elastic = LaneConfig {
+            id: future_lane,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            alias: "elastic-lane-1".to_string(),
+            ..LaneConfig::default()
+        };
+        elastic
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
+        elastic
+            .metadata
+            .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "7".to_string());
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![LaneConfig::default(), elastic],
+        )
+        .expect("future autoscale lane catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+            nexus.autoscale.max_lanes = NonZeroU32::new(8).expect("nonzero max lanes");
+            nexus.lane_catalog = lane_catalog;
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+        let routing = vec![RoutingDecision::new(future_lane, DataSpaceId::UNIVERSAL)];
+        let nexus = state.nexus_snapshot();
+
+        let messages_before_creation = collect_sccp_messages_for_active_proposal_routes(
+            &[accepted_sccp_record_transaction(6)],
+            &routing,
+            &nexus,
+            6,
+            |_| false,
+        )
+        .expect("future-created autoscale route should be filtered before creation height");
+        assert!(
+            messages_before_creation.is_empty(),
+            "proposal roots must not commit SCCP records before the autoscale lane creation height"
+        );
+
+        let messages_at_creation = collect_sccp_messages_for_active_proposal_routes(
+            &[accepted_sccp_record_transaction(7)],
+            &routing,
+            &nexus,
+            7,
+            |_| false,
+        )
+        .expect("autoscale route should collect at creation height");
+        assert_eq!(messages_at_creation.len(), 1);
+        assert_eq!(messages_at_creation[0].tx_index, 0);
+    }
+
+    #[test]
+    fn proposal_sccp_ordered_preflight_replays_regular_transaction_before_candidate() {
+        let regular = accepted_log_transaction("regular-before-sccp");
+        let sccp = accepted_sccp_record_transaction(9);
+        let tx_batch = vec![regular, sccp];
+        let routing = vec![RoutingDecision::default(), RoutingDecision::default()];
+        let sccp_messages =
+            crate::bridge::collect_sccp_messages_from_accepted_transaction(1, &tx_batch[1]);
+        assert_eq!(sccp_messages.len(), 1);
+        let candidate_messages = vec![None, Some(sccp_messages)];
+        let mut preflight_order = Vec::new();
+        let mut prior_regular_applied = false;
+
+        let committable = collect_sccp_messages_after_ordered_preflight(
+            &tx_batch,
+            &routing,
+            candidate_messages,
+            |tx_index, _, _| {
+                preflight_order.push(tx_index);
+                match tx_index {
+                    0 => {
+                        prior_regular_applied = true;
+                        Ok(true)
+                    }
+                    1 if prior_regular_applied => Ok(true),
+                    1 => Err("regular transaction state was not replayed first".to_owned()),
+                    _ => Ok(true),
+                }
+            },
+        );
+
+        assert_eq!(
+            preflight_order,
+            vec![0, 1],
+            "proposal SCCP preflight must replay regular signed entrypoints before later SCCP candidates"
+        );
+        assert_eq!(committable.len(), 1);
+        assert_eq!(
+            committable[0].tx_index, 1,
+            "ordered preflight must preserve the canonical SCCP transaction index"
+        );
+    }
+
+    #[test]
+    fn proposal_sccp_ordered_preflight_does_not_apply_failed_regular_transaction() {
+        let regular = accepted_log_transaction("failed-regular-before-sccp");
+        let sccp = accepted_sccp_record_transaction(10);
+        let tx_batch = vec![regular, sccp];
+        let routing = vec![RoutingDecision::default(), RoutingDecision::default()];
+        let sccp_messages =
+            crate::bridge::collect_sccp_messages_from_accepted_transaction(1, &tx_batch[1]);
+        assert_eq!(sccp_messages.len(), 1);
+        let candidate_messages = vec![None, Some(sccp_messages)];
+        let mut preflight_order = Vec::new();
+        let mut prior_regular_applied = false;
+
+        let committable = collect_sccp_messages_after_ordered_preflight(
+            &tx_batch,
+            &routing,
+            candidate_messages,
+            |tx_index, _, _| {
+                preflight_order.push(tx_index);
+                match tx_index {
+                    0 => Err("regular transaction failed".to_owned()),
+                    1 if prior_regular_applied => Ok(true),
+                    1 => Err("regular transaction state was correctly absent".to_owned()),
+                    _ => {
+                        prior_regular_applied = true;
+                        Ok(true)
+                    }
+                }
+            },
+        );
+
+        assert_eq!(
+            preflight_order,
+            vec![0, 1],
+            "failed regular entrypoints must still be evaluated before later SCCP candidates"
+        );
+        assert!(
+            committable.is_empty(),
+            "SCCP candidate must be excluded when it depends on a prior regular transaction that failed preflight"
+        );
+    }
+
+    #[test]
+    fn proposal_sccp_preflight_excludes_ivm_proved_overlay_build_failure() {
+        let mut state = blank_state();
+        state.nexus.get_mut().enabled = true;
+        let tx = accepted_sccp_record_transaction(8);
+        let routing = vec![RoutingDecision::default()];
+        let nexus = state.nexus_snapshot();
+
+        let raw_messages = collect_sccp_messages_for_active_proposal_routes(
+            &[tx.clone()],
+            &routing,
+            &nexus,
+            1,
+            |_| false,
+        )
+        .expect("raw proposal SCCP collection should still see the record");
+        assert_eq!(raw_messages.len(), 1);
+
+        let committable = collect_sccp_messages_for_committable_proposal_routes(
+            &[tx],
+            &routing,
+            &nexus,
+            1,
+            &state,
+            proposal_test_header(),
+        )
+        .expect("failed SCCP preflight should filter, not abort proposal assembly");
+
+        assert!(
+            committable.is_empty(),
+            "SCCP records from a failed IvmProved preflight must not be signed into the root"
+        );
+    }
+
+    #[test]
     fn proposal_sccp_collection_rejects_routing_vector_length_drift() {
         let mut state = blank_state();
         state.nexus.get_mut().enabled = true;
         let tx = accepted_sccp_record_transaction(5);
         let nexus = state.nexus_snapshot();
 
-        let err = collect_sccp_messages_for_active_proposal_routes(&[tx], &[], &nexus, |_| false)
-            .expect_err("routing length drift must reject before root computation");
+        let err =
+            collect_sccp_messages_for_active_proposal_routes(&[tx], &[], &nexus, 1, |_| false)
+                .expect_err("routing length drift must reject before root computation");
 
         assert!(
             err.to_string()

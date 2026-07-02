@@ -9,7 +9,7 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use iroha_crypto::{Algorithm, Hash, PublicKey};
+use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 use iroha_data_model::{
     account::AccountId,
     asset::{
@@ -62,6 +62,17 @@ fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExec
     let message = message.into();
     let boxed: Box<str> = format!("{OFFLINE_REJECTION_REASON_PREFIX}{label}:{message}").into();
     InstructionExecutionError::InvariantViolation(boxed)
+}
+
+fn verify_signature_for_signer(
+    signature: &Signature,
+    signer: &PublicKey,
+    payload: &[u8],
+) -> Result<(), iroha_crypto::Error> {
+    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    }
+    signature.verify(signer, payload)
 }
 
 fn resolve_offline_escrow_account(
@@ -2779,16 +2790,15 @@ pub mod isi {
                 "offline note issuer account must be single-signature",
             )
         })?;
-        certificate
-            .issuer_signature
-            .verify(issuer_key, &payload)
-            .map_err(|_| {
+        verify_signature_for_signer(&certificate.issuer_signature, issuer_key, &payload).map_err(
+            |_| {
                 labeled_invariant(
                     "invalid_issuer_cert",
                     "offline key certificate signature does not match issuer account",
                 )
                 .into()
-            })
+            },
+        )
     }
 
     fn ensure_offline_note_certificate_authorized(
@@ -5379,6 +5389,17 @@ pub mod isi {
             Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
         }
 
+        const SMALL_ORDER_ED25519_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+
+        fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+            let mut payload = signature.payload().to_vec();
+            payload[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+            Signature::from_bytes(&payload)
+        }
+
         #[test]
         fn fixture_key_pair_uses_checked_seed_derivation() {
             assert_eq!(fixture_key_pair(0x01).algorithm(), Algorithm::Ed25519);
@@ -6733,6 +6754,20 @@ pub mod isi {
                 .expect("certificate signing payload encodes");
             certificate.issuer_signature = checked_signature(issuer.private_key(), &payload);
             certificate
+        }
+
+        #[test]
+        fn offline_note_certificate_signature_rejects_malformed_ed25519_signature_r() {
+            let issuer = fixture_key_pair(0x45);
+            let issuer_account = AccountId::new(issuer.public_key().clone());
+            let mut certificate =
+                signed_sample_certificate(&issuer, sample_account(0x02), 0xAB, "malformed-r");
+            certificate.issuer_signature =
+                signature_with_malformed_ed25519_r(&certificate.issuer_signature);
+
+            let err = ensure_offline_note_certificate_signature(&certificate, &issuer_account)
+                .expect_err("malformed certificate signature R must be rejected");
+            assert_offline_rejection(err, "invalid_issuer_cert", "signature");
         }
 
         fn attestation_registration(

@@ -15,7 +15,7 @@ use std::{
     sync::OnceLock,
 };
 
-use iroha_crypto::{Algorithm, HashOf, Signature};
+use iroha_crypto::{Algorithm, HashOf, Signature, ed25519_parse_signature};
 use iroha_data_model::{
     jurisdiction::{
         JdgAttestation, JdgCommitteeId, JdgSdnKeyRecord, JdgSdnPolicy, JdgSdnRegistry,
@@ -640,9 +640,12 @@ impl JdgAttestationGuard {
                             actual: attestation.signature.signatures.len(),
                         },
                     )?;
-                    let signature = Signature::try_from_bytes(raw_sig).map_err(|_| {
-                        JdgAttestationGuardError::SignatureInvalid { index: sig_idx }
-                    })?;
+                    let signature = if signer.try_algorithm() == Ok(Algorithm::Ed25519) {
+                        ed25519_parse_signature(raw_sig)
+                    } else {
+                        Signature::try_from_bytes(raw_sig).map_err(Into::into)
+                    }
+                    .map_err(|_| JdgAttestationGuardError::SignatureInvalid { index: sig_idx })?;
                     if signature.verify(signer, hash_bytes).is_ok() {
                         valid += 1;
                     } else {
@@ -1603,6 +1606,52 @@ mod tests {
             err,
             JdgAttestationGuardError::SignatureInvalid { index: 0 }
         ));
+    }
+
+    #[test]
+    fn attestation_guard_rejects_malformed_ed25519_simple_threshold_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let dataspace = DataSpaceId::new(10);
+        let (committee, signers) = committee_with_members(dataspace, 1, 5, 1, 2);
+        let manifest = JdgCommitteeManifest {
+            dataspace,
+            committees: vec![committee.clone()],
+        };
+        let schedule =
+            JdgCommitteeSchedule::from_manifests(vec![manifest], 0).expect("schedule builds");
+        let guard = JdgAttestationGuard::new(schedule, None, 4096, 4, simple_signature_schemes());
+        let attestation =
+            signed_attestation_for_committee(&committee, &signers, &[0], dataspace, 2, 8, 0);
+
+        guard
+            .validate(&attestation, dataspace, 3)
+            .expect("valid simple-threshold signature should verify");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = attestation.clone();
+            malformed.signature.signatures[0][..replacement_r.len()]
+                .copy_from_slice(&replacement_r);
+
+            let err = guard
+                .validate(&malformed, dataspace, 3)
+                .expect_err("malformed Ed25519 signature R must reject");
+            assert!(
+                matches!(err, JdgAttestationGuardError::SignatureInvalid { index: 0 }),
+                "{label} Ed25519 signature R should fail admission: {err:?}"
+            );
+        }
     }
 
     #[test]

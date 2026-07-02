@@ -326,6 +326,20 @@ from iroha_torii_client import (  # noqa: E402
 )
 from iroha_torii_client.sccp import _keccak_256  # noqa: E402
 
+
+def canonical_signature_base64_fixture() -> str:
+    return base64.b64encode(bytes([1]) * 64).decode("ascii")
+
+
+def noncanonical_standard_base64_pad_bit_alias(encoded: str) -> str:
+    assert encoded.endswith("==")
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    chars = list(encoded)
+    index = len(chars) - 3
+    chars[index] = alphabet[alphabet.index(chars[index]) ^ 0x01]
+    return "".join(chars)
+
+
 HEX32_A = "0x" + "aa" * 32
 HEX32_B = "0x" + "bb" * 32
 HEX32_C = "0x" + "cc" * 32
@@ -7987,11 +8001,12 @@ def test_derives_evm_and_tron_destination_bindings_for_ui_provers() -> None:
         "commitment": {"message_id": sample_evm_public_inputs()["message_id"]},
         "commitment_root": sample_evm_public_inputs()["commitment_root"],
     }
+    signature_b64 = canonical_signature_base64_fixture()
     evm_submit_payload = build_evm_sccp_bridge_proof_submit_payload(
         {
             "authority": "alice@sora",
             "publicKeyHex": "ed0123",
-            "signatureB64": "sig",
+            "signatureB64": signature_b64,
             "messageBundle": evm_message_bundle,
             "submission": evm_submission_for_submit,
             "destinationBinding": evm_binding,
@@ -8000,7 +8015,7 @@ def test_derives_evm_and_tron_destination_bindings_for_ui_provers() -> None:
     )
     assert evm_submit_payload["authority"] == "alice@sora"
     assert evm_submit_payload["public_key_hex"] == "ed0123"
-    assert evm_submit_payload["signature_b64"] == "sig"
+    assert evm_submit_payload["signature_b64"] == signature_b64
     assert evm_submit_payload["network_id_hex"] == evm_binding["network_id"]
     assert evm_submit_payload["verifier_address_hex"] == evm_binding["verifier_address"]
     assert evm_submit_payload["bridge_address_hex"] == evm_binding["bridge_address"]
@@ -8012,6 +8027,22 @@ def test_derives_evm_and_tron_destination_bindings_for_ui_provers() -> None:
     )
     assert evm_submit_payload["proof_bytes_hex"] == "0x" + evm_proof_bytes.hex()
     assert evm_submit_payload["creation_time_ms"] == 123
+    for bad_signature_b64 in (
+        f" {signature_b64} ",
+        signature_b64.rstrip("="),
+        noncanonical_standard_base64_pad_bit_alias(signature_b64),
+    ):
+        with pytest.raises(TypeError, match="canonical base64"):
+            build_evm_sccp_bridge_proof_submit_payload(
+                {
+                    "authority": "alice@sora",
+                    "publicKeyHex": "ed0123",
+                    "signatureB64": bad_signature_b64,
+                    "messageBundle": evm_message_bundle,
+                    "submission": evm_submission_for_submit,
+                    "destinationBinding": evm_binding,
+                }
+            )
     with pytest.raises(
         TypeError,
         match=r"proofBytes\.messageId must match messageBundle\.commitment\.messageId",

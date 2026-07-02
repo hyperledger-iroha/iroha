@@ -26,7 +26,9 @@ pub mod isi {
 
     use base64::engine::Engine as _;
     use eyre::Result;
-    use iroha_crypto::{Algorithm, Hash, Hash as CryptoHash, PublicKey, blake2::Blake2b512};
+    use iroha_crypto::{
+        Algorithm, Hash, Hash as CryptoHash, PublicKey, Signature, blake2::Blake2b512,
+    };
     use iroha_executor_data_model::permission::{
         account::CanRegisterAccount,
         asset::{
@@ -2538,14 +2540,13 @@ pub mod isi {
             ))
         })?;
         let payload = manifest.signature_payload_bytes();
-        provenance
-            .signature
-            .verify(&provenance.signer, &payload)
-            .map_err(|_| {
+        verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload).map_err(
+            |_| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                     "manifest signature verification failed".into(),
                 ))
-            })?;
+            },
+        )?;
         Ok(provenance)
     }
 
@@ -6332,6 +6333,17 @@ pub mod isi {
         )))
     }
 
+    fn verify_signature_for_signer(
+        signature: &Signature,
+        signer: &PublicKey,
+        payload: &[u8],
+    ) -> Result<(), iroha_crypto::Error> {
+        if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
+            iroha_crypto::ed25519_parse_signature(signature.payload())?;
+        }
+        signature.verify(signer, payload)
+    }
+
     fn validate_runtime_upgrade_provenance(
         manifest: &iroha_data_model::runtime::RuntimeUpgradeManifest,
         state_transaction: &StateTransaction<'_, '_>,
@@ -6383,9 +6395,7 @@ pub mod isi {
             let payload = manifest.signature_payload_bytes();
             let mut trusted_signers = BTreeSet::new();
             for provenance in &manifest.provenance {
-                provenance
-                    .signature
-                    .verify(&provenance.signer, &payload)
+                verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
                     .map_err(|_| {
                         runtime_upgrade_provenance_error(
                             RuntimeUpgradeProvenanceError::InvalidSignature,
@@ -8596,6 +8606,11 @@ pub mod isi {
                 "SCCP BSC mainnet lane launch policy",
                 "BSC mainnet",
             )),
+            iroha_sccp::SccpLaunchModeV1::TonMainnetLane => Some((
+                iroha_sccp::SCCP_DOMAIN_TON,
+                "SCCP TON mainnet lane launch policy",
+                "TON mainnet",
+            )),
         }
     }
 
@@ -8826,6 +8841,7 @@ pub mod isi {
         source_domain: u32,
         target_domain: u32,
         message_id: [u8; 32],
+        payload_hash: [u8; 32],
     }
 
     struct ValidatedBridgeProof {
@@ -8840,6 +8856,7 @@ pub mod isi {
             source_domain: iroha_sccp::sccp_message_source_domain(&artifact.bundle.payload),
             target_domain: iroha_sccp::sccp_message_target_domain(&artifact.bundle.payload),
             message_id: artifact.bundle.commitment.message_id,
+            payload_hash: artifact.bundle.commitment.payload_hash,
         }
     }
 
@@ -9681,6 +9698,11 @@ pub mod isi {
                 .post_deploy_route_canary_transaction_id,
             post_deploy_route_canary_explorer_url: manifest.post_deploy_route_canary_explorer_url,
             post_deploy_offline_full_toml_sha256: manifest.post_deploy_offline_full_toml_sha256,
+            production_blockers: Vec::new(),
+            post_deploy_production_blockers: Vec::new(),
+            full_toml_production_blockers: Vec::new(),
+            source_event_transaction_production_blockers: Vec::new(),
+            route_canary_production_blockers: Vec::new(),
         };
         let actual =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| user_manifest.parse()))
@@ -9810,9 +9832,41 @@ pub mod isi {
                 "SCCP message recording requires nexus.enabled=true".into(),
             ));
         }
-        if nexus_active_lane_dataspace(lane_id, &state_transaction.nexus).is_none() {
+        let Some(active_dataspace_id) = nexus_active_lane_dataspace_at_height(
+            lane_id,
+            &state_transaction.nexus,
+            state_transaction.block_height(),
+        ) else {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("SCCP message recording requires active Nexus lane {lane_id}").into(),
+            ));
+        };
+        let Some(dataspace_id) = state_transaction.current_dataspace_id else {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP message recording requires an active transaction dataspace".into(),
+            ));
+        };
+        if let Some(world_dataspace_id) = state_transaction.world.current_dataspace_id
+            && world_dataspace_id != dataspace_id
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "SCCP message recording transaction dataspace {} does not match world dataspace {}",
+                    dataspace_id.as_u64(),
+                    world_dataspace_id.as_u64()
+                )
+                .into(),
+            ));
+        }
+        if dataspace_id != active_dataspace_id {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "SCCP message recording transaction dataspace {} does not match active Nexus lane {} dataspace {}",
+                    dataspace_id.as_u64(),
+                    lane_id.as_u32(),
+                    active_dataspace_id.as_u64()
+                )
+                .into(),
             ));
         }
         Ok(())
@@ -9830,30 +9884,35 @@ pub mod isi {
                 ));
             }
             ensure_sccp_outbound_lane_is_active(state_transaction)?;
-            let Some(payload) =
-                crate::bridge::decode_recorded_sccp_payload_bytes(&self.payload_bytes)
-            else {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "SCCP payload bytes could not be decoded".into(),
-                    ),
-                ));
+            let validated = match crate::bridge::validate_recorded_sccp_message_payload_bytes(
+                &self.payload_bytes,
+            ) {
+                Ok(validated) => validated,
+                Err(crate::bridge::RecordedSccpMessageValidationError::InvalidPayload) => {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "SCCP payload bytes could not be decoded".into(),
+                        ),
+                    ));
+                }
+                Err(crate::bridge::RecordedSccpMessageValidationError::NonSoraSource {
+                    ..
+                }) => {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "SCCP message recording only accepts SORA-origin payloads; submit non-SORA source messages with a verified source-chain proof envelope".into(),
+                        ),
+                    ));
+                }
+                Err(crate::bridge::RecordedSccpMessageValidationError::RouteBinding { error }) => {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "SORA-origin SCCP outbound payload {error}"
+                        )),
+                    ));
+                }
             };
-            if !iroha_sccp::verify_sccp_payload_structure(&payload) {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "SCCP payload bytes failed structural verification".into(),
-                    ),
-                ));
-            }
-            if iroha_sccp::sccp_message_source_domain(&payload) != iroha_sccp::SCCP_DOMAIN_SORA {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "SCCP message recording only accepts SORA-origin payloads; submit non-SORA source messages with a verified source-chain proof envelope".into(),
-                    ),
-                ));
-            }
-            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let key = validated.key;
             if state_transaction
                 .world
                 .sccp_outbound_messages
@@ -9866,11 +9925,10 @@ pub mod isi {
                     ),
                 ));
             }
-            let canonical_payload = iroha_sccp::canonical_sccp_payload_bytes(&payload);
             state_transaction.world.sccp_outbound_messages.insert(
                 key,
                 iroha_data_model::bridge::SccpOutboundMessageRecord {
-                    payload_hash: iroha_sccp::payload_hash(&canonical_payload),
+                    payload_hash: validated.commitment.payload_hash,
                     recorded_at_height: state_transaction._curr_block.height.get(),
                 },
             );
@@ -14366,9 +14424,7 @@ pub mod isi {
                 if !rec.is_live_at(height, overlap, expiry_grace) {
                     continue;
                 }
-                if sig
-                    .signature
-                    .verify(&rec.public_key, msg_hash.as_ref())
+                if verify_signature_for_signer(&sig.signature, &rec.public_key, msg_hash.as_ref())
                     .is_ok()
                 {
                     signature_valid = true;
@@ -16675,6 +16731,30 @@ pub mod isi {
                 .expect("world ISI fixture key generation for requested algorithm should succeed")
         }
 
+        const SMALL_ORDER_ED25519_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+
+        fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+            let mut payload = signature.payload().to_vec();
+            payload[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+            Signature::from_bytes(&payload)
+        }
+
+        #[test]
+        fn verify_signature_for_signer_rejects_malformed_ed25519_signature_r() {
+            let key_pair = checked_keypair_with_algorithm(Algorithm::Ed25519);
+            let payload = b"world-isi-ed25519-signature-admission";
+            let signature = checked_signature(key_pair.private_key(), payload);
+            let signature = signature_with_malformed_ed25519_r(&signature);
+
+            assert!(
+                verify_signature_for_signer(&signature, key_pair.public_key(), payload).is_err(),
+                "Ed25519 signature admission must reject malformed R before backend verification"
+            );
+        }
+
         fn bridge_proof_fixture(seed: u8) -> BridgeProof {
             BridgeProof {
                 range: BridgeProofRange {
@@ -18302,6 +18382,19 @@ pub mod isi {
             })
         }
 
+        fn sora_outbound_route_activate_payload(nonce: u64) -> iroha_sccp::SccpPayloadV1 {
+            iroha_sccp::SccpPayloadV1::RouteActivate(iroha_sccp::RouteActivatePayloadV1 {
+                version: 1,
+                source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                nonce,
+                asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                asset_id: b"xor#universal".to_vec(),
+                route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                route_id: b"nexus:eth:xor".to_vec(),
+            })
+        }
+
         #[test]
         fn record_sccp_message_rejects_without_verified_ivm_proof() {
             let kura = Kura::blank_kura_for_testing();
@@ -18403,6 +18496,113 @@ pub mod isi {
         }
 
         #[test]
+        fn record_sccp_message_rejects_missing_dataspace_context() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
+            stx.sccp_recording_proof_verified = true;
+            stx.current_lane_id = Some(LaneId::SINGLE);
+            let payload = sora_outbound_sccp_payload(53);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("SCCP outbox recording without a dataspace context must reject");
+            assert!(
+                format!("{err:?}").contains("active transaction dataspace"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_dataspace_mismatch_for_active_lane() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
+            stx.sccp_recording_proof_verified = true;
+            stx.current_lane_id = Some(LaneId::SINGLE);
+            let wrong_dataspace = DataSpaceId::new(7);
+            stx.current_dataspace_id = Some(wrong_dataspace);
+            stx.world.current_dataspace_id = Some(wrong_dataspace);
+            let payload = sora_outbound_sccp_payload(54);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction.execute(&ALICE_ID, &mut stx).expect_err(
+                "SCCP outbox recording must reject stale routing dataspace for an active lane",
+            );
+            assert!(
+                format!("{err:?}").contains("does not match active Nexus lane"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_inconsistent_world_dataspace_context() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
+            stx.sccp_recording_proof_verified = true;
+            stx.current_lane_id = Some(LaneId::SINGLE);
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::new(7));
+            let payload = sora_outbound_sccp_payload(55);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction.execute(&ALICE_ID, &mut stx).expect_err(
+                "SCCP outbox recording must reject inconsistent transaction/world dataspaces",
+            );
+            assert!(
+                format!("{err:?}").contains("does not match world dataspace"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
         fn record_sccp_message_rejects_stale_geometry_lane_context() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -18450,6 +18650,467 @@ pub mod isi {
                 "unexpected error: {err:?}"
             );
             assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_future_created_autoscale_lane_context() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(6).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            let future_lane = LaneId::new(1);
+            let mut elastic = LaneConfig {
+                id: future_lane,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+                alias: "elastic-lane-1".to_owned(),
+                ..LaneConfig::default()
+            };
+            elastic.metadata.insert(
+                iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+                "true".to_owned(),
+            );
+            elastic.metadata.insert(
+                iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+                "7".to_owned(),
+            );
+            let lane_catalog = LaneCatalog::new(
+                NonZeroU32::new(2).expect("nonzero lane count"),
+                vec![LaneConfig::default(), elastic],
+            )
+            .expect("future autoscale SCCP lane catalog");
+            configure_universal_dataspace(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.autoscale.enabled = true;
+            stx.nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+            stx.nexus.autoscale.max_lanes = NonZeroU32::new(8).expect("nonzero max lanes");
+            stx.nexus.lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
+            stx.nexus.lane_catalog = lane_catalog;
+            enable_sccp_recording_for_test(&mut stx, future_lane);
+
+            let payload = sora_outbound_sccp_payload(52);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction.execute(&ALICE_ID, &mut stx).expect_err(
+                "future-created autoscale lane must not authorize SCCP outbox recording",
+            );
+            assert!(
+                format!("{err:?}").contains("active Nexus lane 1"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_outbound_route_domain_mismatch() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let mut payload = sora_outbound_sccp_payload(56);
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
+                unreachable!("test payload is a transfer");
+            };
+            transfer.route_id = b"nexus:bsc:xor".to_vec();
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("outbound SCCP route id must bind to the destination domain");
+            assert!(
+                format!("{err:?}").contains("route_id"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_outbound_route_asset_mismatch() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let mut payload = sora_outbound_sccp_payload(57);
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
+                unreachable!("test payload is a transfer");
+            };
+            transfer.asset_id = b"rose#universal".to_vec();
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("outbound SCCP route id must bind to the asset key");
+            assert!(
+                format!("{err:?}").contains("nexus:eth:rose"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_outbound_non_text_route_id() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let mut payload = sora_outbound_sccp_payload(58);
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
+                unreachable!("test payload is a transfer");
+            };
+            transfer.route_id_codec = iroha_sccp::SCCP_CODEC_EVM_HEX;
+            transfer.route_id = b"0x1111111111111111111111111111111111111111".to_vec();
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("outbound SCCP route id aliases must be rejected");
+            assert!(
+                format!("{err:?}").contains("route_id must use text_utf8 codec"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_outbound_route_activation_domain_mismatch() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let mut payload = sora_outbound_route_activate_payload(62);
+            let iroha_sccp::SccpPayloadV1::RouteActivate(activation) = &mut payload else {
+                unreachable!("test payload is a route activation");
+            };
+            activation.route_id = b"nexus:bsc:xor".to_vec();
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("outbound SCCP route activation must bind route id to target domain");
+            assert!(
+                format!("{err:?}").contains("nexus:eth:xor"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_outbound_empty_asset_scope() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let mut payload = sora_outbound_sccp_payload(65);
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
+                unreachable!("test payload is a transfer");
+            };
+            transfer.asset_id = b"xor#".to_vec();
+            transfer.route_id = b"nexus:eth:xor".to_vec();
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("outbound SCCP asset_id aliases with empty scope must reject");
+            assert!(
+                format!("{err:?}").contains("asset scope must not be empty"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_outbound_invalid_asset_key() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let mut payload = sora_outbound_route_activate_payload(66);
+            let iroha_sccp::SccpPayloadV1::RouteActivate(activation) = &mut payload else {
+                unreachable!("test payload is a route activation");
+            };
+            activation.asset_id = b"bad key#universal".to_vec();
+            activation.route_id = b"nexus:eth:bad key".to_vec();
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("outbound SCCP route-local asset key must be a valid Name");
+            assert!(
+                format!("{err:?}").contains("asset key must be a valid Iroha Name"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_accepts_outbound_route_activation() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let payload = sora_outbound_route_activate_payload(63);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect("canonical outbound SCCP route activation should execute");
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_some());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_cross_domain_outbound_asset_home() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let mut payload = sora_outbound_sccp_payload(59);
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
+                unreachable!("test payload is a transfer");
+            };
+            transfer.asset_home_domain = iroha_sccp::SCCP_DOMAIN_BSC;
+            transfer.route_id = b"bsc:sora:xor".to_vec();
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("outbound SCCP asset home must bind to SORA or destination");
+            assert!(
+                format!("{err:?}").contains("asset home domain"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_accepts_destination_home_outbound_release_route() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let mut payload = sora_outbound_sccp_payload(60);
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
+                unreachable!("test payload is a transfer");
+            };
+            transfer.asset_home_domain = iroha_sccp::SCCP_DOMAIN_ETH;
+            transfer.asset_id = b"weth#eth".to_vec();
+            transfer.route_id = b"eth:sora:weth".to_vec();
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect("destination-home outbound SCCP release route should execute");
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_some());
+        }
+
+        #[test]
+        fn record_sccp_message_accepts_known_taira_xor_outbound_route() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let mut payload = sora_outbound_sccp_payload(61);
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
+                unreachable!("test payload is a transfer");
+            };
+            transfer.dest_domain = iroha_sccp::SCCP_DOMAIN_BSC;
+            transfer.asset_id = iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes().to_vec();
+            transfer.route_id = iroha_sccp::SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1
+                .as_bytes()
+                .to_vec();
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect("known TAIRA XOR outbound SCCP route should execute");
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_some());
+        }
+
+        #[test]
+        fn record_sccp_message_accepts_known_taira_xor_route_activation() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let mut payload = sora_outbound_route_activate_payload(64);
+            let iroha_sccp::SccpPayloadV1::RouteActivate(activation) = &mut payload else {
+                unreachable!("test payload is a route activation");
+            };
+            activation.target_domain = iroha_sccp::SCCP_DOMAIN_BSC;
+            activation.asset_id = iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes().to_vec();
+            activation.route_id = iroha_sccp::SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1
+                .as_bytes()
+                .to_vec();
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect("known TAIRA XOR outbound SCCP route activation should execute");
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_some());
         }
 
         #[test]
@@ -18643,7 +19304,7 @@ pub mod isi {
         }
 
         #[test]
-        fn record_sccp_message_rejects_hex_alias_replay_after_commit_on_different_lane() {
+        fn record_sccp_message_rejects_hex_alias_payload_after_commit_on_different_lane() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -18692,9 +19353,9 @@ pub mod isi {
 
             let err = hex_alias_instruction
                 .execute(&ALICE_ID, &mut replay_stx)
-                .expect_err("hex alias replay on another lane must be rejected");
+                .expect_err("hex alias payload on another lane must be rejected");
             assert!(
-                format!("{err:?}").contains("already been recorded"),
+                format!("{err:?}").contains("could not be decoded"),
                 "unexpected error: {err:?}"
             );
             let record = state
@@ -18747,6 +19408,28 @@ pub mod isi {
             let verified =
                 ivm::verify_contract_artifact(&artifact).expect("valid test contract artifact");
             (artifact, verified.manifest)
+        }
+
+        #[test]
+        fn ensure_manifest_signature_rejects_malformed_ed25519_signature_r() {
+            let (_artifact, manifest) = minimal_contract_artifact();
+            let key_pair = checked_keypair_with_algorithm(Algorithm::Ed25519);
+            let mut manifest = manifest
+                .try_signed(&key_pair)
+                .expect("checked manifest provenance signature");
+            let provenance = manifest
+                .provenance
+                .as_mut()
+                .expect("manifest has provenance");
+            provenance.signature = signature_with_malformed_ed25519_r(&provenance.signature);
+
+            let err = ensure_manifest_signature(&manifest)
+                .expect_err("malformed manifest signature R must be rejected");
+            let message = format!("{err:?}");
+            assert!(
+                message.contains("manifest signature verification failed"),
+                "unexpected manifest signature error: {message}"
+            );
         }
 
         fn new_dummy_block_non_genesis() -> crate::block::CommittedBlock {
@@ -20227,6 +20910,8 @@ pub mod isi {
             stx.nexus.enabled = true;
             stx.sccp_recording_proof_verified = true;
             stx.current_lane_id = Some(lane_id);
+            stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         }
 
         fn register_wonderland_account(stx: &mut StateTransaction<'_, '_>, account_id: &AccountId) {
@@ -25378,6 +26063,27 @@ pub mod isi {
                 )
                 .is_none(),
                 "distinct SCCP message ids must not conflict"
+            );
+        }
+
+        #[test]
+        fn sccp_message_proof_replay_key_binds_payload_hash() {
+            let artifact = sccp_message_artifact_for_receipt_test(
+                sccp_transfer_payload_for_receipt_test(95),
+                45,
+            );
+            let key = sccp_message_key_from_artifact(&artifact);
+            assert_eq!(key.payload_hash, artifact.bundle.commitment.payload_hash);
+
+            let mut alternate_hash_artifact = artifact.clone();
+            alternate_hash_artifact.bundle.commitment.payload_hash[0] ^= 0xA5;
+            alternate_hash_artifact.public_inputs.payload_hash =
+                alternate_hash_artifact.bundle.commitment.payload_hash;
+
+            assert_ne!(
+                key,
+                sccp_message_key_from_artifact(&alternate_hash_artifact),
+                "SCCP inbound replay identity must bind the proof-derived payload hash"
             );
         }
 

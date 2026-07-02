@@ -11,6 +11,7 @@
 
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { dirname, resolve } from "node:path";
 import { normalizeAccountId } from "../javascript/iroha_js/src/normalizers.js";
 
@@ -239,11 +240,10 @@ function normalizePositiveDecimalString(value, label, fallback = null) {
   if (typeof candidate !== "string") {
     throw new Error(`${label} must be a positive integer decimal string.`);
   }
-  const text = candidate.trim();
-  if (!/^[1-9][0-9]*$/u.test(text)) {
+  if (candidate.trim() !== candidate || !/^[1-9][0-9]*$/u.test(candidate)) {
     throw new Error(`${label} must be a positive integer decimal string.`);
   }
-  return text;
+  return candidate;
 }
 
 function normalizeHex32(value, label, { nonzero = true } = {}) {
@@ -421,8 +421,46 @@ function assertDistinctResolvedPaths(outputPath, outputLabel, inputPaths) {
   }
 }
 
+function normalizeUrlHostname(hostname) {
+  return hostname
+    .replace(/^\[/u, "")
+    .replace(/\]$/u, "")
+    .toLowerCase();
+}
+
+function isLoopbackHost(hostname) {
+  const unbracketedHostname = normalizeUrlHostname(hostname);
+  return (
+    unbracketedHostname === "localhost" ||
+    unbracketedHostname.endsWith(".localhost") ||
+    unbracketedHostname === "127.0.0.1" ||
+    unbracketedHostname === "::1"
+  );
+}
+
+function isNonPublicDnsHost(hostname) {
+  const unbracketedHostname = normalizeUrlHostname(hostname);
+  const labels = unbracketedHostname.split(".");
+  return (
+    isLoopbackHost(unbracketedHostname) ||
+    unbracketedHostname.endsWith(".local") ||
+    !unbracketedHostname.includes(".") ||
+    labels.some(
+      (label) =>
+        label === "" ||
+        !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label),
+    ) ||
+    isIP(unbracketedHostname) !== 0
+  );
+}
+
 function normalizeModuleUrl(value, label) {
-  if (typeof value !== "string" || value.trim() !== value || value === "") {
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    value === "" ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
     throw new Error(`${label} must be a deterministic module URL.`);
   }
   if (/[?#\\]/u.test(value) || value.includes("\0")) {
@@ -437,17 +475,20 @@ function normalizeModuleUrl(value, label) {
         `${label} must not include credentials, query, or fragment.`,
       );
     }
+    if (isNonPublicDnsHost(url.hostname)) {
+      throw new Error(`${label} HTTPS URLs must use a public DNS host.`);
+    }
     return value;
   }
   if (/^http:\/\//u.test(value)) {
     const url = new URL(value);
-    const host = url.hostname.toLowerCase();
-    const loopback =
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "::1" ||
-      host.endsWith(".localhost");
-    if (!loopback || url.username || url.password || url.search || url.hash) {
+    if (
+      !isLoopbackHost(url.hostname) ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash
+    ) {
       throw new Error(
         `${label} http URLs must be loopback and credential-free.`,
       );
@@ -459,13 +500,19 @@ function normalizeModuleUrl(value, label) {
       `${label} must be HTTPS, loopback HTTP, or package-relative.`,
     );
   }
-  if (!/^(?:\.{0,2}\/|\/|@?[A-Za-z0-9_-])[-A-Za-z0-9_@./]*$/u.test(value)) {
+  if (value.split("/").includes("..")) {
+    throw new Error(`${label} must not traverse parent directories.`);
+  }
+  if (
+    value.startsWith("/") ||
+    !/^(?:\.{0,2}\/|@?[A-Za-z0-9_-])[-A-Za-z0-9_@./]*$/u.test(value) ||
+    value.split("/").some(
+      (segment, index) => segment === "" || (segment === "." && index !== 0),
+    )
+  ) {
     throw new Error(
       `${label} must be package-relative, HTTPS, or loopback HTTP.`,
     );
-  }
-  if (value.split("/").includes("..")) {
-    throw new Error(`${label} must not traverse parent directories.`);
   }
   return value;
 }
@@ -565,10 +612,16 @@ function normalizePublicJsonRecord(value, label) {
   return stableJsonValue(record);
 }
 
-function normalizeTairaBurnRecordVkName(value) {
-  const normalized = String(value ?? DEFAULT_TAIRA_BURN_RECORD_VK_NAME).trim();
-  if (!normalized || !/^[A-Za-z0-9._:-]{1,128}$/u.test(normalized)) {
-    throw new Error("--vk-name must be 1-128 verifier-key identifier characters.");
+function normalizeTairaBurnRecordVkName(value, label = "--vk-name") {
+  const normalized = value ?? DEFAULT_TAIRA_BURN_RECORD_VK_NAME;
+  if (
+    typeof normalized !== "string" ||
+    normalized.trim() !== normalized ||
+    !/^[A-Za-z0-9._:-]{1,128}$/u.test(normalized)
+  ) {
+    throw new Error(
+      `${label} must be 1-128 verifier-key identifier characters.`,
+    );
   }
   return normalized;
 }
@@ -693,6 +746,18 @@ function normalizeTonRouteManifestForPublication(input) {
   if (manifest.network_id_hex !== TON_TESTNET_CHAIN_ID_HEX) {
     throw new Error("TON route manifest network_id_hex must be TON testnet.");
   }
+  manifest.explorer_url = normalizeRequiredPublicExplorerUrl(
+    manifest.explorer_url ?? TON_TESTNET_EXPLORER_URL,
+    "TON route manifest explorer_url",
+  );
+  const expectedExplorerHost = new URL(manifest.explorer_url).host;
+  if (manifest.explorer_host === undefined || manifest.explorer_host === null) {
+    manifest.explorer_host = expectedExplorerHost;
+  } else if (manifest.explorer_host !== expectedExplorerHost) {
+    throw new Error(
+      "TON route manifest explorer_host must match explorer_url host.",
+    );
+  }
   if (manifest.destination_binding_key !== TON_DESTINATION_BINDING_KEY) {
     throw new Error(
       "TON route manifest destination_binding_key is not canonical.",
@@ -797,6 +862,7 @@ function normalizeTonRouteManifestForPublication(input) {
   manifest.taira_burn_record_vk_backend = TAIRA_BURN_RECORD_VK_BACKEND;
   manifest.taira_burn_record_vk_name = normalizeTairaBurnRecordVkName(
     manifest.taira_burn_record_vk_name,
+    "TON route manifest TAIRA burn-record VK name",
   );
   manifest.taira_burn_record_gas_limit = TAIRA_BURN_RECORD_GAS_LIMIT;
   if (manifest.production_ready !== true) {
@@ -859,25 +925,41 @@ async function commandRouteManifest(options) {
     "--out",
     DEFAULT_ROUTE_MANIFEST_OUT,
   );
-  const tairaContractPath = requireOption(options, "taira-contract");
-  const sourceVerifierMaterialPath = requireOption(
-    options,
-    "source-verifier-material",
+  const tairaContractPath = normalizeCliPathOption(
+    requireOption(options, "taira-contract"),
+    "--taira-contract",
   );
-  const sourceAdapterEngineDeploymentPath = requireOption(
-    options,
-    "source-adapter-engine-deployment",
+  const sourceVerifierMaterialPath = normalizeCliPathOption(
+    requireOption(options, "source-verifier-material"),
+    "--source-verifier-material",
   );
-  const destinationBrowserProverManifestPath = requireOption(
-    options,
-    "destination-browser-prover-manifest",
+  const sourceAdapterEngineDeploymentPath = normalizeCliPathOption(
+    requireOption(options, "source-adapter-engine-deployment"),
+    "--source-adapter-engine-deployment",
   );
-  const sourceBrowserProverManifestPath = requireOption(
-    options,
-    "source-browser-prover-manifest",
+  const destinationBrowserProverManifestPath = normalizeCliPathOption(
+    requireOption(options, "destination-browser-prover-manifest"),
+    "--destination-browser-prover-manifest",
   );
-  const deploymentEvidencePath = requireOption(options, "deployment-evidence");
-  const offlineFullTomlEvidencePath = options["offline-full-toml-evidence"];
+  const sourceBrowserProverManifestPath = normalizeCliPathOption(
+    requireOption(options, "source-browser-prover-manifest"),
+    "--source-browser-prover-manifest",
+  );
+  const deploymentEvidencePath = normalizeCliPathOption(
+    requireOption(options, "deployment-evidence"),
+    "--deployment-evidence",
+  );
+  const offlineFullTomlEvidencePath = options["offline-full-toml-sha256"]
+    ? options["offline-full-toml-evidence"] === undefined
+      ? undefined
+      : normalizeCliPathOption(
+          options["offline-full-toml-evidence"],
+          "--offline-full-toml-evidence",
+        )
+    : normalizeCliPathOption(
+        requireOption(options, "offline-full-toml-evidence"),
+        "--offline-full-toml-evidence",
+      );
   assertDistinctResolvedPaths(outPath, "--out", [
     [tairaContractPath, "--taira-contract"],
     [sourceVerifierMaterialPath, "--source-verifier-material"],
@@ -1038,8 +1120,10 @@ async function commandRouteManifest(options) {
       requireOption(options, "post-deploy-source-event-transaction-id"),
       "--post-deploy-source-event-transaction-id",
     ),
-    post_deploy_source_event_explorer_url:
-      options["post-deploy-source-event-explorer-url"] ?? null,
+    post_deploy_source_event_explorer_url: normalizeOptionalPublicExplorerUrl(
+      options["post-deploy-source-event-explorer-url"],
+      "--post-deploy-source-event-explorer-url",
+    ),
     post_deploy_route_canary_evidence_hash: normalizeHex32(
       requireOption(options, "post-deploy-route-canary-evidence-hash"),
       "--post-deploy-route-canary-evidence-hash",
@@ -1048,15 +1132,17 @@ async function commandRouteManifest(options) {
       requireOption(options, "post-deploy-route-canary-transaction-id"),
       "--post-deploy-route-canary-transaction-id",
     ),
-    post_deploy_route_canary_explorer_url:
-      options["post-deploy-route-canary-explorer-url"] ?? null,
+    post_deploy_route_canary_explorer_url: normalizeOptionalPublicExplorerUrl(
+      options["post-deploy-route-canary-explorer-url"],
+      "--post-deploy-route-canary-explorer-url",
+    ),
     post_deploy_offline_full_toml_sha256: options["offline-full-toml-sha256"]
       ? normalizeHex32(
           options["offline-full-toml-sha256"],
           "--offline-full-toml-sha256",
         )
       : await sha256HexFileOrJson(
-          requireOption(options, "offline-full-toml-evidence"),
+          offlineFullTomlEvidencePath,
           "TON offline full TOML evidence",
         ),
   });
@@ -1295,7 +1381,7 @@ function normalizeToriiUrl(value) {
   } catch (_error) {
     throw new Error("--torii-url must be a valid HTTP(S) URL.");
   }
-  const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  const loopback = isLoopbackHost(url.hostname);
   if (url.protocol !== "https:" && !(loopback && url.protocol === "http:")) {
     throw new Error("--torii-url must use HTTPS unless it is loopback HTTP.");
   }
@@ -1304,7 +1390,50 @@ function normalizeToriiUrl(value) {
       "--torii-url must not include credentials, query, or fragment.",
     );
   }
+  if (url.protocol === "https:" && isNonPublicDnsHost(url.hostname)) {
+    throw new Error("--torii-url HTTPS host must use public DNS.");
+  }
   return url.toString().replace(/\/$/u, "");
+}
+
+function normalizeOptionalPublicExplorerUrl(value, label) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    value === "" ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new Error(`${label} must be a public HTTPS URL.`);
+  }
+  let url;
+  try {
+    url = new URL(value);
+  } catch (_error) {
+    throw new Error(`${label} must be a public HTTPS URL.`);
+  }
+  if (url.protocol !== "https:") {
+    throw new Error(`${label} must be a public HTTPS URL.`);
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error(
+      `${label} must not include credentials, query, or fragment.`,
+    );
+  }
+  if (isNonPublicDnsHost(url.hostname)) {
+    throw new Error(`${label} must use a public DNS host.`);
+  }
+  return url.toString().replace(/\/$/u, "");
+}
+
+function normalizeRequiredPublicExplorerUrl(value, label) {
+  const normalized = normalizeOptionalPublicExplorerUrl(value, label);
+  if (normalized === null) {
+    throw new Error(`${label} must be a public HTTPS URL.`);
+  }
+  return normalized;
 }
 
 async function main(argv = process.argv.slice(2)) {

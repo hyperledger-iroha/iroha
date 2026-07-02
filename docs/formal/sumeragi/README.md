@@ -12790,6 +12790,8 @@ Temporal properties:
 - `CommitDisablesByzantineCommitVote` proves that finalized states explicitly
   disable Byzantine commit-vote equivocation gates alongside the honest progress
   and RBC progress gates.
+- `ByzantineCommitVoteNeverReenabledAfterCommit` proves the temporal retention
+  form of that Byzantine commit-vote closure property after finality.
 - `CommitEvidenceNeverDivergesFromVoteCounters` proves that the latched commit
   certificate evidence remains traceable to the live vote counters and signed
   stake after finality.
@@ -16851,6 +16853,7 @@ bash scripts/formal/sumeragi_apalache.sh missing-request-clear-fast
 bash scripts/formal/sumeragi_apalache.sh missing-block-clear-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-budget-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-fast
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-defer-warning-fast
 bash scripts/formal/sumeragi_apalache.sh non-rbc-payload-budget-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-batch-fast
@@ -17581,6 +17584,7 @@ bash scripts/formal/sumeragi_tlc.sh missing-block-clear-fast
 bash scripts/formal/sumeragi_tlc.sh proposal-budget-fast
 bash scripts/formal/sumeragi_tlc.sh non-rbc-payload-budget-fast
 bash scripts/formal/sumeragi_tlc.sh proposal-backpressure-fast
+bash scripts/formal/sumeragi_tlc.sh proposal-sccp-root-fast
 bash scripts/formal/sumeragi_tlc.sh proposal-defer-warning-fast
 bash scripts/formal/sumeragi_tlc.sh proposal-batch-fast
 bash scripts/formal/sumeragi_tlc.sh lane-interleave-fast
@@ -17864,6 +17868,7 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `missing-block-clear-fast` | 1 | CI missing-block clear reason helper correctness-envelope check |
 | `proposal-budget-fast` | 1 | CI proposal budget/cap helper correctness-envelope check |
 | `proposal-backpressure-fast` | 1 | CI proposal backpressure correctness-envelope check |
+| `proposal-sccp-root-fast` | 1 | CI proposal SCCP commitment-root correctness-envelope check |
 | `proposal-defer-warning-fast` | 1 | CI proposal-defer warning throttle correctness-envelope check |
 | `non-rbc-payload-budget-fast` | 1 | CI non-RBC payload frame budget helper correctness-envelope check |
 | `proposal-batch-fast` | 1 | CI direct proposal batch trim/canonicalization correctness-envelope check |
@@ -19900,6 +19905,14 @@ can still run after the pacemaker deadline, while active pending blocks, RBC
 backlog, and relay pressure are hard stops that suppress pacing-only
 classification and block queued proposal work. Its TLC cross-check
 independently exhausts the same nineteen expected-failure configs as Apalache.
+`proposal-sccp-root-fast` and `proposal-sccp-root-bug-*` cross-check proposal
+SCCP commitment-root construction: candidate SCCP records are considered only
+for enabled Nexus routes active at the proposal height and absent from the
+existing outbound-message index, ordered preflight filters unsigned, failed, or
+state-dependent noncommittable candidates before the final root is derived,
+and the execution-derived probe root must reach a stable fixed point before a
+proposal can be signed. Its TLC cross-check independently exhausts the same
+nine expected-failure configs as Apalache.
 `proposal-defer-warning-fast` and `proposal-defer-warning-bug-*` cross-check
 proposal-defer warning throttling: first observations insert and emit,
 within-cooldown repeats are suppressed with a strict `< cooldown` check,
@@ -25052,6 +25065,15 @@ bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-bug-allows-queue-
 bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-bug-allows-queue-allows-hard-with-pacing
 bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-bug-allows-queue-ignores-queue-pacing
 bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-bug-allows-queue-ignores-consensus-pacing
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-ignore-nexus-disabled
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-ignore-inactive-route
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-ignore-recorded-filter
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-include-unsigned-candidate
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-include-preflight-reject
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-skip-ordered-preflight
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-skip-stable-root-check
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-root-from-raw-candidates
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-bug-root-omits-committable
 bash scripts/formal/sumeragi_apalache.sh proposal-defer-warning-bug-first-suppressed
 bash scripts/formal/sumeragi_apalache.sh proposal-defer-warning-bug-within-cooldown-logs
 bash scripts/formal/sumeragi_apalache.sh proposal-defer-warning-bug-cooldown-boundary-suppressed
@@ -30680,6 +30702,72 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   `PROPERTY/PROPERTIES` operator reference must use non-reserved static TLA
   operator-name syntax, must not target the module's `vars` state tuple, be
   defined by the selected `.tla` module, and resolve to a zero-arity operator.
+  Every top-level Sumeragi property checked by the deep/TLC-fast configs must be reachable
+  from `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope` through zero-arity
+  operator references, so standalone proof obligations cannot drift outside the
+  root correctness envelope.
+  Every non-TypeInvariant top-level Sumeragi invariant checked by the deep/TLC-fast configs must be reachable
+  from `SumeragiConsensusCoreStateMatchesEnvelope` through zero-arity
+  operator references, so standalone state predicates cannot drift outside the
+  state-safety envelope.
+  The consensus-core aggregate proof roots must keep their exact direct conjunct contracts.
+  The correctness root composes `TypeInvariant`, `SumeragiConsensusCoreAlwaysMatchesExactness`,
+  `SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`, and `EventuallyCommit` directly.
+  The state+temporal, exactness, and fast roots keep their documented direct conjuncts.
+  Every direct conjunct of `SumeragiConsensusCoreStateMatchesEnvelope` must be checked
+  as a top-level deep/TLC-fast `INVARIANT`.
+  `SumeragiConsensusCoreStateMatchesEnvelope` must keep the documented state direct conjunct contract.
+  Every direct conjunct of `SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope` must be checked
+  as a top-level deep/TLC-fast `PROPERTY`.
+  Every direct conjunct of `RbcLifecycleAlwaysMatchesEndToEndEnvelope` must be checked.
+  Nested RBC lifecycle aggregate conjuncts use the same top-level `PROPERTY` coverage rule.
+  First-level RBC lifecycle aggregate conjuncts use the same top-level `PROPERTY` coverage rule.
+  RBC progress, corruption repair, chunk/ready/deliver, delivery-entry, and delivered-state roots stay decomposed.
+  Reachable aggregate temporal property roots recursively use the same top-level `PROPERTY` coverage rule.
+  Finalized certificate retention names the Byzantine commit-vote closure property directly.
+  Root coverage checks require each selected deep/TLC-fast CFG to carry every protected conjunct independently.
+  Correctness-root reachability requires the root property in every selected deep/TLC-fast CFG.
+  Correctness-root direct TypeInvariant stays a top-level `INVARIANT` in every selected deep/TLC-fast CFG.
+  Correctness-root direct temporal obligations stay top-level `PROPERTY` checks in every selected deep/TLC-fast CFG.
+  `EventuallyCommit` must keep the direct `[] (gst => <> committed)` liveness shape with exact lowercase state-variable names.
+  `CommitNeverRevoked` must keep the direct `[] (committed => [] committed)` finality-latch monotonicity shape with exact lowercase state-variable names.
+  Finality `AlwaysMatches` temporal wrappers must keep direct `[]` shapes over their matching zero-arity predicates.
+  `TimeoutTickGateNeverBypassesStalledProgress` must keep the direct `[] TimeoutTickGateMatchesStalledProgress` timeout-gate wrapper shape.
+  Pre-commit handoff `Never`/`Always` predicate wrappers must keep direct `[] Predicate` shapes over their documented zero-arity predicates.
+  `CommittedPhaseNeverLeaves` must keep the direct `[] (phase = "Committed" => [] (phase = "Committed"))` phase permanence shape.
+  Timeout-recovery action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators.
+  Pre-commit handoff action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators.
+  `Committed*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators.
+  `RbcDeliveredFinality*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators.
+  `RbcDeliveredEvidenceNeverRegresses` and `RbcDeliveredPending*` lifecycle action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators.
+  `RbcDeliveredPendingSpecStep*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators.
+  `RbcDeliveryEntry*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators.
+  `RbcDeliveryEntryCommitEvidenceBranch*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators.
+  `DeliveredPendingCompleteWaitState*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators.
+  `PendingProtocolStepsNeverChangeGst` must keep the direct `[] [PendingProtocolStepsPreserveGst]_vars` GST-preservation action-wrapper shape.
+  `CommittedGstNeverEnablesActions` must keep the direct `[] CommittedGstDisablesEveryAction` terminal action-disable shape.
+  `CommittedStateAlwaysMatchesTerminalEnvelope` must keep the documented terminal-state direct conjunct contract.
+  `PostFinalityStateAlwaysMatchesStabilityEnvelope` must keep the documented post-finality stability direct conjunct contract.
+  `TimeoutRecoveryAlwaysMatchesViewChangeEnvelope` must keep the documented timeout-recovery direct conjunct contract.
+  `FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope` must keep the documented certified-commit direct conjunct contract.
+  `PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope` must keep the documented pre-commit handoff direct conjunct contract.
+  `CommitVoteHandoffAlwaysMatchesFinalityEnvelope` must keep the documented commit-vote handoff direct conjunct contract.
+  `FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope` must keep the documented finalized-certificate retention direct conjunct contract.
+  `RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope` must keep the documented RBC delivered-finality direct conjunct contract.
+  `RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope` must keep the documented RBC delivered-state lifecycle direct conjunct contract.
+  `RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope` must keep the documented RBC delivered-pending handoff direct conjunct contract.
+  `DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope` must keep the documented delivered-pending complete wait-state direct conjunct contract.
+  `RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope` must keep the documented RBC delivery-entry outcome direct conjunct contract.
+  `RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope` must keep the documented RBC delivery-entry continuation direct conjunct contract.
+  `RbcLifecycleAlwaysMatchesEndToEndEnvelope` must keep the documented RBC lifecycle direct conjunct contract.
+  `RbcCorruptionRepairAlwaysMatchesFaultEnvelope` must keep the documented RBC corruption-repair direct conjunct contract.
+  `RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope` must keep the documented RBC chunk/ready/deliver availability direct conjunct contract.
+  `RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope` must keep the documented RBC progress-mutation direct conjunct contract.
+  `RbcProgressMutationAlwaysMatchesLocalClassification` must keep the documented RBC progress local-classification direct conjunct contract.
+  `RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope` must keep the documented RBC startup-boundary direct conjunct contract.
+  `RbcProgressStateEvidenceAlwaysMatchesEnvelope` must keep the documented RBC progress-state evidence direct conjunct contract.
+  `RbcLiveEvidenceCausalityAlwaysMatchesEnvelope` must keep the documented RBC live-evidence causality direct conjunct contract.
+  `SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope` must keep the documented end-to-end safety direct conjunct contract.
   Malformed CFG operator-reference directive starts are rejected.
   Top-level no-separator CFG operator-reference directive starts are rejected.
   Indented no-separator CFG operator-reference directive starts are rejected.

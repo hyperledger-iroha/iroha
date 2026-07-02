@@ -16,7 +16,7 @@ use std::{
 
 use eyre::{WrapErr, eyre};
 use iroha_core::da::{LaneEpoch, ReplayFingerprint};
-use iroha_crypto::{Hash, PublicKey, Signature};
+use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 use iroha_data_model::{da::prelude::*, nexus::LaneId};
 use iroha_logger::{debug, warn};
 use norito::{
@@ -608,6 +608,10 @@ fn verify_receipt_signature(
     signer_public_key: &PublicKey,
 ) -> eyre::Result<()> {
     let unsigned_bytes = unsigned_receipt_bytes(receipt, sequence)?;
+    if matches!(signer_public_key.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        iroha_crypto::ed25519_parse_signature(receipt.operator_signature.payload())
+            .map_err(|err| eyre!("DA receipt signature material is malformed: {err}"))?;
+    }
     receipt
         .operator_signature
         .verify(signer_public_key, &unsigned_bytes)
@@ -1364,7 +1368,7 @@ fn remove_temp_artifact(tmp_path: &Path) -> std::io::Result<()> {
 mod temp_artifact_tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair};
     use tempfile::tempdir;
 
     use super::*;
@@ -1376,6 +1380,24 @@ mod temp_artifact_tests {
     fn checked_random_keypair(context: &str) -> KeyPair {
         KeyPair::try_random()
             .unwrap_or_else(|err| panic!("{context}: checked random key generation failed: {err}"))
+    }
+
+    fn checked_ed25519_keypair(context: &str) -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519).unwrap_or_else(|err| {
+            panic!("{context}: checked Ed25519 random key generation failed: {err}")
+        })
+    }
+
+    const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+        let mut payload = signature.payload().to_vec();
+        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
+            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        Signature::from_bytes(&payload)
     }
 
     fn poison_replay_cursor_store(store: &ReplayCursorStore) {
@@ -1436,6 +1458,34 @@ mod temp_artifact_tests {
         assert_eq!(placeholder, RECEIPT_SIGNATURE_PLACEHOLDER);
         assert!(!placeholder.iter().all(|byte| *byte == 0));
         assert_eq!(placeholder, receipt_signature_placeholder().payload());
+    }
+
+    #[test]
+    fn da_receipt_log_rejects_malformed_ed25519_signature_r() {
+        let dir = tempdir().expect("tempdir");
+        let cursor_store =
+            Arc::new(ReplayCursorStore::empty(dir.path().join("cursors")).expect("cursor store"));
+        let signer = checked_ed25519_keypair("DA receipt malformed signature fixture");
+        let log = DaReceiptLog::open(
+            dir.path().join("receipts"),
+            cursor_store,
+            signer.public_key().clone(),
+        )
+        .expect("receipt log");
+        let lane_epoch = LaneEpoch::new(LaneId::new(8), 13);
+        let mut receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xB2);
+        receipt.operator_signature =
+            signature_with_malformed_ed25519_r(&receipt.operator_signature);
+
+        let err = log
+            .append(lane_epoch, 1, receipt, test_fingerprint(0xB2))
+            .expect_err("DA receipt log must reject malformed Ed25519 signature R");
+        let message = format!("{err:?}");
+        assert!(
+            message.contains("DA receipt signature verification failed")
+                && message.contains("signature material is malformed"),
+            "unexpected DA receipt signature admission error: {message}"
+        );
     }
 
     #[test]

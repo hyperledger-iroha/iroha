@@ -75,6 +75,21 @@ function cloneFixture(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function canonicalSignatureBase64Fixture() {
+  return Buffer.alloc(64, 0x01).toString("base64");
+}
+
+function noncanonicalStandardBase64PadBitAlias(encoded) {
+  assert.equal(encoded.endsWith("=="), true);
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const chars = [...encoded];
+  const index = chars.length - 3;
+  const value = alphabet.indexOf(chars[index]);
+  assert.notEqual(value, -1);
+  chars[index] = alphabet[value ^ 0x01];
+  return chars.join("");
+}
+
 function readU64Length(buffer, offset, label) {
   assert.ok(offset + 8 <= buffer.length, `${label} length prefix is in bounds`);
   const value = buffer.readBigUInt64LE(offset);
@@ -12455,6 +12470,7 @@ test("submitBridgeProof posts normalized TRON deployment proof material", async 
 test("submitBridgeProof rejects ambiguous or burn-bound destination payloads before fetch", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => assert.fail("unexpected fetch") });
   const bindingHash = sampleSccpTronDestinationBindingHash();
+  const canonicalSignature = canonicalSignatureBase64Fixture();
 
   await assert.rejects(
     () =>
@@ -12488,6 +12504,26 @@ test("submitBridgeProof rejects ambiguous or burn-bound destination payloads bef
       }),
     /messageBundle submissions/,
   );
+
+  for (const signatureB64 of [
+    ` ${canonicalSignature} `,
+    canonicalSignature.replace(/=+$/u, ""),
+    noncanonicalStandardBase64PadBitAlias(canonicalSignature),
+  ]) {
+    await assert.rejects(
+      () =>
+        client.submitBridgeProof({
+          authority: "alice@sora",
+          signatureB64,
+          messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        }),
+      /exact standard-base64/,
+    );
+    assert.throws(
+      () => buildMultisigProposeRequest({ ...request, signatureB64 }),
+      /exact standard-base64/,
+    );
+  }
 });
 
 test("submitBridgeMessage posts normalized TRON deployment proof material", async () => {
@@ -12548,6 +12584,23 @@ test("submitBridgeMessage posts normalized TRON deployment proof material", asyn
 
 test("TRON deployment proof material rejects destination binding hash mismatch", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl: async () => assert.fail("unexpected fetch") });
+  const canonicalSignature = canonicalSignatureBase64Fixture();
+
+  for (const signatureB64 of [
+    ` ${canonicalSignature} `,
+    canonicalSignature.replace(/=+$/u, ""),
+    noncanonicalStandardBase64PadBitAlias(canonicalSignature),
+  ]) {
+    await assert.rejects(
+      () =>
+        client.submitBridgeMessage({
+          authority: "alice@sora",
+          signatureB64,
+          messageBundle: SCCP_TEST_MESSAGE_BUNDLE,
+        }),
+      /exact standard-base64/,
+    );
+  }
 
   await assert.rejects(
     () =>
@@ -22003,8 +22056,19 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
   );
   await assert.rejects(
     () => client.proposeMultisig({ ...request, signatureB64: "not base64" }),
-    /valid base64/,
+    /exact standard-base64/,
   );
+  const canonicalSignature = canonicalSignatureBase64Fixture();
+  for (const signatureB64 of [
+    ` ${canonicalSignature} `,
+    canonicalSignature.replace(/=+$/u, ""),
+    noncanonicalStandardBase64PadBitAlias(canonicalSignature),
+  ]) {
+    await assert.rejects(
+      () => client.proposeMultisig({ ...request, signatureB64 }),
+      /exact standard-base64/,
+    );
+  }
   await assert.rejects(
     () => client.proposeMultisig({ ...request, creationTimeMs: -1 }),
     /non-negative integer/,

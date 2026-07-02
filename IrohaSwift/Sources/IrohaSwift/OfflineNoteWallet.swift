@@ -736,24 +736,7 @@ public enum OfflineNoteReceiveRequestCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        guard !value.isEmpty,
-              !value.contains("="),
-              value.unicodeScalars.allSatisfy({ scalar in
-                  let byte = scalar.value
-                  return (65...90).contains(byte)
-                      || (97...122).contains(byte)
-                      || (48...57).contains(byte)
-                      || byte == 45
-                      || byte == 95
-              }) else {
-            return nil
-        }
-        var normalized = value
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padding = (4 - normalized.count % 4) % 4
-        normalized.append(String(repeating: "=", count: padding))
-        return Data(base64Encoded: normalized)
+        OfflineNoteTextTransferContract.base64URLDecodedData(value)
     }
 }
 
@@ -1005,24 +988,7 @@ public enum OfflineNotePaymentTokenCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        guard !value.isEmpty,
-              !value.contains("="),
-              value.unicodeScalars.allSatisfy({ scalar in
-                  let byte = scalar.value
-                  return (65...90).contains(byte)
-                      || (97...122).contains(byte)
-                      || (48...57).contains(byte)
-                      || byte == 45
-                      || byte == 95
-              }) else {
-            return nil
-        }
-        var normalized = value
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padding = (4 - normalized.count % 4) % 4
-        normalized.append(String(repeating: "=", count: padding))
-        return Data(base64Encoded: normalized)
+        OfflineNoteTextTransferContract.base64URLDecodedData(value)
     }
 }
 
@@ -1242,24 +1208,7 @@ public enum OfflineNoteReceiptAckCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        guard !value.isEmpty,
-              !value.contains("="),
-              value.unicodeScalars.allSatisfy({ scalar in
-                  let byte = scalar.value
-                  return (65...90).contains(byte)
-                      || (97...122).contains(byte)
-                      || (48...57).contains(byte)
-                      || byte == 45
-                      || byte == 95
-              }) else {
-            return nil
-        }
-        var normalized = value
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padding = (4 - normalized.count % 4) % 4
-        normalized.append(String(repeating: "=", count: padding))
-        return Data(base64Encoded: normalized)
+        OfflineNoteTextTransferContract.base64URLDecodedData(value)
     }
 }
 

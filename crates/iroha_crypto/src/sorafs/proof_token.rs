@@ -431,12 +431,15 @@ impl ProofToken {
         if signature_bytes_are_all_zero(&self.signature.to_bytes()) {
             return Err(VerificationError::InertSignature);
         }
+        let signature =
+            crate::signature::ed25519::Ed25519Sha512::parse_signature(&self.signature.to_bytes())
+                .map_err(|_| VerificationError::InvalidSignature)?;
         let body = self
             .body_without_signature()
             .map_err(|_| VerificationError::InvalidSignature)?;
         let message = signing_message(&body);
         verifying_key
-            .verify_strict(&message, &self.signature)
+            .verify_strict(&message, &signature)
             .map_err(|_| VerificationError::InvalidSignature)
     }
 
@@ -1163,6 +1166,34 @@ mod tests {
             .expect_err("all-zero proof-token signature must fail byte verification");
 
         assert!(matches!(err, VerificationError::InertSignature));
+    }
+
+    #[test]
+    fn verify_signature_rejects_invalid_signature_r_material() {
+        for invalid_r in [ED25519_SMALL_ORDER_POINT, ED25519_NONCANONICAL_IDENTITY] {
+            let mut rng = ChaCha20Rng::seed_from_u64(47);
+            let digest_key = ProofTokenDigestKey::new([0x47; 32]);
+            let signing = test_signing_key();
+            let evidence = [0x74; 32];
+            let params = ProofTokenParams {
+                moderation: ModerationAction::Block,
+                entry_ids: &["denylist/verify-invalid-r"],
+                evidence_digest: &evidence,
+                issued_at: UNIX_EPOCH + Duration::from_secs(1_714_000_047),
+                expires_at: None,
+            };
+            let mut token =
+                ProofToken::mint(&mut rng, &digest_key, &signing, &params).expect("mint token");
+            let mut signature = token.signature.to_bytes();
+            signature[..32].copy_from_slice(&invalid_r);
+            token.signature = Signature::from_bytes(&signature);
+
+            let err = token
+                .verify_signature(&signing.verifying_key())
+                .expect_err("invalid Ed25519 signature R must fail verification admission");
+
+            assert!(matches!(err, VerificationError::InvalidSignature));
+        }
     }
 
     #[test]

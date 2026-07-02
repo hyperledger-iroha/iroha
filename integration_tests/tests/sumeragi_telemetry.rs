@@ -2,23 +2,27 @@
 //! Sumeragi telemetry soak exercising long-running epochs with adversarial collectors.
 //!
 //! This integration test spins up an `NPoS` network with redundant collector fan-out,
-//! injects large RBC payloads with deterministic chunk loss, and then cross-checks
-//! `/v1/sumeragi/telemetry` snapshots against the Prometheus metrics surface over
-//! multiple block heights. The goal is to ensure operators can rely on the telemetry
-//! payload even when collectors need redundant fan-out to make progress.
+//! cross-checks `/v1/sumeragi/telemetry` snapshots against the Prometheus metrics surface
+//! over multiple block heights, then injects a large RBC payload with deterministic chunk
+//! loss and validates the backlog telemetry. The goal is to ensure operators can rely on
+//! the telemetry payload even when collectors need redundant fan-out to make progress.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eyre::{Context as _, Result, ensure};
 use integration_tests::{metrics::MetricsReader, sandbox};
-use iroha::data_model::{
-    Level,
-    isi::{Log, SetParameter},
-    parameter::{
-        Parameter,
-        system::{SumeragiNposParameters, SumeragiParameter},
+use iroha::{
+    client::Status,
+    data_model::{
+        Level,
+        isi::{Log, SetParameter},
+        parameter::{
+            Parameter,
+            system::{SumeragiNposParameters, SumeragiParameter},
+        },
     },
 };
+use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use norito::json::{self, Value};
 use reqwest::Client as HttpClient;
@@ -68,7 +72,7 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
     };
 
     let builder = NetworkBuilder::new()
-        .with_peers(5)
+        .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_config_layer(|layer| {
             layer
@@ -143,10 +147,7 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
     for idx in status.blocks..2 {
         client.submit_blocking(Log::new(Level::INFO, format!("telemetry seed {idx}")))?;
     }
-    network
-        .ensure_blocks_with(|height| height.total >= 2)
-        .await?;
-    inject_large_rbc_payloads(&network, "telemetry warmup".to_owned()).await?;
+    wait_for_total_height_quorum_with_bounded_lag(&network, 2).await?;
 
     let http = HttpClient::new();
     let telemetry_url = client
@@ -171,9 +172,7 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
             PROGRESS_BLOCKS_PER_ITERATION,
             format!("telemetry iteration {iteration}"),
         )?;
-        network
-            .ensure_blocks_with(|height| height.non_empty >= target_non_empty)
-            .await?;
+        wait_for_non_empty_height_quorum_with_bounded_lag(&network, target_non_empty).await?;
 
         let telemetry = wait_for_telemetry(&http, &telemetry_url, |snapshot| {
             snapshot
@@ -208,6 +207,17 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
 
         previous_total_votes = total_votes;
     }
+
+    inject_large_rbc_payloads(&network, "telemetry adversarial backlog".to_owned()).await?;
+    let telemetry = wait_for_telemetry(&http, &telemetry_url, |snapshot| {
+        snapshot
+            .get("rbc_backlog")
+            .and_then(Value::as_object)
+            .is_some()
+    })
+    .await?;
+    let metrics = wait_for_metrics(&http, &metrics_url).await?;
+    compare_rbc_backlog(&telemetry, &metrics)?;
 
     network.shutdown().await;
     Ok(())
@@ -360,6 +370,146 @@ fn compare_rbc_backlog(snapshot: &Value, metrics: &MetricsReader) -> Result<()> 
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum TelemetryHeightKind {
+    Total,
+    NonEmpty,
+}
+
+impl TelemetryHeightKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Total => "total",
+            Self::NonEmpty => "non_empty",
+        }
+    }
+
+    fn value(self, status: &Status) -> u64 {
+        match self {
+            Self::Total => status.blocks,
+            Self::NonEmpty => status.blocks_non_empty,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TelemetryHeightSnapshot {
+    blocks: u64,
+    blocks_non_empty: u64,
+    queue_size: u64,
+}
+
+impl TelemetryHeightSnapshot {
+    fn from_status(status: &Status) -> Self {
+        Self {
+            blocks: status.blocks,
+            blocks_non_empty: status.blocks_non_empty,
+            queue_size: status.queue_size,
+        }
+    }
+}
+
+async fn wait_for_total_height_quorum_with_bounded_lag(
+    network: &iroha_test_network::Network,
+    target_height: u64,
+) -> Result<()> {
+    wait_for_height_quorum_with_bounded_lag(network, TelemetryHeightKind::Total, target_height)
+        .await
+}
+
+async fn wait_for_non_empty_height_quorum_with_bounded_lag(
+    network: &iroha_test_network::Network,
+    target_height: u64,
+) -> Result<()> {
+    wait_for_height_quorum_with_bounded_lag(network, TelemetryHeightKind::NonEmpty, target_height)
+        .await
+}
+
+async fn wait_for_height_quorum_with_bounded_lag(
+    network: &iroha_test_network::Network,
+    kind: TelemetryHeightKind,
+    target_height: u64,
+) -> Result<()> {
+    let deadline = Instant::now() + network.sync_timeout();
+    let peer_count = network.peers().len();
+    let quorum = commit_quorum_from_len(peer_count).max(1);
+
+    loop {
+        let mut snapshots = Vec::new();
+        let mut heights = Vec::new();
+        let mut client_height = None;
+        let mut errors = Vec::new();
+
+        for (idx, peer) in network.peers().iter().enumerate() {
+            if !peer.is_running() {
+                continue;
+            }
+            match peer.status().await {
+                Ok(status) => {
+                    let height = kind.value(&status);
+                    if idx == 0 {
+                        client_height = Some(height);
+                    }
+                    heights.push(height);
+                    snapshots.push(TelemetryHeightSnapshot::from_status(&status));
+                }
+                Err(err) => errors.push(format!("peer#{idx}: {err:#}")),
+            }
+        }
+
+        if errors.is_empty()
+            && client_and_quorum_height_with_bounded_lag(
+                client_height,
+                &heights,
+                target_height,
+                quorum,
+            )
+        {
+            return Ok(());
+        }
+
+        if Instant::now() >= deadline {
+            let label = kind.label();
+            eyre::bail!(
+                "telemetry {label} height quorum did not reach {target_height} within {:?}: quorum={quorum}, client_height={client_height:?}, heights={heights:?}, snapshot={snapshots:?}, errors={errors:?}",
+                network.sync_timeout()
+            );
+        }
+
+        sleep(TELEMETRY_RETRY_INTERVAL).await;
+    }
+}
+
+fn client_and_quorum_height_with_bounded_lag(
+    client_height: Option<u64>,
+    heights: &[u64],
+    target_height: u64,
+    quorum: usize,
+) -> bool {
+    client_height.is_some_and(|height| height >= target_height)
+        && height_quorum_with_bounded_lag(heights, target_height, quorum)
+}
+
+fn height_quorum_with_bounded_lag(heights: &[u64], target_height: u64, quorum: usize) -> bool {
+    if heights
+        .iter()
+        .filter(|height| **height >= target_height)
+        .count()
+        < quorum
+    {
+        return false;
+    }
+
+    let Some(min_height) = heights.iter().min().copied() else {
+        return false;
+    };
+    let Some(max_height) = heights.iter().max().copied() else {
+        return false;
+    };
+
+    max_height >= target_height && max_height.saturating_sub(min_height) <= 1
+}
+
 async fn wait_for_telemetry<F>(http: &HttpClient, url: &reqwest::Url, predicate: F) -> Result<Value>
 where
     F: Fn(&Value) -> bool,
@@ -438,7 +588,9 @@ fn submit_progress_logs(
 
 #[cfg(test)]
 mod tests {
-    use super::{availability_total_votes, compare_availability};
+    use super::{
+        availability_total_votes, client_and_quorum_height_with_bounded_lag, compare_availability,
+    };
 
     #[test]
     fn compare_availability_handles_zero_counters() {
@@ -465,5 +617,37 @@ mod tests {
         );
         compare_availability(&payload, &metrics).expect("availability comparison succeeds");
         assert_eq!(availability_total_votes(&payload).expect("total votes"), 0);
+    }
+
+    #[test]
+    fn client_and_quorum_height_accepts_one_block_tail_lag() {
+        assert!(client_and_quorum_height_with_bounded_lag(
+            Some(4),
+            &[4, 4, 4, 3],
+            4,
+            3
+        ));
+    }
+
+    #[test]
+    fn client_and_quorum_height_rejects_unsafe_progress_splits() {
+        assert!(!client_and_quorum_height_with_bounded_lag(
+            Some(3),
+            &[3, 4, 4, 4],
+            4,
+            3
+        ));
+        assert!(!client_and_quorum_height_with_bounded_lag(
+            Some(4),
+            &[4, 4, 3, 3],
+            4,
+            3
+        ));
+        assert!(!client_and_quorum_height_with_bounded_lag(
+            Some(5),
+            &[5, 5, 5, 3],
+            5,
+            3
+        ));
     }
 }

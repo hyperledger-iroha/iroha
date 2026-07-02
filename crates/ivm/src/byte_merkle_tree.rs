@@ -648,10 +648,12 @@ impl ByteMerkleTree {
 
         // GPU CUDA path
         #[cfg(feature = "cuda")]
-        if {
+        let use_cuda = {
             let min_cuda = merkle_cuda_min_leaves();
             crate::cuda_available() && leaves_count >= min_cuda
-        } {
+        };
+        #[cfg(feature = "cuda")]
+        if use_cuda {
             // Prepare padded blocks similar to Metal path
             let mut blocks: Vec<[u8; 64]> = Vec::with_capacity(leaves_count);
             let bit_len_be = (chunk as u64 * 8).to_be_bytes();

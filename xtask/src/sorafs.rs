@@ -4638,7 +4638,7 @@ fn verify_manifest_signatures(
             return Err("signer_multihash does not match encoded public key".into());
         }
 
-        let signature = Signature::try_from_bytes(&signature_bytes)
+        let signature = iroha_crypto::ed25519_parse_signature(&signature_bytes)
             .map_err(|err| format!("invalid signature material: {err}"))?;
         signature
             .verify(&public_key, manifest_digest)
@@ -7908,6 +7908,72 @@ mod tests {
                 .expect("build alias proof");
         let alias_bundle = decode_alias_proof(&alias_binding.proof).expect("decode alias proof");
         verify_alias_proof_bundle(&alias_bundle).expect("alias proof signature verifies");
+    }
+
+    #[test]
+    fn manifest_signatures_reject_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let council_keys = pin_fixture_council_keypair();
+        let mut record = PinManifestRecord::new(
+            pin_fixture_default_digest(),
+            pin_fixture_default_chunker(),
+            pin_fixture_default_chunk_digest(),
+            pin_fixture_default_policy(),
+            pin_fixture_alice(),
+            12,
+            None,
+            None,
+            Metadata::default(),
+        );
+        record.approve(12, None);
+        let manifest_signatures =
+            pin_fixture_build_envelope(&record, &council_keys).expect("build manifest envelope");
+        let manifest_root: Value =
+            json::from_slice(&manifest_signatures).expect("manifest signatures JSON");
+        assert_eq!(
+            verify_manifest_signatures(&manifest_root, record.digest.as_bytes(), false)
+                .expect("valid manifest signature verifies"),
+            1
+        );
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed_root = manifest_root.clone();
+            let signature_entry = malformed_root
+                .get_mut("signatures")
+                .and_then(Value::as_array_mut)
+                .and_then(|signatures| signatures.first_mut())
+                .and_then(Value::as_object_mut)
+                .expect("signature entry");
+            let signature_hex = signature_entry
+                .get("signature")
+                .and_then(Value::as_str)
+                .expect("signature hex");
+            let mut signature_bytes = hex::decode(signature_hex).expect("decode signature hex");
+            signature_bytes[..32].copy_from_slice(&replacement_r);
+            signature_entry.insert(
+                "signature".to_owned(),
+                Value::String(hex::encode(signature_bytes)),
+            );
+
+            let err = verify_manifest_signatures(&malformed_root, record.digest.as_bytes(), false)
+                .expect_err("malformed Ed25519 R must fail admission");
+            assert!(
+                err.to_string().contains("invalid signature material"),
+                "unexpected {label} R error: {err}"
+            );
+        }
     }
 
     #[test]

@@ -7,6 +7,7 @@ import argparse
 import base64
 import binascii
 import hashlib
+import ipaddress
 import json
 import sys
 import urllib.error
@@ -136,6 +137,12 @@ def _decode_hash_text(value: Any, *, label: str) -> bytes:
 
 
 def _account_states_url(api_url: str) -> str:
+    if (
+        not isinstance(api_url, str)
+        or api_url != api_url.strip()
+        or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in api_url)
+    ):
+        raise ValueError("--api-url must be an exact http(s) URL")
     parsed = urllib.parse.urlparse(api_url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ValueError("--api-url must be an http(s) URL")
@@ -145,10 +152,50 @@ def _account_states_url(api_url: str) -> str:
         )
     if parsed.params or parsed.query or parsed.fragment:
         raise ValueError("--api-url must not include params, query, or fragment")
+    host = parsed.hostname
+    if host is None:
+        raise ValueError("--api-url must be an http(s) URL")
+    if parsed.scheme == "http" and not _api_host_is_loopback(host):
+        raise ValueError("--api-url must use HTTPS unless it is loopback HTTP")
+    if parsed.scheme == "https" and _api_host_is_non_public_dns(host):
+        raise ValueError("--api-url HTTPS host must use public DNS")
     path = parsed.path.rstrip("/")
     if path.endswith("/api/v3/accountStates"):
         return urllib.parse.urlunparse(parsed._replace(path=path))
     return urllib.parse.urlunparse(parsed._replace(path=path + "/api/v3/accountStates"))
+
+
+def _api_host_is_loopback(host: str) -> bool:
+    normalized = host.strip("[]").lower()
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return normalized == "localhost" or normalized.endswith(".localhost")
+
+
+def _api_host_is_non_public_dns(host: str) -> bool:
+    normalized = host.strip("[]").lower()
+    try:
+        ipaddress.ip_address(normalized)
+    except ValueError:
+        pass
+    else:
+        return True
+    labels = normalized.split(".")
+    return (
+        _api_host_is_loopback(normalized)
+        or normalized.endswith(".local")
+        or "." not in normalized
+        or any(
+            label == ""
+            or not all(ch.isascii() for ch in label)
+            or not label[0].isalnum()
+            or not label[-1].isalnum()
+            or len(label) > 63
+            or any(not (ch.isalnum() or ch == "-") for ch in label)
+            for label in labels
+        )
+    )
 
 
 def _reject_runtime_file_symlink_path(path: Path) -> None:
@@ -698,8 +745,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--api-url",
         required=True,
         help=(
-            "TON Center v3 API root or accountStates endpoint without credentials, "
-            "params, query, or fragment."
+            "TON Center v3 API root or accountStates endpoint. Must be HTTPS "
+            "with a public DNS host or loopback HTTP, and must not include "
+            "credentials, params, query, or fragment."
         ),
     )
     parser.add_argument(
@@ -848,7 +896,7 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
         return fallback
     if _decoded_cli_error_text_issue(text):
         return fallback
-    normalized_text = _decoded_public_blocker_text(text).lower()
+    normalized_text = _decoded_public_blocker_text(text).casefold()
     if any(marker in normalized_text for marker in SENSITIVE_CLI_ERROR_MARKERS):
         return fallback
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):

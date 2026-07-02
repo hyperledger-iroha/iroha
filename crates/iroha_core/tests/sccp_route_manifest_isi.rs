@@ -537,6 +537,34 @@ fn production_bsc_route_manifest_isi_rejects_untrusted_browser_prover_material_w
         "unexpected error: {err:?}"
     );
 
+    let mut root_relative_url = manifest.clone();
+    root_relative_url
+        .destination_browser_prover
+        .as_mut()
+        .expect("destination prover")
+        .module_url = "/sccp-bsc/prover.js".to_owned();
+    let err = UpsertSccpRouteManifest::new(root_relative_url)
+        .execute(&ALICE_ID.clone(), &mut stx)
+        .expect_err("root-relative browser prover URLs must be rejected");
+    assert!(
+        format!("{err:?}").contains("module_url must be HTTPS, loopback HTTP, or package-relative"),
+        "unexpected error: {err:?}"
+    );
+
+    let mut internal_https_url = manifest.clone();
+    internal_https_url
+        .destination_browser_prover
+        .as_mut()
+        .expect("destination prover")
+        .module_url = "https://localhost/sccp-bsc/prover.js".to_owned();
+    let err = UpsertSccpRouteManifest::new(internal_https_url)
+        .execute(&ALICE_ID.clone(), &mut stx)
+        .expect_err("non-public HTTPS browser prover URLs must be rejected");
+    assert!(
+        format!("{err:?}").contains("module_url HTTPS host must use public DNS"),
+        "unexpected error: {err:?}"
+    );
+
     let mut empty_exports = manifest.clone();
     empty_exports
         .destination_browser_prover

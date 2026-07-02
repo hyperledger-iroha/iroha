@@ -18,6 +18,844 @@ TLC_RUNNER = ROOT_DIR / "scripts" / "formal" / "sumeragi_tlc.sh"
 SUMERAGI_DEEP_CFG = SPEC_DIR / "Sumeragi_deep.cfg"
 SUMERAGI_TLC_FAST_CFG = SPEC_DIR / "Sumeragi_tlc_fast.cfg"
 SUMERAGI_ROOT_PROPERTY = "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope"
+SUMERAGI_STATE_INVARIANT_ROOT = "SumeragiConsensusCoreStateMatchesEnvelope"
+SUMERAGI_STATE_MATCHES_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "SumeragiConsensusCoreStateMatchesEnvelope": (
+        "CommitImpliesQuorum",
+        "CommitImpliesStakeQuorum",
+        "CommitCertificateMatchesFinality",
+        "LiveCommitGateMatchesFinality",
+        "LiveCommitGateRbcEvidenceMatches",
+        "CommitImpliesLiveVoteQuorum",
+        "CommitImpliesLiveStakeQuorum",
+        "CommitImpliesHonestSupport",
+        "CommitImpliesDelivered",
+        "CommitImpliesRbcEvidence",
+        "FinalityCertificateStackComplete",
+        "FinalityCertificateStackMatchesFinality",
+        "FinalityClearsNewViewHandoff",
+        "CommitDisablesProgressActions",
+        "CommitDisablesByzantineCommitVote",
+        "CommittedPhaseMatchesFinality",
+        "CommitViewMatchesFinality",
+        "CommitViewDoesNotLeadCurrentView",
+        "GstElapsedGateMatchesPreGst",
+        "CommittedPreGstOnlyEnablesGstElapsed",
+        "TimeoutTickGateMatchesStalledProgress",
+        "ByzantineCommitVoteDoesNotBlockTimeoutStall",
+        "ViewEvidenceMatchesActiveView",
+        "ViewEvidenceWitnessRequiresNonzeroActiveView",
+        "NewViewPhaseBelowQuorum",
+        "LiveNewViewVotesStayInHandoff",
+        "HonestProposeGateMatchesHandoffEvidence",
+        "NewViewVoteGateMatchesFreshViewEvidence",
+        "NewViewVoteQuorumGateMatchesNextEvidence",
+        "NewViewVotePendingGateMatchesMissingNextEvidence",
+        "ViewEvidenceIsCompleteOrEmpty",
+        "PreCommitPhasesHaveNoCommitVotes",
+        "PrePreparePhasesHaveNoPrepareVotes",
+        "LivePrepareVotesStayInHandoff",
+        "PrepareVoteGateMatchesProposalEvidence",
+        "PrepareVoteQuorumGateMatchesNextEvidence",
+        "PrepareVotePendingGateMatchesMissingNextEvidence",
+        "CommitImpliesViewQuorumEvidence",
+        "CommitVotePhaseRequiresPrepareQuorum",
+        "LiveCommitVotesRequirePrepareQuorum",
+        "CommitVoteGateMatchesPrepareEvidence",
+        "ByzantineCommitVoteGateMatchesPrepareEvidence",
+        "HonestCommitVoteFinalityGateMatchesNextEvidence",
+        "HonestCommitVotePendingGateMatchesMissingNextEvidence",
+        "ByzantineCommitVoteFinalityGateMatchesNextEvidence",
+        "ByzantineCommitVotePendingGateMatchesMissingNextEvidence",
+        "LiveCommitVotesStayInCommitHandoff",
+        "CommitImpliesPrepareQuorum",
+        "CommitEvidenceMatchesVoteCounters",
+        "CommitEvidenceIsCompleteOrEmpty",
+        "CommitEvidenceIsBounded",
+        "VoteCountersRespectRosterBudgets",
+        "StakeSignedMatchesVoteCounters",
+        "LiveStakeSignedIsBounded",
+        "NoCommitEvidenceBeforeCommit",
+        "NoCommitViewBeforeCommit",
+        "DeliverImpliesEvidence",
+        "RbcDeliveredWithoutFinalityHasNoCommitCertificate",
+        "RbcDeliveredWithoutFinalityWaitsForCommitEvidence",
+        "RbcProgressEvidenceMatchesState",
+        "RbcPartialProgressEvidenceMatchesState",
+        "RbcCorruptedNeverHasValidDigest",
+        "RbcCorruptedRetainsHeaderEvidence",
+        "RbcCorruptedHasNoFinalityArtifacts",
+        "RbcCorruptedOnlyEnablesInitRepairProgress",
+        "RbcMissingHeaderRequiresIdle",
+        "RbcHeaderEvidenceRequiresNonIdle",
+        "RbcValidDigestRequiresHeader",
+        "RbcValidDigestRequiresActiveState",
+        "RbcChunkEvidenceRequiresHeader",
+        "RbcChunkEvidenceRequiresChunkOrCorruptedState",
+        "RbcPartialChunkEvidenceRequiresChunkingOrCorruption",
+        "RbcFullChunkCoverageRequiresCoveredOrCorruptedState",
+        "RbcZeroChunkEvidenceRequiresPreChunkOrCorruption",
+        "RbcReadyVotesRequireChunkHeaderEvidence",
+        "RbcReadyVotesRequireReadyOrCorruptedState",
+        "RbcPartialReadyEvidenceRequiresReadyPartialOrCorruption",
+        "RbcReadyQuorumEvidenceRequiresQuorumOrCorruptedState",
+        "RbcZeroReadyEvidenceRequiresPreReadyOrCorruption",
+        "RbcCounterEvidenceRequiresValidDigestOrCorruption",
+        "RbcInvalidDigestRequiresIdleOrCorruption",
+        "ByzantineFaultGateMatchesCorruptibleRbc",
+        "RbcInitGateMatchesRepairableState",
+        "RbcChunkGateMatchesHeaderDigestEvidence",
+        "RbcReadyGateMatchesChunkEvidence",
+        "RbcDeliverGateMatchesCompleteEvidence",
+        "RbcReadyQuorumEnablesDeliverGate",
+        "RbcDeliverFinalityGateMatchesBufferedCommitEvidence",
+        "RbcDeliverPendingGateMatchesMissingBufferedCommitEvidence",
+        "LiveHeaderDigestEvidenceStayInRbcHandoff",
+        "LiveChunkEvidenceStayInRbcHandoff",
+        "LiveReadyVotesStayInRbcHandoff",
+    ),
+}
+SUMERAGI_TEMPORAL_PROPERTY_ROOTS_REQUIRING_CFG_COVERAGE = (
+    "SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope",
+    "RbcLifecycleAlwaysMatchesEndToEndEnvelope",
+    "RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope",
+    "RbcCorruptionRepairAlwaysMatchesFaultEnvelope",
+    "RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope",
+    "RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope",
+    "RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope",
+)
+SUMERAGI_CONSENSUS_CORE_ROOT_CONJUNCT_CONTRACTS = {
+    "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope": (
+        "TypeInvariant",
+        "SumeragiConsensusCoreAlwaysMatchesExactness",
+        "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+        "EventuallyCommit",
+    ),
+    "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope": (
+        "SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope",
+        "SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope",
+    ),
+    "SumeragiConsensusCoreAlwaysMatchesExactness": (
+        "SumeragiConsensusCoreStateMatchesEnvelope",
+    ),
+    "SumeragiConsensusCoreFastCorrectnessEnvelope": (
+        "TypeInvariant",
+        "SumeragiConsensusCoreAlwaysMatchesExactness",
+    ),
+}
+SUMERAGI_CONSENSUS_CORE_ROOT_CFG_CHECK_CONTRACTS = {
+    "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope": {
+        "TypeInvariant": "INVARIANT",
+        "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope": "PROPERTY",
+        "EventuallyCommit": "PROPERTY",
+    },
+}
+SUMERAGI_END_TO_END_SAFETY_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope": (
+        "CommittedStateAlwaysMatchesTerminalEnvelope",
+        "PostFinalityStateAlwaysMatchesStabilityEnvelope",
+        "TimeoutRecoveryAlwaysMatchesViewChangeEnvelope",
+        "FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope",
+        "PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope",
+        "CommitVoteHandoffAlwaysMatchesFinalityEnvelope",
+        "FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope",
+        "PendingProtocolStepsNeverChangeGst",
+        "RbcLifecycleAlwaysMatchesEndToEndEnvelope",
+    ),
+}
+SUMERAGI_TEMPORAL_ALWAYS_THEOREM_CONTRACTS = {
+    "TimeoutTickGateNeverBypassesStalledProgress": "TimeoutTickGateMatchesStalledProgress",
+    "ViewQuorumEvidenceNeverDiverges": "ViewEvidenceMatchesActiveView",
+    "ViewEvidenceWitnessNeverTargetsZeroOrNewView": "ViewEvidenceWitnessRequiresNonzeroActiveView",
+    "NewViewQuorumHandoffNeverStalls": "NewViewPhaseBelowQuorum",
+    "LiveNewViewVotesNeverLeakPastHandoff": "LiveNewViewVotesStayInHandoff",
+    "HonestProposeGateNeverBypassesHandoffEvidence": "HonestProposeGateMatchesHandoffEvidence",
+    "NewViewVoteGateNeverBypassesFreshViewEvidence": "NewViewVoteGateMatchesFreshViewEvidence",
+    "NewViewVoteQuorumGateNeverBypassesNextEvidence": "NewViewVoteQuorumGateMatchesNextEvidence",
+    "NewViewVotePendingGateNeverBypassesMissingNextEvidence": "NewViewVotePendingGateMatchesMissingNextEvidence",
+    "ViewEvidenceNeverPartial": "ViewEvidenceIsCompleteOrEmpty",
+    "PreCommitVotesNeverCarryAcrossViews": "PreCommitPhasesHaveNoCommitVotes",
+    "PrePrepareVotesNeverCarryAcrossViews": "PrePreparePhasesHaveNoPrepareVotes",
+    "LivePrepareVotesNeverBypassPrepareHandoff": "LivePrepareVotesStayInHandoff",
+    "PrepareVoteGateNeverBypassesProposalEvidence": "PrepareVoteGateMatchesProposalEvidence",
+    "PrepareVoteQuorumGateNeverBypassesNextEvidence": "PrepareVoteQuorumGateMatchesNextEvidence",
+    "PrepareVotePendingGateNeverBypassesMissingNextEvidence": "PrepareVotePendingGateMatchesMissingNextEvidence",
+    "CommittedPhaseAlwaysMatchesFinality": "CommittedPhaseMatchesFinality",
+    "CommitCertificateAlwaysMatchesFinality": "CommitCertificateMatchesFinality",
+    "LiveCommitGateAlwaysMatchesFinality": "LiveCommitGateMatchesFinality",
+    "LiveCommitGateRbcEvidenceAlwaysMatches": "LiveCommitGateRbcEvidenceMatches",
+    "CommittedGstNeverEnablesActions": "CommittedGstDisablesEveryAction",
+}
+SUMERAGI_TEMPORAL_ACTION_THEOREM_CONTRACTS = {
+    "PendingProtocolStepsNeverChangeGst": "PendingProtocolStepsPreserveGst",
+    "TimeoutTickStepAlwaysStartsFreshNewView": "TimeoutTickStepStartsFreshNewView",
+    "TimeoutTickStepNeverPreemptsProgress": "TimeoutTickStepNeverPreemptsProgressStep",
+    "TimeoutTickStepAlwaysClearsCommitVoteGates": "TimeoutTickStepClearsCommitVoteGates",
+    "TimeoutTickStepAlwaysStartsNewViewVoteHandoff": "TimeoutTickStepStartsNewViewVoteHandoff",
+    "TimeoutTickStepAlwaysPreservesRbcEvidence": "TimeoutTickStepPreservesRbcEvidence",
+    "ViewAdvanceOnlyComesFromTimeout": "ViewAdvanceOnlyComesFromTimeoutStep",
+    "LiveProgressResetOnlyByTimeout": "LiveProgressResetOnlyByTimeoutStep",
+    "ViewEvidenceOnlyChangesByQuorumOrTimeout": "ViewEvidenceChangesOnlyByQuorumOrTimeoutStep",
+    "NewViewVotesOnlyChangeByVoteOrReset": "NewViewVotesChangeOnlyByVoteOrResetStep",
+    "PrepareVotesOnlyChangeByVoteOrTimeout": "PrepareVotesChangeOnlyByVoteOrTimeoutStep",
+    "CommitVoteCountersOnlyChangeByVoteOrTimeout": "CommitVoteCountersChangeOnlyByVoteOrTimeoutStep",
+    "PhaseOnlyChangesByProtocol": "PhaseOnlyChangesByProtocolStep",
+    "PreparePhaseEntryOnlyByProposal": "PreparePhaseEntryOnlyByProposalStep",
+    "CommitVotePhaseEntryOnlyByPrepareQuorum": "CommitVotePhaseEntryOnlyByPrepareQuorumStep",
+    "ProposePhaseEntryOnlyByNewViewQuorum": "ProposePhaseEntryOnlyByNewViewQuorumStep",
+    "NewViewPhaseEntryOnlyByTimeout": "NewViewPhaseEntryOnlyByTimeoutStep",
+    "HonestProposeStepAlwaysStartsPrepareAndRbc": "HonestProposeStepStartsPrepareAndRbc",
+    "HonestProposeStepAlwaysStartsPrepareVoteHandoff": "HonestProposeStepStartsPrepareVoteHandoff",
+    "NewViewVoteQuorumStepAlwaysInstallsViewEvidence": "NewViewVoteQuorumStepInstallsViewEvidence",
+    "NewViewVoteQuorumStepAlwaysStartsProposalHandoff": "NewViewVoteQuorumStepStartsProposalHandoff",
+    "NewViewVotePendingStepNeverInstallsViewEvidence": "NewViewVotePendingStepPreservesPreProposalArtifacts",
+    "PrepareVoteQuorumStepAlwaysEntersCommitVote": "PrepareVoteQuorumStepEntersCommitVote",
+    "PrepareVoteQuorumStepAlwaysStartsCommitVoteHandoff": "PrepareVoteQuorumStepStartsCommitVoteHandoff",
+    "PrepareVotePendingStepNeverMutatesCommitArtifacts": "PrepareVotePendingStepPreservesPreCommitArtifacts",
+    "PrepareVotePendingStepAlwaysKeepsPrepareVoteHandoff": "PrepareVotePendingStepKeepsPrepareVoteHandoff",
+    "CommittedConsensusStateNeverChanges": "CommittedConsensusStateStableStep",
+    "CommittedOnlyGstObservationCanChange": "CommittedOnlyGstObservationCanMoveStep",
+    "CommittedPreGstOnlyGstElapsedCanMove": "CommittedPreGstOnlyGstElapsedCanMoveStep",
+    "CommittedPreGstNextOnlyGstElapsed": "CommittedPreGstNextOnlyGstElapsedStep",
+    "CommittedPreGstSpecStepStuttersOrObservesGst": "CommittedPreGstSpecStepStuttersOrObservesGstStep",
+    "CommittedGstStateNeverChanges": "CommittedGstStateStableStep",
+    "CommittedGstOnlyAllowsStuttering": "CommittedGstRejectsNextStep",
+    "CommittedGstSpecStepOnlyStutters": "CommittedGstSpecStepOnlyStuttersStep",
+    "CommittedSpecNonStutteringOnlyObservesGst": "CommittedSpecNonStutteringOnlyObservesGstStep",
+    "CommittedSpecStepStuttersOrObservesGst": "CommittedSpecStepStuttersOrObservesGstStep",
+    "CommittedSpecStepPreservesFinalityStack": "CommittedSpecStepPreservesFinalityStackStep",
+    "CommittedSpecStepOnlyChangesGstFlag": "CommittedSpecStepOnlyChangesGstFlagStep",
+    "CommittedSpecStepNeverRunsProtocolActions": "CommittedSpecStepNeverRunsProtocolActionsStep",
+    "CommittedSpecStepKeepsProgressActionsQuiescent": "CommittedSpecStepKeepsProgressActionsQuiescentStep",
+    "CommittedSpecStepPreservesBudgetedRbcEvidence": "CommittedSpecStepPreservesBudgetedRbcEvidenceStep",
+    "RbcDeliveredFinalityOnlyComesFromCommitVote": "RbcDeliveredFinalityOnlyByCommitVoteStep",
+    "RbcDeliveredFinalityAlwaysCompletesCommittedDelivery": "RbcDeliveredFinalityStepCompletesCommittedDelivery",
+    "RbcDeliveredFinalityAlwaysCommitsCurrentView": "RbcDeliveredFinalityCommitsCurrentViewStep",
+    "RbcDeliveredFinalityOnlyLeavesGstElapsedGate": "RbcDeliveredFinalityLeavesOnlyGstElapsedGateStep",
+    "RbcDeliveredFinalityAlwaysInstallsCommitCertificateWitnesses": "RbcDeliveredFinalityInstallsCommitCertificateWitnessesStep",
+    "RbcDeliveredFinalityAlwaysMatchesCommitCertificateWitnessChange": "RbcDeliveredFinalityMatchesCommitCertificateWitnessChangeStep",
+    "RbcDeliveredFinalityAlwaysMatchesCommitViewWitnessChange": "RbcDeliveredFinalityMatchesCommitViewWitnessChangeStep",
+    "RbcDeliveredFinalityAlwaysMatchesLiveCommitGateCrossing": "RbcDeliveredFinalityMatchesLiveCommitGateCrossingStep",
+    "RbcDeliveredFinalityAlwaysDisablesProgressAfterCommittedDelivery": "RbcDeliveredFinalityDisablesProgressAfterCommittedDeliveryStep",
+    "RbcDeliveredFinalityAlwaysMatchesCertifiedSourceStack": "RbcDeliveredFinalityMatchesCertifiedSourceStackStep",
+    "RbcDeliveredFinalityAlwaysInstallsFinalityCertificateStack": "RbcDeliveredFinalityInstallsFinalityCertificateStackStep",
+    "RbcDeliveredFinalityAlwaysMatchesCommittedPhaseEntry": "RbcDeliveredFinalityMatchesCommittedPhaseEntryStep",
+    "RbcDeliveredFinalityAlwaysMatchesCommitArtifactsChange": "RbcDeliveredFinalityMatchesCommitArtifactsChangeStep",
+    "RbcDeliveredFinalityAlwaysCouplesLatchAndCommitArtifacts": "RbcDeliveredFinalityCouplesLatchAndCommitArtifactsStep",
+    "RbcDeliveredFinalityAlwaysRecordsExactCommitVoteWitnesses": "RbcDeliveredFinalityRecordsExactCommitVoteWitnessesStep",
+    "RbcDeliveredFinalityAlwaysPreservesDeliveredRbcEvidence": "RbcDeliveredFinalityPreservesDeliveredRbcEvidenceStep",
+    "RbcDeliveredFinalityAlwaysPreservesViewPrepareHandoffEvidence": "RbcDeliveredFinalityPreservesViewPrepareHandoffEvidenceStep",
+    "RbcDeliveredFinalityAlwaysHasExactProtocolFrame": "RbcDeliveredFinalityHasExactProtocolFrameStep",
+    "RbcDeliveredFinalityAlwaysHasExactCommitVoteActionFrame": "RbcDeliveredFinalityHasExactCommitVoteActionFrameStep",
+    "RbcDeliveredFinalityAlwaysInstallsCommittedPostStateInvariants": "RbcDeliveredFinalityInstallsCommittedPostStateInvariantsStep",
+    "RbcDeliveredFinalityAlwaysSplitsPostStateGate": "RbcDeliveredFinalityPostStateGateSplitStep",
+    "RbcDeliveredFinalityPreGstPostStateOnlyLeavesGstElapsed": "RbcDeliveredFinalityPreGstPostStateLeavesOnlyGstElapsedStep",
+    "RbcDeliveredFinalityPostGstPostStateIsTerminal": "RbcDeliveredFinalityPostGstPostStateIsTerminalStep",
+    "RbcDeliveredEvidenceNeverRegresses": "RbcDeliveredEvidenceStableStep",
+    "RbcDeliveredPendingHonestCommitVoteAlwaysKeepsWaitState": "RbcDeliveredPendingHonestCommitVoteStepKeepsWaitState",
+    "RbcDeliveredPendingByzantineCommitVoteAlwaysKeepsWaitState": "RbcDeliveredPendingByzantineCommitVoteStepKeepsWaitState",
+    "RbcDeliveredPendingHonestCommitVoteAlwaysCompletesFinality": "RbcDeliveredPendingHonestCommitVoteStepCompletesFinality",
+    "RbcDeliveredPendingByzantineCommitVoteAlwaysCompletesFinality": "RbcDeliveredPendingByzantineCommitVoteStepCompletesFinality",
+    "RbcDeliveredPendingPrepareVoteAlwaysKeepsWaitState": "RbcDeliveredPendingPrepareVoteStepKeepsWaitState",
+    "RbcDeliveredPendingPrepareVoteAlwaysStartsCommitVoteWaitState": "RbcDeliveredPendingPrepareVoteStepStartsCommitVoteWaitState",
+    "RbcDeliveredPendingTimeoutAlwaysStartsNewViewWaitState": "RbcDeliveredPendingTimeoutStepStartsNewViewWaitState",
+    "RbcDeliveredPendingNewViewVoteAlwaysKeepsWaitState": "RbcDeliveredPendingNewViewVoteStepKeepsWaitState",
+    "RbcDeliveredPendingNewViewVoteAlwaysStartsProposalWaitState": "RbcDeliveredPendingNewViewVoteStepStartsProposalWaitState",
+    "RbcDeliveredPendingHonestProposeAlwaysStartsPrepareWaitState": "RbcDeliveredPendingHonestProposeStepStartsPrepareWaitState",
+    "RbcDeliveredPendingGstElapsedAlwaysKeepsWaitState": "RbcDeliveredPendingGstElapsedStepKeepsWaitState",
+    "RbcDeliveredPendingNextAlwaysCoveredByHandoffs": "RbcDeliveredPendingNextStepCoveredByHandoffs",
+    "RbcDeliveredPendingSpecStepAlwaysStuttersOrTakesCoveredHandoff": "RbcDeliveredPendingSpecStepStuttersOrTakesCoveredHandoffStep",
+    "RbcDeliveredPendingSpecStepAlwaysEndsInFinalityOrWaitState": "RbcDeliveredPendingSpecStepEndsInFinalityOrWaitStateStep",
+    "RbcDeliveredPendingSpecStepAlwaysPreservesDeliveredRbcEvidence": "RbcDeliveredPendingSpecStepPreservesDeliveredRbcEvidenceStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesCommitArtifactsOutcome": "RbcDeliveredPendingSpecStepCommitArtifactsMatchOutcomeStep",
+    "RbcDeliveredPendingSpecStepAlwaysChangesGstOnlyByElapsed": "RbcDeliveredPendingSpecStepGstChangesOnlyByElapsedStep",
+    "RbcDeliveredPendingSpecStepAlwaysChangesViewOnlyByTimeout": "RbcDeliveredPendingSpecStepViewChangesOnlyByTimeoutStep",
+    "RbcDeliveredPendingSpecStepAlwaysChangesViewEvidenceOnlyByNewViewOrTimeout": "RbcDeliveredPendingSpecStepViewEvidenceChangesOnlyByNewViewOrTimeoutStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesVoteCounterHandoff": "RbcDeliveredPendingSpecStepVoteCountersMatchHandoffStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesPostGateHandoff": "RbcDeliveredPendingSpecStepPostGatesMatchHandoffStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesTimerGateHandoff": "RbcDeliveredPendingSpecStepTimerGatesMatchHandoffStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesFinalitySource": "RbcDeliveredPendingSpecStepFinalitySourceMatchesCommitVoteStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityWitnessFrame": "RbcDeliveredPendingSpecStepFinalityWitnessFrameStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityStackOutcome": "RbcDeliveredPendingSpecStepFinalityStackMatchesOutcomeStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityGateOutcome": "RbcDeliveredPendingSpecStepFinalityGateOutcomeStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityQuorumOutcome": "RbcDeliveredPendingSpecStepFinalityQuorumOutcomeStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesNonFinalHandoffPhaseShape": "RbcDeliveredPendingSpecStepNonFinalHandoffPhaseShapeStep",
+    "RbcDeliveredPendingSpecStepAlwaysClosesActionSurface": "RbcDeliveredPendingSpecStepActionSurfaceClosedStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesPhaseChangeAction": "RbcDeliveredPendingSpecStepPhaseChangeMatchesActionStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesCounterChangeAction": "RbcDeliveredPendingSpecStepCounterChangesMatchActionStep",
+    "RbcDeliveredPendingSpecStepAlwaysHasExclusiveActionSource": "RbcDeliveredPendingSpecStepActionSourcesExclusiveStep",
+    "RbcDeliveredPendingSpecStepAlwaysPreservesActionSurfaceOnStutter": "RbcDeliveredPendingSpecStepStutterPreservesActionSurfaceStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesCommitArtifactChangeSource": "RbcDeliveredPendingSpecStepCommitArtifactChangeMatchesSourceStep",
+    "RbcDeliveredPendingSpecStepAlwaysInstallsCertifiedDeliveryOnCommitArtifactChange": "RbcDeliveredPendingSpecStepCommitArtifactChangeInstallsCertifiedDeliveryStep",
+    "RbcDeliveredPendingSpecStepAlwaysInstallsExactSourceCertifiedDeliveryOnCommitArtifactChange": "RbcDeliveredPendingSpecStepCommitArtifactChangeExactSourceCertifiedDeliveryStep",
+    "RbcDeliveredPendingSpecStepAlwaysKeepsNonFinalHandoffOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsStayNonFinalHandoffStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesNonFinalSourceOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsMatchNonFinalSourceStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesCounterFootprintOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsCounterFootprintStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesPhaseGateFootprintOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsPhaseGateFootprintStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesTimerFootprintOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsTimerFootprintStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesViewFootprintOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsViewFootprintStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityFootprintOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsFinalityFootprintStep",
+    "RbcDeliveredPendingSpecStepAlwaysMatchesRbcSurfaceOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsRbcSurfaceStep",
+    "RbcDeliveredPendingSpecStepAlwaysClosesCompleteWaitStateOnStableCommitArtifacts": "RbcDeliveredPendingSpecStepStableCommitArtifactsCompleteWaitStateStep",
+    "RbcDeliveryEntryOnlyByDeliver": "RbcDeliveryEntryOnlyByDeliverStep",
+    "RbcDeliveryEntryAlwaysMatchesReadyQuorumExitAndCommitBranch": "RbcDeliveryEntryMatchesReadyQuorumExitAndCommitBranchStep",
+    "RbcDeliveryEntryFinalityAlwaysCompletesCommittedDelivery": "RbcDeliveryEntryFinalityCompletesCommittedDeliveryStep",
+    "RbcDeliveryEntryPendingAlwaysInstallsCompleteWaitState": "RbcDeliveryEntryPendingInstallsCompleteWaitStateStep",
+    "RbcDeliveryEntryAlwaysCompletesFinalityOrWaitState": "RbcDeliveryEntryCompletesFinalityOrWaitStateStep",
+    "RbcDeliveryEntryAlwaysMatchesCommitArtifactOutcome": "RbcDeliveryEntryCommitArtifactsMatchOutcomeStep",
+    "RbcDeliveryEntryAlwaysMatchesPostGateSurfaceOutcome": "RbcDeliveryEntryPostGateSurfaceMatchesOutcomeStep",
+    "RbcDeliveryEntryAlwaysMatchesConsensusFrameOutcome": "RbcDeliveryEntryConsensusFrameMatchesOutcomeStep",
+    "RbcDeliveryEntryFinalityAlwaysMatchesCertifiedSourceStack": "RbcDeliveryEntryFinalityMatchesCertifiedSourceStackStep",
+    "RbcDeliveryEntryFinalityAlwaysInstallsCommittedPostStateInvariants": "RbcDeliveryEntryFinalityInstallsCommittedPostStateInvariantsStep",
+    "RbcDeliveryEntryFinalityAlwaysSplitsPostStateGate": "RbcDeliveryEntryFinalityPostStateGateSplitStep",
+    "RbcDeliveryEntryFinalityPreGstPostStateOnlyLeavesGstElapsed": "RbcDeliveryEntryFinalityPreGstPostStateLeavesOnlyGstElapsedStep",
+    "RbcDeliveryEntryFinalityPostGstPostStateIsTerminal": "RbcDeliveryEntryFinalityPostGstPostStateIsTerminalStep",
+    "RbcDeliveryEntryPendingAlwaysMatchesNonFinalWaitSurface": "RbcDeliveryEntryPendingMatchesNonFinalWaitSurfaceStep",
+    "RbcDeliveryEntryPendingAlwaysSplitsPostStateTimerGate": "RbcDeliveryEntryPendingPostStateTimerGateSplitStep",
+    "RbcDeliveryEntryPendingPreGstPostStateAlwaysKeepsWaitTimers": "RbcDeliveryEntryPendingPreGstPostStateKeepsWaitTimersStep",
+    "RbcDeliveryEntryPendingPostGstPostStateAlwaysTracksProgressTimeout": "RbcDeliveryEntryPendingPostGstPostStateTimeoutTracksProgressStep",
+    "RbcDeliveryEntryPendingAlwaysInstallsDeliveredWaitPredicate": "RbcDeliveryEntryPendingInstallsDeliveredWaitPredicateStep",
+    "RbcDeliveryEntryPendingAlwaysOpensDeliveredPendingContinuationSurface": "RbcDeliveryEntryPendingOpensDeliveredPendingContinuationSurfaceStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysOpensExactContinuation": "RbcDeliveryEntryCommitEvidenceBranchOpensExactContinuationStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExclusiveOutcome": "RbcDeliveryEntryCommitEvidenceBranchMatchesExclusiveOutcomeStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExclusiveGateOutcome": "RbcDeliveryEntryCommitEvidenceBranchMatchesExclusiveGateOutcomeStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExactConsensusFrame": "RbcDeliveryEntryCommitEvidenceBranchMatchesExactConsensusFrameStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExactActionSource": "RbcDeliveryEntryCommitEvidenceBranchMatchesExactActionSourceStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCertifiedOrPendingStack": "RbcDeliveryEntryCommitEvidenceBranchMatchesCertifiedOrPendingStackStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExactWitnessSurface": "RbcDeliveryEntryCommitEvidenceBranchMatchesExactWitnessSurfaceStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesLiveCommitGateCrossing": "RbcDeliveryEntryCommitEvidenceBranchMatchesLiveCommitGateCrossingStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationMode": "RbcDeliveryEntryCommitEvidenceBranchMatchesContinuationModeStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesViewHandoffSurface": "RbcDeliveryEntryCommitEvidenceBranchMatchesViewHandoffSurfaceStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesDeliveredEvidenceSurface": "RbcDeliveryEntryCommitEvidenceBranchMatchesDeliveredEvidenceSurfaceStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesGstTimerSurface": "RbcDeliveryEntryCommitEvidenceBranchMatchesGstTimerSurfaceStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesProgressActionSurface": "RbcDeliveryEntryCommitEvidenceBranchMatchesProgressActionSurfaceStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesVoteBudgetSurface": "RbcDeliveryEntryCommitEvidenceBranchMatchesVoteBudgetSurfaceStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesThresholdClassifier": "RbcDeliveryEntryCommitEvidenceBranchMatchesThresholdClassifierStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPendingCommitVoteProgressSplit": "RbcDeliveryEntryCommitEvidenceBranchMatchesPendingCommitVoteProgressSplitStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPendingNonCommitVoteProgressSplit": "RbcDeliveryEntryCommitEvidenceBranchMatchesPendingNonCommitVoteProgressSplitStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPendingProgressPartition": "RbcDeliveryEntryCommitEvidenceBranchMatchesPendingProgressPartitionStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPostStateClassifier": "RbcDeliveryEntryCommitEvidenceBranchMatchesPostStateClassifierStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCertificateProgressDisjointness": "RbcDeliveryEntryCommitEvidenceBranchMatchesCertificateProgressDisjointnessStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesActionFamilyClassifier": "RbcDeliveryEntryCommitEvidenceBranchMatchesActionFamilyClassifierStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesByzantineCommitVoteBoundary": "RbcDeliveryEntryCommitEvidenceBranchMatchesByzantineCommitVoteBoundaryStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesResidualGatePartition": "RbcDeliveryEntryCommitEvidenceBranchMatchesResidualGatePartitionStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCompleteHandoff": "RbcDeliveryEntryCommitEvidenceBranchMatchesCompleteHandoffStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsContinuationState": "RbcDeliveryEntryCommitEvidenceBranchSeedsContinuationStateStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingActionSurface": "RbcDeliveryEntryCommitEvidenceBranchSeedsPendingActionSurfaceStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingTimerSurface": "RbcDeliveryEntryCommitEvidenceBranchSeedsPendingTimerSurfaceStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingCounterFrame": "RbcDeliveryEntryCommitEvidenceBranchSeedsPendingCounterFrameStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingCompleteWaitState": "RbcDeliveryEntryCommitEvidenceBranchSeedsPendingCompleteWaitStateStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysHandsOffToDeliveredPendingWaitState": "RbcDeliveryEntryCommitEvidenceBranchHandsOffToDeliveredPendingWaitStateStep",
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCompleteContinuation": "RbcDeliveryEntryCommitEvidenceBranchMatchesCompleteContinuationStep",
+    "DeliveredPendingCompleteWaitStateSpecStepAlwaysCloses": "DeliveredPendingCompleteWaitStateSpecStepClosesStep",
+    "DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysSplits": "DeliveredPendingCompleteWaitStateCommitVoteStepSplitsStep",
+    "DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysPreservesWaitState": "DeliveredPendingCompleteWaitStateCommitVoteStepPreservesWaitStateStep",
+    "DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysCompletesFinality": "DeliveredPendingCompleteWaitStateCommitVoteStepCompletesFinalityStep",
+    "DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysMatchesCertifiedCommitEnvelope": "DeliveredPendingCompleteWaitStateCommitVoteStepMatchesCertifiedCommitEnvelopeStep",
+    "DeliveredPendingCompleteWaitStatePrepareVoteStepAlwaysSplits": "DeliveredPendingCompleteWaitStatePrepareVoteStepSplitsStep",
+    "DeliveredPendingCompleteWaitStateTimeoutStepAlwaysStartsNewView": "DeliveredPendingCompleteWaitStateTimeoutStepStartsNewViewStep",
+    "DeliveredPendingCompleteWaitStateNewViewVoteStepAlwaysSplits": "DeliveredPendingCompleteWaitStateNewViewVoteStepSplitsStep",
+    "DeliveredPendingCompleteWaitStateHonestProposeStepAlwaysStartsPrepare": "DeliveredPendingCompleteWaitStateHonestProposeStepStartsPrepareStep",
+    "DeliveredPendingCompleteWaitStateGstElapsedStepAlwaysKeepsWaitState": "DeliveredPendingCompleteWaitStateGstElapsedStepKeepsWaitStateStep",
+    "DeliveredPendingCompleteWaitStateNextStepAlwaysMatchesNamedActionBranch": "DeliveredPendingCompleteWaitStateNextStepMatchesNamedActionBranchStep",
+    "DeliveredPendingCompleteWaitStateStutterStepAlwaysKeepsWaitState": "DeliveredPendingCompleteWaitStateStutterStepKeepsWaitStateStep",
+    "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteBranchClassifier": "DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteBranchClassifierStep",
+    "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCommittedCertifiedEnvelope": "DeliveredPendingCompleteWaitStateSpecStepCommittedOutcomeMatchesCertifiedEnvelopeStep",
+    "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesNonCommittedWaitEnvelope": "DeliveredPendingCompleteWaitStateSpecStepNonCommittedOutcomeMatchesWaitEnvelopeStep",
+    "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteOutcomeEnvelope": "DeliveredPendingCompleteWaitStateSpecStepMatchesCompleteOutcomeEnvelopeStep",
+}
+SUMERAGI_COMMITTED_TERMINAL_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "CommittedStateAlwaysMatchesTerminalEnvelope": (
+        "CommitNeverRevoked",
+        "CommittedPhaseAlwaysMatchesFinality",
+        "CommitCertificateAlwaysMatchesFinality",
+        "LiveCommitGateAlwaysMatchesFinality",
+        "LiveCommitGateRbcEvidenceAlwaysMatches",
+        "CommittedPhaseNeverLeaves",
+        "CommittedConsensusStateNeverChanges",
+        "CommittedOnlyGstObservationCanChange",
+        "CommittedPreGstOnlyGstElapsedCanMove",
+        "CommittedPreGstNextOnlyGstElapsed",
+        "CommittedPreGstSpecStepStuttersOrObservesGst",
+        "CommittedGstStateNeverChanges",
+        "CommittedGstNeverEnablesActions",
+        "CommittedGstOnlyAllowsStuttering",
+        "CommittedGstSpecStepOnlyStutters",
+        "CommittedSpecNonStutteringOnlyObservesGst",
+        "CommittedSpecStepStuttersOrObservesGst",
+        "CommittedSpecStepPreservesFinalityStack",
+        "CommittedSpecStepOnlyChangesGstFlag",
+        "CommittedSpecStepNeverRunsProtocolActions",
+        "CommittedSpecStepKeepsProgressActionsQuiescent",
+        "CommittedSpecStepPreservesBudgetedRbcEvidence",
+    ),
+}
+SUMERAGI_POST_FINALITY_STABILITY_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "PostFinalityStateAlwaysMatchesStabilityEnvelope": (
+        "CommitViewNeverChanges",
+        "CommittedViewWitnessAlwaysStaysAtCommittedView",
+        "CommitViewNeverLeadsCurrentView",
+        "GstElapsedGateNeverBypassesPreGst",
+        "GstElapsedStepAlwaysOnlySetsGst",
+        "GstOnlyChangesByElapsed",
+        "GstNeverRegresses",
+        "ViewNeverRegresses",
+        "CommitViewNeverRegresses",
+        "CommitEvidenceNeverRegresses",
+    ),
+}
+SUMERAGI_TIMEOUT_RECOVERY_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "TimeoutRecoveryAlwaysMatchesViewChangeEnvelope": (
+        "TimeoutTickGateNeverBypassesStalledProgress",
+        "TimeoutTickStepAlwaysStartsFreshNewView",
+        "TimeoutTickStepNeverPreemptsProgress",
+        "TimeoutTickStepAlwaysClearsCommitVoteGates",
+        "TimeoutTickStepAlwaysStartsNewViewVoteHandoff",
+        "TimeoutTickStepAlwaysPreservesRbcEvidence",
+        "ViewAdvanceOnlyComesFromTimeout",
+        "LiveProgressResetOnlyByTimeout",
+        "ViewEvidenceOnlyChangesByQuorumOrTimeout",
+        "NewViewVotesOnlyChangeByVoteOrReset",
+        "PrepareVotesOnlyChangeByVoteOrTimeout",
+        "CommitVoteCountersOnlyChangeByVoteOrTimeout",
+        "PhaseOnlyChangesByProtocol",
+    ),
+}
+SUMERAGI_FINALITY_INSTALLATION_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope": (
+        "CommitArtifactsOnlyInstallAtFinality",
+        "CommitArtifactsOnlyChangeByFinalitySource",
+        "CommitArtifactsChangeAlwaysMatchesCertifiedFinalityStack",
+        "CommitArtifactsChangeAlwaysCompletesCommittedDeliveryFromExactSource",
+        "CommitArtifactsChangeAlwaysCommitsCurrentView",
+        "CommitArtifactsChangeNeverChangesGst",
+        "CommitArtifactsChangeOnlyLeavesGstElapsedGate",
+        "FinalityLatchOnlySetsCompleteStack",
+        "FinalityLatchAndArtifactsAlwaysChangeTogether",
+        "CommittedPhaseOnlyEntersWithCompleteStack",
+        "CommittedPhaseEntryAlwaysMatchesFinalityLatch",
+        "FinalityLatchChangeOnlyEntersCommittedPhase",
+        "FinalityLatchChangeAlwaysMatchesLiveCommitGateCrossing",
+        "CommitCertificateWitnessesAlwaysInstallWithFinalityLatch",
+        "CommitCertificateWitnessComponentsAlwaysChangeTogether",
+        "CommitCertificateWitnessChangeAlwaysMatchesCertifiedFinalityStack",
+        "CommitCertificateWitnessChangeAlwaysInstallsCommitViewWitness",
+        "CommitCertificateWitnessChangeAlwaysCompletesCommittedDeliveryFromExactSource",
+        "CommitCertificateWitnessChangeNeverChangesGst",
+        "CommitCertificateWitnessChangeOnlyLeavesGstElapsedGate",
+        "CommitViewWitnessOnlyChangesOnNonzeroFinality",
+        "CommitViewWitnessAlwaysInstallsWithFinalityLatch",
+        "CommitViewWitnessChangeAlwaysMatchesCertifiedFinalityStack",
+        "CommitViewWitnessChangeAlwaysInstallsCommitCertificateWitnesses",
+        "CommitViewWitnessChangeAlwaysCompletesCommittedDeliveryFromExactSource",
+        "CommitViewWitnessChangeNeverChangesGst",
+        "CommitViewWitnessChangeOnlyLeavesGstElapsedGate",
+        "FinalityLatchNeverCarriesNewViewHandoff",
+        "FinalityLatchOnlyComesFromCommitOrDelivery",
+        "FinalityLatchChangeNeverChangesGst",
+        "FinalityLatchChangeOnlyLeavesGstElapsedGate",
+        "FinalityLatchSourceEffectsAlwaysExact",
+        "FinalityLatchSourceQuorumGatesAlwaysHold",
+        "FinalitySourceActionAlwaysCompletesCommittedDeliveryFromExactSource",
+        "FinalitySourceActionAlwaysMatchesCertifiedSourceStack",
+        "FinalitySourceActionAlwaysMatchesFinalityLatchChange",
+        "FinalitySourceActionAlwaysMatchesCommittedPhaseEntry",
+        "FinalitySourceActionAlwaysInstallsFinalityCertificateStack",
+        "FinalitySourceActionSourceAlwaysIsCommitOrDelivery",
+        "FinalitySourceActionSourceEffectsAlwaysExact",
+        "FinalitySourceActionQuorumGatesAlwaysHold",
+        "FinalitySourceActionAlwaysMatchesCommitArtifactsChange",
+        "FinalitySourceActionAlwaysMatchesLiveCommitGateCrossing",
+        "FinalitySourceActionAlwaysDisablesProgressAfterCommittedDelivery",
+        "FinalitySourceActionNeverChangesGst",
+        "FinalitySourceActionOnlyLeavesGstElapsedGate",
+        "FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses",
+        "FinalitySourceActionAlwaysMatchesCommitCertificateWitnessChange",
+        "FinalitySourceActionAlwaysMatchesCommitViewWitnessChange",
+        "FinalitySourceActionAlwaysInstallsCommitViewWitness",
+        "FinalitySourceActionNeverCarriesNewViewHandoff",
+        "FinalitySourceActionAlwaysCommitsCurrentView",
+        "FinalityLatchChangeAlwaysMatchesCertifiedSourceStack",
+        "FinalityLatchChangeAlwaysCompletesCommittedDeliveryFromExactSource",
+        "CommittedPhaseEntryOnlyByFinalitySource",
+        "CommittedPhaseEntryAlwaysMatchesCertifiedFinalityStack",
+        "CommittedPhaseEntryAlwaysInstallsCommitCertificateWitnesses",
+        "CommittedPhaseEntryAlwaysMatchesCommitCertificateWitnessChange",
+        "CommittedPhaseEntryAlwaysMatchesCommitViewWitnessChange",
+        "CommittedPhaseEntryAlwaysInstallsCommitViewWitness",
+        "CommittedPhaseEntryAlwaysMatchesLiveCommitGateCrossing",
+        "CommittedPhaseEntryAlwaysMatchesCommitArtifactsChange",
+        "CommittedPhaseEntryAlwaysMatchesExactFinalitySourceEffects",
+        "CommittedPhaseEntryNeverCarriesNewViewHandoff",
+        "CommittedPhaseEntryAlwaysCommitsCurrentView",
+        "CommittedPhaseEntryNeverChangesGst",
+        "CommittedPhaseEntryOnlyLeavesGstElapsedGate",
+        "CommittedPhaseEntryAlwaysDisablesProgressActions",
+        "CommittedPhaseEntryAlwaysCompletesCommittedDeliveryFromExactSource",
+    ),
+}
+SUMERAGI_PRE_COMMIT_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope": (
+        "PreparePhaseEntryOnlyByProposal",
+        "CommitVotePhaseEntryOnlyByPrepareQuorum",
+        "ProposePhaseEntryOnlyByNewViewQuorum",
+        "NewViewPhaseEntryOnlyByTimeout",
+        "ViewQuorumEvidenceNeverDiverges",
+        "ViewEvidenceWitnessNeverTargetsZeroOrNewView",
+        "NewViewQuorumHandoffNeverStalls",
+        "LiveNewViewVotesNeverLeakPastHandoff",
+        "HonestProposeGateNeverBypassesHandoffEvidence",
+        "HonestProposeStepAlwaysStartsPrepareAndRbc",
+        "HonestProposeStepAlwaysStartsPrepareVoteHandoff",
+        "NewViewVoteGateNeverBypassesFreshViewEvidence",
+        "NewViewVoteQuorumGateNeverBypassesNextEvidence",
+        "NewViewVoteQuorumStepAlwaysInstallsViewEvidence",
+        "NewViewVoteQuorumStepAlwaysStartsProposalHandoff",
+        "NewViewVotePendingGateNeverBypassesMissingNextEvidence",
+        "NewViewVotePendingStepNeverInstallsViewEvidence",
+        "ViewEvidenceNeverPartial",
+        "PreCommitVotesNeverCarryAcrossViews",
+        "PrePrepareVotesNeverCarryAcrossViews",
+        "LivePrepareVotesNeverBypassPrepareHandoff",
+        "PrepareVoteGateNeverBypassesProposalEvidence",
+        "PrepareVoteQuorumGateNeverBypassesNextEvidence",
+        "PrepareVoteQuorumStepAlwaysEntersCommitVote",
+        "PrepareVoteQuorumStepAlwaysStartsCommitVoteHandoff",
+        "PrepareVotePendingGateNeverBypassesMissingNextEvidence",
+        "PrepareVotePendingStepNeverMutatesCommitArtifacts",
+        "PrepareVotePendingStepAlwaysKeepsPrepareVoteHandoff",
+    ),
+}
+SUMERAGI_COMMIT_VOTE_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "CommitVoteHandoffAlwaysMatchesFinalityEnvelope": (
+        "CommitEvidenceNeverPartial",
+        "CommitPhasesNeverBypassPrepareQuorum",
+        "LiveCommitVotesNeverBypassPrepareQuorum",
+        "CommitVoteGateNeverBypassesPrepareEvidence",
+        "ByzantineCommitVoteGateNeverBypassesPrepareEvidence",
+        "HonestCommitVoteFinalityGateNeverBypassesNextEvidence",
+        "HonestCommitVoteFinalityStepAlwaysInstallsCommitArtifacts",
+        "HonestCommitVoteFinalityStepAlwaysCompletesCommittedDelivery",
+        "HonestCommitVotePendingGateNeverBypassesMissingNextEvidence",
+        "HonestCommitVotePendingStepNeverMutatesCommitArtifacts",
+        "HonestCommitVotePendingStepAlwaysKeepsCommitVoteHandoff",
+        "ByzantineCommitVoteFinalityGateNeverBypassesNextEvidence",
+        "ByzantineCommitVoteFinalityStepAlwaysInstallsCommitArtifacts",
+        "ByzantineCommitVoteFinalityStepAlwaysCompletesCommittedDelivery",
+        "ByzantineCommitVotePendingGateNeverBypassesMissingNextEvidence",
+        "ByzantineCommitVotePendingStepNeverMutatesCommitArtifacts",
+        "ByzantineCommitVotePendingStepAlwaysKeepsCommitVoteHandoff",
+        "LiveCommitVotesNeverBypassCommitHandoff",
+        "PreFinalityCommitArtifactsNeverAppear",
+    ),
+}
+SUMERAGI_FINALIZED_CERTIFICATE_RETENTION_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope": (
+        "FinalityCertificateStackNeverIncomplete",
+        "FinalityCertificateStackAlwaysMatchesFinality",
+        "FinalityNeverRetainsNewViewHandoff",
+        "CommitViewQuorumEvidenceNeverLost",
+        "PrepareQuorumNeverLostAfterCommit",
+        "LiveCommitQuorumNeverLost",
+        "CommitHonestSupportNeverLost",
+        "CommitRbcEvidenceNeverLost",
+        "CommitProgressActionsNeverReenabled",
+        "ByzantineCommitVoteNeverReenabledAfterCommit",
+        "CommitEvidenceNeverDivergesFromVoteCounters",
+        "StakeAccountingNeverDiverges",
+        "LiveStakeNeverExceedsRosterBudget",
+        "CommitEvidenceNeverExceedsRosterBudget",
+        "VoteCountersNeverExceedRosterBudgets",
+        "CommitEvidenceNeverLost",
+    ),
+}
+SUMERAGI_RBC_DELIVERED_FINALITY_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope": (
+        "RbcDeliveredFinalityOnlyComesFromCommitVote",
+        "RbcDeliveredFinalityAlwaysCompletesCommittedDelivery",
+        "RbcDeliveredFinalityAlwaysCommitsCurrentView",
+        "RbcDeliveredFinalityOnlyLeavesGstElapsedGate",
+        "RbcDeliveredFinalityAlwaysInstallsCommitCertificateWitnesses",
+        "RbcDeliveredFinalityAlwaysMatchesCommitCertificateWitnessChange",
+        "RbcDeliveredFinalityAlwaysMatchesCommitViewWitnessChange",
+        "RbcDeliveredFinalityAlwaysMatchesLiveCommitGateCrossing",
+        "RbcDeliveredFinalityAlwaysDisablesProgressAfterCommittedDelivery",
+        "RbcDeliveredFinalityAlwaysMatchesCertifiedSourceStack",
+        "RbcDeliveredFinalityAlwaysInstallsFinalityCertificateStack",
+        "RbcDeliveredFinalityAlwaysMatchesCommittedPhaseEntry",
+        "RbcDeliveredFinalityAlwaysMatchesCommitArtifactsChange",
+        "RbcDeliveredFinalityAlwaysCouplesLatchAndCommitArtifacts",
+        "RbcDeliveredFinalityAlwaysRecordsExactCommitVoteWitnesses",
+        "RbcDeliveredFinalityAlwaysPreservesDeliveredRbcEvidence",
+        "RbcDeliveredFinalityAlwaysPreservesViewPrepareHandoffEvidence",
+        "RbcDeliveredFinalityAlwaysHasExactProtocolFrame",
+        "RbcDeliveredFinalityAlwaysHasExactCommitVoteActionFrame",
+        "RbcDeliveredFinalityAlwaysInstallsCommittedPostStateInvariants",
+        "RbcDeliveredFinalityAlwaysSplitsPostStateGate",
+        "RbcDeliveredFinalityPreGstPostStateOnlyLeavesGstElapsed",
+        "RbcDeliveredFinalityPostGstPostStateIsTerminal",
+    ),
+}
+SUMERAGI_RBC_DELIVERED_STATE_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope": (
+        "RbcDeliveryNeverLost",
+        "RbcDeliveredEvidenceNeverRegresses",
+        "RbcDeliveredWithoutFinalityNeverCarriesCommitCertificate",
+        "RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope",
+        "RbcDeliveredNeverEnablesRbcProgress",
+        "RbcDeliveredWithoutFinalityAlwaysWaitsForCommitEvidence",
+        "RbcDeliveredPendingHonestCommitVoteAlwaysKeepsWaitState",
+        "RbcDeliveredPendingByzantineCommitVoteAlwaysKeepsWaitState",
+        "RbcDeliveredPendingHonestCommitVoteAlwaysCompletesFinality",
+        "RbcDeliveredPendingByzantineCommitVoteAlwaysCompletesFinality",
+        "RbcDeliveredPendingPrepareVoteAlwaysKeepsWaitState",
+        "RbcDeliveredPendingPrepareVoteAlwaysStartsCommitVoteWaitState",
+        "RbcDeliveredPendingTimeoutAlwaysStartsNewViewWaitState",
+        "RbcDeliveredPendingNewViewVoteAlwaysKeepsWaitState",
+        "RbcDeliveredPendingNewViewVoteAlwaysStartsProposalWaitState",
+        "RbcDeliveredPendingHonestProposeAlwaysStartsPrepareWaitState",
+        "RbcDeliveredPendingGstElapsedAlwaysKeepsWaitState",
+        "RbcDeliveredPendingNextAlwaysCoveredByHandoffs",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope",
+        "DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope",
+    ),
+}
+SUMERAGI_RBC_DELIVERED_PENDING_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope": (
+        "RbcDeliveredPendingSpecStepAlwaysStuttersOrTakesCoveredHandoff",
+        "RbcDeliveredPendingSpecStepAlwaysEndsInFinalityOrWaitState",
+        "RbcDeliveredPendingSpecStepAlwaysPreservesDeliveredRbcEvidence",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesCommitArtifactsOutcome",
+        "RbcDeliveredPendingSpecStepAlwaysChangesGstOnlyByElapsed",
+        "RbcDeliveredPendingSpecStepAlwaysChangesViewOnlyByTimeout",
+        "RbcDeliveredPendingSpecStepAlwaysChangesViewEvidenceOnlyByNewViewOrTimeout",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesVoteCounterHandoff",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesPostGateHandoff",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesTimerGateHandoff",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesFinalitySource",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityWitnessFrame",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityStackOutcome",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityGateOutcome",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityQuorumOutcome",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesNonFinalHandoffPhaseShape",
+        "RbcDeliveredPendingSpecStepAlwaysClosesActionSurface",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesPhaseChangeAction",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesCounterChangeAction",
+        "RbcDeliveredPendingSpecStepAlwaysHasExclusiveActionSource",
+        "RbcDeliveredPendingSpecStepAlwaysPreservesActionSurfaceOnStutter",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesCommitArtifactChangeSource",
+        "RbcDeliveredPendingSpecStepAlwaysInstallsCertifiedDeliveryOnCommitArtifactChange",
+        "RbcDeliveredPendingSpecStepAlwaysInstallsExactSourceCertifiedDeliveryOnCommitArtifactChange",
+        "RbcDeliveredPendingSpecStepAlwaysKeepsNonFinalHandoffOnStableCommitArtifacts",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesNonFinalSourceOnStableCommitArtifacts",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesCounterFootprintOnStableCommitArtifacts",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesPhaseGateFootprintOnStableCommitArtifacts",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesTimerFootprintOnStableCommitArtifacts",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesViewFootprintOnStableCommitArtifacts",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesFinalityFootprintOnStableCommitArtifacts",
+        "RbcDeliveredPendingSpecStepAlwaysMatchesRbcSurfaceOnStableCommitArtifacts",
+        "RbcDeliveredPendingSpecStepAlwaysClosesCompleteWaitStateOnStableCommitArtifacts",
+    ),
+}
+SUMERAGI_DELIVERED_PENDING_COMPLETE_WAIT_STATE_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope": (
+        "DeliveredPendingCompleteWaitStateSpecStepAlwaysCloses",
+        "DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysSplits",
+        "DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysPreservesWaitState",
+        "DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysCompletesFinality",
+        "DeliveredPendingCompleteWaitStateCommitVoteStepAlwaysMatchesCertifiedCommitEnvelope",
+        "DeliveredPendingCompleteWaitStatePrepareVoteStepAlwaysSplits",
+        "DeliveredPendingCompleteWaitStateTimeoutStepAlwaysStartsNewView",
+        "DeliveredPendingCompleteWaitStateNewViewVoteStepAlwaysSplits",
+        "DeliveredPendingCompleteWaitStateHonestProposeStepAlwaysStartsPrepare",
+        "DeliveredPendingCompleteWaitStateGstElapsedStepAlwaysKeepsWaitState",
+        "DeliveredPendingCompleteWaitStateNextStepAlwaysMatchesNamedActionBranch",
+        "DeliveredPendingCompleteWaitStateStutterStepAlwaysKeepsWaitState",
+        "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteBranchClassifier",
+        "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCommittedCertifiedEnvelope",
+        "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesNonCommittedWaitEnvelope",
+        "DeliveredPendingCompleteWaitStateSpecStepAlwaysMatchesCompleteOutcomeEnvelope",
+    ),
+}
+SUMERAGI_RBC_DELIVERY_ENTRY_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope": (
+        "RbcDeliveryEntryOnlyByDeliver",
+        "RbcDeliveryEntryAlwaysMatchesReadyQuorumExitAndCommitBranch",
+        "RbcDeliveryEntryFinalityAlwaysCompletesCommittedDelivery",
+        "RbcDeliveryEntryPendingAlwaysInstallsCompleteWaitState",
+        "RbcDeliveryEntryAlwaysCompletesFinalityOrWaitState",
+        "RbcDeliveryEntryAlwaysMatchesCommitArtifactOutcome",
+        "RbcDeliveryEntryAlwaysMatchesPostGateSurfaceOutcome",
+        "RbcDeliveryEntryAlwaysMatchesConsensusFrameOutcome",
+        "RbcDeliveryEntryFinalityAlwaysMatchesCertifiedSourceStack",
+        "RbcDeliveryEntryFinalityAlwaysInstallsCommittedPostStateInvariants",
+        "RbcDeliveryEntryFinalityAlwaysSplitsPostStateGate",
+        "RbcDeliveryEntryFinalityPreGstPostStateOnlyLeavesGstElapsed",
+        "RbcDeliveryEntryFinalityPostGstPostStateIsTerminal",
+        "RbcDeliveryEntryPendingAlwaysMatchesNonFinalWaitSurface",
+        "RbcDeliveryEntryPendingAlwaysSplitsPostStateTimerGate",
+        "RbcDeliveryEntryPendingPreGstPostStateAlwaysKeepsWaitTimers",
+        "RbcDeliveryEntryPendingPostGstPostStateAlwaysTracksProgressTimeout",
+        "RbcDeliveryEntryPendingAlwaysInstallsDeliveredWaitPredicate",
+        "RbcDeliveryEntryPendingAlwaysOpensDeliveredPendingContinuationSurface",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope",
+    ),
+}
+SUMERAGI_RBC_DELIVERY_ENTRY_CONTINUATION_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope": (
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysOpensExactContinuation",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExclusiveOutcome",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExclusiveGateOutcome",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExactConsensusFrame",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExactActionSource",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCertifiedOrPendingStack",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesExactWitnessSurface",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesLiveCommitGateCrossing",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationMode",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesViewHandoffSurface",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesDeliveredEvidenceSurface",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesGstTimerSurface",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesProgressActionSurface",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesVoteBudgetSurface",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesThresholdClassifier",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPendingCommitVoteProgressSplit",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPendingNonCommitVoteProgressSplit",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPendingProgressPartition",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesPostStateClassifier",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCertificateProgressDisjointness",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesActionFamilyClassifier",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesByzantineCommitVoteBoundary",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesResidualGatePartition",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCompleteHandoff",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsContinuationState",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingActionSurface",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingTimerSurface",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingCounterFrame",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysSeedsPendingCompleteWaitState",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysHandsOffToDeliveredPendingWaitState",
+        "RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesCompleteContinuation",
+    ),
+}
+SUMERAGI_RBC_LIFECYCLE_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "RbcLifecycleAlwaysMatchesEndToEndEnvelope": (
+        "RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope",
+        "RbcCorruptionRepairAlwaysMatchesFaultEnvelope",
+        "RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope",
+        "RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope",
+        "RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope",
+    ),
+}
+SUMERAGI_RBC_CORRUPTION_REPAIR_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "RbcCorruptionRepairAlwaysMatchesFaultEnvelope": (
+        "ByzantineFaultGateNeverBypassesCorruptibleRbc",
+        "ByzantineFaultStepAlwaysCorruptsOnlyRbcDigest",
+        "RbcDigestInvalidationOnlyByFault",
+        "RbcCorruptionEntryOnlyByFault",
+        "RbcCorruptedDigestNeverValid",
+        "RbcCorruptedAlwaysRetainsHeaderEvidence",
+        "RbcCorruptedNeverCarriesFinalityArtifacts",
+        "RbcCorruptedNeverBypassesInitRepairProgress",
+        "RbcCorruptionExitOnlyByInit",
+        "RbcCorruptedInitRepairAlwaysResetsEvidence",
+        "RbcInitGateNeverBypassesRepairableState",
+        "RbcInitStepAlwaysInstallsHeaderDigestEvidence",
+        "RbcInitStepAlwaysStartsChunkOnlyHandoff",
+    ),
+}
+SUMERAGI_RBC_CHUNK_READY_DELIVER_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope": (
+        "RbcChunkGateNeverBypassesHeaderDigestEvidence",
+        "RbcChunkStepAlwaysAdvancesChunkEvidence",
+        "RbcChunkStepAlwaysHandsOffByCoverage",
+        "RbcInitExitOnlyByChunkOrFault",
+        "RbcChunkCountIncreaseOnlyByChunk",
+        "RbcChunkCountDecreaseOnlyByProposalOrInit",
+        "RbcChunkingEntryOnlyByChunk",
+        "RbcChunkingExitOnlyByChunkOrFault",
+        "RbcChunkCompletionEntryOnlyByChunk",
+        "RbcChunksCompleteExitOnlyByReadyOrFault",
+        "RbcReadyGateNeverBypassesChunkEvidence",
+        "RbcReadyStepAlwaysAdvancesReadyEvidence",
+        "RbcReadyStepAlwaysHandsOffByQuorum",
+        "RbcReadyQuorumStepAlwaysEnablesDeliverHandoff",
+        "RbcReadyVotesIncreaseOnlyByReady",
+        "RbcReadyVotesDecreaseOnlyByProposalOrInit",
+        "RbcReadyPartialEntryOnlyByReady",
+        "RbcReadyPartialExitOnlyByReadyOrFault",
+        "RbcReadyQuorumEntryOnlyByReady",
+        "RbcReadyQuorumExitOnlyByDeliverOrFault",
+        "RbcDeliverGateNeverBypassesCompleteEvidence",
+        "RbcReadyQuorumNeverLacksDeliverGate",
+        "RbcDeliverStepAlwaysPreservesCompleteEvidence",
+        "RbcDeliverStepAlwaysHandsOffByCommitEvidence",
+        "RbcDeliverFinalityGateNeverBypassesBufferedCommitEvidence",
+        "RbcDeliverFinalityStepAlwaysInstallsCommitArtifacts",
+        "RbcDeliverFinalityStepAlwaysCompletesCommittedDelivery",
+        "RbcDeliverPendingGateNeverBypassesMissingBufferedCommitEvidence",
+        "RbcDeliverPendingStepNeverMutatesCommitArtifacts",
+        "RbcDeliverPendingStepAlwaysKeepsDeliveredEvidenceWithoutFinality",
+    ),
+}
+SUMERAGI_RBC_PROGRESS_MUTATION_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope": (
+        "RbcProgressStateEvidenceAlwaysMatchesEnvelope",
+        "RbcProgressMutationAlwaysMatchesLocalClassification",
+        "LiveHeaderDigestEvidenceNeverBypassRbcHandoff",
+        "LiveChunkEvidenceNeverBypassRbcHandoff",
+        "LiveReadyVotesNeverBypassRbcHandoff",
+    ),
+}
+SUMERAGI_RBC_PROGRESS_LOCAL_CLASSIFICATION_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "RbcProgressMutationAlwaysMatchesLocalClassification": (
+        "RbcStateOnlyChangesByProtocolOrFault",
+        "RbcStateChangeAlwaysMatchesLocalExitClassification",
+        "RbcEvidenceOnlyChangesByProtocolOrFault",
+        "RbcEvidenceChangeAlwaysMatchesLocalEffectClassification",
+        "RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope",
+        "RbcDeliveryEntryOnlyByDeliver",
+        "RbcDeliveryEntryAlwaysMatchesReadyQuorumExitAndCommitBranch",
+        "RbcCorruptionEntryOnlyByFault",
+        "RbcCorruptionExitOnlyByInit",
+    ),
+}
+SUMERAGI_RBC_STARTUP_BOUNDARY_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope": (
+        "RbcIdleExitOnlyByProposalOrInit",
+        "RbcInitEntryOnlyByProposalOrInit",
+        "RbcWithheldNeverReached",
+        "RbcWithheldEntryOnlyByStutteringFromWithheld",
+    ),
+}
+SUMERAGI_RBC_PROGRESS_STATE_EVIDENCE_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "RbcProgressStateEvidenceAlwaysMatchesEnvelope": (
+        "RbcProgressEvidenceNeverDiverges",
+        "RbcPartialProgressEvidenceNeverDiverges",
+        "RbcLiveEvidenceCausalityAlwaysMatchesEnvelope",
+    ),
+}
+SUMERAGI_RBC_LIVE_EVIDENCE_CAUSALITY_ENVELOPE_CONJUNCT_CONTRACTS = {
+    "RbcLiveEvidenceCausalityAlwaysMatchesEnvelope": (
+        "RbcHeaderInstallationOnlyByProposalOrInit",
+        "RbcHeaderEvidenceNeverLost",
+        "RbcMissingHeaderNeverLeavesIdle",
+        "RbcHeaderEvidenceNeverReturnsToIdle",
+        "RbcDigestInstallationOnlyByProposalInitOrChunk",
+        "RbcValidDigestNeverOutrunsHeader",
+        "RbcValidDigestNeverLeavesActiveStates",
+        "RbcChunkEvidenceNeverOutrunsHeader",
+        "RbcChunkEvidenceNeverLeavesChunkOrCorruptedHandoff",
+        "RbcPartialChunkEvidenceNeverLeavesChunkingOrCorruptedHandoff",
+        "RbcFullChunkCoverageNeverLeavesCoveredOrCorruptedHandoff",
+        "RbcZeroChunkEvidenceNeverLeavesPreChunkOrCorruptedHandoff",
+        "RbcReadyVotesNeverOutrunChunkHeaderEvidence",
+        "RbcReadyVotesNeverLeaveReadyOrCorruptedHandoff",
+        "RbcPartialReadyEvidenceNeverLeavesPartialOrCorruptedHandoff",
+        "RbcReadyQuorumEvidenceNeverLeavesQuorumOrCorruptedHandoff",
+        "RbcZeroReadyEvidenceNeverLeavesPreReadyOrCorruptedHandoff",
+        "RbcCounterEvidenceNeverOutrunsValidDigestOrCorruption",
+        "RbcInvalidDigestNeverLeavesIdleOrCorruption",
+    ),
+}
 FAST_CI = ROOT_DIR / "ci" / "check_sumeragi_formal.sh"
 EXPECTED_FAILURE_CI = ROOT_DIR / "ci" / "check_sumeragi_formal_expected_failures.sh"
 PR_WORKFLOW = ROOT_DIR / ".github" / "workflows" / "pr.yml"
@@ -396,6 +1234,66 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Every top-level Sumeragi property checked by the deep/TLC-fast configs must be reachable",
     "from `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope` through zero-arity",
     "operator references",
+    "Every non-TypeInvariant top-level Sumeragi invariant checked by the deep/TLC-fast configs must be reachable",
+    "from `SumeragiConsensusCoreStateMatchesEnvelope` through zero-arity",
+    "The consensus-core aggregate proof roots must keep their exact direct conjunct contracts",
+    "The correctness root composes `TypeInvariant`, `SumeragiConsensusCoreAlwaysMatchesExactness`,",
+    "`SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`, and `EventuallyCommit` directly",
+    "The state+temporal, exactness, and fast roots keep their documented direct conjuncts",
+    "Every direct conjunct of `SumeragiConsensusCoreStateMatchesEnvelope` must be checked",
+    "as a top-level deep/TLC-fast `INVARIANT`",
+    "`SumeragiConsensusCoreStateMatchesEnvelope` must keep the documented state direct conjunct contract",
+    "Every direct conjunct of `SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope` must be checked",
+    "as a top-level deep/TLC-fast `PROPERTY`",
+    "Every direct conjunct of `RbcLifecycleAlwaysMatchesEndToEndEnvelope` must be checked",
+    "Nested RBC lifecycle aggregate conjuncts use the same top-level `PROPERTY` coverage rule",
+    "First-level RBC lifecycle aggregate conjuncts use the same top-level `PROPERTY` coverage rule",
+    "RBC progress, corruption repair, chunk/ready/deliver, delivery-entry, and delivered-state roots stay decomposed",
+    "Reachable aggregate temporal property roots recursively use the same top-level `PROPERTY` coverage rule",
+    "Finalized certificate retention names the Byzantine commit-vote closure property directly",
+    "Root coverage checks require each selected deep/TLC-fast CFG to carry every protected conjunct independently",
+    "Correctness-root reachability requires the root property in every selected deep/TLC-fast CFG",
+    "Correctness-root direct TypeInvariant stays a top-level `INVARIANT` in every selected deep/TLC-fast CFG",
+    "Correctness-root direct temporal obligations stay top-level `PROPERTY` checks in every selected deep/TLC-fast CFG",
+    "`EventuallyCommit` must keep the direct `[] (gst => <> committed)` liveness shape with exact lowercase state-variable names",
+    "`CommitNeverRevoked` must keep the direct `[] (committed => [] committed)` finality-latch monotonicity shape with exact lowercase state-variable names",
+    "Finality `AlwaysMatches` temporal wrappers must keep direct `[]` shapes over their matching zero-arity predicates",
+    "`TimeoutTickGateNeverBypassesStalledProgress` must keep the direct `[] TimeoutTickGateMatchesStalledProgress` timeout-gate wrapper shape",
+    "Pre-commit handoff `Never`/`Always` predicate wrappers must keep direct `[] Predicate` shapes over their documented zero-arity predicates",
+    "`CommittedPhaseNeverLeaves` must keep the direct `[] (phase = \"Committed\" => [] (phase = \"Committed\"))` phase permanence shape",
+    "Timeout-recovery action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+    "Pre-commit handoff action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+    "`Committed*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+    "`RbcDeliveredFinality*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+    "`RbcDeliveredEvidenceNeverRegresses` and `RbcDeliveredPending*` lifecycle action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+    "`RbcDeliveredPendingSpecStep*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+    "`RbcDeliveryEntry*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+    "`RbcDeliveryEntryCommitEvidenceBranch*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+    "`DeliveredPendingCompleteWaitState*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
+    "`PendingProtocolStepsNeverChangeGst` must keep the direct `[] [PendingProtocolStepsPreserveGst]_vars` GST-preservation action-wrapper shape",
+    "`CommittedGstNeverEnablesActions` must keep the direct `[] CommittedGstDisablesEveryAction` terminal action-disable shape",
+    "`CommittedStateAlwaysMatchesTerminalEnvelope` must keep the documented terminal-state direct conjunct contract",
+    "`PostFinalityStateAlwaysMatchesStabilityEnvelope` must keep the documented post-finality stability direct conjunct contract",
+    "`TimeoutRecoveryAlwaysMatchesViewChangeEnvelope` must keep the documented timeout-recovery direct conjunct contract",
+    "`FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope` must keep the documented certified-commit direct conjunct contract",
+    "`PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope` must keep the documented pre-commit handoff direct conjunct contract",
+    "`CommitVoteHandoffAlwaysMatchesFinalityEnvelope` must keep the documented commit-vote handoff direct conjunct contract",
+    "`FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope` must keep the documented finalized-certificate retention direct conjunct contract",
+    "`RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope` must keep the documented RBC delivered-finality direct conjunct contract",
+    "`RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope` must keep the documented RBC delivered-state lifecycle direct conjunct contract",
+    "`RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope` must keep the documented RBC delivered-pending handoff direct conjunct contract",
+    "`DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope` must keep the documented delivered-pending complete wait-state direct conjunct contract",
+    "`RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope` must keep the documented RBC delivery-entry outcome direct conjunct contract",
+    "`RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope` must keep the documented RBC delivery-entry continuation direct conjunct contract",
+    "`RbcLifecycleAlwaysMatchesEndToEndEnvelope` must keep the documented RBC lifecycle direct conjunct contract",
+    "`RbcCorruptionRepairAlwaysMatchesFaultEnvelope` must keep the documented RBC corruption-repair direct conjunct contract",
+    "`RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope` must keep the documented RBC chunk/ready/deliver availability direct conjunct contract",
+    "`RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope` must keep the documented RBC progress-mutation direct conjunct contract",
+    "`RbcProgressMutationAlwaysMatchesLocalClassification` must keep the documented RBC progress local-classification direct conjunct contract",
+    "`RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope` must keep the documented RBC startup-boundary direct conjunct contract",
+    "`RbcProgressStateEvidenceAlwaysMatchesEnvelope` must keep the documented RBC progress-state evidence direct conjunct contract",
+    "`RbcLiveEvidenceCausalityAlwaysMatchesEnvelope` must keep the documented RBC live-evidence causality direct conjunct contract",
+    "`SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope` must keep the documented end-to-end safety direct conjunct contract",
 )
 # Historical escape hatch for fast envelopes without direct *Exactness coverage.
 # Keep empty; new entries should be justified by an explicit formal debt note.
@@ -490,6 +1388,9 @@ TLA_MODULE_PREFIX_START_RE = re.compile(r"^\s*-{4}\s+MODULE(?=\S)")
 TLA_TERMINATOR_RE = re.compile(r"^={4}\s*$")
 TLA_EQUALS_MARKER_TRAILING_RE = re.compile(r"^={4,}(?:[^=\s]|\s+\S)")
 TLA_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+TLA_ACTION_BOX_RE = re.compile(
+    r"^\[\s*([A-Za-z_][A-Za-z0-9_]*)\s*\]_\s*([A-Za-z_][A-Za-z0-9_]*)$"
+)
 TLA_IDENTIFIER_EQUALITY_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*\s*=\s*[A-Za-z_][A-Za-z0-9_]*$"
 )
@@ -1998,6 +2899,1089 @@ def top_level_cfg_check_parity_errors(
                 f"{display_path(deep_cfg)} but {tlc_kind} in "
                 f"{display_path(tlc_fast_cfg)}"
             )
+    return errors
+
+
+def cfg_property_root_reachability_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+    cfg_paths: tuple[Path, ...] = (SUMERAGI_DEEP_CFG, SUMERAGI_TLC_FAST_CFG),
+    root_property: str = SUMERAGI_ROOT_PROPERTY,
+) -> list[str]:
+    """Return errors for checked properties not reachable from the root property."""
+
+    if not module_path.exists() or any(not path.exists() for path in cfg_paths):
+        return []
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    signatures = tla_operator_signatures(module_path)
+    cfg_properties: dict[str, list[tuple[Path, int]]] = {}
+    cfg_properties_by_path: dict[Path, set[str]] = {}
+    for cfg_path in cfg_paths:
+        cfg_properties_by_path[cfg_path] = set()
+        references, parse_errors = cfg_operator_references(cfg_path)
+        if parse_errors:
+            return []
+        for line_number, directive, operator in references:
+            if normalized_cfg_check_directive(directive) != "PROPERTY":
+                continue
+            cfg_properties_by_path[cfg_path].add(operator)
+            cfg_properties.setdefault(operator, []).append((cfg_path, line_number))
+
+    errors: list[str] = []
+    root_missing_cfgs = [
+        cfg_path
+        for cfg_path, cfg_properties_for_path in cfg_properties_by_path.items()
+        if root_property not in cfg_properties_for_path
+    ]
+    if root_missing_cfgs:
+        cfg_list = ", ".join(str(display_path(path)) for path in root_missing_cfgs)
+        errors.append(
+            f"{display_path(module_path)} root property {root_property} is not "
+            f"checked as a top-level PROPERTY by {cfg_list}"
+        )
+    if root_property not in definitions:
+        errors.append(
+            f"{display_path(module_path)} does not define root property "
+            f"{root_property}"
+        )
+        return errors
+
+    root_signature = signatures.get(root_property)
+    if root_signature is not None and root_signature[1] != 0:
+        root_line, root_arity = root_signature
+        errors.append(
+            f"{display_path(module_path)}:{root_line} defines root property "
+            f"{root_property} with arity {root_arity}; root property reachability "
+            "requires a zero-arity operator"
+        )
+        return errors
+
+    reachable: set[str] = set()
+    stack = [root_property]
+    while stack:
+        operator = stack.pop()
+        if operator in reachable:
+            continue
+        reachable.add(operator)
+        definition = definitions.get(operator)
+        if definition is None:
+            continue
+        _, expression = definition
+        for identifier in tla_free_static_identifiers(expression):
+            if identifier in reachable or identifier not in definitions:
+                continue
+            signature = signatures.get(identifier)
+            if signature is not None and signature[1] != 0:
+                continue
+            stack.append(identifier)
+
+    for operator in sorted(set(cfg_properties) - reachable):
+        locations = ", ".join(
+            f"{display_path(cfg_path)}:{line_number}"
+            for cfg_path, line_number in cfg_properties[operator]
+        )
+        errors.append(
+            f"{locations} checks PROPERTY {operator}, but it is not reachable "
+            f"from root property {root_property} through zero-arity TLA "
+            "operator references"
+        )
+    return errors
+
+
+def cfg_state_invariant_root_reachability_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+    cfg_paths: tuple[Path, ...] = (SUMERAGI_DEEP_CFG, SUMERAGI_TLC_FAST_CFG),
+    root_invariant: str = SUMERAGI_STATE_INVARIANT_ROOT,
+    exempt_invariants: frozenset[str] = frozenset({"TypeInvariant"}),
+) -> list[str]:
+    """Return errors for checked state invariants outside the state root."""
+
+    if not module_path.exists() or any(not path.exists() for path in cfg_paths):
+        return []
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    signatures = tla_operator_signatures(module_path)
+    cfg_invariants: dict[str, list[tuple[Path, int]]] = {}
+    for cfg_path in cfg_paths:
+        references, parse_errors = cfg_operator_references(cfg_path)
+        if parse_errors:
+            return []
+        for line_number, directive, operator in references:
+            if normalized_cfg_check_directive(directive) != "INVARIANT":
+                continue
+            if operator in exempt_invariants:
+                continue
+            cfg_invariants.setdefault(operator, []).append((cfg_path, line_number))
+
+    if root_invariant not in definitions:
+        return [
+            f"{display_path(module_path)} does not define state invariant root "
+            f"{root_invariant}"
+        ]
+
+    root_signature = signatures.get(root_invariant)
+    if root_signature is not None and root_signature[1] != 0:
+        root_line, root_arity = root_signature
+        return [
+            f"{display_path(module_path)}:{root_line} defines state invariant "
+            f"root {root_invariant} with arity {root_arity}; state invariant "
+            "reachability requires a zero-arity operator"
+        ]
+
+    reachable: set[str] = set()
+    stack = [root_invariant]
+    while stack:
+        operator = stack.pop()
+        if operator in reachable:
+            continue
+        reachable.add(operator)
+        definition = definitions.get(operator)
+        if definition is None:
+            continue
+        _, expression = definition
+        for identifier in tla_free_static_identifiers(expression):
+            if identifier in reachable or identifier not in definitions:
+                continue
+            signature = signatures.get(identifier)
+            if signature is not None and signature[1] != 0:
+                continue
+            stack.append(identifier)
+
+    errors: list[str] = []
+    for operator in sorted(set(cfg_invariants) - reachable):
+        locations = ", ".join(
+            f"{display_path(cfg_path)}:{line_number}"
+            for cfg_path, line_number in cfg_invariants[operator]
+        )
+        errors.append(
+            f"{locations} checks INVARIANT {operator}, but it is not reachable "
+            f"from state invariant root {root_invariant} through zero-arity TLA "
+            "operator references"
+        )
+    return errors
+
+
+def state_invariant_root_cfg_coverage_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+    cfg_paths: tuple[Path, ...] = (SUMERAGI_DEEP_CFG, SUMERAGI_TLC_FAST_CFG),
+    root_invariant: str = SUMERAGI_STATE_INVARIANT_ROOT,
+    exempt_invariants: frozenset[str] = frozenset({"TypeInvariant"}),
+) -> list[str]:
+    """Return errors for state-root conjuncts missing top-level CFG checks."""
+
+    if not module_path.exists() or any(not path.exists() for path in cfg_paths):
+        return []
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    signatures = tla_operator_signatures(module_path)
+    cfg_invariants_by_path: dict[Path, set[str]] = {}
+    for cfg_path in cfg_paths:
+        cfg_invariants_by_path[cfg_path] = set()
+        references, parse_errors = cfg_operator_references(cfg_path)
+        if parse_errors:
+            return []
+        for _, directive, operator in references:
+            if normalized_cfg_check_directive(directive) != "INVARIANT":
+                continue
+            if operator in exempt_invariants:
+                continue
+            cfg_invariants_by_path[cfg_path].add(operator)
+
+    definition = definitions.get(root_invariant)
+    if definition is None:
+        return [
+            f"{display_path(module_path)} does not define state invariant root "
+            f"{root_invariant}"
+        ]
+
+    root_signature = signatures.get(root_invariant)
+    if root_signature is not None and root_signature[1] != 0:
+        root_line, root_arity = root_signature
+        return [
+            f"{display_path(module_path)}:{root_line} defines state invariant "
+            f"root {root_invariant} with arity {root_arity}; state invariant "
+            "CFG coverage requires a zero-arity operator"
+        ]
+
+    definition_line, body = definition
+    errors: list[str] = []
+    for conjunct in tla_top_level_conjuncts(body):
+        compact_conjunct = " ".join(
+            strip_static_outer_parentheses(conjunct).split()
+        )
+        if (
+            TLA_IDENTIFIER_RE.fullmatch(compact_conjunct)
+            and is_tla_user_identifier(compact_conjunct)
+        ):
+            continue
+        errors.append(
+            f"{display_path(module_path)}:{definition_line} defines "
+            f"{root_invariant}, but contains direct non-named state invariant "
+            f"conjunct {compact_conjunct}; compose named zero-arity state "
+            "predicates directly"
+        )
+
+    root_conjuncts = tuple(tla_zero_arity_conjunct_references(body))
+    repeated_conjuncts = duplicate_values(root_conjuncts)
+    if repeated_conjuncts:
+        errors.append(
+            f"{display_path(module_path)}:{definition_line} defines "
+            f"{root_invariant}, but repeats direct state invariant conjunct(s) "
+            f"{', '.join(repeated_conjuncts)}; each state obligation must be "
+            "counted once"
+        )
+
+    nonzero_arity_conjuncts = nonzero_arity_conjunct_references(
+        body,
+        signatures,
+    )
+    if nonzero_arity_conjuncts:
+        errors.append(
+            f"{display_path(module_path)}:{definition_line} defines "
+            f"{root_invariant}, but contains non-zero-arity state invariant "
+            "conjunct "
+            f"{format_nonzero_arity_references(nonzero_arity_conjuncts, module_path)}; "
+            "state-root conjuncts must compose zero-arity predicates directly"
+        )
+
+    illegal_exempt_conjuncts = [
+        conjunct for conjunct in root_conjuncts if conjunct in exempt_invariants
+    ]
+    if illegal_exempt_conjuncts:
+        errors.append(
+            f"{display_path(module_path)}:{definition_line} defines "
+            f"{root_invariant}, but includes exempt invariant conjunct(s) "
+            f"{', '.join(illegal_exempt_conjuncts)}; keep type checks outside "
+            "the non-type state root"
+        )
+
+    for cfg_path, cfg_invariants in cfg_invariants_by_path.items():
+        missing_cfg_checks = [
+            conjunct
+            for conjunct in root_conjuncts
+            if conjunct not in exempt_invariants and conjunct not in cfg_invariants
+        ]
+        if missing_cfg_checks:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{root_invariant}, but direct state invariant conjunct(s) "
+                f"{', '.join(missing_cfg_checks)} are not checked as top-level "
+                f"INVARIANT entries by {display_path(cfg_path)}"
+            )
+    return errors
+
+
+def temporal_property_root_cfg_coverage_closure(
+    definitions: dict[str, tuple[int, str]],
+    cfg_properties: set[str],
+    root_properties: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Return aggregate property roots reachable through checked properties."""
+
+    closure: list[str] = []
+    seen: set[str] = set()
+    queue = list(root_properties)
+    while queue:
+        root_property = queue.pop(0)
+        if root_property in seen:
+            continue
+        seen.add(root_property)
+        closure.append(root_property)
+
+        definition = definitions.get(root_property)
+        if definition is None:
+            continue
+        _, body = definition
+        for child_property in tla_zero_arity_conjunct_references(body):
+            if child_property in seen or child_property not in cfg_properties:
+                continue
+            child_definition = definitions.get(child_property)
+            if child_definition is None:
+                continue
+            _, child_body = child_definition
+            if len(tla_top_level_conjuncts(child_body)) > 1:
+                queue.append(child_property)
+
+    return tuple(closure)
+
+
+def temporal_property_root_cfg_coverage_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+    cfg_paths: tuple[Path, ...] = (SUMERAGI_DEEP_CFG, SUMERAGI_TLC_FAST_CFG),
+    root_properties: tuple[
+        str, ...
+    ] = SUMERAGI_TEMPORAL_PROPERTY_ROOTS_REQUIRING_CFG_COVERAGE,
+) -> list[str]:
+    """Return errors for temporal root conjuncts missing top-level CFG checks."""
+
+    if not module_path.exists() or any(not path.exists() for path in cfg_paths):
+        return []
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    signatures = tla_operator_signatures(module_path)
+    cfg_properties_by_path: dict[Path, set[str]] = {}
+    for cfg_path in cfg_paths:
+        cfg_properties_by_path[cfg_path] = set()
+        references, parse_errors = cfg_operator_references(cfg_path)
+        if parse_errors:
+            return []
+        for _, directive, operator in references:
+            if normalized_cfg_check_directive(directive) != "PROPERTY":
+                continue
+            cfg_properties_by_path[cfg_path].add(operator)
+    cfg_properties = set().union(*cfg_properties_by_path.values())
+
+    root_properties = temporal_property_root_cfg_coverage_closure(
+        definitions,
+        cfg_properties,
+        root_properties,
+    )
+
+    errors: list[str] = []
+    for root_property in root_properties:
+        definition = definitions.get(root_property)
+        if definition is None:
+            errors.append(
+                f"{display_path(module_path)} does not define temporal "
+                f"property root {root_property}"
+            )
+            continue
+
+        root_signature = signatures.get(root_property)
+        if root_signature is not None and root_signature[1] != 0:
+            root_line, root_arity = root_signature
+            errors.append(
+                f"{display_path(module_path)}:{root_line} defines temporal "
+                f"property root {root_property} with arity {root_arity}; "
+                "temporal property CFG coverage requires a zero-arity operator"
+            )
+            continue
+
+        definition_line, body = definition
+        root_missing_cfgs = [
+            cfg_path
+            for cfg_path, cfg_properties_for_path in cfg_properties_by_path.items()
+            if root_property not in cfg_properties_for_path
+        ]
+        if root_missing_cfgs:
+            cfg_list = ", ".join(
+                str(display_path(cfg_path)) for cfg_path in root_missing_cfgs
+            )
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"temporal property root {root_property}, but the root is not "
+                f"checked as a top-level PROPERTY by {cfg_list}"
+            )
+
+        for conjunct in tla_top_level_conjuncts(body):
+            compact_conjunct = " ".join(
+                strip_static_outer_parentheses(conjunct).split()
+            )
+            if (
+                TLA_IDENTIFIER_RE.fullmatch(compact_conjunct)
+                and is_tla_user_identifier(compact_conjunct)
+            ):
+                continue
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{root_property}, but contains direct non-named temporal "
+                f"property conjunct {compact_conjunct}; compose named "
+                "zero-arity temporal predicates directly"
+            )
+
+        root_conjuncts = tuple(tla_zero_arity_conjunct_references(body))
+        repeated_conjuncts = duplicate_values(root_conjuncts)
+        if repeated_conjuncts:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{root_property}, but repeats direct temporal property "
+                f"conjunct(s) {', '.join(repeated_conjuncts)}; each temporal "
+                "obligation must be counted once"
+            )
+
+        nonzero_arity_conjuncts = nonzero_arity_conjunct_references(
+            body,
+            signatures,
+        )
+        if nonzero_arity_conjuncts:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{root_property}, but contains non-zero-arity temporal "
+                "property conjunct "
+                f"{format_nonzero_arity_references(nonzero_arity_conjuncts, module_path)}; "
+                "temporal-root conjuncts must compose zero-arity predicates "
+                "directly"
+            )
+
+        for cfg_path, cfg_properties_for_path in cfg_properties_by_path.items():
+            missing_cfg_checks = [
+                conjunct
+                for conjunct in root_conjuncts
+                if conjunct not in cfg_properties_for_path
+            ]
+            if missing_cfg_checks:
+                errors.append(
+                    f"{display_path(module_path)}:{definition_line} defines "
+                    f"{root_property}, but direct temporal property conjunct(s) "
+                    f"{', '.join(missing_cfg_checks)} are not checked as "
+                    "top-level PROPERTY entries by "
+                    f"{display_path(cfg_path)}"
+                )
+    return errors
+
+
+def consensus_core_root_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+    contracts: dict[str, tuple[str, ...]] = SUMERAGI_CONSENSUS_CORE_ROOT_CONJUNCT_CONTRACTS,
+    *,
+    root_kind: str = "consensus-core proof root",
+    zero_arity_requirement: str = (
+        "aggregate proof roots must be zero-arity operators"
+    ),
+    duplicate_requirement: str = (
+        "each consensus-core root obligation must be counted once"
+    ),
+    unexpected_requirement: str = (
+        "keep consensus-core aggregate proof roots on the documented conjunct "
+        "contract"
+    ),
+) -> list[str]:
+    """Return errors for aggregate proof roots with drifted conjuncts."""
+
+    if not module_path.exists():
+        return []
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    signatures = tla_operator_signatures(module_path)
+    errors: list[str] = []
+    for operator, expected_conjuncts in contracts.items():
+        definition = definitions.get(operator)
+        if definition is None:
+            errors.append(
+                f"{display_path(module_path)} does not define "
+                f"{root_kind} {operator}"
+            )
+            continue
+
+        signature = signatures.get(operator)
+        if signature is not None and signature[1] != 0:
+            root_line, root_arity = signature
+            errors.append(
+                f"{display_path(module_path)}:{root_line} defines "
+                f"{root_kind} {operator} with arity {root_arity}; "
+                f"{zero_arity_requirement}"
+            )
+            continue
+
+        definition_line, body = definition
+        direct_conjuncts = tuple(tla_zero_arity_conjunct_references(body))
+        direct_conjunct_set = set(direct_conjuncts)
+        expected_conjunct_set = set(expected_conjuncts)
+        repeated_conjuncts = duplicate_values(direct_conjuncts)
+        if repeated_conjuncts:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{operator}, but repeats direct conjunct(s) "
+                f"{', '.join(repeated_conjuncts)}; {duplicate_requirement}"
+            )
+
+        missing_conjuncts = [
+            conjunct
+            for conjunct in expected_conjuncts
+            if conjunct not in direct_conjunct_set
+        ]
+        if missing_conjuncts:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{operator}, but is missing required direct conjunct(s) "
+                f"{', '.join(missing_conjuncts)}"
+            )
+
+        unexpected_conjuncts = [
+            conjunct
+            for conjunct in direct_conjuncts
+            if conjunct not in expected_conjunct_set
+        ]
+        if unexpected_conjuncts:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{operator}, but contains unexpected direct conjunct(s) "
+                f"{', '.join(unexpected_conjuncts)}; {unexpected_requirement}"
+            )
+    return errors
+
+
+def state_matches_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for Sumeragi state-safety aggregate invariant drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_STATE_MATCHES_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="state matches envelope",
+        zero_arity_requirement=(
+            "state matches envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each state-safety obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep state-safety aggregate proof envelope on the documented "
+            "conjunct contract"
+        ),
+    )
+
+
+def committed_terminal_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for committed terminal-state aggregate proof drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_COMMITTED_TERMINAL_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="committed terminal-state envelope",
+        zero_arity_requirement=(
+            "committed terminal-state envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each committed terminal-state obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep committed terminal-state aggregate proof envelope on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def end_to_end_safety_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for the Sumeragi end-to-end safety aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_END_TO_END_SAFETY_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="end-to-end safety envelope",
+        zero_arity_requirement=(
+            "end-to-end safety envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each end-to-end safety obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep end-to-end safety aggregate proof envelope on the documented "
+            "conjunct contract"
+        ),
+    )
+
+
+def post_finality_stability_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for post-finality stability aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_POST_FINALITY_STABILITY_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="post-finality stability envelope",
+        zero_arity_requirement=(
+            "post-finality stability envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each post-finality stability obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep post-finality stability aggregate proof envelope on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def timeout_recovery_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for timeout-recovery aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_TIMEOUT_RECOVERY_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="timeout-recovery envelope",
+        zero_arity_requirement=(
+            "timeout-recovery envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each timeout-recovery obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep timeout-recovery aggregate proof envelope on the documented "
+            "conjunct contract"
+        ),
+    )
+
+
+def finality_installation_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for certified-commit installation aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_FINALITY_INSTALLATION_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="certified-commit installation envelope",
+        zero_arity_requirement=(
+            "certified-commit installation envelopes must be zero-arity "
+            "operators"
+        ),
+        duplicate_requirement=(
+            "each certified-commit installation obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep certified-commit installation aggregate proof envelope on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def pre_commit_handoff_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for pre-commit proposal/prepare handoff aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_PRE_COMMIT_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="pre-commit handoff envelope",
+        zero_arity_requirement=(
+            "pre-commit handoff envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each pre-commit handoff obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep pre-commit handoff aggregate proof envelope on the documented "
+            "conjunct contract"
+        ),
+    )
+
+
+def commit_vote_handoff_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for commit-vote/finality handoff aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_COMMIT_VOTE_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="commit-vote handoff envelope",
+        zero_arity_requirement=(
+            "commit-vote handoff envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each commit-vote handoff obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep commit-vote handoff aggregate proof envelope on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def finalized_certificate_retention_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for finalized certificate/evidence retention drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_FINALIZED_CERTIFICATE_RETENTION_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="finalized certificate retention envelope",
+        zero_arity_requirement=(
+            "finalized certificate retention envelopes must be zero-arity "
+            "operators"
+        ),
+        duplicate_requirement=(
+            "each finalized certificate retention obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep finalized certificate retention aggregate proof envelope on "
+            "the documented conjunct contract"
+        ),
+    )
+
+
+def rbc_delivered_finality_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for RBC delivered-finality certified-commit drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_RBC_DELIVERED_FINALITY_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="RBC delivered-finality envelope",
+        zero_arity_requirement=(
+            "RBC delivered-finality envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each RBC delivered-finality obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep RBC delivered-finality aggregate proof envelope on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def rbc_delivered_state_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for RBC delivered-state lifecycle aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_RBC_DELIVERED_STATE_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="RBC delivered-state lifecycle envelope",
+        zero_arity_requirement=(
+            "RBC delivered-state lifecycle envelopes must be zero-arity "
+            "operators"
+        ),
+        duplicate_requirement=(
+            "each RBC delivered-state lifecycle obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep RBC delivered-state lifecycle aggregate proof envelope on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def rbc_delivered_pending_handoff_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for RBC delivered-pending handoff aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_RBC_DELIVERED_PENDING_HANDOFF_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="RBC delivered-pending handoff envelope",
+        zero_arity_requirement=(
+            "RBC delivered-pending handoff envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each RBC delivered-pending handoff obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep RBC delivered-pending handoff aggregate proof envelope on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def delivered_pending_complete_wait_state_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for delivered-pending complete wait-state aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_DELIVERED_PENDING_COMPLETE_WAIT_STATE_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="delivered-pending complete wait-state envelope",
+        zero_arity_requirement=(
+            "delivered-pending complete wait-state envelopes must be zero-arity "
+            "operators"
+        ),
+        duplicate_requirement=(
+            "each delivered-pending complete wait-state obligation must be "
+            "counted once"
+        ),
+        unexpected_requirement=(
+            "keep delivered-pending complete wait-state aggregate proof envelope "
+            "on the documented conjunct contract"
+        ),
+    )
+
+
+def rbc_delivery_entry_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for RBC delivery-entry complete outcome drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_RBC_DELIVERY_ENTRY_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="RBC delivery-entry outcome envelope",
+        zero_arity_requirement=(
+            "RBC delivery-entry outcome envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each RBC delivery-entry outcome obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep RBC delivery-entry outcome aggregate proof envelope on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def rbc_delivery_entry_continuation_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for RBC delivery-entry commit-evidence continuation drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_RBC_DELIVERY_ENTRY_CONTINUATION_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="RBC delivery-entry continuation envelope",
+        zero_arity_requirement=(
+            "RBC delivery-entry continuation envelopes must be zero-arity "
+            "operators"
+        ),
+        duplicate_requirement=(
+            "each RBC delivery-entry continuation obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep RBC delivery-entry continuation aggregate proof envelope on "
+            "the documented conjunct contract"
+        ),
+    )
+
+
+def rbc_lifecycle_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for RBC lifecycle end-to-end aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_RBC_LIFECYCLE_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="RBC lifecycle end-to-end envelope",
+        zero_arity_requirement=(
+            "RBC lifecycle end-to-end envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each RBC lifecycle end-to-end obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep RBC lifecycle aggregate proof envelope on the documented "
+            "conjunct contract"
+        ),
+    )
+
+
+def rbc_corruption_repair_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for RBC corruption-repair aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_RBC_CORRUPTION_REPAIR_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="RBC corruption-repair envelope",
+        zero_arity_requirement=(
+            "RBC corruption-repair envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each RBC corruption-repair obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep RBC corruption-repair aggregate proof envelope on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def rbc_chunk_ready_deliver_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for RBC chunk/ready/deliver availability aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_RBC_CHUNK_READY_DELIVER_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="RBC chunk/ready/deliver availability envelope",
+        zero_arity_requirement=(
+            "RBC chunk/ready/deliver availability envelopes must be zero-arity "
+            "operators"
+        ),
+        duplicate_requirement=(
+            "each RBC chunk/ready/deliver availability obligation must be "
+            "counted once"
+        ),
+        unexpected_requirement=(
+            "keep RBC chunk/ready/deliver availability aggregate proof envelope "
+            "on the documented conjunct contract"
+        ),
+    )
+
+
+def rbc_progress_mutation_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for RBC progress-mutation aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_RBC_PROGRESS_MUTATION_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="RBC progress-mutation envelope",
+        zero_arity_requirement=(
+            "RBC progress-mutation envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each RBC progress-mutation obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep RBC progress-mutation aggregate proof envelope on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def rbc_progress_local_classification_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for RBC progress local-classification aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_RBC_PROGRESS_LOCAL_CLASSIFICATION_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="RBC progress local-classification envelope",
+        zero_arity_requirement=(
+            "RBC progress local-classification envelopes must be zero-arity "
+            "operators"
+        ),
+        duplicate_requirement=(
+            "each RBC progress local-classification obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep RBC progress local-classification aggregate proof envelope on "
+            "the documented conjunct contract"
+        ),
+    )
+
+
+def rbc_startup_boundary_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for RBC startup/defensive boundary aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_RBC_STARTUP_BOUNDARY_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="RBC startup-boundary envelope",
+        zero_arity_requirement=(
+            "RBC startup-boundary envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each RBC startup-boundary obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep RBC startup-boundary aggregate proof envelope on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def rbc_progress_state_evidence_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for RBC progress-state evidence aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_RBC_PROGRESS_STATE_EVIDENCE_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="RBC progress-state evidence envelope",
+        zero_arity_requirement=(
+            "RBC progress-state evidence envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each RBC progress-state evidence obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep RBC progress-state evidence aggregate proof envelope on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def rbc_live_evidence_causality_envelope_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for RBC live-evidence causality aggregate drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_RBC_LIVE_EVIDENCE_CAUSALITY_ENVELOPE_CONJUNCT_CONTRACTS,
+        root_kind="RBC live-evidence causality envelope",
+        zero_arity_requirement=(
+            "RBC live-evidence causality envelopes must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each RBC live-evidence causality obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep RBC live-evidence causality aggregate proof envelope on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def consensus_core_root_cfg_check_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+    cfg_paths: tuple[Path, ...] = (SUMERAGI_DEEP_CFG, SUMERAGI_TLC_FAST_CFG),
+    contracts: dict[
+        str, dict[str, str]
+    ] = SUMERAGI_CONSENSUS_CORE_ROOT_CFG_CHECK_CONTRACTS,
+) -> list[str]:
+    """Return errors for consensus-core roots with drifted CFG check roles."""
+
+    if not module_path.exists() or any(not path.exists() for path in cfg_paths):
+        return []
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    cfg_check_kinds_by_path: dict[Path, dict[str, str]] = {}
+    for cfg_path in cfg_paths:
+        check_kinds, parse_errors = cfg_check_operator_kinds(cfg_path)
+        if parse_errors:
+            return []
+        cfg_check_kinds_by_path[cfg_path] = check_kinds
+
+    errors: list[str] = []
+    for root_operator, conjunct_contracts in contracts.items():
+        definition = definitions.get(root_operator)
+        if definition is None:
+            errors.append(
+                f"{display_path(module_path)} does not define "
+                f"consensus-core proof root {root_operator}"
+            )
+            continue
+
+        definition_line, body = definition
+        direct_conjuncts = set(tla_zero_arity_conjunct_references(body))
+        for conjunct, expected_kind in conjunct_contracts.items():
+            if conjunct not in direct_conjuncts:
+                errors.append(
+                    f"{display_path(module_path)}:{definition_line} defines "
+                    f"{root_operator}, but expected CFG-checked direct "
+                    f"conjunct {conjunct} is not a direct root conjunct"
+                )
+                continue
+            for cfg_path, check_kinds in cfg_check_kinds_by_path.items():
+                actual_kind = check_kinds.get(conjunct)
+                if actual_kind is None:
+                    errors.append(
+                        f"{display_path(module_path)}:{definition_line} "
+                        f"defines {root_operator}, but direct conjunct "
+                        f"{conjunct} is not checked as a top-level "
+                        f"{expected_kind} by {display_path(cfg_path)}"
+                    )
+                elif actual_kind != expected_kind:
+                    errors.append(
+                        f"{display_path(module_path)}:{definition_line} "
+                        f"defines {root_operator}, but direct conjunct "
+                        f"{conjunct} is checked as {actual_kind} by "
+                        f"{display_path(cfg_path)}; expected {expected_kind}"
+                    )
     return errors
 
 
@@ -12666,6 +14650,16 @@ def temporal_extra_definition_shape_errors(
             "temporal predicates before composing allowlisted temporal "
             "side-conjunct chains"
         ]
+    if (
+        temporal_operator == "EventuallyCommit"
+        and not has_direct_post_gst_committed_eventuality(body)
+    ):
+        return [
+            f"{prefix} at {display_path(module_path)}:{line} does not contain "
+            "the direct [] (gst => <> committed) liveness shape; "
+            "EventuallyCommit must preserve the post-GST commit liveness "
+            "obligation"
+        ]
     return []
 
 
@@ -12709,6 +14703,311 @@ def temporal_direct_boolean_parts(body: str) -> list[str]:
 
     collect(body)
     return parts
+
+
+def has_direct_post_gst_committed_eventuality(body: str) -> bool:
+    """Return whether a formula has the [] (gst => <> committed) shape."""
+
+    normalized = strip_static_outer_parentheses(" ".join(body.split()))
+    operator_operand = tla_unary_temporal_operator_operand(normalized)
+    if operator_operand is None:
+        return False
+    operator, operand = operator_operand
+    if operator != "[]":
+        return False
+
+    implication_operands = tla_top_level_implication_operands(operand)
+    if len(implication_operands) != 2:
+        return False
+    antecedent = strip_static_outer_parentheses(
+        " ".join(implication_operands[0].split())
+    )
+    if TLA_IDENTIFIER_RE.fullmatch(antecedent) is None or antecedent != "gst":
+        return False
+
+    consequent = strip_static_outer_parentheses(
+        " ".join(implication_operands[1].split())
+    )
+    consequent_operator_operand = tla_unary_temporal_operator_operand(consequent)
+    if consequent_operator_operand is None:
+        return False
+    consequent_operator, consequent_operand = consequent_operator_operand
+    compact_consequent_operand = strip_static_outer_parentheses(
+        " ".join(consequent_operand.split())
+    )
+    return (
+        consequent_operator == "<>"
+        and TLA_IDENTIFIER_RE.fullmatch(compact_consequent_operand) is not None
+        and compact_consequent_operand == "committed"
+    )
+
+
+def has_direct_commit_never_revoked_shape(body: str) -> bool:
+    """Return whether a formula has the [] (committed => [] committed) shape."""
+
+    normalized = strip_static_outer_parentheses(" ".join(body.split()))
+    operator_operand = tla_unary_temporal_operator_operand(normalized)
+    if operator_operand is None:
+        return False
+    operator, operand = operator_operand
+    if operator != "[]":
+        return False
+
+    implication_operands = tla_top_level_implication_operands(operand)
+    if len(implication_operands) != 2:
+        return False
+    antecedent = strip_static_outer_parentheses(
+        " ".join(implication_operands[0].split())
+    )
+    if TLA_IDENTIFIER_RE.fullmatch(antecedent) is None or antecedent != "committed":
+        return False
+
+    consequent = strip_static_outer_parentheses(
+        " ".join(implication_operands[1].split())
+    )
+    consequent_operator_operand = tla_unary_temporal_operator_operand(consequent)
+    if consequent_operator_operand is None:
+        return False
+    consequent_operator, consequent_operand = consequent_operator_operand
+    compact_consequent_operand = strip_static_outer_parentheses(
+        " ".join(consequent_operand.split())
+    )
+    return (
+        consequent_operator == "[]"
+        and TLA_IDENTIFIER_RE.fullmatch(compact_consequent_operand) is not None
+        and compact_consequent_operand == "committed"
+    )
+
+
+def has_direct_always_predicate_shape(body: str, predicate: str) -> bool:
+    """Return whether a formula has the [] Predicate wrapper shape."""
+
+    normalized = strip_static_outer_parentheses(" ".join(body.split()))
+    operator_operand = tla_unary_temporal_operator_operand(normalized)
+    if operator_operand is None:
+        return False
+    operator, operand = operator_operand
+    compact_operand = strip_static_outer_parentheses(" ".join(operand.split()))
+    return (
+        operator == "[]"
+        and TLA_IDENTIFIER_RE.fullmatch(compact_operand) is not None
+        and compact_operand == predicate
+    )
+
+
+def tla_action_box_parts(body: str) -> tuple[str, str] | None:
+    """Return the action and subscript from an [Action]_subscript wrapper."""
+
+    compact_body = strip_static_outer_parentheses(" ".join(body.split()))
+    match = TLA_ACTION_BOX_RE.fullmatch(compact_body)
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
+def has_direct_always_action_wrapper_shape(body: str, action: str) -> bool:
+    """Return whether a formula has the [] [Action]_vars wrapper shape."""
+
+    normalized = strip_static_outer_parentheses(" ".join(body.split()))
+    operator_operand = tla_unary_temporal_operator_operand(normalized)
+    if operator_operand is None:
+        return False
+    operator, operand = operator_operand
+    action_box = tla_action_box_parts(operand)
+    if action_box is None:
+        return False
+    wrapped_action, subscript = action_box
+    return operator == "[]" and wrapped_action == action and subscript == "vars"
+
+
+def is_committed_phase_equality(body: str) -> bool:
+    """Return whether a formula is exactly phase = "Committed"."""
+
+    relation = tla_top_level_equality_relation_parts(body)
+    if relation is None:
+        return False
+    left, operator, right = relation
+    compact_left = strip_static_outer_parentheses(" ".join(left.split()))
+    compact_right = strip_static_outer_parentheses(" ".join(right.split()))
+    return compact_left == "phase" and operator == "=" and compact_right == '"Committed"'
+
+
+def has_direct_committed_phase_never_leaves_shape(body: str) -> bool:
+    """Return whether a formula has the committed-phase permanence shape."""
+
+    normalized = strip_static_outer_parentheses(" ".join(body.split()))
+    operator_operand = tla_unary_temporal_operator_operand(normalized)
+    if operator_operand is None:
+        return False
+    operator, operand = operator_operand
+    if operator != "[]":
+        return False
+
+    implication_operands = tla_top_level_implication_operands(operand)
+    if len(implication_operands) != 2:
+        return False
+    if not is_committed_phase_equality(implication_operands[0]):
+        return False
+
+    consequent = strip_static_outer_parentheses(
+        " ".join(implication_operands[1].split())
+    )
+    consequent_operator_operand = tla_unary_temporal_operator_operand(consequent)
+    if consequent_operator_operand is None:
+        return False
+    consequent_operator, consequent_operand = consequent_operator_operand
+    return consequent_operator == "[]" and is_committed_phase_equality(
+        consequent_operand
+    )
+
+
+def sumeragi_temporal_shape_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for protected temporal theorem shape drift."""
+
+    if not module_path.exists():
+        return []
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    signatures = tla_operator_signatures(module_path)
+    errors: list[str] = []
+
+    commit_never_revoked = "CommitNeverRevoked"
+    definition = definitions.get(commit_never_revoked)
+    if definition is None:
+        errors.append(
+            f"{display_path(module_path)} does not define temporal theorem "
+            f"{commit_never_revoked}"
+        )
+    else:
+        signature = signatures.get(commit_never_revoked)
+        if signature is not None and signature[1] != 0:
+            line, arity = signature
+            errors.append(
+                f"{display_path(module_path)}:{line} defines temporal theorem "
+                f"{commit_never_revoked} with arity {arity}; temporal shape "
+                "contracts require zero-arity operators"
+            )
+        else:
+            line, body = definition
+            if not has_direct_commit_never_revoked_shape(body):
+                errors.append(
+                    f"{display_path(module_path)}:{line} defines "
+                    f"{commit_never_revoked}, but it does not keep the direct "
+                    "[] (committed => [] committed) finality-latch monotonicity "
+                    "shape with exact lowercase state-variable names"
+                )
+
+    committed_phase_never_leaves = "CommittedPhaseNeverLeaves"
+    definition = definitions.get(committed_phase_never_leaves)
+    if definition is None:
+        errors.append(
+            f"{display_path(module_path)} does not define temporal theorem "
+            f"{committed_phase_never_leaves}"
+        )
+    else:
+        signature = signatures.get(committed_phase_never_leaves)
+        if signature is not None and signature[1] != 0:
+            line, arity = signature
+            errors.append(
+                f"{display_path(module_path)}:{line} defines temporal theorem "
+                f"{committed_phase_never_leaves} with arity {arity}; temporal "
+                "shape contracts require zero-arity operators"
+            )
+        else:
+            line, body = definition
+            if not has_direct_committed_phase_never_leaves_shape(body):
+                errors.append(
+                    f"{display_path(module_path)}:{line} defines "
+                    f"{committed_phase_never_leaves}, but it does not keep the "
+                    'direct [] (phase = "Committed" => [] (phase = "Committed")) '
+                    "phase permanence shape"
+                )
+
+    for operator, action in SUMERAGI_TEMPORAL_ACTION_THEOREM_CONTRACTS.items():
+        definition = definitions.get(operator)
+        if definition is None:
+            errors.append(
+                f"{display_path(module_path)} does not define temporal theorem "
+                f"{operator}"
+            )
+            continue
+
+        signature = signatures.get(operator)
+        if signature is not None and signature[1] != 0:
+            line, arity = signature
+            errors.append(
+                f"{display_path(module_path)}:{line} defines temporal theorem "
+                f"{operator} with arity {arity}; temporal shape contracts "
+                "require zero-arity operators"
+            )
+            continue
+
+        action_signature = signatures.get(action)
+        if action_signature is None:
+            errors.append(
+                f"{display_path(module_path)} defines temporal theorem "
+                f"{operator}, but matching action step {action} is not defined"
+            )
+        elif action_signature[1] != 0:
+            line, arity = action_signature
+            errors.append(
+                f"{display_path(module_path)}:{line} defines matching action "
+                f"step {action} for temporal theorem {operator} with arity "
+                f"{arity}; temporal shape contracts require zero-arity action "
+                "steps"
+            )
+
+        line, body = definition
+        if not has_direct_always_action_wrapper_shape(body, action):
+            errors.append(
+                f"{display_path(module_path)}:{line} defines {operator}, but "
+                f"it does not keep the direct [] [{action}]_vars "
+                "action-wrapper shape"
+            )
+
+    for operator, predicate in SUMERAGI_TEMPORAL_ALWAYS_THEOREM_CONTRACTS.items():
+        definition = definitions.get(operator)
+        if definition is None:
+            errors.append(
+                f"{display_path(module_path)} does not define temporal theorem "
+                f"{operator}"
+            )
+            continue
+
+        signature = signatures.get(operator)
+        if signature is not None and signature[1] != 0:
+            line, arity = signature
+            errors.append(
+                f"{display_path(module_path)}:{line} defines temporal theorem "
+                f"{operator} with arity {arity}; temporal shape contracts "
+                "require zero-arity operators"
+            )
+            continue
+
+        predicate_signature = signatures.get(predicate)
+        if predicate_signature is None:
+            errors.append(
+                f"{display_path(module_path)} defines temporal theorem "
+                f"{operator}, but matching predicate {predicate} is not defined"
+            )
+        elif predicate_signature[1] != 0:
+            line, arity = predicate_signature
+            errors.append(
+                f"{display_path(module_path)}:{line} defines matching predicate "
+                f"{predicate} for temporal theorem {operator} with arity "
+                f"{arity}; temporal shape contracts require zero-arity "
+                "predicates"
+            )
+
+        line, body = definition
+        if not has_direct_always_predicate_shape(body, predicate):
+            errors.append(
+                f"{display_path(module_path)}:{line} defines {operator}, but "
+                f"it does not keep the direct [] {predicate} wrapper shape"
+            )
+    return errors
 
 
 def temporal_self_equality_parts(body: str) -> list[str]:
@@ -15514,6 +17813,92 @@ def main() -> int:
     ) + expected_failure_default_errors(TLC_RUNNER, "TLC")
     runner_invocation_mismatches = runner_invocation_errors()
     top_level_cfg_check_parity_mismatches = top_level_cfg_check_parity_errors()
+    property_root_reachability_mismatches = cfg_property_root_reachability_errors()
+    state_invariant_root_reachability_mismatches = (
+        cfg_state_invariant_root_reachability_errors()
+    )
+    state_invariant_root_cfg_coverage_mismatches = (
+        state_invariant_root_cfg_coverage_errors()
+    )
+    temporal_property_root_cfg_coverage_mismatches = (
+        temporal_property_root_cfg_coverage_errors()
+    )
+    consensus_core_root_contract_mismatches = (
+        consensus_core_root_conjunct_contract_errors()
+    )
+    state_matches_envelope_contract_mismatches = (
+        state_matches_envelope_conjunct_contract_errors()
+    )
+    committed_terminal_envelope_contract_mismatches = (
+        committed_terminal_envelope_conjunct_contract_errors()
+    )
+    end_to_end_safety_envelope_contract_mismatches = (
+        end_to_end_safety_envelope_conjunct_contract_errors()
+    )
+    post_finality_stability_envelope_contract_mismatches = (
+        post_finality_stability_envelope_conjunct_contract_errors()
+    )
+    timeout_recovery_envelope_contract_mismatches = (
+        timeout_recovery_envelope_conjunct_contract_errors()
+    )
+    finality_installation_envelope_contract_mismatches = (
+        finality_installation_envelope_conjunct_contract_errors()
+    )
+    pre_commit_handoff_envelope_contract_mismatches = (
+        pre_commit_handoff_envelope_conjunct_contract_errors()
+    )
+    commit_vote_handoff_envelope_contract_mismatches = (
+        commit_vote_handoff_envelope_conjunct_contract_errors()
+    )
+    finalized_certificate_retention_envelope_contract_mismatches = (
+        finalized_certificate_retention_envelope_conjunct_contract_errors()
+    )
+    rbc_delivered_finality_envelope_contract_mismatches = (
+        rbc_delivered_finality_envelope_conjunct_contract_errors()
+    )
+    rbc_delivered_state_envelope_contract_mismatches = (
+        rbc_delivered_state_envelope_conjunct_contract_errors()
+    )
+    rbc_delivered_pending_handoff_envelope_contract_mismatches = (
+        rbc_delivered_pending_handoff_envelope_conjunct_contract_errors()
+    )
+    delivered_pending_complete_wait_state_envelope_contract_mismatches = (
+        delivered_pending_complete_wait_state_envelope_conjunct_contract_errors()
+    )
+    rbc_delivery_entry_envelope_contract_mismatches = (
+        rbc_delivery_entry_envelope_conjunct_contract_errors()
+    )
+    rbc_delivery_entry_continuation_envelope_contract_mismatches = (
+        rbc_delivery_entry_continuation_envelope_conjunct_contract_errors()
+    )
+    rbc_lifecycle_envelope_contract_mismatches = (
+        rbc_lifecycle_envelope_conjunct_contract_errors()
+    )
+    rbc_corruption_repair_envelope_contract_mismatches = (
+        rbc_corruption_repair_envelope_conjunct_contract_errors()
+    )
+    rbc_chunk_ready_deliver_envelope_contract_mismatches = (
+        rbc_chunk_ready_deliver_envelope_conjunct_contract_errors()
+    )
+    rbc_progress_mutation_envelope_contract_mismatches = (
+        rbc_progress_mutation_envelope_conjunct_contract_errors()
+    )
+    rbc_progress_local_classification_envelope_contract_mismatches = (
+        rbc_progress_local_classification_envelope_conjunct_contract_errors()
+    )
+    rbc_startup_boundary_envelope_contract_mismatches = (
+        rbc_startup_boundary_envelope_conjunct_contract_errors()
+    )
+    rbc_progress_state_evidence_envelope_contract_mismatches = (
+        rbc_progress_state_evidence_envelope_conjunct_contract_errors()
+    )
+    rbc_live_evidence_causality_envelope_contract_mismatches = (
+        rbc_live_evidence_causality_envelope_conjunct_contract_errors()
+    )
+    consensus_core_root_cfg_check_contract_mismatches = (
+        consensus_core_root_cfg_check_contract_errors()
+    )
+    temporal_shape_contract_mismatches = sumeragi_temporal_shape_contract_errors()
     apalache_typecheck_default_mismatches = apalache_typecheck_default_errors()
     workflow_entrypoint_mismatches = workflow_entrypoint_errors()
     command_shape_mismatches: list[str] = []
@@ -16004,6 +18389,170 @@ def main() -> int:
         errors.append(
             "Sumeragi top-level Apalache/TLC CFG proof checks diverge:\n"
             + format_items(top_level_cfg_check_parity_mismatches)
+        )
+    if property_root_reachability_mismatches:
+        errors.append(
+            "Sumeragi top-level proof property graph is disconnected:\n"
+            + format_items(property_root_reachability_mismatches)
+        )
+    if state_invariant_root_reachability_mismatches:
+        errors.append(
+            "Sumeragi top-level state invariant graph is disconnected:\n"
+            + format_items(state_invariant_root_reachability_mismatches)
+        )
+    if state_invariant_root_cfg_coverage_mismatches:
+        errors.append(
+            "Sumeragi state invariant root has untracked direct conjuncts:\n"
+            + format_items(state_invariant_root_cfg_coverage_mismatches)
+        )
+    if temporal_property_root_cfg_coverage_mismatches:
+        errors.append(
+            "Sumeragi temporal property roots have untracked direct conjuncts:\n"
+            + format_items(temporal_property_root_cfg_coverage_mismatches)
+        )
+    if consensus_core_root_contract_mismatches:
+        errors.append(
+            "Sumeragi consensus-core aggregate proof roots drifted:\n"
+            + format_items(consensus_core_root_contract_mismatches)
+        )
+    if state_matches_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi state-safety proof envelope drifted:\n"
+            + format_items(state_matches_envelope_contract_mismatches)
+        )
+    if committed_terminal_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi committed terminal-state proof envelope drifted:\n"
+            + format_items(committed_terminal_envelope_contract_mismatches)
+        )
+    if end_to_end_safety_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi end-to-end safety proof envelope drifted:\n"
+            + format_items(end_to_end_safety_envelope_contract_mismatches)
+        )
+    if post_finality_stability_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi post-finality stability proof envelope drifted:\n"
+            + format_items(post_finality_stability_envelope_contract_mismatches)
+        )
+    if timeout_recovery_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi timeout-recovery proof envelope drifted:\n"
+            + format_items(timeout_recovery_envelope_contract_mismatches)
+        )
+    if finality_installation_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi certified-commit installation proof envelope drifted:\n"
+            + format_items(finality_installation_envelope_contract_mismatches)
+        )
+    if pre_commit_handoff_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi pre-commit handoff proof envelope drifted:\n"
+            + format_items(pre_commit_handoff_envelope_contract_mismatches)
+        )
+    if commit_vote_handoff_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi commit-vote handoff proof envelope drifted:\n"
+            + format_items(commit_vote_handoff_envelope_contract_mismatches)
+        )
+    if finalized_certificate_retention_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi finalized certificate retention proof envelope drifted:\n"
+            + format_items(
+                finalized_certificate_retention_envelope_contract_mismatches
+            )
+        )
+    if rbc_delivered_finality_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi RBC delivered-finality proof envelope drifted:\n"
+            + format_items(rbc_delivered_finality_envelope_contract_mismatches)
+        )
+    if rbc_delivered_state_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi RBC delivered-state lifecycle proof envelope drifted:\n"
+            + format_items(rbc_delivered_state_envelope_contract_mismatches)
+        )
+    if rbc_delivered_pending_handoff_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi RBC delivered-pending handoff proof envelope drifted:\n"
+            + format_items(
+                rbc_delivered_pending_handoff_envelope_contract_mismatches
+            )
+        )
+    if delivered_pending_complete_wait_state_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi delivered-pending complete wait-state proof envelope "
+            "drifted:\n"
+            + format_items(
+                delivered_pending_complete_wait_state_envelope_contract_mismatches
+            )
+        )
+    if rbc_delivery_entry_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi RBC delivery-entry outcome proof envelope drifted:\n"
+            + format_items(rbc_delivery_entry_envelope_contract_mismatches)
+        )
+    if rbc_delivery_entry_continuation_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi RBC delivery-entry continuation proof envelope drifted:\n"
+            + format_items(rbc_delivery_entry_continuation_envelope_contract_mismatches)
+        )
+    if rbc_lifecycle_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi RBC lifecycle proof envelope drifted:\n"
+            + format_items(rbc_lifecycle_envelope_contract_mismatches)
+        )
+    if rbc_corruption_repair_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi RBC corruption-repair proof envelope drifted:\n"
+            + format_items(rbc_corruption_repair_envelope_contract_mismatches)
+        )
+    if rbc_chunk_ready_deliver_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi RBC chunk/ready/deliver availability proof envelope "
+            "drifted:\n"
+            + format_items(rbc_chunk_ready_deliver_envelope_contract_mismatches)
+        )
+    if rbc_progress_mutation_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi RBC progress-mutation proof envelope drifted:\n"
+            + format_items(rbc_progress_mutation_envelope_contract_mismatches)
+        )
+    if rbc_progress_local_classification_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi RBC progress local-classification proof envelope drifted:\n"
+            + format_items(
+                rbc_progress_local_classification_envelope_contract_mismatches
+            )
+        )
+    if rbc_startup_boundary_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi RBC startup-boundary proof envelope drifted:\n"
+            + format_items(rbc_startup_boundary_envelope_contract_mismatches)
+        )
+    if rbc_progress_state_evidence_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi RBC progress-state evidence proof envelope drifted:\n"
+            + format_items(
+                rbc_progress_state_evidence_envelope_contract_mismatches
+            )
+        )
+    if rbc_live_evidence_causality_envelope_contract_mismatches:
+        errors.append(
+            "Sumeragi RBC live-evidence causality proof envelope drifted:\n"
+            + format_items(
+                rbc_live_evidence_causality_envelope_contract_mismatches
+            )
+        )
+    if consensus_core_root_cfg_check_contract_mismatches:
+        errors.append(
+            "Sumeragi consensus-core root CFG check roles drifted:\n"
+            + format_items(consensus_core_root_cfg_check_contract_mismatches)
+        )
+    if temporal_shape_contract_mismatches:
+        errors.append(
+            "Sumeragi temporal theorem shape contracts drifted:\n"
+            + format_items(temporal_shape_contract_mismatches)
         )
     if apalache_typecheck_default_mismatches:
         errors.append(

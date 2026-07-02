@@ -1535,6 +1535,16 @@ mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
 
+    const SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn id(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
@@ -2033,6 +2043,28 @@ mod tests {
         let err = verify_order_request_signature_v1(&signed)
             .expect_err("all-zero order public key must be rejected");
         assert!(matches!(err, OrderbookValidationError::InvalidSignature));
+    }
+
+    #[test]
+    fn verify_order_signature_rejects_malformed_ed25519_signature_r() {
+        for (label, replacement_r, expected_reason) in [
+            ("small-order", SMALL_ORDER_R, "small-order"),
+            ("noncanonical", NONCANONICAL_R, "not a canonical"),
+        ] {
+            let mut signed = sign_order(order(), 0x1A);
+            signed.signature.signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
+
+            let err = verify_order_request_signature_v1(&signed)
+                .expect_err("malformed order signature R must be rejected");
+            assert!(
+                matches!(
+                    &err,
+                    OrderbookValidationError::SignatureVerification { reason }
+                        if reason.contains(expected_reason)
+                ),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

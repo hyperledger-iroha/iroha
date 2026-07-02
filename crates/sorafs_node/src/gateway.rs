@@ -31,7 +31,7 @@ use axum::{
 };
 use base64::Engine as _;
 use eyre::WrapErr;
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, Signature};
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey, Signature, ed25519_parse_signature};
 use iroha_logger::{info, warn};
 use iroha_telemetry::metrics::{SorafsGatewayOtel, global_sorafs_gateway_otel};
 use norito::json::{self, Value};
@@ -722,7 +722,7 @@ fn verify_proof_signature(proof: &PorProofV1) -> Result<(), GatewayResponseError
                 Some(Value::Object(details)),
             )
         })?;
-    let signature = Signature::try_from_bytes(&proof.signature.signature).map_err(|err| {
+    let signature = ed25519_parse_signature(&proof.signature.signature).map_err(|err| {
         let mut details = json::Map::new();
         details.insert(
             "signature_len".into(),
@@ -2274,6 +2274,16 @@ mod tests {
     use super::*;
     use crate::config::StorageConfig;
 
+    const SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     #[test]
     fn capability_refusal_status_and_code_exposed() {
         let err = GatewayResponseError::capability_refusal(
@@ -2492,6 +2502,43 @@ mod tests {
                 assert!(reason.contains("all zero"));
             }
             other => panic!("expected proof mismatch refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn por_proof_signature_rejects_malformed_ed25519_signature_r() {
+        let (payload, por_tree) = sample_por_tree_payload();
+        let manifest_digest = [0xA5; 32];
+        let provider_id = [0xCD; 32];
+        let signing_key =
+            PrivateKey::from_bytes(Algorithm::Ed25519, &[0x22; 32]).expect("private key");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut proof = build_por_proof(
+                &por_tree,
+                &payload,
+                manifest_digest,
+                provider_id,
+                &signing_key,
+            )
+            .expect("build proof");
+            proof.signature.signature[..32].copy_from_slice(&replacement_r);
+
+            let err = verify_proof_signature(&proof)
+                .expect_err("malformed proof signature R should fail");
+            assert_eq!(err.error_code(), "proof_mismatch");
+            match err {
+                GatewayResponseError::CapabilityRefusal { reason, .. } => {
+                    assert!(
+                        reason.contains("proof signature material is invalid"),
+                        "{label} signature R produced unexpected reason: {reason}"
+                    );
+                }
+                other => panic!("expected proof mismatch refusal, got {other:?}"),
+            }
         }
     }
 

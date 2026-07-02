@@ -3020,6 +3020,16 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
 
+    const SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn signed_por_proof_payload() -> GovernanceLogPayloadV1 {
         GovernanceLogPayloadV1::PorProof(crate::por::PorProofV1 {
             version: crate::POR_PROOF_VERSION_V1,
@@ -3378,6 +3388,31 @@ mod tests {
             GovernanceLogSignatureVerificationError::Verification { reason }
                 if reason.contains("all zero")
         ));
+    }
+
+    #[test]
+    fn verify_publisher_signature_rejects_malformed_ed25519_signature_r() {
+        for (label, replacement_r, expected_reason) in [
+            ("small-order", SMALL_ORDER_R, "small-order"),
+            ("noncanonical", NONCANONICAL_R, "not a canonical"),
+        ] {
+            let seed = [0xA5; 32];
+            let mut node = governance_node_for_signing();
+            sign_governance_node(&mut node, &seed);
+            node.publisher_signature.signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
+
+            let err = node
+                .verify_publisher_signature()
+                .expect_err("malformed governance publisher signature R must be rejected");
+            assert!(
+                matches!(
+                    &err,
+                    GovernanceLogSignatureVerificationError::Verification { reason }
+                        if reason.contains(expected_reason)
+                ),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

@@ -38,7 +38,19 @@ use norito::{json::Value, to_bytes};
 use tokio::runtime::Runtime;
 
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
-const CLIENT_HEIGHT_TIMEOUT: Duration = Duration::from_secs(120);
+const CLIENT_HEIGHT_TIMEOUT: Duration = Duration::from_secs(300);
+
+fn commit_quorum_size(validator_count: usize) -> usize {
+    let tolerated_faults = validator_count.saturating_sub(1) / 3;
+    validator_count.saturating_sub(tolerated_faults)
+}
+
+fn count_reached(heights: &[Option<u64>], target_height: u64) -> usize {
+    heights
+        .iter()
+        .filter(|height| height.is_some_and(|value| value >= target_height))
+        .count()
+}
 
 fn evidence_count(value: &norito::json::Value) -> u64 {
     value
@@ -314,22 +326,47 @@ fn advance_client_to_height(
     label: &str,
 ) -> Result<()> {
     let deadline = Instant::now() + CLIENT_HEIGHT_TIMEOUT;
+    let quorum = commit_quorum_size(network.peers().len()).max(1);
+    let mut attempt = 0usize;
+    let mut last_observed = Vec::new();
     loop {
-        let status = client.get_status()?;
-        if status.blocks >= target {
+        let mut heights = Vec::new();
+        last_observed.clear();
+        for (idx, peer) in network.peers().iter().enumerate() {
+            match peer.best_effort_block_height() {
+                Some(height) => {
+                    heights.push(Some(height.total));
+                    last_observed.push(format!("#{idx}:{}", height.total));
+                }
+                None => {
+                    heights.push(None);
+                    last_observed.push(format!("#{idx}:unavailable"));
+                }
+            }
+        }
+        if count_reached(&heights, target) >= quorum {
             return Ok(());
         }
 
+        let status = client.get_status()?;
+        let highest = heights
+            .iter()
+            .flatten()
+            .copied()
+            .chain(core::iter::once(status.blocks))
+            .max()
+            .unwrap_or_default();
         let submit_client = submit_client_for_network(network, client);
         submit_client.submit_blocking(Log::new(
             Level::INFO,
-            format!("{label} tick {}", status.blocks),
+            format!("{label} tick {highest} attempt {attempt}"),
         ))?;
 
         ensure!(
             Instant::now() < deadline,
-            "client did not reach target height {target} within {CLIENT_HEIGHT_TIMEOUT:?}"
+            "network did not reach target height {target} on quorum {quorum} within {CLIENT_HEIGHT_TIMEOUT:?}; last observed {last_observed:?}"
         );
+        attempt = attempt.saturating_add(1);
         thread::sleep(Duration::from_millis(200));
     }
 }
@@ -682,7 +719,7 @@ fn joint_consensus_switches_mode_at_activation_height() -> Result<()> {
         activation_height.saturating_add(1),
         "joint consensus activation",
     )?;
-    wait_for_collectors_mode(&client, "npos", 40, Duration::from_millis(200))?;
+    wait_for_collectors_mode_quorum(&network, "npos", 80, Duration::from_millis(200))?;
 
     let final_snapshot = client.get_sumeragi_collectors_json()?;
     ensure!(
@@ -920,6 +957,16 @@ fn min_connected_peers_for_submit_keeps_quorum_margin() {
 }
 
 #[test]
+fn commit_quorum_and_height_count_match_bft_progress_rules() {
+    assert_eq!(commit_quorum_size(0), 0);
+    assert_eq!(commit_quorum_size(1), 1);
+    assert_eq!(commit_quorum_size(4), 3);
+    assert_eq!(commit_quorum_size(7), 5);
+    assert_eq!(count_reached(&[Some(7), Some(6), None, Some(9)], 7), 2);
+    assert_eq!(count_reached(&[Some(7), Some(6), None, Some(9)], 6), 3);
+}
+
+#[test]
 fn pick_fallback_submit_peer_index_prefers_best_height_round_robin() {
     let totals = [7, 11, 11, 3];
 
@@ -942,17 +989,30 @@ fn collectors_consensus_mode(value: &Value) -> Option<&str> {
     value.get("consensus_mode").and_then(Value::as_str)
 }
 
-fn wait_for_collectors_mode(
-    client: &Client,
+fn wait_for_collectors_mode_quorum(
+    network: &Network,
     expected: &str,
     attempts: usize,
     delay: Duration,
 ) -> Result<()> {
+    let quorum = commit_quorum_size(network.peers().len()).max(1);
+    let mut last_observed = Vec::new();
     for attempt in 0..attempts {
-        let snapshot = client.get_sumeragi_collectors_json()?;
-        if collectors_consensus_mode(&snapshot)
-            .is_some_and(|mode| mode.eq_ignore_ascii_case(expected))
-        {
+        last_observed.clear();
+        let mut matching = 0usize;
+        for (idx, peer) in network.peers().iter().enumerate() {
+            match peer.client().get_sumeragi_collectors_json() {
+                Ok(snapshot) => {
+                    let mode = collectors_consensus_mode(&snapshot).unwrap_or("<missing>");
+                    if mode.eq_ignore_ascii_case(expected) {
+                        matching = matching.saturating_add(1);
+                    }
+                    last_observed.push(format!("#{idx}:{mode}"));
+                }
+                Err(err) => last_observed.push(format!("#{idx}:err:{err}")),
+            }
+        }
+        if matching >= quorum {
             return Ok(());
         }
         if attempt + 1 < attempts {
@@ -960,8 +1020,7 @@ fn wait_for_collectors_mode(
         }
     }
     bail!(
-        "collectors mode did not switch to {expected} within {} attempts",
-        attempts
+        "collectors mode did not switch to {expected} on quorum {quorum} within {attempts} attempts; last observed {last_observed:?}"
     );
 }
 

@@ -782,8 +782,15 @@ impl VpnUsageVoucherV1 {
     /// # Errors
     /// Returns an error when signature verification fails.
     pub fn verify(&self) -> Result<(), iroha_crypto::Error> {
-        self.signature
-            .verify(&self.client_public_key, &self.body.encode())
+        let signature = if matches!(
+            self.client_public_key.try_algorithm(),
+            Ok(Algorithm::Ed25519)
+        ) {
+            iroha_crypto::ed25519_parse_signature(self.signature.payload())?
+        } else {
+            Signature::try_from_bytes(self.signature.payload())?
+        };
+        signature.verify(&self.client_public_key, &self.body.encode())
     }
 
     /// Deterministic hash of the signed voucher used by relay receipts.
@@ -1545,6 +1552,18 @@ mod tests {
         (key_pair, voucher)
     }
 
+    const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+        let mut payload = signature.payload().to_vec();
+        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
+            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        Signature::from_bytes(&payload)
+    }
+
     #[test]
     fn flow_label_roundtrip_respects_bounds() {
         let label = VpnFlowLabelV1::from_u32(0xABCDE).expect("flow label within bounds");
@@ -1846,6 +1865,22 @@ mod tests {
         assert!(
             voucher.verify().is_err(),
             "tampered checked voucher signature must fail"
+        );
+    }
+
+    #[test]
+    fn usage_voucher_rejects_malformed_ed25519_signature_r() {
+        let (_key_pair, mut voucher) = sample_usage_voucher();
+        voucher
+            .verify()
+            .expect("checked usage voucher signature must verify");
+
+        voucher.signature = signature_with_malformed_ed25519_r(&voucher.signature);
+        assert_eq!(
+            voucher
+                .verify()
+                .expect_err("malformed voucher signature R must fail admission"),
+            iroha_crypto::Error::BadSignature
         );
     }
 

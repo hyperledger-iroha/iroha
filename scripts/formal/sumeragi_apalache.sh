@@ -1010,6 +1010,11 @@ case "$mode" in
     cfg_file="$spec_dir/SumeragiProposalBackpressureGate_fast.cfg"
     apalache_length=1
     ;;
+  proposal-sccp-root-fast)
+    spec_file="$spec_dir/SumeragiProposalSccpRootGate.tla"
+    cfg_file="$spec_dir/SumeragiProposalSccpRootGate_fast.cfg"
+    apalache_length=1
+    ;;
   proposal-defer-warning-fast)
     spec_file="$spec_dir/SumeragiProposalDeferWarningThrottleGate.tla"
     cfg_file="$spec_dir/SumeragiProposalDeferWarningThrottleGate_fast.cfg"
@@ -4611,6 +4616,14 @@ case "$mode" in
     cfg_bug_name="${bug_name//-/_}"
     spec_file="$spec_dir/SumeragiProposalBackpressureGate.tla"
     cfg_file="$spec_dir/SumeragiProposalBackpressureGate_bug_${cfg_bug_name}.cfg"
+    apalache_length=1
+    expect_failure=1
+    ;;
+  proposal-sccp-root-bug-*)
+    bug_name="${mode#proposal-sccp-root-bug-}"
+    cfg_bug_name="${bug_name//-/_}"
+    spec_file="$spec_dir/SumeragiProposalSccpRootGate.tla"
+    cfg_file="$spec_dir/SumeragiProposalSccpRootGate_bug_${cfg_bug_name}.cfg"
     apalache_length=1
     expect_failure=1
     ;;

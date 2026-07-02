@@ -1,7 +1,7 @@
 //! Stream token schema and helpers for SoraFS chunk-range gateways.
 
 use blake3::Hash as Blake3Hash;
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
@@ -47,7 +47,15 @@ impl StreamTokenV1 {
 
     /// Verify the token signature using the supplied verifying key.
     pub fn verify(&self, verifier: &VerifyingKey) -> Result<(), StreamTokenError> {
-        let sig = Signature::try_from(self.signature.as_slice())
+        if verifier.is_weak() {
+            return Err(StreamTokenError::InvalidSignatureFormat);
+        }
+        let signature_bytes: [u8; ed25519_dalek::SIGNATURE_LENGTH] = self
+            .signature
+            .as_slice()
+            .try_into()
+            .map_err(|_| StreamTokenError::InvalidSignatureFormat)?;
+        let sig = crate::checked_ed25519_signature_from_bytes(&signature_bytes)
             .map_err(|_| StreamTokenError::InvalidSignatureFormat)?;
         let message = self.body.to_canonical_bytes()?;
         verifier
@@ -78,9 +86,19 @@ pub enum StreamTokenError {
 
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::SigningKey;
+    use ed25519_dalek::{PUBLIC_KEY_LENGTH, SigningKey};
 
     use super::*;
+
+    const SMALL_ORDER_R: [u8; PUBLIC_KEY_LENGTH] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; PUBLIC_KEY_LENGTH] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
 
     fn sample_body() -> StreamTokenBodyV1 {
         StreamTokenBodyV1 {
@@ -118,6 +136,42 @@ mod tests {
         let mut tampered = token.clone();
         tampered.body.max_streams = 8;
         let err = tampered.verify(&verifying).expect_err("should fail");
-        matches!(err, StreamTokenError::SignatureInvalid(_));
+        assert!(matches!(err, StreamTokenError::SignatureInvalid(_)));
+    }
+
+    #[test]
+    fn verify_rejects_malformed_ed25519_signature_r() {
+        let signing = SigningKey::from_bytes(&[0x42; 32]);
+        let verifying = signing.verifying_key();
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut token = StreamTokenV1::sign(sample_body(), &signing).expect("sign");
+            token.signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
+
+            let err = token
+                .verify(&verifying)
+                .expect_err("malformed stream-token signature R must be rejected");
+            assert!(
+                matches!(err, StreamTokenError::InvalidSignatureFormat),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_rejects_small_order_verifier_key_before_backend() {
+        let signing = SigningKey::from_bytes(&[0x42; 32]);
+        let weak_verifier = VerifyingKey::from_bytes(&SMALL_ORDER_R)
+            .expect("small-order Ed25519 verifier key has parseable encoding");
+        let token = StreamTokenV1::sign(sample_body(), &signing).expect("sign");
+
+        let err = token
+            .verify(&weak_verifier)
+            .expect_err("small-order verifier key must fail before backend verification");
+
+        assert!(matches!(err, StreamTokenError::InvalidSignatureFormat));
     }
 }

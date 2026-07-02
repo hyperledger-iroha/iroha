@@ -510,8 +510,9 @@ mod avx2 {
 
     use super::{gf_mul, tables_u32};
 
-    /// AVX2 path that vectorizes the XOR accumulation and gf_mul table lookups.
+    /// AVX2 path that vectorizes the XOR accumulation and `gf_mul` table lookups.
     #[allow(unsafe_code)]
+    #[allow(clippy::cast_ptr_alignment)]
     #[target_feature(enable = "avx2")]
     pub(super) unsafe fn mul_add_row_avx2(coef: u16, data_row: &[u16], out: &mut [u16]) {
         // SAFETY: Caller ensures AVX2 is available and slices are equal length.
@@ -525,13 +526,13 @@ mod avx2 {
             if coef == 1 {
                 while idx + 16 <= len {
                     let data_vec = arch::_mm256_loadu_si256(
-                        data_row.as_ptr().add(idx) as *const arch::__m256i
+                        data_row.as_ptr().add(idx).cast::<arch::__m256i>(),
                     );
                     let out_vec =
-                        arch::_mm256_loadu_si256(out.as_ptr().add(idx) as *const arch::__m256i);
+                        arch::_mm256_loadu_si256(out.as_ptr().add(idx).cast::<arch::__m256i>());
                     let merged = arch::_mm256_xor_si256(out_vec, data_vec);
                     arch::_mm256_storeu_si256(
-                        out.as_mut_ptr().add(idx) as *mut arch::__m256i,
+                        out.as_mut_ptr().add(idx).cast::<arch::__m256i>(),
                         merged,
                     );
                     idx += 16;
@@ -543,14 +544,14 @@ mod avx2 {
             }
 
             let tables = tables_u32();
-            let log_table = tables.log.as_ptr() as *const i32;
-            let exp_table = tables.exp.as_ptr() as *const i32;
-            let log_coef = tables.log[coef as usize] as i32;
+            let log_table = tables.log.as_ptr().cast::<i32>();
+            let exp_table = tables.exp.as_ptr().cast::<i32>();
+            let log_coef = tables.log[coef as usize].cast_signed();
             let log_coef_vec = arch::_mm256_set1_epi32(log_coef);
             let zero = arch::_mm256_setzero_si256();
             while idx + 8 <= len {
                 let data_vec =
-                    arch::_mm_loadu_si128(data_row.as_ptr().add(idx) as *const arch::__m128i);
+                    arch::_mm_loadu_si128(data_row.as_ptr().add(idx).cast::<arch::__m128i>());
                 let indices = arch::_mm256_cvtepu16_epi32(data_vec);
                 let zero_mask = arch::_mm256_cmpeq_epi32(indices, zero);
                 let log_vec = arch::_mm256_i32gather_epi32(log_table, indices, 4);
@@ -560,9 +561,9 @@ mod avx2 {
                 let term_lo = arch::_mm256_castsi256_si128(term_vec);
                 let term_hi = arch::_mm256_extracti128_si256(term_vec, 1);
                 let packed = arch::_mm_packus_epi32(term_lo, term_hi);
-                let out_vec = arch::_mm_loadu_si128(out.as_ptr().add(idx) as *const arch::__m128i);
+                let out_vec = arch::_mm_loadu_si128(out.as_ptr().add(idx).cast::<arch::__m128i>());
                 let merged = arch::_mm_xor_si128(out_vec, packed);
-                arch::_mm_storeu_si128(out.as_mut_ptr().add(idx) as *mut arch::__m128i, merged);
+                arch::_mm_storeu_si128(out.as_mut_ptr().add(idx).cast::<arch::__m128i>(), merged);
                 idx += 8;
             }
             for (slot, symbol) in out.iter_mut().zip(data_row.iter()).skip(idx) {
@@ -744,14 +745,20 @@ mod tests {
         exp_indices.sort_unstable();
         exp_indices.dedup();
         for idx in exp_indices {
-            assert_eq!(tables.exp[idx], tables_u32.exp[idx] as u16);
+            assert_eq!(
+                tables.exp[idx],
+                u16::try_from(tables_u32.exp[idx]).expect("u32 exp entry fits u16")
+            );
         }
 
         let mut log_indices = vec![0usize, 1, 2, 17, 1024, tables.log.len() - 1];
         log_indices.sort_unstable();
         log_indices.dedup();
         for idx in log_indices {
-            assert_eq!(tables.log[idx], tables_u32.log[idx] as u16);
+            assert_eq!(
+                tables.log[idx],
+                u16::try_from(tables_u32.log[idx]).expect("u32 log entry fits u16")
+            );
         }
     }
 

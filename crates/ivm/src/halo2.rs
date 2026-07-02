@@ -570,6 +570,52 @@ mod tests {
         }
     }
 
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    #[test]
+    fn ed25519_verify_circuit_rejects_malformed_signature_r_before_dalek_decode() {
+        use ed25519_dalek::{Signer as _, SigningKey};
+
+        let signing_key = SigningKey::from_bytes(&[0x4a; 32]);
+        let message = b"ivm-halo2-ed25519-malformed-r";
+        let public_key = signing_key.verifying_key().to_bytes();
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut signature = signing_key.sign(message).to_bytes();
+            signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let mut circuit = Ed25519VerifyCircuit {
+                public_key,
+                signature,
+                message,
+                result: true,
+            };
+
+            assert_eq!(
+                circuit
+                    .verify()
+                    .expect_err("malformed Ed25519 R must not satisfy a true result"),
+                "halo2 constraint failure",
+                "{label} R must be classified as a false verification result before signature decode"
+            );
+
+            circuit.result = false;
+            circuit
+                .verify()
+                .expect("malformed Ed25519 R must fail closed as a false result");
+        }
+    }
+
     #[test]
     fn vm_execution_circuit_accepts_wrapping_addi_and_sub_semantics() {
         let program = build_program(&[
@@ -1152,6 +1198,9 @@ impl<'a> Ed25519VerifyCircuit<'a> {
             return ensure_equal_bool(false, self.result);
         }
         if crate::signature::signature_bytes_are_all_zero(&self.signature) {
+            return ensure_equal_bool(false, self.result);
+        }
+        if crate::signature::signature_has_invalid_ed25519_r(&self.signature) {
             return ensure_equal_bool(false, self.result);
         }
         let sig = Signature::from_slice(&self.signature)

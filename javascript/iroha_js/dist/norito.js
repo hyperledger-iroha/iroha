@@ -586,7 +586,7 @@ export function noritoEncodeMultisigProposeRequest(request) {
       [
         encodeOptionValue(
           request.signature_b64 ?? request.signatureB64 ?? null,
-          encodeNoritoStringValue,
+          encodeExactBase64StringValue,
           "MultisigProposeDto.signature_b64",
         ),
       ],
@@ -772,7 +772,7 @@ export function noritoEncodeMultisigContractCallProposeRequest(request) {
       [
         encodeOptionValue(
           request.signature_b64 ?? request.signatureB64 ?? null,
-          encodeNoritoStringValue,
+          encodeExactBase64StringValue,
           "MultisigContractCallProposeDto.signature_b64",
         ),
       ],
@@ -888,7 +888,7 @@ export function noritoEncodeMultisigContractCallApproveRequest(request) {
       [
         encodeOptionValue(
           request.signature_b64 ?? request.signatureB64 ?? null,
-          encodeNoritoStringValue,
+          encodeExactBase64StringValue,
           "MultisigContractCallApproveDto.signature_b64",
         ),
       ],
@@ -6414,6 +6414,23 @@ function decodeU64Value(payload, context) {
 
 function encodeNoritoStringValue(value) {
   return encodeNoritoField(Buffer.from(value, "utf8"));
+}
+
+function encodeExactBase64StringValue(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a string`);
+  }
+  if (value.length === 0 || value.trim() !== value || /\s/u.test(value)) {
+    throw new TypeError(`${context} must be exact standard-base64`);
+  }
+  if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(value) || value.length % 4 !== 0) {
+    throw new TypeError(`${context} must be exact standard-base64`);
+  }
+  const decoded = Buffer.from(value, "base64");
+  if (decoded.length === 0 || decoded.toString("base64") !== value) {
+    throw new TypeError(`${context} must be exact standard-base64`);
+  }
+  return encodeNoritoStringValue(value);
 }
 
 function decodeStringValue(payload, context, lengthFlags = 0) {

@@ -22274,7 +22274,7 @@ fn validate_manifest_envelope_signature(entry: &Value, message: &[u8]) -> bool {
     if signature_bytes.len() != 64 {
         return false;
     }
-    let Ok(signature) = Signature::try_from_bytes(&signature_bytes) else {
+    let Ok(signature) = iroha_crypto::ed25519_parse_signature(&signature_bytes) else {
         return false;
     };
     signature.verify(&public_key, message).is_ok()

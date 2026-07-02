@@ -595,6 +595,50 @@ def test_tron_api_rejects_duplicate_json_keys():
         raise AssertionError("duplicate-key TRON API response was accepted")
 
 
+def test_tron_node_url_rejects_hidden_request_state():
+    module = load_live_module()
+
+    assert module._normalize_tron_node_url("https://tron.example") == (
+        "https://tron.example"
+    )
+    assert module._url("https://tron.example/root", "/wallet/getnowblock") == (
+        "https://tron.example/root/wallet/getnowblock"
+    )
+    assert module._normalize_tron_node_url("http://127.0.0.1:8090") == (
+        "http://127.0.0.1:8090"
+    )
+
+    def forbidden_opener(_request, timeout):
+        raise AssertionError("malformed TRON node URL reached the opener")
+
+    for base_url, expected_error in (
+        ("https://token@tron.example", "credentials"),
+        ("https://tron.example/root;param", "params, query, or fragment"),
+        ("https://tron.example?api_key=secret", "params, query, or fragment"),
+        ("https://tron.example#fragment", "params, query, or fragment"),
+        ("http://tron.example", "HTTPS unless it is loopback HTTP"),
+        ("https://localhost", "public DNS"),
+        ("https://127.0.0.1", "public DNS"),
+        ("https://tron", "public DNS"),
+        ("https://tron.local", "public DNS"),
+        ("https://bad_host.tron.example", "public DNS"),
+        (" https://tron.example", "exact http(s) URL"),
+        ("https://tron.example\nsecret", "exact http(s) URL"),
+    ):
+        try:
+            module._post_json(
+                base_url,
+                "/wallet/getnowblock",
+                {},
+                opener=forbidden_opener,
+                timeout=1.0,
+            )
+        except ValueError as exc:
+            assert expected_error in str(exc)
+        else:
+            raise AssertionError(f"hidden TRON node URL state {base_url!r} was accepted")
+
+
 def test_tron_api_redacts_transport_and_error_response_details():
     module = load_live_module()
 

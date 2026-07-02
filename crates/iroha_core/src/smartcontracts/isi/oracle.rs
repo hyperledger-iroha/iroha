@@ -8,7 +8,7 @@ use std::{
 };
 
 use blake3::Hasher;
-use iroha_crypto::{Algorithm, PublicKey, Signature};
+use iroha_crypto::{Algorithm, PublicKey, SignatureOf, ed25519_parse_signature};
 use iroha_data_model::{
     events::data::oracle::{
         DefiOracleAttestationRecorded, OracleChangeProposed, OracleChangeStageUpdated, OracleEvent,
@@ -50,6 +50,17 @@ fn aggregation_err(err: &iroha_data_model::oracle::OracleAggregationError) -> Er
 
 fn signature_err(message: impl Into<String>) -> Error {
     Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
+}
+
+fn verify_typed_signature_for_signer<T: norito::codec::Encode>(
+    signature: &SignatureOf<T>,
+    signer: &PublicKey,
+    value: &T,
+) -> Result<(), iroha_crypto::Error> {
+    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        ed25519_parse_signature(signature.payload())?;
+    }
+    signature.verify(signer, value)
 }
 
 fn has_permission_in_set(permissions: Option<&Permissions>, required: &DataPermission) -> bool {
@@ -831,7 +842,7 @@ fn verify_defi_oracle_signature(
     public_key: &PublicKey,
     attestation: &DefiOracleAttestation,
 ) -> Result<(), Error> {
-    let signature = Signature::try_from_bytes(&attestation.oracle_signature)
+    let signature = ed25519_parse_signature(&attestation.oracle_signature)
         .map_err(|err| signature_err(format!("invalid DeFi oracle signature material: {err}")))?;
     signature
         .verify(public_key, &attestation.oracle_payload)
@@ -974,7 +985,7 @@ fn validate_defi_sources(
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{KeyPair, Signature, SignatureOf};
     use iroha_data_model::oracle::{DefiOracleAttestationKey, kits};
 
     use super::*;
@@ -985,13 +996,9 @@ mod tests {
     }
 
     fn provider() -> AccountId {
-        kits::price_xor_usd()
-            .observations
-            .first()
-            .expect("observation fixture")
-            .body
-            .provider_id
-            .clone()
+        let keypair = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
+            .expect("DeFi oracle provider fixture key generation should succeed");
+        AccountId::new(keypair.public_key().clone())
     }
 
     fn direct_defi_attestation(attestation_hash: u64) -> DefiOracleAttestation {
@@ -1010,6 +1017,33 @@ mod tests {
             oracle_scheme: 1,
             source_events: Vec::new(),
         }
+    }
+
+    fn observation_body(provider: AccountId) -> iroha_data_model::oracle::ObservationBody {
+        iroha_data_model::oracle::ObservationBody {
+            feed_id: FeedId("price_xor_usd".parse().expect("oracle feed id")),
+            feed_config_version: FeedConfigVersion(1),
+            slot: 11,
+            provider_id: provider,
+            connector_id: "test-connector".to_owned(),
+            connector_version: 1,
+            request_hash: Hash::new(b"oracle-observation-request"),
+            outcome: ObservationOutcome::Value(iroha_data_model::oracle::ObservationValue::new(
+                12_345, 2,
+            )),
+            timestamp_ms: Some(1_700_000_000_123),
+        }
+    }
+
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    fn signature_of_with_malformed_ed25519_r<T>(signature: &SignatureOf<T>) -> SignatureOf<T> {
+        let mut payload = signature.payload().to_vec();
+        payload[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+        SignatureOf::from_signature(Signature::from_bytes(&payload))
     }
 
     #[test]
@@ -1039,6 +1073,67 @@ mod tests {
         assert!(
             message.contains("signature payload must not be all zero"),
             "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn defi_oracle_signature_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let keypair = checked_ed25519_keypair();
+        let mut attestation = direct_defi_attestation(17);
+        let valid_signature =
+            Signature::try_new(keypair.private_key(), &attestation.oracle_payload)
+                .expect("DeFi oracle fixture signing should succeed")
+                .payload()
+                .to_vec();
+        attestation.oracle_signature = valid_signature.clone();
+        verify_defi_oracle_signature(keypair.public_key(), &attestation)
+            .expect("valid DeFi oracle signature should verify");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed_signature = valid_signature.clone();
+            malformed_signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+            attestation.oracle_signature = malformed_signature;
+
+            let err = verify_defi_oracle_signature(keypair.public_key(), &attestation)
+                .expect_err("malformed DeFi oracle signature R must fail admission");
+            let Error::InvalidParameter(InvalidParameterError::SmartContract(message)) = err else {
+                panic!("unexpected error: {err:?}");
+            };
+            assert!(
+                message.contains("invalid DeFi oracle signature material"),
+                "{label} R should fail as invalid material before verification: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn oracle_observation_signature_rejects_malformed_ed25519_signature_r() {
+        let keypair = checked_ed25519_keypair();
+        let body = observation_body(AccountId::new(keypair.public_key().clone()));
+        let signature = SignatureOf::try_new(keypair.private_key(), &body)
+            .expect("oracle observation fixture signing should succeed");
+        verify_typed_signature_for_signer(&signature, keypair.public_key(), &body)
+            .expect("valid oracle observation signature should verify");
+
+        let signature = signature_of_with_malformed_ed25519_r(&signature);
+        let err = verify_typed_signature_for_signer(&signature, keypair.public_key(), &body)
+            .expect_err("malformed oracle observation signature R must fail admission");
+        assert!(
+            matches!(err, iroha_crypto::Error::BadSignature),
+            "malformed observation signature R should fail before typed verification: {err:?}"
         );
     }
 
@@ -1138,7 +1233,9 @@ impl Execute for SubmitOracleObservation {
         let signatory = provider.controller().single_signatory().ok_or_else(|| {
             signature_err("oracle providers must use single-signature controllers")
         })?;
-        if let Err(err) = observation.signature.verify(signatory, &observation.body) {
+        if let Err(err) =
+            verify_typed_signature_for_signer(&observation.signature, signatory, &observation.body)
+        {
             let slash_amount = state_transaction
                 .oracle
                 .economics

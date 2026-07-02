@@ -960,6 +960,38 @@ def _all_lanes_route_canary_fields(domain: Any) -> frozenset[str]:
     return _all_lanes_nested_field_sets()["route_canary_common"]
 
 
+def _all_lanes_route_canary_transcript_hash_fields(domain: Any) -> tuple[str, ...]:
+    """Return ordered route-canary transcript hash roles for a lane domain."""
+
+    route_canary_fields = _all_lanes_route_canary_fields(domain)
+    fields = [
+        field
+        for field in ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
+        if field in route_canary_fields and field != "evidence_hash"
+    ]
+    if domain == _sccp_domain_tron():
+        for preferred in reversed(("transaction_id", "message_id")):
+            if preferred in fields:
+                fields.remove(preferred)
+                fields.insert(0, preferred)
+    if "evidence_hash" in route_canary_fields:
+        fields.append("evidence_hash")
+    return tuple(fields)
+
+
+def _all_lanes_route_canary_source_gate_hash_role_fields(
+    domain: Any,
+) -> tuple[str, ...]:
+    """Return route-canary hash roles reserved from source-gate audit hashes."""
+
+    route_canary_fields = _all_lanes_route_canary_fields(domain)
+    return tuple(
+        field
+        for field in ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
+        if field in route_canary_fields and field != "evidence_hash"
+    )
+
+
 def _native_evm_required_implementations() -> dict[str, str]:
     global _NATIVE_EVM_REQUIRED_IMPLEMENTATIONS
     if _NATIVE_EVM_REQUIRED_IMPLEMENTATIONS is None:
@@ -1179,9 +1211,7 @@ def _source_adapter_gate_template_hashes(
     profile = all_lanes.LANE_PROFILES.get(domain)
     if profile is None:
         return ()
-    return tuple(
-        all_lanes._source_material_template_hashes(profile).values()
-    )
+    return all_lanes._source_material_template_hash_values(profile)
 
 
 def _source_adapter_gate_template_hashes_or_errors(
@@ -1703,13 +1733,10 @@ def _source_adapter_gate_semantic_errors(
                     )
                 )
                 # Source-inventory marker: source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id
-                for field in sorted(_all_lanes_route_canary_fields(domain)):
-                    if field in {
-                        "destination_binding_hash",
-                        "evidence_hash",
-                        "route_allowlist_hash",
-                    }:
-                        continue
+                # Source-inventory marker: source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.call_data_sha256
+                for field in _all_lanes_route_canary_source_gate_hash_role_fields(
+                    domain
+                ):
                     role_fields.append(
                         (f"route_canary.{field}", route_canary.get(field))
                     )
@@ -1936,21 +1963,12 @@ def _cryptographic_evidence_source_adapter_gate_hash_role_errors(
         ),
         ("destination_binding_hash", payload.get("destination_binding_hash")),
         ("route_allowlist_hash", payload.get("route_allowlist_hash")),
-        ("route_canary_evidence_hash", payload.get("route_canary_evidence_hash")),
         # Source-inventory marker: public source_adapter_gate audit hashes must not reuse route_canary_message_id
-        ("route_canary_transaction_hash", payload.get("route_canary_transaction_hash")),
-        (
-            "route_canary_receipt_block_hash",
-            payload.get("route_canary_receipt_block_hash"),
-        ),
-        (
-            "route_canary_block_receipts_root",
-            payload.get("route_canary_block_receipts_root"),
-        ),
-        ("route_canary_message_id", payload.get("route_canary_message_id")),
-        ("route_canary_transaction_id", payload.get("route_canary_transaction_id")),
-        ("route_canary_signature_sha256", payload.get("route_canary_signature_sha256")),
     ]
+    fields.extend(
+        (field, payload.get(field))
+        for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
+    )
     for audit_key, audit_hash in sorted(
         audit_hashes.items(),
         key=lambda item: _safe_public_key_sort_key(item[0]),
@@ -1972,26 +1990,9 @@ def _cryptographic_evidence_route_canary_hash_role_errors(
 
     return _distinct_nonzero_bytes32_field_errors(
         f"{label} route_canary hash role",
-        (
-            (
-                "route_canary_transaction_hash",
-                payload.get("route_canary_transaction_hash"),
-            ),
-            (
-                "route_canary_receipt_block_hash",
-                payload.get("route_canary_receipt_block_hash"),
-            ),
-            (
-                "route_canary_block_receipts_root",
-                payload.get("route_canary_block_receipts_root"),
-            ),
-            ("route_canary_message_id", payload.get("route_canary_message_id")),
-            ("route_canary_transaction_id", payload.get("route_canary_transaction_id")),
-            ("route_canary_signature_sha256", payload.get("route_canary_signature_sha256")),
-            (
-                "route_canary_evidence_hash",
-                payload.get("route_canary_evidence_hash"),
-            ),
+        tuple(
+            (field, payload.get(field))
+            for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
         ),
     )
 
@@ -2412,17 +2413,9 @@ def _route_canary_evm_semantic_errors(
 
     canary_label = f"{label}.route_allowlist.route_canary"
     errors: list[str] = []
-    transcript_hash_fields = (
-        "transaction_hash",
-        "receipt_block_hash",
-        "block_receipts_root",
-        "call_data_sha256",
-        "message_id",
-        "payload_hash",
-        "statement_hash",
-        "commitment_root",
-        "finality_height",
-        "finality_block_hash",
+    transcript_roles = _all_lanes_route_canary_transcript_hash_fields(domain)
+    transcript_hash_fields = tuple(
+        field for field in transcript_roles if field != "evidence_hash"
     )
     for field in transcript_hash_fields:
         if not _is_nonzero_bytes32_hex_text(route_canary.get(field)):
@@ -2431,7 +2424,6 @@ def _route_canary_evm_semantic_errors(
                 "bytes32 hex string"
             )
 
-    transcript_roles = transcript_hash_fields + ("evidence_hash",)
     errors.extend(
         _distinct_nonzero_bytes32_field_errors(
             f"{canary_label} transcript hash",
@@ -2540,16 +2532,9 @@ def _route_canary_tron_semantic_errors(
 
     canary_label = f"{label}.route_allowlist.route_canary"
     errors: list[str] = []
-    transcript_hash_fields = (
-        "transaction_id",
-        "message_id",
-        "call_data_sha256",
-        "payload_hash",
-        "statement_hash",
-        "commitment_root",
-        "finality_height",
-        "finality_block_hash",
-        "signature_sha256",
+    transcript_roles = _all_lanes_route_canary_transcript_hash_fields(domain)
+    transcript_hash_fields = tuple(
+        field for field in transcript_roles if field != "evidence_hash"
     )
     for field in transcript_hash_fields:
         if not _is_nonzero_bytes32_hex_text(route_canary.get(field)):
@@ -2576,7 +2561,6 @@ def _route_canary_tron_semantic_errors(
             "transaction_owner_address"
         )
 
-    transcript_roles = transcript_hash_fields + ("evidence_hash",)
     errors.extend(
         _distinct_nonzero_bytes32_field_errors(
             f"{canary_label} transcript hash",
@@ -3291,7 +3275,7 @@ def _decoded_public_blocker_text(value: str) -> str:
 def _decoded_sensitive_public_marker_text(value: str) -> str:
     return _decoded_public_blocker_text(value).translate(
         PUBLIC_SENSITIVE_MARKER_CONFUSABLES
-    ).lower()
+    ).casefold()
 
 
 def _decoded_public_blocker_text_issue(value: str) -> str | None:
@@ -3306,7 +3290,7 @@ def _decoded_public_blocker_text_issue(value: str) -> str | None:
 
 
 def _canonical_public_blocker_key(value: str) -> str:
-    return _decoded_public_blocker_text(value).lower()
+    return _decoded_public_blocker_text(value).casefold()
 
 
 def _submission_surface_validation_blocker_text_error(
@@ -3460,6 +3444,27 @@ def _require_report_mapping(
     return {}
 
 
+def _public_mapping_string_keys(payload: dict[Any, Any]) -> set[str]:
+    """Return copied public mapping keys that are exactly strings."""
+
+    return {key for key in payload if isinstance(key, str)}
+
+
+def _public_mapping_has_string_key(payload: dict[Any, Any], field: str) -> bool:
+    return field in _public_mapping_string_keys(payload)
+
+
+def _public_mapping_get_string_key(
+    payload: dict[Any, Any],
+    field: str,
+    default: Any = None,
+) -> Any:
+    for key, value in payload.items():
+        if isinstance(key, str) and key == field:
+            return value
+    return default
+
+
 def _require_report_list(value: Any, label: str, errors: list[str]) -> list[Any]:
     if isinstance(value, list):
         return value
@@ -3473,8 +3478,9 @@ def _require_report_fields(
     fields: tuple[str, ...],
     errors: list[str],
 ) -> None:
+    present_fields = _public_mapping_string_keys(payload)
     for field in fields:
-        if field not in payload:
+        if field not in present_fields:
             errors.append(f"{label} missing field: {field}")
 
 
@@ -3489,7 +3495,7 @@ def _string_list_field_errors(
         raise ValueError("string list allow_empty must be a boolean")
 
     errors: list[str] = []
-    value = payload.get(field)
+    value = _public_mapping_get_string_key(payload, field)
     if not isinstance(value, list):
         return [f"{label} {field} must be a list of non-empty strings"]
     if not allow_empty and not value:
@@ -4093,10 +4099,15 @@ def _unknown_public_field_errors(
     label: str,
     allowed_fields: set[str] | frozenset[str] | tuple[str, ...],
 ) -> list[str]:
+    allowed_field_set = set(allowed_fields)
     field_errors = [
         _unknown_public_field_error(field, label)
         for field in sorted(
-            set(payload) - set(allowed_fields),
+            (
+                field
+                for field in payload
+                if not isinstance(field, str) or field not in allowed_field_set
+            ),
             key=_safe_public_key_sort_key,
         )
     ]
@@ -7718,7 +7729,12 @@ def _release_report_bundle_errors(
     source_inventory_label = f"{label}.source_inventory"
     if isinstance(payload.get("source_inventory"), dict):
         known_source_inventory_gates = _source_inventory_known_gates()
-        for gate in sorted(known_source_inventory_gates - set(source_inventory)):
+        present_source_inventory_gates = {
+            gate
+            for gate in source_inventory
+            if isinstance(gate, str) and gate in known_source_inventory_gates
+        }
+        for gate in sorted(known_source_inventory_gates - present_source_inventory_gates):
             errors.append(f"{source_inventory_label} missing required gate: {gate}")
         gate_key_errors: list[str] = []
         for gate in sorted(source_inventory, key=_safe_public_key_sort_key):
@@ -7746,7 +7762,10 @@ def _release_report_bundle_errors(
                 SOURCE_INVENTORY_FIELDS,
                 errors,
             )
-            validation_status = inventory_payload.get("validation_status")
+            validation_status = _public_mapping_get_string_key(
+                inventory_payload,
+                "validation_status",
+            )
             if validation_status not in {"passed", "blocked"}:
                 errors.append(
                     f"{inventory_label} validation_status must be passed or blocked"
@@ -7761,7 +7780,10 @@ def _release_report_bundle_errors(
                     allow_empty=True,
                 )
             )
-            validation_blockers = inventory_payload.get("validation_blockers")
+            validation_blockers = _public_mapping_get_string_key(
+                inventory_payload,
+                "validation_blockers",
+            )
             if isinstance(validation_blockers, list) and validation_blockers:
                 errors.append(f"{inventory_label} validation_blockers must be empty")
         errors.extend(
@@ -8636,7 +8658,7 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
     markdown_scan_text = _cli_error_safety_scan_text(text)
     if _decoded_public_blocker_text_issue(markdown_scan_text) is not None:
         return fallback
-    normalized_text = _decoded_public_blocker_text(text).lower()
+    normalized_text = _decoded_public_blocker_text(text).casefold()
     if any(marker in normalized_text for marker in SENSITIVE_CLI_ERROR_MARKERS):
         return fallback
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):

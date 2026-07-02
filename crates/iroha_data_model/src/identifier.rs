@@ -12,7 +12,7 @@ use crate::{
     nexus::UniversalAccountId,
     ram_lfe::{
         RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeProgramId,
-        RamLfeReceiptAttestation,
+        RamLfeReceiptAttestation, signature_for_public_key_algorithm,
     },
 };
 
@@ -267,12 +267,12 @@ impl IdentifierResolutionReceipt {
     /// # Errors
     /// Returns the underlying signature verification error when the signature is invalid.
     pub fn verify(&self, public_key: &PublicKey) -> Result<(), iroha_crypto::Error> {
-        SignatureOf::<IdentifierResolutionReceiptPayload>::from_signature(
-            self.attestation.signature().cloned().ok_or_else(|| {
-                iroha_crypto::Error::Other("identifier receipt is missing a signature".to_owned())
-            })?,
-        )
-        .verify(public_key, &self.payload)
+        let signature = self.attestation.signature().ok_or_else(|| {
+            iroha_crypto::Error::Other("identifier receipt is missing a signature".to_owned())
+        })?;
+        let signature = signature_for_public_key_algorithm(public_key, signature)?;
+        SignatureOf::<IdentifierResolutionReceiptPayload>::from_signature(signature)
+            .verify(public_key, &self.payload)
     }
 }
 
@@ -347,6 +347,12 @@ mod tests {
 
     use super::*;
 
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked identifier fixture keypair")
     }
@@ -362,6 +368,12 @@ mod tests {
     ) -> SignatureOf<T> {
         SignatureOf::try_new(signer.private_key(), payload)
             .expect("sign checked identifier fixture payload")
+    }
+
+    fn with_noncanonical_ed25519_r(signature: &Signature) -> Signature {
+        let mut bytes = signature.payload().to_vec();
+        bytes[..NONCANONICAL_ED25519_R.len()].copy_from_slice(&NONCANONICAL_ED25519_R);
+        Signature::from_bytes(&bytes)
     }
 
     #[test]
@@ -653,6 +665,24 @@ mod tests {
         receipt
             .verify(wrong_signer.public_key())
             .expect_err("identifier receipt signatures must reject unrelated resolver keys");
+    }
+
+    #[test]
+    fn identifier_resolution_receipt_rejects_noncanonical_ed25519_signature_r() {
+        let payload = live_identifier_resolution_payload_fixture();
+        let signer = checked_seed_keypair(0x42);
+        let signature = Signature::from_bytes(checked_signature(&signer, &payload).payload());
+        let receipt = IdentifierResolutionReceipt {
+            payload,
+            attestation: RamLfeReceiptAttestation::Signed(with_noncanonical_ed25519_r(&signature)),
+        };
+
+        assert_eq!(
+            receipt
+                .verify(signer.public_key())
+                .expect_err("noncanonical identifier receipt Ed25519 R must fail admission"),
+            iroha_crypto::Error::BadSignature
+        );
     }
 
     #[test]

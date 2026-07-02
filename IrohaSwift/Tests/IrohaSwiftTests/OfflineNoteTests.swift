@@ -795,6 +795,7 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertThrowsError(try OfflineNotePaymentTokenCodec.decodeText("\(text)\n"))
         XCTAssertThrowsError(try OfflineBearerCashTextCodec.decodePaymentText("\t\(text)"))
         XCTAssertNil(OfflineBearerCashTextCodec.payloadKind(" \(text)"))
+        XCTAssertNil(OfflineBearerCashTextCodec.payloadKind(OfflineNotePaymentTokenCodec.textPrefix + "AB"))
         XCTAssertNil(OfflineBearerCashTextCodec.payloadKind(" wallet-offline-bearer-cash-payment:AAAA"))
         XCTAssertThrowsError(
             try OfflineNotePaymentTokenCodec.decodeText(

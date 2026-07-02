@@ -3,6 +3,7 @@
 use std::time::UNIX_EPOCH;
 
 use hex::encode as hex_encode;
+use iroha_crypto::{Algorithm, PublicKey, Signature};
 use iroha_data_model::{
     events::data::{DataEvent, soradns::SoradnsDirectoryEvent},
     isi::error::{InstructionExecutionError, InvalidParameterError},
@@ -460,10 +461,23 @@ fn validate_rotation_policy(policy: &DirectoryRotationPolicyV1) -> Result<(), Er
 
 fn verify_builder_signature(record: &ResolverDirectoryRecordV1) -> Result<(), Error> {
     let payload = signing_payload_bytes(record)?;
-    record
-        .builder_signature
-        .verify(&record.builder_public_key, &payload)
-        .map_err(|err| invalid_parameter(format!("builder signature verification failed: {err}")))
+    verify_signature_for_signer(
+        &record.builder_signature,
+        &record.builder_public_key,
+        &payload,
+    )
+    .map_err(|err| invalid_parameter(format!("builder signature verification failed: {err}")))
+}
+
+fn verify_signature_for_signer(
+    signature: &Signature,
+    signer: &PublicKey,
+    payload: &[u8],
+) -> Result<(), iroha_crypto::Error> {
+    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    }
+    signature.verify(signer, payload)
 }
 
 fn signing_payload_bytes(record: &ResolverDirectoryRecordV1) -> Result<Vec<u8>, Error> {
@@ -631,6 +645,17 @@ mod tests {
         (record, keypair)
     }
 
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+        let mut payload = signature.payload().to_vec();
+        payload[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+        Signature::from_bytes(&payload)
+    }
+
     fn authority_account() -> AccountId {
         AccountId::new(
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
@@ -706,5 +731,21 @@ mod tests {
                 .get(&record.root_hash)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn directory_builder_signature_rejects_malformed_ed25519_signature_r() {
+        let (mut record, _) = signed_record();
+        record.builder_signature = signature_with_malformed_ed25519_r(&record.builder_signature);
+
+        let err = verify_builder_signature(&record)
+            .expect_err("malformed builder signature R must be rejected");
+        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            message,
+        )) = err
+        else {
+            panic!("malformed builder signature should fail as an invalid parameter: {err:?}");
+        };
+        assert!(message.contains("builder signature verification failed"));
     }
 }

@@ -68,6 +68,19 @@ SCCP_TEST_TRON_VERIFIER_CODE_HASH = "72" * 32
 SCCP_TEST_TRON_VERIFIER_KEY_HASH = "73" * 32
 
 
+def _canonical_signature_base64_fixture() -> str:
+    return base64.b64encode(bytes([1]) * 64).decode("ascii")
+
+
+def _noncanonical_standard_base64_pad_bit_alias(encoded: str) -> str:
+    assert encoded.endswith("==")
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    chars = list(encoded)
+    index = len(chars) - 3
+    chars[index] = alphabet[alphabet.index(chars[index]) ^ 0x01]
+    return "".join(chars)
+
+
 def _sample_sccp_evm_destination_binding_hash(
     network_id: str = SCCP_TEST_EVM_NETWORK_ID,
     verifier_address: str = SCCP_TEST_EVM_VERIFIER_ADDRESS,
@@ -1453,13 +1466,25 @@ def test_propose_multisig_rejects_adversarial_request_shapes() -> None:
             signer_account_id=CANONICAL_OWNER,
             instructions=[],
         )
-    with pytest.raises(RuntimeError, match="valid base64"):
+    with pytest.raises((RuntimeError, ValueError), match="valid base64|exact standard-base64"):
         client.propose_multisig(
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
             signature_b64="not base64",
         )
+    canonical_signature = _canonical_signature_base64_fixture()
+    for signature_b64 in (
+        canonical_signature.rstrip("="),
+        _noncanonical_standard_base64_pad_bit_alias(canonical_signature),
+    ):
+        with pytest.raises((RuntimeError, ValueError), match="valid base64|exact standard-base64"):
+            client.propose_multisig(
+                multisig_account_alias="cbdc@banka",
+                signer_account_id=CANONICAL_OWNER,
+                instructions=[b"\x01"],
+                signature_b64=signature_b64,
+            )
     with pytest.raises(RuntimeError, match="64 hex"):
         client.propose_multisig(
             multisig_account_alias="cbdc@banka",
@@ -2900,7 +2925,7 @@ def test_submit_bridge_proof_rejects_padded_signing_fields_before_request() -> N
     session = RecordingSession()
     client = ToriiClient("http://node.test", session=session)
     public_key_hex = "aa" * 32
-    signature_b64 = base64.b64encode(b"bridge proof signature").decode("ascii")
+    signature_b64 = _canonical_signature_base64_fixture()
 
     cases = (
         (
@@ -2915,6 +2940,14 @@ def test_submit_bridge_proof_rejects_padded_signing_fields_before_request() -> N
             {"signature_b64": f" {signature_b64} "},
             "bridge proof submit\\.signature_b64 must not contain surrounding whitespace",
         ),
+        (
+            {"signature_b64": signature_b64.rstrip("=")},
+            "bridge proof submit\\.signature_b64 must be a valid base64 payload",
+        ),
+        (
+            {"signature_b64": _noncanonical_standard_base64_pad_bit_alias(signature_b64)},
+            "bridge proof submit\\.signature_b64 must be exact standard-base64",
+        ),
     )
     for overrides, message in cases:
         request = {
@@ -2922,7 +2955,7 @@ def test_submit_bridge_proof_rejects_padded_signing_fields_before_request() -> N
             "message_bundle": SCCP_TEST_MESSAGE_BUNDLE,
         }
         request.update(overrides)
-        with pytest.raises(ValueError, match=message):
+        with pytest.raises((RuntimeError, ValueError), match=message):
             client.submit_bridge_proof(**request)
 
     assert session.calls == []
@@ -3029,7 +3062,7 @@ def test_submit_bridge_message_rejects_padded_signing_fields_before_request() ->
     session = RecordingSession()
     client = ToriiClient("http://node.test", session=session)
     public_key_hex = "bb" * 32
-    signature_b64 = base64.b64encode(b"bridge message signature").decode("ascii")
+    signature_b64 = _canonical_signature_base64_fixture()
 
     cases = (
         (
@@ -3044,6 +3077,14 @@ def test_submit_bridge_message_rejects_padded_signing_fields_before_request() ->
             {"signature_b64": f" {signature_b64} "},
             "bridge message submit\\.signature_b64 must not contain surrounding whitespace",
         ),
+        (
+            {"signature_b64": signature_b64.rstrip("=")},
+            "bridge message submit\\.signature_b64 must be a valid base64 payload",
+        ),
+        (
+            {"signature_b64": _noncanonical_standard_base64_pad_bit_alias(signature_b64)},
+            "bridge message submit\\.signature_b64 must be exact standard-base64",
+        ),
     )
     for overrides, message in cases:
         request = {
@@ -3051,7 +3092,7 @@ def test_submit_bridge_message_rejects_padded_signing_fields_before_request() ->
             "message_bundle": SCCP_TEST_MESSAGE_BUNDLE,
         }
         request.update(overrides)
-        with pytest.raises(ValueError, match=message):
+        with pytest.raises((RuntimeError, ValueError), match=message):
             client.submit_bridge_message(**request)
 
     assert session.calls == []

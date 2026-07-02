@@ -9,11 +9,14 @@
 
 use std::fmt;
 
-use iroha_crypto::{Algorithm, PublicKey, Signature};
+use iroha_crypto::{Algorithm, PublicKey};
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
 use crate::{deal::BASIS_POINTS_PER_UNIT, provider_advert::SignatureAlgorithm};
+
+#[cfg(test)]
+use iroha_crypto::Signature;
 
 /// Schema version for [`RepairEvidenceV1`].
 pub const REPAIR_EVIDENCE_VERSION_V1: u8 = 1;
@@ -1154,11 +1157,12 @@ impl SignedAuditorRequestV1 {
             .map_err(|err| AuditorSignatureVerificationError::InvalidPublicKey {
                 reason: err.to_string(),
             })?;
-        let signature = Signature::try_from_bytes(&self.signature.signature).map_err(|err| {
-            AuditorSignatureVerificationError::Verification {
-                reason: format!("invalid signature material: {err}"),
-            }
-        })?;
+        let signature =
+            iroha_crypto::ed25519_parse_signature(&self.signature.signature).map_err(|err| {
+                AuditorSignatureVerificationError::Verification {
+                    reason: format!("invalid signature material: {err}"),
+                }
+            })?;
         let payload_bytes = norito::to_bytes(&self.signature_payload()).map_err(|err| {
             AuditorSignatureVerificationError::PayloadEncoding {
                 reason: err.to_string(),
