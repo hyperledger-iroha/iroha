@@ -53154,6 +53154,7 @@ pub(crate) mod tests_runtime_handlers {
             taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
             sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
             tron_verifier_address: "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ".to_owned(),
+            ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", "11".repeat(32)),
             verifier_key_hash: format!("0x{}", "22".repeat(32)),
             proof_artifact_hash: None,

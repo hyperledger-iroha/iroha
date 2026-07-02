@@ -7426,7 +7426,11 @@ fn sccp_configured_counterparty_capability(
             production_readiness.production_ready = false;
             production_readiness.routes_allowlisted = false;
             production_readiness.route_allowlist.routes_allowlisted = false;
-            if !production_readiness.blockers.iter().any(|blocker| blocker == &reason) {
+            if !production_readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker == &reason)
+            {
                 production_readiness.blockers.push(reason);
             }
         }
@@ -13300,7 +13304,10 @@ mod sccp_message_backend_tests {
             .find(|entry| entry.domain == iroha_sccp::SCCP_DOMAIN_TON)
             .expect("TON counterparty");
         assert!(!ton.production_ready);
-        assert_eq!(ton.disabled_reason.as_deref(), Some(disabled_reason.as_str()));
+        assert_eq!(
+            ton.disabled_reason.as_deref(),
+            Some(disabled_reason.as_str())
+        );
         assert!(!ton.production_readiness.production_ready);
         assert!(!ton.production_readiness.routes_allowlisted);
         assert!(
@@ -13310,9 +13317,11 @@ mod sccp_message_backend_tests {
                 .any(|blocker| blocker == &disabled_reason),
             "disabled route reason should be surfaced as a capability blocker"
         );
-        let err =
-            sccp_configured_launch_ready_for_domain(&state.zk_snapshot(), iroha_sccp::SCCP_DOMAIN_TON)
-                .expect_err("disabled route manifest must fail launch readiness");
+        let err = sccp_configured_launch_ready_for_domain(
+            &state.zk_snapshot(),
+            iroha_sccp::SCCP_DOMAIN_TON,
+        )
+        .expect_err("disabled route manifest must fail launch readiness");
         assert!(conversion_message(&err).is_some_and(|message| message == disabled_reason));
     }
 
@@ -13410,6 +13419,7 @@ mod sccp_message_backend_tests {
             sccp_tron_source_bridge_address: "0x3333333333333333333333333333333333333333"
                 .to_owned(),
             tron_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
+            ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", "45".repeat(32)),
             verifier_key_hash: format!("0x{}", "46".repeat(32)),
             proof_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
