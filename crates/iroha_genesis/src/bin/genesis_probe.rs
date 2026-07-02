@@ -192,8 +192,9 @@ fn diagnose_signed_block(bytes: &[u8]) {
         Ok(Ok(block)) => {
             let tx_count = block.external_transactions().len();
             let time_triggers = block.time_triggers().len();
+            let hash = block.hash();
             println!(
-                "event=probe stage=decode kind=SignedBlock outcome=ok tx_count={tx_count} time_triggers={time_triggers}"
+                "event=probe stage=decode kind=SignedBlock outcome=ok hash={hash} tx_count={tx_count} time_triggers={time_triggers}"
             );
         }
         Ok(Err(err)) => {

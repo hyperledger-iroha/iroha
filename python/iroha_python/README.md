@@ -161,7 +161,7 @@ the append-boundary helper
 helpers, `kagemusha_recursive_spend_verify`, and
 `kagemusha_recursive_spend_redeem`. Explicit capability selection must pass both
 `recursive_compact_available` and `recursive_spend_available`; single-argument
-compatibility selectors are not shipped.
+selectors are not shipped.
 
 Transaction helpers expose the same Kagemusha instruction surface without
 asking wallet code to reframe native archives. Use

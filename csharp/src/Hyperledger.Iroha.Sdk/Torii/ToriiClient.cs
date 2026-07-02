@@ -3677,24 +3677,19 @@ public sealed class ToriiClient : IDisposable
             "identifier resolve response.policy_id",
             static message => new JsonException(message));
 
-        if (IsNestedIdentifierResolveResponse(response))
+        if (!IsNestedIdentifierResolveResponse(response))
         {
-            if (!string.IsNullOrEmpty(response.Signature))
-            {
-                ValidateExactHex(response.Signature, "identifier resolve response.attestation.signature");
-            }
-
-            ValidateIdentifierReceiptSignaturePayload(
-                response.SignaturePayload,
-                "identifier resolve response");
-            return;
+            throw new JsonException("identifier resolve response must use the current payload/attestation envelope.");
         }
 
-        ValidateExactHex(response.Signature, "identifier resolve response.signature");
-        ValidateExactHex(response.SignaturePayloadHex, "identifier resolve response.signature_payload_hex");
+        if (!string.IsNullOrEmpty(response.Signature))
+        {
+            ValidateExactHex(response.Signature, "identifier resolve response.attestation.signature");
+        }
+
         ValidateIdentifierReceiptSignaturePayload(
             response.SignaturePayload,
-            "identifier resolve response.signature_payload");
+            "identifier resolve response");
     }
 
     private static bool IsNestedIdentifierResolveResponse(ToriiIdentifierResolveResponse response)

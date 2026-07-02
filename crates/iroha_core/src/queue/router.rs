@@ -6,19 +6,19 @@
 //! exact routing policy while allowing metrics to reflect the real
 //! assignments instead of single-lane placeholders.
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, str::FromStr, sync::Arc};
 
 use iroha_config::parameters::actual::{
     LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule, Nexus,
 };
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     account::{AccountAlias, AccountId},
     asset::{AssetBalancePolicy, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
     domain::DomainId,
     isi::{
-        BurnBox, GrantBox, Instruction, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
-        SetKeyValueBox, TransferBox, UnregisterBox,
+        BurnBox, CustomInstruction, GrantBox, Instruction, InstructionBox, MintBox, RegisterBox,
+        RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
         asset_alias::SetAssetDefinitionBalancePolicy,
         contract_alias::SetContractAlias,
         musubi::{
@@ -31,12 +31,14 @@ use iroha_data_model::{
             RegisterSmartContractCode,
         },
         zk::{
-            AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, RegisterZkAceIdentityCommitment,
-            RevokeZkAceIdentityCommitment, RotateZkAceIdentityCommitment, Shield,
+            AssetHiddenZkTransfer, CancelConfidentialPolicyTransition, RegisterAssetHiddenZkPool,
+            RegisterZkAceIdentityCommitment, RegisterZkAsset, RevokeZkAceIdentityCommitment,
+            RotateZkAceIdentityCommitment, ScheduleConfidentialPolicyTransition, Shield,
             SubmitZkAceAuthorizedTransfer, Unshield, ZkTransfer,
         },
     },
     musubi::{MusubiNamespace, MusubiPackageId},
+    name::Name,
     nexus::{
         AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
         LaneCatalog, LaneId,
@@ -44,6 +46,9 @@ use iroha_data_model::{
     permission::Permission,
     smart_contract::ContractAddress,
     transaction::Executable,
+};
+use iroha_executor_data_model::isi::multisig::{
+    MultisigApprove, MultisigInstructionBox, MultisigProposalState, MultisigPropose,
 };
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
@@ -382,43 +387,6 @@ fn fail_closed_policy_route_with_view(
         )
     })
     .unwrap_or_else(|_| RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
-}
-
-fn catalog_policy_routing_hint(
-    policy: &LaneRoutingPolicy,
-    matched_rule: Option<&LaneRoutingRule>,
-    target_dataspace: Option<DataSpaceId>,
-    lane_catalog: &LaneCatalog,
-    dataspace_catalog: &DataSpaceCatalog,
-    tx: &AcceptedTransaction<'_>,
-) -> Option<RoutingDecision> {
-    if let Some(account_id) = account_permission_holder_routing_target(tx) {
-        return resolve_query_routing_decision(
-            policy,
-            lane_catalog,
-            dataspace_catalog,
-            account_id,
-            None,
-        )
-        .ok();
-    }
-
-    if let Some(rule) = matched_rule {
-        reject_autoscale_owned_rule_lane(rule, lane_catalog).ok()?;
-        let dataspace_id = rule
-            .dataspace
-            .or(target_dataspace)
-            .unwrap_or(policy.default_dataspace);
-        return resolve_routing_decision(
-            RoutingDecision::new(rule.lane, dataspace_id),
-            lane_catalog,
-            dataspace_catalog,
-        )
-        .ok();
-    }
-
-    let dataspace_id = target_dataspace?;
-    canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).ok()
 }
 
 /// Evaluate the routing policy and resolve it against the configured catalogs.
@@ -1020,6 +988,106 @@ fn asset_balance_operation_dataspace_target(
             .chain(core::iter::once(explicit_asset_target))
             .chain(account_targets),
     )
+}
+
+fn zk_asset_operation_dataspace_target(
+    asset_definition_id: &AssetDefinitionId,
+    account_targets: impl IntoIterator<Item = Option<DataSpaceId>>,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Option<DataSpaceId> {
+    asset_balance_operation_dataspace_target(
+        asset_balance_definition_route_target(asset_definition_id, dataspace_catalog, state_view),
+        None,
+        account_targets,
+    )
+}
+
+fn zk_asset_operation_dataspace_target_with_world<W: WorldReadOnly>(
+    asset_definition_id: &AssetDefinitionId,
+    account_targets: impl IntoIterator<Item = Option<DataSpaceId>>,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Option<DataSpaceId> {
+    asset_balance_operation_dataspace_target(
+        asset_balance_definition_route_target_with_world(
+            asset_definition_id,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        ),
+        None,
+        account_targets,
+    )
+}
+
+fn asset_hidden_pool_storage_asset_definition<W: WorldReadOnly>(
+    world: &W,
+    pool_id: &str,
+) -> Option<AssetDefinitionId> {
+    let pool_id = pool_id.trim();
+    world
+        .zk_assets()
+        .iter()
+        .find_map(|(asset_definition, state)| {
+            state
+                .asset_hidden_pool_id
+                .as_deref()
+                .is_some_and(|registered| registered == pool_id)
+                .then(|| asset_definition.clone())
+        })
+}
+
+fn asset_hidden_pool_dataspace_target(
+    pool_id: &str,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Option<DataSpaceId> {
+    let view = state_view?;
+    let asset_definition_id = asset_hidden_pool_storage_asset_definition(view.world(), pool_id)?;
+    asset_balance_definition_dataspace_target(&asset_definition_id, dataspace_catalog, state_view)
+}
+
+fn asset_hidden_pool_dataspace_target_with_world<W: WorldReadOnly>(
+    pool_id: &str,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Option<DataSpaceId> {
+    let asset_definition_id = asset_hidden_pool_storage_asset_definition(world, pool_id)?;
+    asset_balance_definition_dataspace_target_with_world(
+        &asset_definition_id,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )
+}
+
+fn asset_definition_requires_universal_coordinator(
+    asset_definition_id: &AssetDefinitionId,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> bool {
+    asset_balance_definition_route_target(asset_definition_id, dataspace_catalog, state_view)
+        .balance_scope_policy
+        == Some(AssetBalancePolicy::Global)
+}
+
+fn asset_definition_requires_universal_coordinator_with_world<W: WorldReadOnly>(
+    asset_definition_id: &AssetDefinitionId,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> bool {
+    asset_balance_definition_route_target_with_world(
+        asset_definition_id,
+        dataspace_catalog,
+        world,
+        ledger_time_ms,
+    )
+    .balance_scope_policy
+        == Some(AssetBalancePolicy::Global)
 }
 
 fn settlement_transaction_dataspace_target(
@@ -1704,6 +1772,54 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         }
     }
 
+    if let Some(shield) = any.downcast_ref::<Shield>() {
+        collect_asset_balance_native_amx_participants(
+            dataspaces,
+            asset_balance_definition_route_target_with_world(
+                &shield.asset,
+                Some(dataspace_catalog),
+                world,
+                None,
+            ),
+            None,
+            [account_dataspace_target(Some(world), &shield.from)],
+        );
+        return;
+    }
+
+    if let Some(unshield) = any.downcast_ref::<Unshield>() {
+        collect_asset_balance_native_amx_participants(
+            dataspaces,
+            asset_balance_definition_route_target_with_world(
+                &unshield.asset,
+                Some(dataspace_catalog),
+                world,
+                None,
+            ),
+            None,
+            [account_dataspace_target(Some(world), &unshield.to)],
+        );
+        return;
+    }
+
+    if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
+        collect_asset_balance_native_amx_participants(
+            dataspaces,
+            asset_balance_definition_route_target_with_world(
+                &transfer.asset,
+                Some(dataspace_catalog),
+                world,
+                None,
+            ),
+            None,
+            [
+                account_dataspace_target(Some(world), &transfer.from),
+                account_dataspace_target(Some(world), &transfer.to),
+            ],
+        );
+        return;
+    }
+
     insert_native_amx_participant(
         dataspaces,
         instruction_transaction_dataspace_target_with_world(
@@ -1811,6 +1927,42 @@ fn instruction_transaction_dataspace_target(
     state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
+
+    if let Some(multisig) = multisig_instruction(instruction) {
+        return match &multisig {
+            MultisigInstructionBox::Propose(propose) => {
+                multisig_propose_transaction_dataspace_target(
+                    propose,
+                    dataspace_catalog,
+                    state_view,
+                )
+            }
+            MultisigInstructionBox::Approve(approve) => {
+                multisig_approve_transaction_dataspace_target(
+                    approve,
+                    dataspace_catalog,
+                    state_view,
+                )
+            }
+            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+        };
+    }
+
+    if let Some(propose) = any.downcast_ref::<MultisigPropose>() {
+        return multisig_propose_transaction_dataspace_target(
+            propose,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(approve) = any.downcast_ref::<MultisigApprove>() {
+        return multisig_approve_transaction_dataspace_target(
+            approve,
+            dataspace_catalog,
+            state_view,
+        );
+    }
 
     if let Some(register) = any.downcast_ref::<RegisterBox>() {
         return match register {
@@ -1976,6 +2128,114 @@ fn instruction_transaction_dataspace_target(
         );
     }
 
+    if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
+        return asset_balance_definition_dataspace_target(
+            &register_zk_asset.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(register_pool) = any.downcast_ref::<RegisterAssetHiddenZkPool>() {
+        return asset_balance_definition_dataspace_target(
+            &register_pool.storage_asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(schedule_transition) = any.downcast_ref::<ScheduleConfidentialPolicyTransition>() {
+        return asset_balance_definition_dataspace_target(
+            &schedule_transition.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(cancel_transition) = any.downcast_ref::<CancelConfidentialPolicyTransition>() {
+        return asset_balance_definition_dataspace_target(
+            &cancel_transition.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(register_identity) = any.downcast_ref::<RegisterZkAceIdentityCommitment>() {
+        return asset_balance_definition_dataspace_target(
+            &register_identity.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(rotate_identity) = any.downcast_ref::<RotateZkAceIdentityCommitment>() {
+        return asset_balance_definition_dataspace_target(
+            &rotate_identity.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(revoke_identity) = any.downcast_ref::<RevokeZkAceIdentityCommitment>() {
+        return asset_balance_definition_dataspace_target(
+            &revoke_identity.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
+        return zk_asset_operation_dataspace_target(
+            &transfer.asset,
+            [
+                account_dataspace_target(state_view.map(StateView::world), &transfer.from),
+                account_dataspace_target(state_view.map(StateView::world), &transfer.to),
+            ],
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(shield) = any.downcast_ref::<Shield>() {
+        return zk_asset_operation_dataspace_target(
+            &shield.asset,
+            [account_dataspace_target(
+                state_view.map(StateView::world),
+                &shield.from,
+            )],
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(transfer) = any.downcast_ref::<ZkTransfer>() {
+        return asset_balance_definition_dataspace_target(
+            &transfer.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(transfer) = any.downcast_ref::<AssetHiddenZkTransfer>() {
+        return asset_hidden_pool_dataspace_target(
+            &transfer.pool_id,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(unshield) = any.downcast_ref::<Unshield>() {
+        return zk_asset_operation_dataspace_target(
+            &unshield.asset,
+            [account_dataspace_target(
+                state_view.map(StateView::world),
+                &unshield.to,
+            )],
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
     if let Some(publish) = any.downcast_ref::<PublishMusubiRelease>() {
         return musubi_package_dataspace_target_with_state(
             &publish.release.package.package,
@@ -2040,6 +2300,46 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
+
+    if let Some(multisig) = multisig_instruction(instruction) {
+        return match &multisig {
+            MultisigInstructionBox::Propose(propose) => {
+                multisig_propose_transaction_dataspace_target_with_world(
+                    propose,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                )
+            }
+            MultisigInstructionBox::Approve(approve) => {
+                multisig_approve_transaction_dataspace_target_with_world(
+                    approve,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                )
+            }
+            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => None,
+        };
+    }
+
+    if let Some(propose) = any.downcast_ref::<MultisigPropose>() {
+        return multisig_propose_transaction_dataspace_target_with_world(
+            propose,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(approve) = any.downcast_ref::<MultisigApprove>() {
+        return multisig_approve_transaction_dataspace_target_with_world(
+            approve,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
 
     if let Some(register) = any.downcast_ref::<RegisterBox>() {
         return match register {
@@ -2221,6 +2521,120 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         );
     }
 
+    if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
+        return asset_balance_definition_dataspace_target_with_world(
+            &register_zk_asset.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(register_pool) = any.downcast_ref::<RegisterAssetHiddenZkPool>() {
+        return asset_balance_definition_dataspace_target_with_world(
+            &register_pool.storage_asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(schedule_transition) = any.downcast_ref::<ScheduleConfidentialPolicyTransition>() {
+        return asset_balance_definition_dataspace_target_with_world(
+            &schedule_transition.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(cancel_transition) = any.downcast_ref::<CancelConfidentialPolicyTransition>() {
+        return asset_balance_definition_dataspace_target_with_world(
+            &cancel_transition.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(register_identity) = any.downcast_ref::<RegisterZkAceIdentityCommitment>() {
+        return asset_balance_definition_dataspace_target_with_world(
+            &register_identity.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(rotate_identity) = any.downcast_ref::<RotateZkAceIdentityCommitment>() {
+        return asset_balance_definition_dataspace_target_with_world(
+            &rotate_identity.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(revoke_identity) = any.downcast_ref::<RevokeZkAceIdentityCommitment>() {
+        return asset_balance_definition_dataspace_target_with_world(
+            &revoke_identity.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
+        return zk_asset_operation_dataspace_target_with_world(
+            &transfer.asset,
+            [
+                account_dataspace_target(Some(world), &transfer.from),
+                account_dataspace_target(Some(world), &transfer.to),
+            ],
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(shield) = any.downcast_ref::<Shield>() {
+        return zk_asset_operation_dataspace_target_with_world(
+            &shield.asset,
+            [account_dataspace_target(Some(world), &shield.from)],
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(transfer) = any.downcast_ref::<ZkTransfer>() {
+        return asset_balance_definition_dataspace_target_with_world(
+            &transfer.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(transfer) = any.downcast_ref::<AssetHiddenZkTransfer>() {
+        return asset_hidden_pool_dataspace_target_with_world(
+            &transfer.pool_id,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(unshield) = any.downcast_ref::<Unshield>() {
+        return zk_asset_operation_dataspace_target_with_world(
+            &unshield.asset,
+            [account_dataspace_target(Some(world), &unshield.to)],
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
     if let Some(publish) = any.downcast_ref::<PublishMusubiRelease>() {
         return musubi_package_dataspace_target_with_world(
             &publish.release.package.package,
@@ -2281,6 +2695,137 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     }
 
     None
+}
+
+fn multisig_instruction(instruction: &dyn Instruction) -> Option<MultisigInstructionBox> {
+    let any = instruction.as_any();
+    if let Some(multisig) = instruction
+        .as_any()
+        .downcast_ref::<MultisigInstructionBox>()
+    {
+        return Some(multisig.clone());
+    }
+    if let Some(propose) = any.downcast_ref::<MultisigPropose>() {
+        return Some(MultisigInstructionBox::Propose(propose.clone()));
+    }
+    if let Some(approve) = any.downcast_ref::<MultisigApprove>() {
+        return Some(MultisigInstructionBox::Approve(approve.clone()));
+    }
+    any.downcast_ref::<CustomInstruction>().and_then(|custom| {
+        MultisigInstructionBox::try_from(custom.payload())
+            .ok()
+            .or_else(|| {
+                custom
+                    .payload()
+                    .try_into_any_norito::<MultisigPropose>()
+                    .ok()
+                    .map(MultisigInstructionBox::Propose)
+            })
+            .or_else(|| {
+                custom
+                    .payload()
+                    .try_into_any_norito::<MultisigApprove>()
+                    .ok()
+                    .map(MultisigInstructionBox::Approve)
+            })
+    })
+}
+
+fn multisig_proposal_state_key(
+    multisig_account: &AccountId,
+    instructions_hash: &HashOf<Vec<InstructionBox>>,
+) -> Name {
+    const DELIMITER: char = '/';
+    const MULTISIG: &str = "multisig";
+    const MULTISIG_PROPOSAL_STATE: &str = "proposal";
+
+    Name::from_str(&format!(
+        "{MULTISIG}{DELIMITER}{MULTISIG_PROPOSAL_STATE}{DELIMITER}{}{DELIMITER}{}",
+        HashOf::new(multisig_account),
+        instructions_hash
+    ))
+    .expect("multisig proposal state path must be a valid name")
+}
+
+fn multisig_proposal_state<W: WorldReadOnly>(
+    world: &W,
+    multisig_account: &AccountId,
+    instructions_hash: &HashOf<Vec<InstructionBox>>,
+) -> Option<MultisigProposalState> {
+    let key = multisig_proposal_state_key(multisig_account, instructions_hash);
+    let bytes = world.smart_contract_state().get(&key)?;
+    norito::decode_from_bytes::<MultisigProposalState>(bytes).ok()
+}
+
+fn multisig_propose_transaction_dataspace_target(
+    propose: &MultisigPropose,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Option<DataSpaceId> {
+    merge_instruction_dataspace_targets(propose.instructions.iter().map(|instruction| {
+        instruction_transaction_dataspace_target(&**instruction, dataspace_catalog, state_view)
+    }))
+    .or_else(|| account_dataspace_target(state_view.map(StateView::world), &propose.account))
+}
+
+fn multisig_approve_transaction_dataspace_target(
+    approve: &MultisigApprove,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Option<DataSpaceId> {
+    let world = state_view.map(StateView::world)?;
+    multisig_proposal_state(world, &approve.account, &approve.instructions_hash)
+        .and_then(|proposal_state| {
+            merge_instruction_dataspace_targets(proposal_state.instructions.iter().map(
+                |instruction| {
+                    instruction_transaction_dataspace_target(
+                        &**instruction,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                },
+            ))
+        })
+        .or_else(|| account_dataspace_target(Some(world), &approve.account))
+}
+
+fn multisig_approve_transaction_dataspace_target_with_world<W: WorldReadOnly>(
+    approve: &MultisigApprove,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Option<DataSpaceId> {
+    multisig_proposal_state(world, &approve.account, &approve.instructions_hash)
+        .and_then(|proposal_state| {
+            merge_instruction_dataspace_targets(proposal_state.instructions.iter().map(
+                |instruction| {
+                    instruction_transaction_dataspace_target_with_world(
+                        &**instruction,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                },
+            ))
+        })
+        .or_else(|| account_dataspace_target(Some(world), &approve.account))
+}
+
+fn multisig_propose_transaction_dataspace_target_with_world<W: WorldReadOnly>(
+    propose: &MultisigPropose,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Option<DataSpaceId> {
+    merge_instruction_dataspace_targets(propose.instructions.iter().map(|instruction| {
+        instruction_transaction_dataspace_target_with_world(
+            &**instruction,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )
+    }))
+    .or_else(|| account_dataspace_target(Some(world), &propose.account))
 }
 
 fn offline_note_asset_definition_target(any: &dyn std::any::Any) -> Option<&AssetDefinitionId> {
@@ -2357,6 +2902,108 @@ fn instruction_transaction_target_requires_universal_coordinator(
             == Some(AssetBalancePolicy::Global);
     }
 
+    if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
+        return asset_definition_requires_universal_coordinator(
+            &register_zk_asset.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(register_pool) = any.downcast_ref::<RegisterAssetHiddenZkPool>() {
+        return asset_definition_requires_universal_coordinator(
+            &register_pool.storage_asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(schedule_transition) = any.downcast_ref::<ScheduleConfidentialPolicyTransition>() {
+        return asset_definition_requires_universal_coordinator(
+            &schedule_transition.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(cancel_transition) = any.downcast_ref::<CancelConfidentialPolicyTransition>() {
+        return asset_definition_requires_universal_coordinator(
+            &cancel_transition.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(register_identity) = any.downcast_ref::<RegisterZkAceIdentityCommitment>() {
+        return asset_definition_requires_universal_coordinator(
+            &register_identity.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(rotate_identity) = any.downcast_ref::<RotateZkAceIdentityCommitment>() {
+        return asset_definition_requires_universal_coordinator(
+            &rotate_identity.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(revoke_identity) = any.downcast_ref::<RevokeZkAceIdentityCommitment>() {
+        return asset_definition_requires_universal_coordinator(
+            &revoke_identity.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
+        return asset_definition_requires_universal_coordinator(
+            &transfer.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(shield) = any.downcast_ref::<Shield>() {
+        return asset_definition_requires_universal_coordinator(
+            &shield.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(transfer) = any.downcast_ref::<ZkTransfer>() {
+        return asset_definition_requires_universal_coordinator(
+            &transfer.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
+    if let Some(transfer) = any.downcast_ref::<AssetHiddenZkTransfer>() {
+        let Some(view) = state_view else {
+            return false;
+        };
+        return asset_hidden_pool_storage_asset_definition(view.world(), &transfer.pool_id)
+            .is_some_and(|asset_definition_id| {
+                asset_definition_requires_universal_coordinator(
+                    &asset_definition_id,
+                    dataspace_catalog,
+                    state_view,
+                )
+            });
+    }
+
+    if let Some(unshield) = any.downcast_ref::<Unshield>() {
+        return asset_definition_requires_universal_coordinator(
+            &unshield.asset,
+            dataspace_catalog,
+            state_view,
+        );
+    }
+
     false
 }
 
@@ -2405,6 +3052,118 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
         )
         .balance_scope_policy
             == Some(AssetBalancePolicy::Global);
+    }
+
+    if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
+        return asset_definition_requires_universal_coordinator_with_world(
+            &register_zk_asset.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(register_pool) = any.downcast_ref::<RegisterAssetHiddenZkPool>() {
+        return asset_definition_requires_universal_coordinator_with_world(
+            &register_pool.storage_asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(schedule_transition) = any.downcast_ref::<ScheduleConfidentialPolicyTransition>() {
+        return asset_definition_requires_universal_coordinator_with_world(
+            &schedule_transition.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(cancel_transition) = any.downcast_ref::<CancelConfidentialPolicyTransition>() {
+        return asset_definition_requires_universal_coordinator_with_world(
+            &cancel_transition.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(register_identity) = any.downcast_ref::<RegisterZkAceIdentityCommitment>() {
+        return asset_definition_requires_universal_coordinator_with_world(
+            &register_identity.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(rotate_identity) = any.downcast_ref::<RotateZkAceIdentityCommitment>() {
+        return asset_definition_requires_universal_coordinator_with_world(
+            &rotate_identity.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(revoke_identity) = any.downcast_ref::<RevokeZkAceIdentityCommitment>() {
+        return asset_definition_requires_universal_coordinator_with_world(
+            &revoke_identity.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(transfer) = any.downcast_ref::<SubmitZkAceAuthorizedTransfer>() {
+        return asset_definition_requires_universal_coordinator_with_world(
+            &transfer.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(shield) = any.downcast_ref::<Shield>() {
+        return asset_definition_requires_universal_coordinator_with_world(
+            &shield.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(transfer) = any.downcast_ref::<ZkTransfer>() {
+        return asset_definition_requires_universal_coordinator_with_world(
+            &transfer.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
+    }
+
+    if let Some(transfer) = any.downcast_ref::<AssetHiddenZkTransfer>() {
+        return asset_hidden_pool_storage_asset_definition(world, &transfer.pool_id).is_some_and(
+            |asset_definition_id| {
+                asset_definition_requires_universal_coordinator_with_world(
+                    &asset_definition_id,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                )
+            },
+        );
+    }
+
+    if let Some(unshield) = any.downcast_ref::<Unshield>() {
+        return asset_definition_requires_universal_coordinator_with_world(
+            &unshield.asset,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
     }
 
     false
@@ -2613,6 +3372,21 @@ fn asset_definition_target_from_parts_with_world<W: WorldReadOnly>(
 fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
     let any = instruction.as_any();
 
+    if let Some(multisig) = multisig_instruction(instruction) {
+        return match multisig {
+            MultisigInstructionBox::Propose(_) | MultisigInstructionBox::Approve(_) => true,
+            MultisigInstructionBox::Register(_) | MultisigInstructionBox::Cancel(_) => false,
+        };
+    }
+
+    if any.downcast_ref::<MultisigPropose>().is_some() {
+        return true;
+    }
+
+    if any.downcast_ref::<MultisigApprove>().is_some() {
+        return true;
+    }
+
     if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
         return dvp
             .delivery_leg()
@@ -2690,6 +3464,34 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
     if any
         .downcast_ref::<SetAssetDefinitionBalancePolicy>()
         .is_some()
+    {
+        return true;
+    }
+
+    if any.downcast_ref::<RegisterZkAsset>().is_some()
+        || any.downcast_ref::<RegisterAssetHiddenZkPool>().is_some()
+        || any
+            .downcast_ref::<ScheduleConfidentialPolicyTransition>()
+            .is_some()
+        || any
+            .downcast_ref::<CancelConfidentialPolicyTransition>()
+            .is_some()
+        || any
+            .downcast_ref::<RegisterZkAceIdentityCommitment>()
+            .is_some()
+        || any
+            .downcast_ref::<RotateZkAceIdentityCommitment>()
+            .is_some()
+        || any
+            .downcast_ref::<RevokeZkAceIdentityCommitment>()
+            .is_some()
+        || any
+            .downcast_ref::<SubmitZkAceAuthorizedTransfer>()
+            .is_some()
+        || any.downcast_ref::<Shield>().is_some()
+        || any.downcast_ref::<ZkTransfer>().is_some()
+        || any.downcast_ref::<AssetHiddenZkTransfer>().is_some()
+        || any.downcast_ref::<Unshield>().is_some()
     {
         return true;
     }
@@ -4768,48 +5570,7 @@ impl LaneRouter for ConfigLaneRouter {
     }
 
     fn route_without_state(&self, tx: &AcceptedTransaction<'_>) -> Option<RoutingDecision> {
-        if dataspace_scoped_permission_routing_requires_state(tx)
-            || transaction_target_routing_requires_state(tx)
-        {
-            return None;
-        }
-        if let Ok(Some(decision)) = self.catalog_only_routing_decision(tx) {
-            return Some(decision);
-        }
-        if policy_needs_state(self.policy.as_ref()) {
-            return None;
-        }
-        let target =
-            transaction_dataspace_routing_target(tx, Some(self.dataspace_catalog.as_ref()), None)
-                .ok()?;
-        let matched_rule = self
-            .policy
-            .rules
-            .iter()
-            .find(|rule| rule_matches(rule, tx, None));
-        if target.is_none() && matched_rule.is_none() {
-            return None;
-        }
-        if let Some(account_id) = account_permission_holder_routing_target(tx)
-            && !self
-                .policy
-                .rules
-                .iter()
-                .any(|rule| query_rule_matches(rule, account_id, None))
-        {
-            return None;
-        }
-        if self.authority_scope_routing_requires_state(tx).ok()? {
-            return None;
-        }
-        catalog_policy_routing_hint(
-            &self.policy,
-            matched_rule,
-            target,
-            self.lane_catalog.as_ref(),
-            self.dataspace_catalog.as_ref(),
-            tx,
-        )
+        self.try_route_without_state(tx).ok().flatten()
     }
 
     fn try_route(
@@ -5217,7 +5978,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
-    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         Encode, IntoKeyValue,
         account::{AccountAddress, AccountAliasDomain},
@@ -5683,6 +6444,14 @@ mod tests {
             *byte = seed.wrapping_add(u8::try_from(idx).expect("index fits into u8"));
         }
         Signature::from_bytes(&payload)
+    }
+
+    fn dummy_zk_proof_attachment() -> ProofAttachment {
+        ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+            VerifyingKeyId::new("halo2/ipa", "router-zk-route-fixture"),
+        )
     }
 
     fn sample_offline_certificate_keypair() -> KeyPair {
@@ -11247,6 +12016,246 @@ mod tests {
     }
 
     #[test]
+    fn global_asset_shield_from_private_scoped_authority_routes_to_universal() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let shield = Shield::new(
+            asset_definition.clone(),
+            alice_id.clone(),
+            1,
+            [0x11; 32],
+            iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(shield)],
+        );
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition)
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("global shield route should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("global shield must route to the universal coordinator"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&tx, &state.view())
+                .expect("global shield plan must keep the universal coordinator")
+                .coordinator_route(),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+    }
+
+    #[test]
+    fn global_asset_zk_operations_from_private_authority_route_to_universal() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let (bob_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            "pkr".parse().expect("asset definition name"),
+        );
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(asset_definition.clone())
+                    .with_name("pkr".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
+
+        let cases: Vec<(&str, InstructionBox)> = vec![
+            (
+                "register_zk_asset",
+                InstructionBox::from(RegisterZkAsset::new(
+                    asset_definition.clone(),
+                    iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+                    true,
+                    true,
+                    None,
+                    None,
+                    None,
+                )),
+            ),
+            (
+                "zk_transfer",
+                InstructionBox::from(ZkTransfer::new(
+                    asset_definition.clone(),
+                    vec![[0x21; 32]],
+                    vec![[0x22; 32]],
+                    dummy_zk_proof_attachment(),
+                    Some([0x23; 32]),
+                )),
+            ),
+            (
+                "unshield",
+                InstructionBox::from(Unshield::new(
+                    asset_definition.clone(),
+                    bob_id.clone(),
+                    1,
+                    vec![[0x31; 32]],
+                    dummy_zk_proof_attachment(),
+                    Some([0x32; 32]),
+                )),
+            ),
+            (
+                "zk_ace_authorized_transfer",
+                InstructionBox::from(SubmitZkAceAuthorizedTransfer::new(
+                    alice_id.clone(),
+                    bob_id,
+                    asset_definition.clone(),
+                    1,
+                    [0x41; 32],
+                    [0x42; 32],
+                    ChainId::from("chain"),
+                    "iroha:zk-ace:pq-authorization:v0".to_owned(),
+                    "transparent_asset_transfer".to_owned(),
+                    [0x43; 32],
+                    [0x44; 32],
+                    dummy_zk_proof_attachment(),
+                )),
+            ),
+        ];
+
+        for (label, instruction) in cases {
+            let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
+            assert_eq!(
+                router
+                    .try_route_without_state(&tx)
+                    .expect("ZK asset route should defer to state"),
+                None,
+                "{label} should not route without the asset policy"
+            );
+            assert_eq!(
+                router
+                    .try_route_with_view(&tx, &state.view())
+                    .expect("global ZK asset route must resolve"),
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                "{label} should route to universal"
+            );
+        }
+    }
+
+    #[test]
+    fn asset_hidden_zk_transfer_uses_global_storage_asset_route() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: vec![],
+            },
+            dataspace_catalog.clone(),
+            lane_catalog.clone(),
+        );
+        let storage_asset = AssetDefinitionId::new(
+            DomainId::try_new("cash", "paynet").expect("asset definition domain"),
+            "pool".parse().expect("asset definition name"),
+        );
+        let transfer = AssetHiddenZkTransfer::new(
+            "global-pool".to_owned(),
+            vec![[0x51; 32]],
+            vec![[0x52; 32]],
+            dummy_zk_proof_attachment(),
+            Some([0x53; 32]),
+        );
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(transfer)],
+        );
+        let mut state = state_with_asset_definitions(
+            vec![
+                AssetDefinition::numeric(storage_asset.clone())
+                    .with_name("pool".to_owned())
+                    .with_balance_scope_policy(AssetBalancePolicy::Global)
+                    .build(&alice_id),
+            ],
+            dataspace_catalog,
+            lane_catalog,
+        );
+        let mut zk_state = crate::state::ZkAssetState::default();
+        zk_state.asset_hidden_pool_id = Some("global-pool".to_owned());
+        state.world.zk_assets.insert(storage_asset, zk_state);
+        scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("asset-hidden pool route should defer to state"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("asset-hidden pool route must resolve through storage asset policy"),
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+        );
+    }
+
+    #[test]
     fn native_amx_participants_ignore_private_scopes_for_global_asset_write() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
@@ -14228,6 +15237,11 @@ mod tests {
             None
         );
         assert_eq!(
+            router.route_without_state(&tx),
+            None,
+            "unchecked queue routing must also defer without account scope state"
+        );
+        assert_eq!(
             router
                 .try_route_with_view(&tx, &state_view)
                 .expect("state-view routing should use holder account scope"),
@@ -14386,6 +15400,492 @@ mod tests {
                 .try_route_without_state(&tx)
                 .expect("account registration with a dataspace label should route without state"),
             Some(RoutingDecision::new(lane_id, dataspace_id))
+        );
+    }
+
+    #[test]
+    fn multisig_propose_routes_by_embedded_instruction_dataspace() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (multisig_id, _) = gen_account_in("wonderland");
+        let (target_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let proposed = vec![InstructionBox::from(Register::account(
+            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
+        ))];
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(MultisigPropose::new(
+                multisig_id,
+                proposed,
+                None,
+            ))],
+        );
+        let state = state_with_account_scope_entries(&[], catalog);
+        state.nexus.write().lane_catalog = lane_catalog;
+        let expected_route = RoutingDecision::new(lane_id, dataspace_id);
+        let expected_plan = RoutingPlan::single(expected_route);
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("multisig proposal should defer to state-aware routing"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("embedded proposal target should route to its dataspace"),
+            expected_route
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&tx, &state.view())
+                .expect("embedded proposal plan should route to its dataspace"),
+            expected_plan
+        );
+        assert_eq!(
+            evaluate_policy_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &state.view().nexus().dataspace_catalog,
+                &tx,
+                state.view().world(),
+            )
+            .expect("validation routing should match proposal routing"),
+            expected_route
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &state.view().nexus().dataspace_catalog,
+                &tx,
+                state.view().world(),
+            )
+            .expect("validation routing plan should match proposal routing plan"),
+            expected_plan
+        );
+    }
+
+    #[test]
+    fn multisig_propose_plan_prefers_embedded_dataspace_over_multiscope_account() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (multisig_id, _) = gen_account_in("wonderland");
+        let (target_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let proposed = vec![InstructionBox::from(Register::account(
+            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
+        ))];
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(MultisigPropose::new(
+                multisig_id.clone(),
+                proposed,
+                None,
+            ))],
+        );
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
+        scope_entry.ensure_dataspace(dataspace_id);
+        let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
+        state.nexus.write().lane_catalog = lane_catalog;
+        let expected_route = RoutingDecision::new(lane_id, dataspace_id);
+        let expected_plan = RoutingPlan::single(expected_route);
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("multisig proposal should defer to state-aware routing"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&tx, &state.view())
+                .expect("proposal plan should use the embedded write dataspace"),
+            expected_plan
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &state.view().nexus().dataspace_catalog,
+                &tx,
+                state.view().world(),
+            )
+            .expect("validation plan should use the embedded write dataspace"),
+            expected_plan
+        );
+    }
+
+    #[test]
+    fn custom_multisig_propose_defers_and_routes_by_embedded_instruction_dataspace() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (multisig_id, _) = gen_account_in("wonderland");
+        let (target_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let proposed = vec![InstructionBox::from(Register::account(
+            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
+        ))];
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(CustomInstruction::new(
+                iroha_primitives::json::Json::new(MultisigInstructionBox::Propose(
+                    MultisigPropose::new(multisig_id, proposed, None),
+                )),
+            ))],
+        );
+        let state = state_with_account_scope_entries(&[], catalog);
+        state.nexus.write().lane_catalog = lane_catalog;
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("custom multisig proposal should defer to state-aware routing"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("custom embedded proposal target should route to its dataspace"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+        assert_eq!(
+            evaluate_policy_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &state.view().nexus().dataspace_catalog,
+                &tx,
+                state.view().world(),
+            )
+            .expect("validation routing should match custom proposal routing"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn multisig_approve_routes_by_multisig_account_scope() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (multisig_id, _) = gen_account_in("wonderland");
+        let (target_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let proposed = vec![InstructionBox::from(Register::account(
+            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
+        ))];
+        let instructions_hash = HashOf::new(&proposed);
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(MultisigApprove::new(
+                multisig_id.clone(),
+                instructions_hash,
+            ))],
+        );
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(dataspace_id);
+        let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
+        state.nexus.write().lane_catalog = lane_catalog;
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("multisig approval should defer to state-aware routing"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("approval should route by multisig account scope"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+        assert_eq!(
+            evaluate_policy_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &state.view().nexus().dataspace_catalog,
+                &tx,
+                state.view().world(),
+            )
+            .expect("validation routing should match approval routing"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn custom_multisig_approve_defers_and_routes_by_multisig_account_scope() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (multisig_id, _) = gen_account_in("wonderland");
+        let (target_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let proposed = vec![InstructionBox::from(Register::account(
+            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
+        ))];
+        let instructions_hash = HashOf::new(&proposed);
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(CustomInstruction::new(
+                iroha_primitives::json::Json::new(MultisigInstructionBox::Approve(
+                    MultisigApprove::new(multisig_id.clone(), instructions_hash),
+                )),
+            ))],
+        );
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(dataspace_id);
+        let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
+        state.nexus.write().lane_catalog = lane_catalog;
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("custom multisig approval should defer to state-aware routing"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_with_view(&tx, &state.view())
+                .expect("custom approval should route by multisig account scope"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+        assert_eq!(
+            evaluate_policy_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &state.view().nexus().dataspace_catalog,
+                &tx,
+                state.view().world(),
+            )
+            .expect("validation routing should match custom approval routing"),
+            RoutingDecision::new(lane_id, dataspace_id)
+        );
+    }
+
+    #[test]
+    fn multisig_approve_routes_by_persisted_proposal_when_scope_is_missing() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (multisig_id, _) = gen_account_in("wonderland");
+        let (target_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let proposed = vec![InstructionBox::from(Register::account(
+            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
+        ))];
+        let instructions_hash = HashOf::new(&proposed);
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(MultisigApprove::new(
+                multisig_id.clone(),
+                instructions_hash,
+            ))],
+        );
+        let mut state = state_with_account_scope_entries(&[], catalog);
+        state.nexus.write().lane_catalog = lane_catalog;
+        let proposal_state = MultisigProposalState::new(
+            multisig_id.clone(),
+            instructions_hash,
+            proposed,
+            1,
+            10_000,
+            BTreeSet::new(),
+            None,
+        );
+        state.world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_key(&multisig_id, &instructions_hash),
+            norito::to_bytes(&proposal_state).expect("proposal state should encode"),
+        );
+        let expected_route = RoutingDecision::new(lane_id, dataspace_id);
+        let expected_plan = RoutingPlan::single(expected_route);
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("multisig approval should defer to state-aware routing"),
+            None
+        );
+        assert_eq!(
+            router.try_route_with_view(&tx, &state.view()).expect(
+                "approval should route by embedded proposal target when account scope is absent"
+            ),
+            expected_route
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&tx, &state.view())
+                .expect("approval plan should route by embedded proposal target"),
+            expected_plan
+        );
+        assert_eq!(
+            evaluate_policy_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &state.view().nexus().dataspace_catalog,
+                &tx,
+                state.view().world(),
+            )
+            .expect("validation routing should match proposal-state fallback routing"),
+            expected_route
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &state.view().nexus().dataspace_catalog,
+                &tx,
+                state.view().world(),
+            )
+            .expect("validation routing plan should match proposal-state fallback routing"),
+            expected_plan
+        );
+    }
+
+    #[test]
+    fn multisig_approve_plan_prefers_visible_proposal_over_multiscope_account() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (multisig_id, _) = gen_account_in("wonderland");
+        let (target_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let proposed = vec![InstructionBox::from(Register::account(
+            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
+        ))];
+        let instructions_hash = HashOf::new(&proposed);
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(MultisigApprove::new(
+                multisig_id.clone(),
+                instructions_hash,
+            ))],
+        );
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
+        scope_entry.ensure_dataspace(dataspace_id);
+        let mut state =
+            state_with_account_scope_entries(&[(multisig_id.clone(), scope_entry)], catalog);
+        state.nexus.write().lane_catalog = lane_catalog;
+        let proposal_state = MultisigProposalState::new(
+            multisig_id.clone(),
+            instructions_hash,
+            proposed,
+            1,
+            10_000,
+            BTreeSet::new(),
+            None,
+        );
+        state.world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_key(&multisig_id, &instructions_hash),
+            norito::to_bytes(&proposal_state).expect("proposal state should encode"),
+        );
+        let expected_route = RoutingDecision::new(lane_id, dataspace_id);
+        let expected_plan = RoutingPlan::single(expected_route);
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("multisig approval should defer to state-aware routing"),
+            None
+        );
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&tx, &state.view())
+                .expect("visible proposal should override multiscope account route"),
+            expected_plan
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &state.view().nexus().dataspace_catalog,
+                &tx,
+                state.view().world(),
+            )
+            .expect("validation plan should prefer visible proposal target"),
+            expected_plan
         );
     }
 

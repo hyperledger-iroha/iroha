@@ -211,6 +211,12 @@ public sealed class OfflineNoteWalletNoteTests
         AssertRejects(JsonWith(encoded, "version", "01"));
         AssertRejects(JsonWith(encoded, "note_secret_base64", Convert.ToBase64String(Bytes(0x7a, 31))));
         AssertRejects(JsonWith(encoded, "note_commitment_hex", "0x" + Convert.ToHexString(Fixed32(0x7b))));
+        AssertRejects(JsonWith(encoded, "note_commitment_hex", " " + LowerHex(Fixed32(0x7b))));
+        AssertRejects(JsonWith(encoded, "note_commitment_hex", ""));
+        AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7b))[..63]));
+        AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Fixed32(0x7b))[..63] + "g"));
+        AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Bytes(0x7d, 31))));
+        AssertRejects(JsonWith(encoded, "note_commitment_hex", LowerHex(Bytes(0x7e, 33))));
         AssertRejects(JsonWith(encoded, "note_commitment_hex", Convert.ToHexString(Fixed32(0x20))));
         AssertRejects(JsonWith(encoded, "key_certificate_norito_base64", " " + Convert.ToBase64String(Bytes(0x7c, 8))));
         AssertRejects(JsonWith(encoded, "key_certificate_norito_base64", "AR=="));
@@ -264,19 +270,37 @@ public sealed class OfflineNoteWalletNoteTests
     }
 
     [Theory]
-    [InlineData("SPENDABLE", OfflineNoteWalletNoteState.Spendable)]
+    [InlineData("spendable", OfflineNoteWalletNoteState.Spendable)]
     [InlineData("receivePending", OfflineNoteWalletNoteState.ReceivePending)]
-    [InlineData("RECEIVE_PENDING", OfflineNoteWalletNoteState.ReceivePending)]
-    [InlineData("spendPending", OfflineNoteWalletNoteState.Spent)]
-    [InlineData("SPEND_PENDING", OfflineNoteWalletNoteState.Spent)]
-    [InlineData("CHANGE_PENDING", OfflineNoteWalletNoteState.Spendable)]
-    public void JsonCodecDecodesCrossPlatformStateNames(
+    [InlineData("spent", OfflineNoteWalletNoteState.Spent)]
+    [InlineData("redeemPending", OfflineNoteWalletNoteState.RedeemPending)]
+    [InlineData("redeemed", OfflineNoteWalletNoteState.Redeemed)]
+    [InlineData("cancelled", OfflineNoteWalletNoteState.Cancelled)]
+    public void JsonCodecDecodesExactCurrentStateNames(
         string state,
         OfflineNoteWalletNoteState expected)
     {
         var encoded = JsonWith(OfflineNoteWalletNoteJsonCodec.Encode(ValidNote()), "state", state);
 
         Assert.Equal(expected, OfflineNoteWalletNoteJsonCodec.Decode(encoded).State);
+    }
+
+    [Theory]
+    [InlineData("SPENDABLE")]
+    [InlineData("RECEIVE_PENDING")]
+    [InlineData("SPENT")]
+    [InlineData("REDEEM_PENDING")]
+    [InlineData("REDEEMED")]
+    [InlineData("CANCELLED")]
+    [InlineData("spendPending")]
+    [InlineData("SPEND_PENDING")]
+    [InlineData("changePending")]
+    [InlineData("CHANGE_PENDING")]
+    public void JsonCodecRejectsRetiredOrCaseNormalizedStateNames(string state)
+    {
+        var encoded = JsonWith(OfflineNoteWalletNoteJsonCodec.Encode(ValidNote()), "state", state);
+
+        AssertRejects(encoded);
     }
 
     private static OfflineNoteWalletNote ValidNote(
@@ -362,6 +386,8 @@ public sealed class OfflineNoteWalletNoteTests
 
         return bytes;
     }
+
+    private static string LowerHex(byte[] value) => Convert.ToHexString(value).ToLowerInvariant();
 
     private static byte[] Fixed32(byte seed) => Bytes(seed, 32);
 }

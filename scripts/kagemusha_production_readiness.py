@@ -180,6 +180,18 @@ LINEAGE_PROOF_RESULT_RE = re.compile(
 LINEAGE_ARTIFACT_ALL_ZERO_ERROR = (
     "must be generated lineage material, not all-zero placeholder bytes"
 )
+LINEAGE_ARTIFACT_PLACEHOLDER_PREFIXES = (
+    b"lineage artifact ",
+    b"generated lineage artifact ",
+    b"generated init lineage artifact ",
+    b"generated append lineage artifact ",
+    b"dummy lineage artifact ",
+    b"placeholder lineage artifact ",
+    b"test lineage artifact ",
+)
+LINEAGE_ARTIFACT_PLACEHOLDER_ERROR = (
+    "must be generated lineage material, not a placeholder fixture"
+)
 COMPACT_KEY_REQUIRED_ARTIFACTS = (
     "recursive-compact-len4.vk",
     "recursive-compact-len4.pk",
@@ -3097,8 +3109,11 @@ def validate_compact_key_artifact_content(path: Path, artifact: str) -> list[str
 def validate_lineage_artifact_prefix(prefix: bytes, artifact: str) -> list[str]:
     """Reject obvious development placeholders for Reserved-lineage artifacts."""
 
+    stripped = prefix.strip().lower()
     if prefix and all(byte == 0 for byte in prefix):
         return [f"lineage artifact {artifact} {LINEAGE_ARTIFACT_ALL_ZERO_ERROR}"]
+    if any(stripped.startswith(marker) for marker in LINEAGE_ARTIFACT_PLACEHOLDER_PREFIXES):
+        return [f"lineage artifact {artifact} {LINEAGE_ARTIFACT_PLACEHOLDER_ERROR}"]
     return []
 
 
@@ -5574,6 +5589,91 @@ def _missing_android_d2d_payment_transport_pairs(
     return missing
 
 
+def _android_report_signed_evidence_freshness_blockers(
+    report: dict[str, Any],
+    min_signed_at: dt.datetime | None,
+    max_signed_at: dt.datetime | None,
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    if report.get("status") != "ok":
+        return blockers
+    slot_name = report.get("slot")
+    if not isinstance(slot_name, str):
+        blockers.append(
+            blocker(
+                "android_device_lab_slot_name_missing",
+                "Android device-lab report is missing a slot name",
+            )
+        )
+        return blockers
+    signed_at_text = _android_report_kagemusha(report).get("signed_at_utc")
+    if not isinstance(signed_at_text, str) or not signed_at_text:
+        blockers.append(
+            blocker(
+                "android_signed_evidence_timestamp_missing",
+                "validated Android device-lab report is missing signed evidence timestamp",
+                slot=slot_name,
+            )
+        )
+        return blockers
+    if device_lab.SIGNED_AT_UTC_RE.fullmatch(signed_at_text) is None:
+        blockers.append(
+            blocker(
+                "android_signed_evidence_timestamp_noncanonical",
+                "signed evidence artifact signed_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+                slot=slot_name,
+                signed_at_utc=_display_evidence_value(signed_at_text),
+            )
+        )
+        return blockers
+    signed_at, parse_blocker = parse_utc_timestamp(
+        signed_at_text,
+        "signed evidence artifact signed_at_utc",
+    )
+    if parse_blocker is not None:
+        parse_blocker["slot"] = slot_name
+        parse_blocker["code"] = "android_signed_evidence_timestamp_invalid"
+        blockers.append(parse_blocker)
+        return blockers
+    if min_signed_at is not None and signed_at is not None and signed_at < min_signed_at:
+        blockers.append(
+            blocker(
+                "android_signed_evidence_stale",
+                "signed evidence artifact predates the required release evidence cutoff",
+                slot=slot_name,
+                signed_at_utc=signed_at_text,
+                min_signed_at_utc=min_signed_at.isoformat().replace("+00:00", "Z"),
+            )
+        )
+    if max_signed_at is not None and signed_at is not None and signed_at > max_signed_at:
+        blockers.append(
+            blocker(
+                "android_signed_evidence_future_dated",
+                "signed evidence artifact is ahead of the release validator clock skew",
+                slot=slot_name,
+                signed_at_utc=signed_at_text,
+                max_signed_at_utc=max_signed_at.isoformat().replace("+00:00", "Z"),
+            )
+        )
+    return blockers
+
+
+def _android_report_signed_evidence_is_fresh(
+    report: dict[str, Any],
+    min_signed_at: dt.datetime | None,
+    max_signed_at: dt.datetime | None,
+) -> bool:
+    """Return whether a report can satisfy matrix coverage under freshness gates."""
+
+    if min_signed_at is None and max_signed_at is None:
+        return True
+    return not _android_report_signed_evidence_freshness_blockers(
+        report,
+        min_signed_at,
+        max_signed_at,
+    )
+
+
 def _check_android_signed_evidence_freshness(
     reports: list[dict[str, Any]],
     min_signed_at: dt.datetime | None,
@@ -5581,66 +5681,13 @@ def _check_android_signed_evidence_freshness(
 ) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
     for report in reports:
-        if report.get("status") != "ok":
-            continue
-        slot_name = report.get("slot")
-        if not isinstance(slot_name, str):
-            blockers.append(
-                blocker(
-                    "android_device_lab_slot_name_missing",
-                    "Android device-lab report is missing a slot name",
-                )
+        blockers.extend(
+            _android_report_signed_evidence_freshness_blockers(
+                report,
+                min_signed_at,
+                max_signed_at,
             )
-            continue
-        signed_at_text = _android_report_kagemusha(report).get("signed_at_utc")
-        if not isinstance(signed_at_text, str) or not signed_at_text:
-            blockers.append(
-                blocker(
-                    "android_signed_evidence_timestamp_missing",
-                    "validated Android device-lab report is missing signed evidence timestamp",
-                    slot=slot_name,
-                )
-            )
-            continue
-        if device_lab.SIGNED_AT_UTC_RE.fullmatch(signed_at_text) is None:
-            blockers.append(
-                blocker(
-                    "android_signed_evidence_timestamp_noncanonical",
-                    "signed evidence artifact signed_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
-                    slot=slot_name,
-                    signed_at_utc=_display_evidence_value(signed_at_text),
-                )
-            )
-            continue
-        signed_at, parse_blocker = parse_utc_timestamp(
-            signed_at_text,
-            "signed evidence artifact signed_at_utc",
         )
-        if parse_blocker is not None:
-            parse_blocker["slot"] = slot_name
-            parse_blocker["code"] = "android_signed_evidence_timestamp_invalid"
-            blockers.append(parse_blocker)
-            continue
-        if min_signed_at is not None and signed_at is not None and signed_at < min_signed_at:
-            blockers.append(
-                blocker(
-                    "android_signed_evidence_stale",
-                    "signed evidence artifact predates the required release evidence cutoff",
-                    slot=slot_name,
-                    signed_at_utc=signed_at_text,
-                    min_signed_at_utc=min_signed_at.isoformat().replace("+00:00", "Z"),
-                )
-            )
-        if max_signed_at is not None and signed_at is not None and signed_at > max_signed_at:
-            blockers.append(
-                blocker(
-                    "android_signed_evidence_future_dated",
-                    "signed evidence artifact is ahead of the release validator clock skew",
-                    slot=slot_name,
-                    signed_at_utc=signed_at_text,
-                    max_signed_at_utc=max_signed_at.isoformat().replace("+00:00", "Z"),
-                )
-            )
     return blockers
 
 
@@ -6268,10 +6315,19 @@ def check_android_device_lab(
         reports,
         trusted_signer_public_key_sha256_set,
     )
+    matrix_reports = [
+        report
+        for report in reports
+        if _android_report_signed_evidence_is_fresh(
+            report,
+            min_signed_at,
+            max_signed_at,
+        )
+    ]
     covered = sorted(
         {
             family
-            for report in reports
+            for report in matrix_reports
             for family in [_android_report_device_family(report)]
             if report.get("status") == "ok"
             and _android_report_has_complete_signed_evidence(report, signed_evidence)
@@ -6286,7 +6342,7 @@ def check_android_device_lab(
     covered_transports = sorted(
         {
             transport
-            for report in reports
+            for report in matrix_reports
             for transport in _android_report_d2d_payment_transports(report)
             if report.get("status") == "ok"
             and _android_report_has_complete_signed_evidence(report, signed_evidence)
@@ -6298,7 +6354,7 @@ def check_android_device_lab(
         if transport not in covered_transports
     ]
     covered_transports_by_family = _android_d2d_payment_transport_coverage_by_family(
-        reports,
+        matrix_reports,
         signed_evidence,
     )
     missing_transport_pairs = _missing_android_d2d_payment_transport_pairs(

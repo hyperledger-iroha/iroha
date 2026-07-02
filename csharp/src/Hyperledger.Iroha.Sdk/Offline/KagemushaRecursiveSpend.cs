@@ -1756,12 +1756,6 @@ public static class KagemushaRecursiveSpendNative
         {
             throw BundleDecodeError("lineageWitness.previousRecursiveProofs");
         }
-        if (count > CompactTokenMaxHops)
-        {
-            throw BundleDecodeError(
-                "lineageWitness.previousRecursiveProofs",
-                $"lineageWitness.previousRecursiveProofs count must not exceed {CompactTokenMaxHops}");
-        }
 
         var proofOffset = 8;
         var hasReserved = false;

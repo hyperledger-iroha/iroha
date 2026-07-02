@@ -3454,6 +3454,12 @@ pub(crate) mod valid {
 
     type Error = (Box<SignedBlock>, Box<BlockValidationError>);
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum SccpRootValidation {
+        Enforce,
+        Defer,
+    }
+
     #[cfg(test)]
     fn collect_ready_soracloud_mailbox_messages(
         state_transaction: &StateTransaction<'_, '_>,
@@ -5399,10 +5405,11 @@ pub(crate) mod valid {
             )
         }
 
-        fn validate_sccp_commitment_root(block: &SignedBlock) -> Result<(), BlockValidationError> {
-            let messages = crate::bridge::collect_sccp_messages_from_signed_block(block);
+        fn validate_sccp_messages_unique(
+            messages: &[crate::bridge::RecordedSccpMessage],
+        ) -> Result<(), BlockValidationError> {
             let mut seen = std::collections::BTreeSet::new();
-            for message in &messages {
+            for message in messages {
                 let key = crate::bridge::sccp_outbound_message_key(&message.payload);
                 if !seen.insert(key) {
                     return Err(BlockValidationError::SccpDuplicateOutboundMessage {
@@ -5412,6 +5419,12 @@ pub(crate) mod valid {
                     });
                 }
             }
+            Ok(())
+        }
+
+        fn validate_sccp_commitment_root(block: &SignedBlock) -> Result<(), BlockValidationError> {
+            let messages = crate::bridge::collect_sccp_messages_from_signed_block(block);
+            Self::validate_sccp_messages_unique(&messages)?;
             let expected = crate::bridge::sccp_commitment_root_from_messages(&messages);
             let actual = block.header().sccp_commitment_root();
             if actual == expected {
@@ -5419,6 +5432,31 @@ pub(crate) mod valid {
             } else {
                 Err(BlockValidationError::SccpCommitmentRootMismatch { expected, actual })
             }
+        }
+
+        pub(crate) fn sccp_commitment_root_after_execution(
+            mut block: SignedBlock,
+            state_block: &mut StateBlock<'_>,
+        ) -> Result<Option<[u8; 32]>, BlockValidationError> {
+            assert!(
+                block.header().is_genesis() || signed_block_entrypoints_are_canonical(&block),
+                "SCCP root probe block payload is not in canonical transaction entrypoint order"
+            );
+            let exec_witness_guard = (!state_block.replay_compatibility)
+                .then(crate::sumeragi::witness::exec_witness_guard);
+            Self::validate_and_record_transactions_with_prepared(
+                &mut block,
+                state_block,
+                None,
+                false,
+                None,
+                SccpRootValidation::Defer,
+            )?;
+            let _ = crate::sumeragi::witness::drain_exec_witness();
+            drop(exec_witness_guard);
+            let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
+            Self::validate_sccp_messages_unique(&messages)?;
+            Ok(crate::bridge::sccp_commitment_root_from_messages(&messages))
         }
 
         #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -5613,6 +5651,7 @@ pub(crate) mod valid {
                 timings.as_deref_mut(),
                 true,
                 Some(&prepared_txs),
+                SccpRootValidation::Enforce,
             ) {
                 drop(state_block);
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
@@ -7422,6 +7461,7 @@ pub(crate) mod valid {
             state_block: &mut StateBlock<'_>,
             mut timings: Option<&mut ValidationTimings>,
             entrypoints: Vec<TransactionEntrypoint>,
+            sccp_root_validation: SccpRootValidation,
         ) -> Result<(), BlockValidationError> {
             let to_ms = |duration: Duration| -> u64 {
                 u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
@@ -7604,7 +7644,9 @@ pub(crate) mod valid {
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             block.set_trigger_completions(trigger_completions);
-            Self::validate_sccp_commitment_root(block)?;
+            if sccp_root_validation == SccpRootValidation::Enforce {
+                Self::validate_sccp_commitment_root(block)?;
+            }
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), start) {
                 let elapsed = to_ms(start.elapsed());
                 timings.execution_tx_apply_ms = elapsed;
@@ -7677,6 +7719,7 @@ pub(crate) mod valid {
                 timings,
                 skip_stateless_checks,
                 None,
+                SccpRootValidation::Enforce,
             )?;
             Self::finalize_committed_fragment_count(
                 block,
@@ -7718,6 +7761,7 @@ pub(crate) mod valid {
             timings: Option<&mut ValidationTimings>,
             skip_stateless_checks: bool,
             prepared_txs: Option<&[PreparedBlockTransaction]>,
+            sccp_root_validation: SccpRootValidation,
         ) -> Result<(), BlockValidationError> {
             use rayon::prelude::*;
 
@@ -7754,6 +7798,7 @@ pub(crate) mod valid {
                     state_block,
                     timings,
                     entrypoints,
+                    sccp_root_validation,
                 )?;
                 return Ok(());
             }
@@ -11696,7 +11741,9 @@ pub(crate) mod valid {
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             block.set_trigger_completions(trigger_completions);
-            Self::validate_sccp_commitment_root(block)?;
+            if sccp_root_validation == SccpRootValidation::Enforce {
+                Self::validate_sccp_commitment_root(block)?;
+            }
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), set_results_start) {
                 timings.execution_tx_finalize_set_results_ms = to_ms(start.elapsed());
             }

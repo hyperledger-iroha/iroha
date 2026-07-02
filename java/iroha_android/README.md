@@ -1393,7 +1393,7 @@ mismatches, and conflicting repeated headers or chunks.
 The NFC APDU parser fails closed on nonzero Le bytes for no-data commands,
 non-canonical zero-length reads, and direct read helpers with invalid requested
 lengths; no-offset APDUs also reject smuggled nonzero P1/P2 bytes. Nearby
-decoding rejects fractional versions, unknown fields inside legacy
+decoding rejects fractional versions, unknown fields inside
 pairing-challenge objects, and challenge/receipt ACK content-type downgrades
 instead of ignoring smuggled JSON.
 `AndroidOfflineNoteSecureStore` rotates a non-exportable Android Keystore key

@@ -2184,12 +2184,15 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "scripts/kagemusha_release_bundle.py",
     "scripts/kagemusha_run_lineage_proof_staged.py",
     "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
+    "scripts/kagemusha_staged_resource_guard.py",
     "scripts/sign_android_device_lab_evidence.py",
     "scripts/tests/check_android_device_lab_slot_test.py",
     "scripts/tests/kagemusha_production_readiness_test.py",
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs",
     "IrohaSwift/README.md",
     "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
@@ -4933,6 +4936,25 @@ def check_recursive_compact_record_envelope_preflight_order():
 def check_recursive_compact_first_release_public_surface():
     relative = "crates/iroha_core/src/zk.rs"
     core = read(relative)
+    for pattern, forbidden in (
+        (
+            r"future\s+(?:///\s*)?compressed recursive verifier evidence",
+            "future compressed recursive verifier evidence",
+        ),
+        (
+            r"future\s+(?:///\s*)?Kagemusha\s+(?:///\s*)?recursive aggregation mode",
+            "future Kagemusha recursive aggregation mode",
+        ),
+        (
+            r"future\s+///\s*recursive verifier",
+            "future recursive verifier",
+        ),
+    ):
+        if re.search(pattern, core):
+            fail(
+                f"{relative} contains stale recursive compact first-release wording: "
+                + forbidden
+            )
     for required in (
         "/// Canonical Reserved-lineage circuit-family identifier for recursive spend lineage proofs.",
         "one_hop_proving_key_bytes: Option<&[u8]>",
@@ -4943,6 +4965,16 @@ def check_recursive_compact_first_release_public_surface():
         "is_retired_unqualified_vote_bool_backend_profile",
         "is_retired_unqualified_anon_transfer_backend_profile",
         "retired unqualified profile roots",
+        "Mode-2 recursive compact evidence uses the separate recursive aggregation",
+        "mode `1` folded-token construction",
+        "foundations used by current aggregation mode 2",
+        "current recursive-in-circuit",
+        "aggregation mode.",
+        "compressed recursive verifier evidence that reuses the current shifted",
+        "production host-side preflight for Kagemusha recursive",
+        "aggregation mode `2`",
+        "smallest compressed-table composition used by the current",
+        "recursive verifier: the selector reads the table columns",
     ):
         if required not in core:
             fail(
@@ -4974,11 +5006,71 @@ def check_recursive_compact_first_release_public_surface():
         "acy_path",
         "is_legacy_vote_bool_backend_profile",
         "is_legacy_anon_transfer_backend_profile",
+        "Future mode-2 work can replace this checked pre-fold path",
+        "Temporary dispatch-verification circuits remain until aggregation mode 2",
+        "future recursive-in-circuit aggregation mode",
+        "future compressed recursive verifier evidence",
+        "future Kagemusha recursive aggregation mode",
+        "smallest compressed-table composition used by the future",
     ):
         if forbidden in core:
             fail(
                 f"{relative} contains stale recursive compact first-release wording: "
                 + forbidden
+            )
+    data_model_relative = "crates/iroha_data_model/src/offline/mod.rs"
+    data_model = read(data_model_relative)
+    data_model_flat = re.sub(r"\s+", " ", data_model)
+    for required in (
+        "Wallets and recursive aggregators hash this statement",
+        "`kagemusha-recursive-compact-v1` admission compares this",
+        "Mode `2` is the current",
+        "recursive in-circuit mode and must remain bound to recursive compact evidence",
+        "`kagemusha-recursive-compact-v1` admission enforces from a compact token",
+        "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_UNBOUND",
+    ):
+        if required not in data_model_flat:
+            fail(
+                f"{data_model_relative} is missing recursive compact first-release wording: "
+                + required
+            )
+    for forbidden in (
+        "future recursive",
+        "Future recursive",
+        "future mode-2",
+        "Future `kagemusha-recursive-compact-v1`",
+        "public-input-only relation future",
+        "TRANSITION_PROFILE_BINDING_DIGEST_PENDING",
+    ):
+        if forbidden in data_model:
+            fail(
+                f"{data_model_relative} contains stale recursive compact first-release wording: "
+                + forbidden
+            )
+    ipa_relative = "crates/iroha_zkp_halo2/src/ipa.rs"
+    ipa = read(ipa_relative)
+    for forbidden in (
+        "future recursive verification",
+        "future recursive verifier",
+        "future in-circuit verifier",
+        "intended for future in-circuit",
+        "any future in-circuit verifier",
+    ):
+        if forbidden in ipa:
+            fail(
+                f"{ipa_relative} contains stale recursive verifier first-release wording: "
+                + forbidden
+            )
+    for required in (
+        "deterministic witness layout for current recursive verification",
+        "Combined native verifier-side IPA witness for recursive verification",
+        "native verifier and recursive in-circuit verifier entrypoints must agree",
+        "canonical host-side witness shape used by recursive in-circuit verifier",
+    ):
+        if required not in ipa:
+            fail(
+                f"{ipa_relative} is missing recursive verifier first-release wording: "
+                + required
             )
 
 
@@ -5067,6 +5159,9 @@ def check_docs_reserved_lineage_policy():
     for forbidden in (
         "runtime legacy bearer-audit fallback",
         "legacy Halo2 proof-envelope",
+        "pre-existing Halo2 proof-envelope",
+        "Halo2 proof-envelope wrappers remain accepted",
+        "proof-envelope wrappers remain scoped",
         "legacy Offline recursive proof admission",
         "classic payment construction",
         "classic parser",
@@ -5077,7 +5172,7 @@ def check_docs_reserved_lineage_policy():
             fail(f"docs/source/offline_kagemusha.md contains stale retired-mode wording: {forbidden}")
     for needle in (
         "runtime bearer-audit dispatch is not available",
-        "pre-existing Halo2 proof-envelope wrappers remain scoped to semantic v1 preverification",
+        "generic Halo2 proof-envelope parser is scoped to current semantic v1 preverification",
         "zero cannot act as a wildcard during Offline recursive proof admission either",
         "Torii issue/redeem endpoints reject retired payment construction",
         "routed to the retired structured parser",
@@ -5129,13 +5224,48 @@ def check_docs_reserved_lineage_policy():
             )
 
     roadmap_doc = re.sub(r"\s+", " ", read("roadmap.md"))
+    for forbidden in (
+        "legacy Halo2 proof-envelope",
+        "pre-existing Halo2 proof-envelope",
+        "Halo2 proof-envelope wrappers remain accepted",
+        "proof-envelope wrappers remain scoped",
+    ):
+        if forbidden in roadmap_doc:
+            fail(f"roadmap.md contains stale recursive proof-envelope wording: {forbidden}")
+    for forbidden in (
+        "legacy offline transfer/revocation HTTP compatibility routes",
+        "Legacy Offline audit metadata",
+        "recursive aggregation of the private per-hop proofs into the compact folded-token mode-2 proof remains follow-up work for a later version",
+        "Swift native/compatibility",
+        "legacy bearer-audit forcing available only as an explicit migration fallback",
+        "legacy `OfflineNotePaymentTokenEnvelope` Norito/text handoff",
+        "legacy `OfflineNoteReceiveRequestEnvelope` Norito/text handoff",
+        "legacy `OfflineNoteReceiptAckEnvelope` Norito/text handoff",
+        "classic Torii Offline middleware",
+    ):
+        if forbidden in roadmap_doc:
+            fail(f"roadmap.md contains stale Kagemusha first-release wording: {forbidden}")
     for needle in (
         "Bridge ABI 6 adds recursive spend `init`, `append`, both transition-profile helpers, append-boundary derivation, both lineage-witness assembly helpers, `verify`, and `redeem` entry points",
         "complete ABI-6 native surface - init, append, both transition-profile helpers, append-boundary derivation, both lineage-witness helpers, verify, and redeem",
         "without the witness path and append-boundary surface needed for safe redemption",
+        "generic Halo2 proof-envelope parser is scoped to current semantic v1 preverification",
     ):
         if needle not in roadmap_doc:
             fail(f"roadmap.md is missing complete recursive spend ABI-6 surface documentation: {needle}")
+    for needle in (
+        "retired offline transfer/revocation HTTP routes",
+        "Offline audit metadata now mirrors the Kagemusha nullifier/commitment separation rule",
+        "compact folded-token mode-2 path uses the current recursive aggregation evidence/proof binding",
+        "Swift native and retired JSON payment-token output-commitment lookup helpers plus Kotlin/JVM payment-token output-commitment lookup helpers",
+        "Runtime bearer-audit forcing is not part of first-release production admission",
+        "current first-release `OfflineNotePaymentTokenEnvelope` Norito/text handoff",
+        "current first-release `OfflineNoteReceiveRequestEnvelope` Norito/text handoff",
+        "current first-release `OfflineNoteReceiptAckEnvelope` Norito/text handoff",
+        "Keep Torii Offline middleware attestation and fixture generation on the same first-release contract",
+    ):
+        if needle not in roadmap_doc:
+            fail(f"roadmap.md is missing current Kagemusha first-release wording: {needle}")
 
 
 def require_needles(coverage, missing_message):
@@ -8082,6 +8212,72 @@ if mode == "--negative-control-core-offline-first-release-test-wording":
             "iroha_config Kagemusha force flag tests contain stale first-release wording: removed Kagemusha leg"
             "acy readiness knob",
         ),
+        (
+            "crates/iroha_data_model/src/offline/mod.rs",
+            "recursive verifier circuits a hash-friendly public verifier-key binding",
+            "future recursive verifier circuits a hash-friendly public verifier-key binding",
+            "crates/iroha_data_model/src/offline/mod.rs contains stale recursive compact first-release wording: future recursive",
+        ),
+        (
+            "crates/iroha_data_model/src/offline/mod.rs",
+            "TRANSITION_PROFILE_BINDING_DIGEST_UNBOUND",
+            "TRANSITION_PROFILE_BINDING_DIGEST_PENDING",
+            "crates/iroha_data_model/src/offline/mod.rs contains stale recursive compact first-release wording: TRANSITION_PROFILE_BINDING_DIGEST_PENDING",
+        ),
+        (
+            "crates/iroha_core/src/zk.rs",
+            "Dispatch-verification circuits exercise",
+            "Temporary dispatch-verification circuits remain until aggregation mode 2. Dispatch-verification circuits exercise",
+            "crates/iroha_core/src/zk.rs contains stale recursive compact first-release wording: Temporary dispatch-verification circuits remain until aggregation mode 2",
+        ),
+        (
+            "crates/iroha_core/src/zk.rs",
+            "paths; this helper remains",
+            "paths; Future mode-2 work can replace this checked pre-fold path. this helper remains",
+            "crates/iroha_core/src/zk.rs contains stale recursive compact first-release wording: Future mode-2 work can replace this checked pre-fold path",
+        ),
+        (
+            "crates/iroha_core/src/zk.rs",
+            "current recursive-in-circuit",
+            "future recursive-in-circuit aggregation mode; current recursive-in-circuit",
+            "crates/iroha_core/src/zk.rs contains stale recursive compact first-release wording: future recursive-in-circuit aggregation mode",
+        ),
+        (
+            "crates/iroha_core/src/zk.rs",
+            "compressed recursive verifier evidence that reuses the current shifted",
+            "future compressed recursive verifier evidence that reuses shifted",
+            "crates/iroha_core/src/zk.rs contains stale recursive compact first-release wording: future compressed recursive verifier evidence",
+        ),
+        (
+            "crates/iroha_core/src/zk.rs",
+            "production host-side preflight for Kagemusha recursive\n/// aggregation mode `2`",
+            "production host-side preflight for the future Kagemusha\n/// recursive aggregation mode",
+            "crates/iroha_core/src/zk.rs contains stale recursive compact first-release wording: future Kagemusha recursive aggregation mode",
+        ),
+        (
+            "crates/iroha_core/src/zk.rs",
+            "smallest compressed-table composition used by the current\n    /// recursive verifier",
+            "smallest compressed-table composition used by the future\n    /// recursive verifier",
+            "crates/iroha_core/src/zk.rs contains stale recursive compact first-release wording: future recursive verifier",
+        ),
+        (
+            "crates/iroha_zkp_halo2/src/ipa.rs",
+            "it exposes the initial `Q`",
+            "future recursive verification still pending; it exposes the initial `Q`",
+            "crates/iroha_zkp_halo2/src/ipa.rs contains stale recursive verifier first-release wording: future recursive verification",
+        ),
+        (
+            "crates/iroha_zkp_halo2/src/ipa.rs",
+            "native verifier and recursive in-circuit verifier entrypoints must agree",
+            "native verifier and any future in-circuit verifier must agree",
+            "crates/iroha_zkp_halo2/src/ipa.rs contains stale recursive verifier first-release wording: future in-circuit verifier",
+        ),
+        (
+            "crates/iroha_zkp_halo2/src/ipa.rs",
+            "canonical host-side witness shape used by recursive in-circuit verifier",
+            "canonical host-side witness shape intended for future in-circuit verifier",
+            "crates/iroha_zkp_halo2/src/ipa.rs contains stale recursive verifier first-release wording: future in-circuit verifier",
+        ),
     )
     first_message = None
     for target, before, after, expected in cases:
@@ -9320,6 +9516,13 @@ if mode == "--negative-control-active-kagemusha-todo":
             "production-readiness script active marker",
         ),
         (
+            "scripts/kagemusha_staged_resource_guard.py",
+            '"""Resource guards for long-running Kagemusha staged subprocesses."""',
+            '"""Resource guards for long-running Kagemusha staged subprocesses."""\n'
+            "# TODO: bypass Kagemusha staged resource guard review",
+            "staged resource guard script active marker",
+        ),
+        (
             "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
             "//! Source-level guards for the Kagemusha-only offline payment surface.",
             "// TODO: bypass Kagemusha-only offline smoke\n"
@@ -9362,6 +9565,13 @@ if mode == "--negative-control-active-kagemusha-todo":
             "C# recursive spend active marker",
         ),
         (
+            "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs",
+            "public sealed class OfflineNoteWalletNote",
+            "// TODO: bypass Kagemusha C# wallet-note strict-state review\n"
+            "public sealed class OfflineNoteWalletNote",
+            "C# wallet-note strict-state active marker",
+        ),
+        (
             "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
             "using System.Buffers.Binary;",
             "// TODO: bypass Kagemusha C# instruction archive review\n"
@@ -9374,6 +9584,13 @@ if mode == "--negative-control-active-kagemusha-todo":
             "// TODO: bypass Kagemusha C# native tests review\n"
             "using System.Collections.Generic;",
             "C# native test active marker",
+        ),
+        (
+            "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs",
+            "public sealed class OfflineNoteWalletNoteTests",
+            "// TODO: bypass Kagemusha C# wallet-note strict-state tests\n"
+            "public sealed class OfflineNoteWalletNoteTests",
+            "C# wallet-note strict-state test active marker",
         ),
         (
             "python/iroha_python/src/iroha_python/offline_cash.py",
@@ -13432,7 +13649,12 @@ if mode == "--negative-control-doc-retired-wording":
             "runtime legacy bearer-audit fallback",
         ),
         (
+            "generic Halo2\nproof-envelope parser is scoped to current semantic v1 preverification",
             "pre-existing Halo2\nproof-envelope wrappers remain scoped to semantic v1 preverification",
+            "pre-existing Halo2 proof-envelope",
+        ),
+        (
+            "generic Halo2\nproof-envelope parser is scoped to current semantic v1 preverification",
             "legacy Halo2 proof-envelope wrappers remain accepted only for semantic v1 preverification",
             "legacy Halo2 proof-envelope",
         ),
@@ -13498,32 +13720,91 @@ if mode == "--negative-control-doc-retired-wording":
 if mode == "--negative-control-roadmap-abi-surface":
     target = "roadmap.md"
     source = read(target)
-    mutated = source.replace(
-        "both transition-profile\n  helpers, append-boundary derivation, both lineage-witness assembly helpers",
-        "lineage-witness assembly",
-        1,
-    )
-    if mutated == source:
-        raise SystemExit("negative control failed: unable to mutate roadmap ABI-6 surface")
-    text_overrides[target] = mutated
-    try:
-        run_checks()
-    except PolicyError as error:
-        message = str(error)
-        expected = (
+    cases = (
+        (
+            "both transition-profile\n  helpers, append-boundary derivation, both lineage-witness assembly helpers",
+            "lineage-witness assembly",
             "roadmap.md is missing complete recursive spend ABI-6 surface documentation: "
             "Bridge ABI 6 adds recursive spend `init`, `append`, both transition-profile helpers, "
-            "append-boundary derivation, both lineage-witness assembly helpers, `verify`, and `redeem` entry points"
-        )
-        if expected not in message:
-            raise SystemExit(
-                "negative control failed: roadmap ABI-6 surface drift was rejected for the wrong reason: "
-                + message.splitlines()[0]
-            )
-        print("negative control rejected roadmap ABI-6 surface drift")
-        print(message.splitlines()[0])
-        raise SystemExit(0)
-    raise SystemExit("negative control failed: roadmap ABI-6 surface drift was not detected")
+            "append-boundary derivation, both lineage-witness assembly helpers, `verify`, and `redeem` entry points",
+        ),
+        (
+            "generic Halo2 proof-envelope parser is scoped to current semantic v1\n  preverification",
+            "legacy Halo2 proof-envelope wrappers remain accepted only for semantic v1\n  preverification",
+            "roadmap.md contains stale recursive proof-envelope wording: legacy Halo2 proof-envelope",
+        ),
+        (
+            "retired offline transfer/revocation HTTP routes",
+            "legacy offline transfer/revocation HTTP compatibility routes",
+            "roadmap.md contains stale Kagemusha first-release wording: legacy offline transfer/revocation HTTP compatibility routes",
+        ),
+        (
+            "Offline audit metadata now\n  mirrors the Kagemusha nullifier/commitment separation rule",
+            "Legacy Offline audit metadata now\n  mirrors the Kagemusha nullifier/commitment separation rule",
+            "roadmap.md contains stale Kagemusha first-release wording: Legacy Offline audit metadata",
+        ),
+        (
+            "The compact folded-token\n  mode-2 path uses the current recursive aggregation evidence/proof binding",
+            "recursive aggregation of the\n  private per-hop proofs into the compact folded-token mode-2 proof remains\n  follow-up work for a later version",
+            "roadmap.md contains stale Kagemusha first-release wording: recursive aggregation of the private per-hop proofs into the compact folded-token mode-2 proof remains follow-up work for a later version",
+        ),
+        (
+            "Swift native and retired JSON payment-token output-commitment lookup helpers\n  plus Kotlin/JVM payment-token output-commitment lookup helpers",
+            "Swift native/compatibility and Kotlin/JVM payment-token output-commitment\n  lookup helpers",
+            "roadmap.md contains stale Kagemusha first-release wording: Swift native/compatibility",
+        ),
+        (
+            "Runtime bearer-audit forcing is not part of first-release\n  production admission",
+            "It leaves legacy bearer-audit forcing available only as an explicit\n  migration fallback",
+            "roadmap.md contains stale Kagemusha first-release wording: legacy bearer-audit forcing available only as an explicit migration fallback",
+        ),
+        (
+            "current first-release `OfflineNotePaymentTokenEnvelope` Norito/text\n    handoff",
+            "legacy `OfflineNotePaymentTokenEnvelope` Norito/text handoff",
+            "roadmap.md contains stale Kagemusha first-release wording: legacy `OfflineNotePaymentTokenEnvelope` Norito/text handoff",
+        ),
+        (
+            "current first-release `OfflineNoteReceiveRequestEnvelope`\n    Norito/text handoff",
+            "legacy `OfflineNoteReceiveRequestEnvelope` Norito/text handoff",
+            "roadmap.md contains stale Kagemusha first-release wording: legacy `OfflineNoteReceiveRequestEnvelope` Norito/text handoff",
+        ),
+        (
+            "current first-release `OfflineNoteReceiptAckEnvelope` Norito/text\n    handoff",
+            "legacy `OfflineNoteReceiptAckEnvelope` Norito/text handoff",
+            "roadmap.md contains stale Kagemusha first-release wording: legacy `OfflineNoteReceiptAckEnvelope` Norito/text handoff",
+        ),
+        (
+            "Keep Torii Offline middleware attestation and fixture generation on",
+            "Keep classic Torii Offline middleware attestation and fixture generation on",
+            "roadmap.md contains stale Kagemusha first-release wording: classic Torii Offline middleware",
+        ),
+    )
+    first_message = None
+    for before, after, expected in cases:
+        mutated = source.replace(before, after, 1)
+        if mutated == source:
+            raise SystemExit("negative control failed: unable to mutate roadmap ABI-6 surface")
+        text_overrides[target] = mutated
+        try:
+            run_checks()
+        except PolicyError as error:
+            message = str(error)
+            if expected not in message:
+                raise SystemExit(
+                    "negative control failed: roadmap ABI-6 surface drift was rejected for the wrong reason: "
+                    + message.splitlines()[0]
+                )
+            if first_message is None:
+                first_message = message
+            continue
+        finally:
+            text_overrides.pop(target, None)
+        raise SystemExit("negative control failed: roadmap ABI-6 surface drift was not detected")
+    if first_message is None:
+        raise SystemExit("negative control failed: roadmap ABI-6 surface drift was not detected")
+    print("negative control rejected roadmap ABI-6 surface drift")
+    print(first_message.splitlines()[0])
+    raise SystemExit(0)
 
 if mode == "--negative-control-policy-negative-controls-workflow":
     target = WORKFLOW_PATH

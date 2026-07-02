@@ -52,7 +52,7 @@ impl<B: IpaBackend> IpaProof<B> {
 /// Transcript projection for one verifier-side IPA reduction round.
 ///
 /// These values are useful as deterministic recursive-verifier witnesses: the
-/// native verifier and any future in-circuit verifier must agree on the
+/// native verifier and recursive in-circuit verifier entrypoints must agree on the
 /// transcript state before/after absorbing `L || R`, the derived challenge, and
 /// its inverse.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,7 +181,7 @@ pub struct IpaVerifierBVectorReduction<S: IpaScalar> {
 
 /// Native verifier-side IPA accumulation projection.
 ///
-/// This is a deterministic witness layout for future recursive verification:
+/// This is a deterministic witness layout for current recursive verification:
 /// it exposes the initial `Q`, every round's folded group state, the final
 /// folded generators, and the final expected term compared by the ordinary IPA
 /// verifier.
@@ -205,7 +205,7 @@ pub struct IpaVerifierAccumulation<G: IpaGroup> {
 ///
 /// This bundles the transcript challenge projection, public `b`-vector
 /// reduction, and group-accumulation projection for one proof. It is the
-/// canonical host-side witness shape intended for future in-circuit verifier
+/// canonical host-side witness shape used by recursive in-circuit verifier
 /// assembly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpaVerifierWitness<B: IpaBackend> {

@@ -531,6 +531,25 @@ where
     )
 }
 
+fn proposal_sccp_commitment_root_after_execution(
+    state: &crate::state::State,
+    builder: &crate::block::BlockBuilder<crate::block::Chained>,
+    sccp_root: Option<[u8; 32]>,
+    private_key: &iroha_crypto::PrivateKey,
+    local_validator_index: u32,
+) -> Result<Option<[u8; 32]>> {
+    let probe_block: SignedBlock = builder
+        .clone()
+        .with_sccp_commitment_root(sccp_root)
+        .try_sign_with_index(private_key, u64::from(local_validator_index))
+        .map_err(|err| eyre!("failed to sign SCCP root probe block: {err}"))?
+        .unpack(|_| {})
+        .into();
+    let mut state_block = state.block(probe_block.header());
+    crate::block::ValidBlock::sccp_commitment_root_after_execution(probe_block, &mut state_block)
+        .map_err(|err| eyre!("failed to derive SCCP commitment root after execution: {err}"))
+}
+
 const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_millis(1);
 
 #[derive(Debug, Clone, Copy)]
@@ -3374,16 +3393,16 @@ impl Actor {
                 let npos_effects =
                     self.build_npos_consensus_effects_for_proposal(proposal_height)?;
                 builder = builder.with_npos_consensus_effects(npos_effects);
-                let world_view = self.state.world_view();
-                let sccp_messages = collect_sccp_messages_for_active_proposal_routes(
-                    &tx_batch,
-                    &routing_batch,
-                    &nexus,
-                    |key| world_view.sccp_outbound_messages().get(key).is_some(),
-                )?;
-                builder = builder.with_sccp_commitment_root(
-                    crate::bridge::sccp_commitment_root_from_messages(&sccp_messages),
-                );
+                let proposal_may_record_sccp_messages = {
+                    let world_view = self.state.world_view();
+                    !collect_sccp_messages_for_active_proposal_routes(
+                        &tx_batch,
+                        &routing_batch,
+                        &nexus,
+                        |key| world_view.sccp_outbound_messages().get(key).is_some(),
+                    )?
+                    .is_empty()
+                };
 
                 let receipt_plan = if nexus_enabled {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot_cached();
@@ -3732,11 +3751,39 @@ impl Actor {
                         BlockExecutionContextBundle::new(execution_context),
                     ));
                 }
+                builder = builder.with_confidential_features(conf_features);
+                let sccp_commitment_root = if proposal_may_record_sccp_messages {
+                    let private_key = self.common_config.key_pair.private_key();
+                    let initial_root = proposal_sccp_commitment_root_after_execution(
+                        self.state.as_ref(),
+                        &builder,
+                        None,
+                        private_key,
+                        local_validator_index,
+                    )?;
+                    let stable_root = proposal_sccp_commitment_root_after_execution(
+                        self.state.as_ref(),
+                        &builder,
+                        initial_root,
+                        private_key,
+                        local_validator_index,
+                    )?;
+                    if stable_root != initial_root {
+                        return Err(eyre!(
+                            "unstable SCCP commitment root after proposal execution: initial={:?} stable={:?}",
+                            initial_root,
+                            stable_root
+                        ));
+                    }
+                    stable_root
+                } else {
+                    None
+                };
+                builder = builder.with_sccp_commitment_root(sccp_commitment_root);
                 last_sidecar_ms = sidecar_started_at.elapsed().as_millis();
 
                 let block_build_started_at = Instant::now();
                 let new_block = builder
-                    .with_confidential_features(conf_features)
                     .try_sign_with_index(
                         self.common_config.key_pair.private_key(),
                         u64::from(local_validator_index),

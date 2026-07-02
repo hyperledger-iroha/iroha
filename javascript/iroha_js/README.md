@@ -3,8 +3,8 @@
 `@iroha/iroha-js` is a JavaScript/TypeScript SDK for interacting
 with Hyperledger Iroha nodes from Node.js runtimes. The initial focus mirrors
 the Python helper coverage so developers can manage attachments, prover
-reports, Ed25519 signing, and Norito payloads while we thread manifest builders
-and gRPC transports into future milestones.
+reports, Ed25519 signing, and Norito payloads as manifest builders and gRPC
+transports land in the maintained SDK surface.
 
 TypeScript consumers can import the bundled `index.d.ts` definitions for the
 SDK surface.
@@ -91,7 +91,7 @@ the append-boundary helper `kagemushaRecursiveSpendLineageAppendBoundary`, both
 lineage-witness helpers, `kagemushaRecursiveSpendVerify`, and
 `kagemushaRecursiveSpendRedeem`. Explicit capability selection must pass both
 `recursiveCompactAvailable` and `recursiveSpendAvailable`; single-argument
-compatibility selectors are not shipped.
+selectors are not shipped.
 
 Typed Node callers can build the ABI-6 recursive spend request archives without
 hand-framing Norito payloads. Use
@@ -3215,7 +3215,7 @@ They are normalised via the same unsigned-integer validators before any request 
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
 
-The supported first-release offline HTTP surface is Offline readiness. Classic
+The supported first-release offline HTTP surface is Offline readiness. Retired
 Offline Note issuance, redemption, and audit transaction paths are retired; use
 Kagemusha readiness fields and payment flows for offline payments.
 
