@@ -148,7 +148,6 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
 
     private static let supportedFirstReleasePlatforms: Set<String> = [
         OfflineNoteV2Constants.iosPlatform,
-        OfflineNoteV2Constants.iosAppAttestPlatform,
         OfflineNoteV2Constants.androidPlatform,
     ]
 
@@ -252,7 +251,6 @@ public struct ToriiOfflineDeviceProof: Codable, Sendable, Equatable {
 
     private static let supportedFirstReleasePlatforms: Set<String> = [
         OfflineNoteV2Constants.iosPlatform,
-        OfflineNoteV2Constants.iosAppAttestPlatform,
         OfflineNoteV2Constants.androidPlatform,
     ]
 
