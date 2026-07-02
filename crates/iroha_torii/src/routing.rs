@@ -13417,7 +13417,6 @@ mod sccp_message_backend_tests {
             sccp_tron_source_bridge_address: "0x3333333333333333333333333333333333333333"
                 .to_owned(),
             tron_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
-            ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", "45".repeat(32)),
             verifier_key_hash: format!("0x{}", "46".repeat(32)),
             proof_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
