@@ -53,6 +53,11 @@ def complete_payloads() -> dict[str, dict[str, object]]:
             "revocation_list_digest_hex": HEX_2,
             "credential_count": 3,
             "signed_credential_count": 3,
+            "credentials": [
+                {"name": "credential-00"},
+                {"name": "credential-01"},
+                {"name": "credential-02"},
+            ],
             "canonical_norito_verified": True,
             "issuer_signature_verified": True,
             "issuer_key_policy_verified": True,
@@ -120,6 +125,12 @@ def complete_payloads() -> dict[str, dict[str, object]]:
             "proof_probe_count": 4,
             "accepted_valid_proof_count": 1,
             "rejected_invalid_proof_count": 3,
+            "probes": [
+                {"name": "valid-proof-00", "accepted": True},
+                {"name": "invalid-proof-00", "accepted": False},
+                {"name": "invalid-proof-01", "accepted": False},
+                {"name": "invalid-proof-02", "accepted": False},
+            ],
             "expired_proof_rejected": True,
             "revoked_proof_rejected": True,
             "replay_nullifier_rejected": True,
@@ -142,7 +153,15 @@ def complete_payloads() -> dict[str, dict[str, object]]:
             "revocation_list_digest_hex": HEX_2,
             "pop_snapshot_digest_hex": HEX,
             "sortition_probe_count": 2,
+            "sortition_probes": [
+                {"name": "sortition-probe-00"},
+                {"name": "sortition-probe-01"},
+            ],
             "commit_reveal_probe_count": 2,
+            "commit_reveal_probes": [
+                {"name": "commit-reveal-probe-00"},
+                {"name": "commit-reveal-probe-01"},
+            ],
             "juror_pool_bound": True,
             "moderation_case_binding_verified": True,
             "duplicate_nullifier_rejected": True,
@@ -265,6 +284,290 @@ def test_response_file_complete_evidence_is_ready(tmp_path: Path, capsys) -> Non
     assert "is ready" in capsys.readouterr().err
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["status"] == "ready"
+
+
+def test_issuer_credential_count_must_match_unique_credentials(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    issuer = complete_payloads()["issuer_bundle"]
+    issuer["credential_count"] += 1
+    issuer["signed_credential_count"] = issuer["credential_count"]
+    write_json(evidence_dir / "issuer_bundle.json", issuer)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["issuer_bundle"]["artifacts"][0]
+    assert "credential_count must match unique credentials count" in artifact["errors"]
+
+
+def test_issuer_credentials_must_not_duplicate(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    issuer = complete_payloads()["issuer_bundle"]
+    issuer["credentials"].append(dict(issuer["credentials"][0]))
+    issuer["credential_count"] = len(issuer["credentials"])
+    issuer["signed_credential_count"] = len(issuer["credentials"])
+    write_json(evidence_dir / "issuer_bundle.json", issuer)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["issuer_bundle"]["artifacts"][0]
+    assert "credentials must not contain duplicate values" in artifact["errors"]
+    assert "credential_count must match unique credentials count" in artifact["errors"]
+
+
+def test_verifier_proof_probe_count_must_match_unique_probes(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    verifier = complete_payloads()["verifier_service"]
+    verifier["proof_probe_count"] += 1
+    verifier["rejected_invalid_proof_count"] += 1
+    write_json(evidence_dir / "verifier_service.json", verifier)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["verifier_service"]["artifacts"][0]
+    assert "proof_probe_count must match unique probes count" in artifact["errors"]
+    assert (
+        "rejected_invalid_proof_count must match rejected probes count"
+        in artifact["errors"]
+    )
+
+
+def test_verifier_probes_must_not_duplicate(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    verifier = complete_payloads()["verifier_service"]
+    verifier["probes"].append(dict(verifier["probes"][0]))
+    verifier["proof_probe_count"] = len(verifier["probes"])
+    verifier["accepted_valid_proof_count"] += 1
+    write_json(evidence_dir / "verifier_service.json", verifier)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["verifier_service"]["artifacts"][0]
+    assert "probes must not contain duplicate values" in artifact["errors"]
+    assert "proof_probe_count must match unique probes count" in artifact["errors"]
+
+
+def test_verifier_probe_partition_counts_must_match_probes(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    verifier = complete_payloads()["verifier_service"]
+    verifier["probes"][0]["accepted"] = False
+    write_json(evidence_dir / "verifier_service.json", verifier)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["verifier_service"]["artifacts"][0]
+    assert (
+        "accepted_valid_proof_count must match accepted probes count"
+        in artifact["errors"]
+    )
+    assert (
+        "rejected_invalid_proof_count must match rejected probes count"
+        in artifact["errors"]
+    )
+
+
+def test_moderation_sortition_probe_count_must_match_unique_probes(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    moderation = complete_payloads()["moderation_integration"]
+    moderation["sortition_probe_count"] += 1
+    write_json(evidence_dir / "moderation_integration.json", moderation)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["moderation_integration"]["artifacts"][0]
+    assert (
+        "sortition_probe_count must match unique sortition_probes count"
+        in artifact["errors"]
+    )
+
+
+def test_moderation_sortition_probes_must_not_duplicate(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    moderation = complete_payloads()["moderation_integration"]
+    moderation["sortition_probes"].append(dict(moderation["sortition_probes"][0]))
+    moderation["sortition_probe_count"] = len(moderation["sortition_probes"])
+    write_json(evidence_dir / "moderation_integration.json", moderation)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["moderation_integration"]["artifacts"][0]
+    assert "sortition_probes must not contain duplicate values" in artifact["errors"]
+    assert (
+        "sortition_probe_count must match unique sortition_probes count"
+        in artifact["errors"]
+    )
+
+
+def test_moderation_commit_reveal_probe_count_must_match_unique_probes(
+    tmp_path: Path,
+) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    moderation = complete_payloads()["moderation_integration"]
+    moderation["commit_reveal_probe_count"] += 1
+    write_json(evidence_dir / "moderation_integration.json", moderation)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["moderation_integration"]["artifacts"][0]
+    assert (
+        "commit_reveal_probe_count must match unique commit_reveal_probes count"
+        in artifact["errors"]
+    )
+
+
+def test_moderation_commit_reveal_probes_must_not_duplicate(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    moderation = complete_payloads()["moderation_integration"]
+    moderation["commit_reveal_probes"].append(
+        dict(moderation["commit_reveal_probes"][0])
+    )
+    moderation["commit_reveal_probe_count"] = len(
+        moderation["commit_reveal_probes"]
+    )
+    write_json(evidence_dir / "moderation_integration.json", moderation)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(evidence_dir),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["moderation_integration"]["artifacts"][0]
+    assert (
+        "commit_reveal_probes must not contain duplicate values"
+        in artifact["errors"]
+    )
+    assert (
+        "commit_reveal_probe_count must match unique commit_reveal_probes count"
+        in artifact["errors"]
+    )
 
 
 def test_enrollment_portal_route_count_must_match_unique_routes(

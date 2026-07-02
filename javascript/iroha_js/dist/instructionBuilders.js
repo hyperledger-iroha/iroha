@@ -918,15 +918,21 @@ function normalizeOptionalHexString(value, name) {
   return compact.toLowerCase();
 }
 
-function normalizeOptionalBase64String(value, name) {
+function normalizeOptionalExactBase64String(value, name) {
   const literal = assertString(value, name);
-  if (literal.length === 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must not be empty`, name);
+  if (literal.length === 0 || literal.trim() !== literal || /\s/u.test(literal)) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be exact standard-base64`, name);
+  }
+  if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(literal) || literal.length % 4 !== 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be exact standard-base64`, name);
   }
   try {
-    Buffer.from(literal, "base64");
+    const decoded = Buffer.from(literal, "base64");
+    if (decoded.length === 0 || decoded.toString("base64") !== literal) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be exact standard-base64`, name);
+    }
   } catch (error) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be valid base64`, name);
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be exact standard-base64`, name);
   }
   return literal;
 }
@@ -11021,7 +11027,10 @@ export function buildMultisigProposeRequest(options) {
   }
   const signatureB64 = source.signatureB64 ?? source.signature_b64;
   if (signatureB64 !== undefined && signatureB64 !== null) {
-    payload.signature_b64 = normalizeOptionalBase64String(signatureB64, "multisigPropose.signatureB64");
+    payload.signature_b64 = normalizeOptionalExactBase64String(
+      signatureB64,
+      "multisigPropose.signatureB64",
+    );
   }
   const creationTimeMs = source.creationTimeMs ?? source.creation_time_ms;
   if (creationTimeMs !== undefined && creationTimeMs !== null) {
@@ -11176,7 +11185,7 @@ export function buildMultisigContractCallProposeRequest(options) {
   }
   const signatureB64 = source.signatureB64 ?? source.signature_b64;
   if (signatureB64 !== undefined && signatureB64 !== null) {
-    payload.signature_b64 = normalizeOptionalBase64String(
+    payload.signature_b64 = normalizeOptionalExactBase64String(
       signatureB64,
       "multisigContractCallPropose.signatureB64",
     );
@@ -11274,7 +11283,7 @@ export function buildMultisigContractCallApproveRequest(options) {
   }
   const signatureB64 = source.signatureB64 ?? source.signature_b64;
   if (signatureB64 !== undefined && signatureB64 !== null) {
-    payload.signature_b64 = normalizeOptionalBase64String(
+    payload.signature_b64 = normalizeOptionalExactBase64String(
       signatureB64,
       "multisigContractCallApprove.signatureB64",
     );

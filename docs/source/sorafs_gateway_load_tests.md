@@ -30,6 +30,10 @@ mark the offending artifact invalid in the emitted summary before the gate can
 report ready. Local conformance artifacts must also keep `scenario_count` equal
 to the unique canonical `scenarios` inventory, and duplicate scenario entries
 fail the artifact before promotion can report ready.
+Staging-load artifacts must also keep `stream_count` and `provider_count` equal
+to the unique canonical `streams[].name` and `providers[].name` inventories, and
+duplicate stream or provider entries fail the artifact before promotion can
+report ready.
 
 ## Objectives
 
@@ -105,8 +109,10 @@ evidence-contract, and command-step shapes before any live gateway-load contact.
 evidence artifacts for local conformance, staging load, telemetry/SLO,
 transport-scope, and governance approval runs. The builder requires reviewed
 deployment context, complete deterministic scenario and metric coverage where
-applicable, suite/staging digest bindings, SLO threshold facts, and validates
-every generated artifact through
+applicable, reviewed staging provider names whose unique inventory matches
+`--provider-count`, generated per-stream inventory labels matching
+`--stream-count`, suite/staging digest bindings, SLO threshold facts, and
+validates every generated artifact through
 `scripts/check_sorafs_gateway_load_rollout_evidence.py` before writing. Checked
 in response-file examples cover the local conformance and staging-load roots.
 

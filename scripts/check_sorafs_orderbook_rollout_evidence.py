@@ -286,6 +286,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "reconciliation": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "peer_count",
+        "peers",
         "contract_digest_hex",
         "source_count",
         "sources",
@@ -491,6 +492,16 @@ def validate_reconciliation(
     options: ValidationOptions,
 ) -> None:
     require_minimum_int(payload, "peer_count", options.min_reconciliation_peers, errors)
+    require_string_inventory_count_match(
+        payload,
+        "peers",
+        "peer_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "peers", errors):
+        require_string(record, "name", errors)
     require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
     require_positive_int(payload, "source_count", errors)
     require_string_coverage(payload, "sources", "name", REQUIRED_RECONCILIATION_SOURCES, errors)

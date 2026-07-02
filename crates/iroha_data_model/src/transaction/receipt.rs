@@ -1,6 +1,6 @@
 //! Transaction submission receipt types and signing helpers.
 
-use iroha_crypto::{HashOf, KeyPair, PublicKey, Signature};
+use iroha_crypto::{Algorithm, HashOf, KeyPair, PublicKey, Signature};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},
@@ -8,6 +8,17 @@ use norito::{
 };
 
 use super::{SignedTransaction, signed::TransactionEntrypoint};
+
+fn verify_signature_for_signer(
+    signature: &Signature,
+    signer: &PublicKey,
+    payload: &[u8],
+) -> Result<(), iroha_crypto::Error> {
+    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    }
+    signature.verify(signer, payload)
+}
 
 /// Domain tag for transaction submission receipt signatures.
 pub const TX_SUBMISSION_RECEIPT_DOMAIN: &str = "iroha.tx.submission.receipt@v1";
@@ -88,8 +99,11 @@ impl TransactionSubmissionReceipt {
     /// # Errors
     /// Returns any signature verification error from `iroha_crypto` if the signature is invalid.
     pub fn verify(&self) -> Result<(), iroha_crypto::Error> {
-        self.signature
-            .verify(&self.payload.signer, &self.payload.signing_bytes())
+        verify_signature_for_signer(
+            &self.signature,
+            &self.payload.signer,
+            &self.payload.signing_bytes(),
+        )
     }
 }
 
@@ -101,10 +115,13 @@ mod tests {
         KeyPair::try_random().expect("generate checked transaction receipt fixture keypair")
     }
 
-    #[test]
-    fn submission_receipt_roundtrips_signature() {
-        let key_pair = checked_random_keypair();
-        let payload = TransactionSubmissionReceiptPayload {
+    fn checked_ed25519_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("generate checked Ed25519 transaction receipt fixture keypair")
+    }
+
+    fn sample_receipt_payload(key_pair: &KeyPair) -> TransactionSubmissionReceiptPayload {
+        TransactionSubmissionReceiptPayload {
             tx_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xA5; 32])),
             entrypoint_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
                 [0xA5; 32],
@@ -115,11 +132,61 @@ mod tests {
             submitted_at_ms: 42,
             submitted_at_height: 7,
             signer: key_pair.public_key().clone(),
-        };
+        }
+    }
+
+    const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_with_malformed_ed25519_r(
+        signature: &Signature,
+        replacement_r: &[u8; 32],
+    ) -> Signature {
+        let mut payload = signature.payload().to_vec();
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
+        Signature::from_bytes(&payload)
+    }
+
+    #[test]
+    fn submission_receipt_roundtrips_signature() {
+        let key_pair = checked_random_keypair();
+        let payload = sample_receipt_payload(&key_pair);
         let receipt = TransactionSubmissionReceipt::try_sign(payload.clone(), &key_pair)
             .expect("sign receipt");
         assert!(receipt.verify().is_ok());
         let receipt = TransactionSubmissionReceipt::sign(payload, &key_pair);
         assert!(receipt.verify().is_ok());
+    }
+
+    #[test]
+    fn submission_receipt_rejects_malformed_ed25519_signature_r() {
+        let key_pair = checked_ed25519_keypair();
+        let receipt =
+            TransactionSubmissionReceipt::sign(sample_receipt_payload(&key_pair), &key_pair);
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            let mut invalid_receipt = receipt.clone();
+            invalid_receipt.signature =
+                signature_with_malformed_ed25519_r(&receipt.signature, &replacement_r);
+
+            assert_eq!(
+                invalid_receipt
+                    .verify()
+                    .expect_err("malformed receipt signature R must fail admission"),
+                iroha_crypto::Error::BadSignature,
+                "{label} receipt signature R was not rejected"
+            );
+        }
     }
 }

@@ -795,6 +795,7 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertThrowsError(try OfflineNotePaymentTokenCodec.decodeText("\(text)\n"))
         XCTAssertThrowsError(try OfflineBearerCashTextCodec.decodePaymentText("\t\(text)"))
         XCTAssertNil(OfflineBearerCashTextCodec.payloadKind(" \(text)"))
+        XCTAssertNil(OfflineBearerCashTextCodec.payloadKind(OfflineNotePaymentTokenCodec.textPrefix + "AB"))
         XCTAssertNil(OfflineBearerCashTextCodec.payloadKind(" wallet-offline-bearer-cash-payment:AAAA"))
         XCTAssertThrowsError(
             try OfflineNotePaymentTokenCodec.decodeText(
@@ -4148,14 +4149,15 @@ final class OfflineNoteTests: XCTestCase {
             clock: { 1_700_000_001_000 }
         )
 
-        let note = try await wallet.load(
+        await XCTAssertThrowsErrorAsync(try await wallet.load(
             assetDefinitionId: Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId),
             amount: fixture.chainVectors.issue.amount
-        )
+        )) { error in
+            XCTAssertEqual(error as? ToriiOfflineNoteIssuerClientError, .retiredOfflineNoteIssue)
+        }
 
-        XCTAssertEqual(note.noteCommitmentHex, derivation.sourceNoteCommitment)
-        XCTAssertEqual(issuerClient.lastIssueRequest?.noteCommitment.hexLowercased(), derivation.sourceNoteCommitment)
-        XCTAssertEqual(note.state, .issuePending)
+        XCTAssertEqual(issuerClient.prepareLoadCount, 0)
+        XCTAssertNil(issuerClient.lastIssueRequest)
     }
 
     func testOfflineNoteWalletRejectsNonPositiveLoadAmounts() async throws {
@@ -4191,7 +4193,7 @@ final class OfflineNoteTests: XCTestCase {
                 assetDefinitionId: assetDefinitionId,
                 amount: invalidAmount
             )) { error in
-                XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("amount"))
+                XCTAssertEqual(error as? ToriiOfflineNoteIssuerClientError, .retiredOfflineNoteIssue)
             }
             XCTAssertEqual(issuerClient.prepareLoadCount, 0)
             XCTAssertNil(issuerClient.lastIssueRequest)
@@ -4227,14 +4229,16 @@ final class OfflineNoteTests: XCTestCase {
         )
         let assetDefinitionId = Self.assetDefinition(fromAssetId: issue.assetId)
 
-        let loaded = try await loadWallet.load(
+        await XCTAssertThrowsErrorAsync(try await loadWallet.load(
             assetDefinitionId: assetDefinitionId,
             amount: "001.2300"
-        )
+        )) { error in
+            XCTAssertEqual(error as? ToriiOfflineNoteIssuerClientError, .retiredOfflineNoteIssue)
+        }
 
-        XCTAssertEqual(issuerClient.lastPrepareLoadAmount, "1.2300")
-        XCTAssertEqual(issuerClient.lastIssueRequest?.amount, "1.2300")
-        XCTAssertEqual(loaded.amount, "1.2300")
+        XCTAssertEqual(issuerClient.prepareLoadCount, 0)
+        XCTAssertNil(issuerClient.lastPrepareLoadAmount)
+        XCTAssertNil(issuerClient.lastIssueRequest)
 
         let issuer = try SoftwareIssuerCertificateSigner(privateKeyByte: 0x82)
         let recipientSigner = try SoftwareOwnerCertificateSigner(privateKeyByte: 0x83)
@@ -4297,14 +4301,7 @@ final class OfflineNoteTests: XCTestCase {
         }
     }
 
-    /// Regression: `Wallet.load(assetDefinitionId:)` must forward the
-    /// asset definition id verbatim to the issuer client. An earlier
-    /// revision derived the value from the SDK-internal 2-part `assetId
-    /// = name#account`, which dropped any suffix after the first `#`
-    /// (e.g. `someBase58Alias#extra` → `someBase58Alias`). The pass-
-    /// through is verified against the Base58 form that the wallet's
-    /// note-commitment encoding requires.
-    func testWalletLoadForwardsAssetDefinitionIdVerbatimToIssuerClient() async throws {
+    func testWalletLoadDoesNotForwardRetiredIssueToIssuerClient() async throws {
         let fixture = try Self.loadFixture()
         let derivation = fixture.chainVectors.derivation
         let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
@@ -4330,26 +4327,17 @@ final class OfflineNoteTests: XCTestCase {
             clock: { 1_700_000_001_000 }
         )
 
-        // The Base58 form is what the wallet's note-commitment encoding
-        // requires (assetId = `<asset-def-base58>#<account>`); the
-        // regression check is that the exact Base58 value is forwarded
-        // to the issuer client, not the substring before any later `#`.
         let assetDefinitionId = Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId)
-        _ = try await wallet.load(
+        await XCTAssertThrowsErrorAsync(try await wallet.load(
             assetDefinitionId: assetDefinitionId,
             amount: fixture.chainVectors.issue.amount
-        )
+        )) { error in
+            XCTAssertEqual(error as? ToriiOfflineNoteIssuerClientError, .retiredOfflineNoteIssue)
+        }
 
-        XCTAssertEqual(
-            issuerClient.lastPrepareLoadAssetDefinitionId,
-            assetDefinitionId,
-            "prepareLoad must receive the assetDefinitionId verbatim; an earlier revision derived it from the SDK-internal assetId which dropped suffixes"
-        )
-        XCTAssertEqual(
-            issuerClient.lastIssueRequest?.assetDefinitionId,
-            assetDefinitionId,
-            "issueNote must receive the assetDefinitionId verbatim; an earlier revision derived it from the SDK-internal assetId which dropped suffixes"
-        )
+        XCTAssertEqual(issuerClient.prepareLoadCount, 0)
+        XCTAssertNil(issuerClient.lastPrepareLoadAssetDefinitionId)
+        XCTAssertNil(issuerClient.lastIssueRequest)
     }
 
     func testToriiIssuerClientBodySignsRefillAndRetiresNoteIssue() async throws {

@@ -51,7 +51,21 @@ Config- and policy-digest mismatches are recorded on the offending artifact in
 the JSON summary before required-kind validity is reported. Quote API, deposit
 lifecycle, and settlement execution artifacts also bind `route_count` to the
 unique canonical `routes[].name` inventory and reject duplicate route entries
-before promotion can report ready. The checker also
+before promotion can report ready. Deposit-lifecycle artifacts also bind
+`deposit_probe_count` to the unique canonical `deposit_probes[].name` inventory,
+require `confirmed_deposit_count` to match the `deposit_probes[].confirmed`
+partition, and reject duplicate deposit-probe entries before promotion can
+report ready. Quote API artifacts also bind `quote_count` and
+`passed_quote_count` to the product of unique `classes` and `urgencies`
+inventories and reject duplicate quote dimension entries before promotion can
+report ready. Settlement execution artifacts also bind `settlement_probe_count`
+to the unique `outcomes` inventory and reject duplicate outcome or
+reconciliation-status entries before promotion can report ready.
+Settlement-submitter artifacts also bind `configured_signer_count` to the unique
+canonical `signers[].name` inventory, bind `queued_step_count` to the unique
+canonical `steps[].name` inventory, require `submitted_step_count` to match the
+`steps[].submitted` partition, and reject duplicate signer or submitter-step
+entries before promotion can report ready. The checker also
 exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and
 `scripts/run_sorafs_appeal_finance_rollout_evidence.py` provides the matching
 reviewed evidence collection planner/runner with a dry-run
@@ -444,9 +458,20 @@ every current evidence kind, requires explicit `--verified-claim` input for
 positive safety claims, complete quote, deposit, settlement, class, urgency,
 outcome, reconciliation-status, payload-kind, and metric coverage where
 applicable, shared `config_digest_hex` binding, and threshold-bounded
-route/settlement facts. Pricing-config and governance-approval canaries both
-require reviewed `--policy-digest-hex` input so the gate can prove governance
-approval was issued for the staged pricing policy. It forces raw instructions,
+route/settlement facts. Deposit-lifecycle canaries also require reviewed
+`--confirmed-deposit-probe` and `--unconfirmed-deposit-probe` labels whose
+unique inventories match `--deposit-probe-count` and
+`--confirmed-deposit-count`. Settlement-submitter canaries also require reviewed
+`--signer`, `--submitted-step`, and `--queued-only-step` labels whose unique
+inventories match the submitter signer and step counts. Governance-DAG
+publication canaries also require reviewed `--report`, `--weekly-rollup`, and
+`--settlement-receipt` labels whose unique inventories match the report,
+weekly rollup, and settlement receipt counts. Multi-peer
+reconciliation canaries also require reviewed peer, validator, and
+reconciliation-case labels whose unique inventories match `--peer-count`,
+`--validator-count`, and `--case-count`. Pricing-config
+and governance-approval canaries both require reviewed `--policy-digest-hex` input so the gate can prove
+governance approval was issued for the staged pricing policy. It forces raw instructions,
 signed transactions, response bodies, private signer material, deposit
 confirmations, raw reports/rollups/receipts, and raw ledger payload inclusion
 flags to `false`, prevalidates the generated artifact with
@@ -475,8 +500,24 @@ reconciliation/governance artifacts carry a `config_digest_hex` matching a
 valid pricing-config artifact in the same bundle, config-bound mismatches are
 attached to the offending artifact in the emitted summary, pricing-config
 artifacts publish valid staged `policy_digest_hex` values, governance approval
-evidence carries a matching `policy_digest_hex`, the multi-peer reconciliation
-run covers at least four peers, and the governance approval is bound to
+evidence carries a matching `policy_digest_hex`, quote API artifacts bind
+`quote_count`/`passed_quote_count` to unique class and urgency inventories,
+deposit lifecycle artifacts bind `deposit_probe_count` and
+`confirmed_deposit_count` to reviewed deposit-probe inventories, and the
+settlement execution artifacts bind `settlement_probe_count` to unique outcome
+coverage. Settlement-submitter artifacts bind configured signer and queued/
+submitted step counts to reviewed signer and step inventories.
+Governance-DAG publication artifacts also bind `report_count`,
+`weekly_rollup_count`, and `settlement_receipt_count` to the unique canonical
+`reports[].name`, `weekly_rollups[].name`, and `settlement_receipts[].name`
+inventories and reject duplicate publication entries before promotion can
+report ready. Multi-peer
+reconciliation artifacts also bind `peer_count`, `validator_count`, and
+`case_count` to the unique canonical `peers[].name`, `validators[].name`, and
+`cases[].name` inventories, require `case_count` to match the
+`cases[].reconciled` partition, and reject duplicate peer, validator, or case
+entries before promotion can report ready. The multi-peer reconciliation run covers at least four peers, and the
+governance approval is bound to
 `iroha_config`. The collection planner includes the checker-backed
 `evidence_contract` map in `--dry-run` output so operators can review the exact
 SFM-4b2 artifact contract before promoting staged evidence. The shared runner

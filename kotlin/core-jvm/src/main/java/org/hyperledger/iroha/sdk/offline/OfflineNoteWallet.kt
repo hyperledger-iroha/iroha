@@ -1412,110 +1412,9 @@ class OfflineNoteWallet @JvmOverloads constructor(
     fun listNotes(): List<OfflineNoteWalletNote> = store.listNotes()
 
     fun load(assetDefinitionId: String, amount: String): CompletableFuture<OfflineNoteWalletNote> {
-        val issuer = issuerClient ?: return failedFuture(
-            IllegalStateException("Offline Note issuer client is required for load")
+        return failedFuture(
+            IllegalStateException(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE)
         )
-        val canonicalAmount: String
-        try {
-            canonicalAmount = canonicalPositivePaymentAmountString(amount)
-        } catch (error: Throwable) {
-            return failedFuture(error)
-        }
-        val assetId = walletAssetId(assetDefinitionId, accountId)
-        val result = CompletableFuture<OfflineNoteWalletNote>()
-        issuer.prepareLoad(chainId, accountId, assetDefinition(assetId), canonicalAmount)
-            .whenComplete { context, prepareError ->
-                loadExecutor.execute(prepareComplete@{
-                    if (prepareError != null) {
-                        result.completeExceptionally(unwrapCompletion(prepareError))
-                        return@prepareComplete
-                    }
-                    if (context == null) {
-                        result.completeExceptionally(
-                            IllegalStateException("Offline Note issuer returned no load context")
-                        )
-                        return@prepareComplete
-                    }
-                    val noteSecret: ByteArray
-                    val origin: OfflineNote.CommitmentOrigin.IssuerLoad
-                    val noteCommitment: ByteArray
-                    val request: OfflineNoteIssueRequest
-                    try {
-                        requireTrustedIssuerCertificate(context.keyCertificate, accountId)
-                        noteSecret = random32()
-                        origin = OfflineNote.CommitmentOrigin.IssuerLoad(
-                            operationId = context.operationId,
-                            lineageId = context.lineageId,
-                            localRevision = context.localRevision,
-                        )
-                        noteCommitment = deriveNoteCommitment(
-                            keyCertificate = context.keyCertificate,
-                            assetId = assetId,
-                            amount = canonicalAmount,
-                            noteSecret = noteSecret,
-                            origin = origin,
-                        )
-                        request = OfflineNoteIssueRequest(
-                            chainId = chainId,
-                            accountId = accountId,
-                            assetDefinitionId = assetDefinition(assetId),
-                            assetId = assetId,
-                            amount = canonicalAmount,
-                            loadContext = context,
-                            noteCommitment = noteCommitment,
-                        )
-                    } catch (error: Throwable) {
-                        result.completeExceptionally(error)
-                        return@prepareComplete
-                    }
-                    val issueFuture = try {
-                        issuer.issueNote(request)
-                    } catch (error: Throwable) {
-                        result.completeExceptionally(error)
-                        return@prepareComplete
-                    }
-                    issueFuture.whenComplete { response, issueError ->
-                        loadExecutor.execute(issueComplete@{
-                            if (issueError != null) {
-                                result.completeExceptionally(unwrapCompletion(issueError))
-                                return@issueComplete
-                            }
-                            if (response == null) {
-                                result.completeExceptionally(
-                                    IllegalStateException("Offline Note issuer returned no issue response")
-                                )
-                                return@issueComplete
-                            }
-                            try {
-                                require(response.noteCommitment().contentEquals(noteCommitment)) {
-                                    "issuer returned a different Offline Note commitment"
-                                }
-                                val issuedCertificate = response.keyCertificate ?: context.keyCertificate
-                                requireTrustedIssuerCertificate(issuedCertificate, accountId)
-                                val now = clock.getAsLong()
-                                val issued = OfflineNoteWalletNote(
-                                    chainId = chainId,
-                                    accountId = accountId,
-                                    assetId = assetId,
-                                    amount = canonicalAmount,
-                                    keyCertificate = issuedCertificate,
-                                    noteCommitment = noteCommitment,
-                                    noteSecret = noteSecret,
-                                    origin = origin,
-                                    state = OfflineNoteWalletNoteState.ISSUE_PENDING,
-                                    createdAtMs = now,
-                                    updatedAtMs = now,
-                                )
-                                store.upsert(issued)
-                                result.complete(issued)
-                            } catch (error: Throwable) {
-                                result.completeExceptionally(error)
-                            }
-                        })
-                    }
-                })
-            }
-        return result
     }
 
     fun prepareReceive(assetDefinitionId: String, amount: String): OfflineNoteReceiveRequest {
@@ -2182,7 +2081,11 @@ private fun strictBase64UrlDecode(value: String, field: String): ByteArray {
         "$field must be unpadded base64url"
     }
     require(value.all(::isBase64UrlCharacter)) { "$field must be unpadded base64url" }
-    return Base64.getUrlDecoder().decode(value)
+    val decoded = Base64.getUrlDecoder().decode(value)
+    require(Base64.getUrlEncoder().withoutPadding().encodeToString(decoded) == value) {
+        "$field must be canonical unpadded base64url"
+    }
+    return decoded
 }
 
 private fun isBase64UrlCharacter(value: Char): Boolean =

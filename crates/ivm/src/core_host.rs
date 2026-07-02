@@ -2398,7 +2398,14 @@ impl IVMHost for CoreHost {
                     return Ok(Self::pointer_gas(0));
                 }
                 let ptr = vm.register(10);
-                let tlv = self.decode_tlv(vm, ptr, PointerType::NoritoBytes)?;
+                // Public JSON Blob parameters carry the inner pointer TLV directly.
+                // NoritoBytes remains the canonical carrier for explicit wrappers.
+                let tlv = self
+                    .decode_tlv(vm, ptr, PointerType::NoritoBytes)
+                    .or_else(|err| match err {
+                        VMError::AbiTypeNotAllowed { .. } => Err(err),
+                        _ => self.decode_tlv(vm, ptr, PointerType::Blob),
+                    })?;
                 let encoded_len = tlv.payload.len();
                 let policy = vm.syscall_policy();
                 let (inner_type, inner_version, inner_payload) = {

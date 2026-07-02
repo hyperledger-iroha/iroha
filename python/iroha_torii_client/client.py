@@ -4521,7 +4521,7 @@ class ToriiClient:
                 signature_b64,
                 "bridge proof submit.signature_b64",
             )
-            payload["signature_b64"] = self._normalize_required_base64_payload(
+            payload["signature_b64"] = self._normalize_required_exact_base64_payload(
                 signature_b64,
                 "bridge proof submit.signature_b64",
             )
@@ -4619,7 +4619,7 @@ class ToriiClient:
                 signature_b64,
                 "bridge message submit.signature_b64",
             )
-            payload["signature_b64"] = self._normalize_required_base64_payload(
+            payload["signature_b64"] = self._normalize_required_exact_base64_payload(
                 signature_b64,
                 "bridge message submit.signature_b64",
             )
@@ -5963,6 +5963,9 @@ class ToriiClient:
         code_b64: str,
         contract_alias: str,
         lease_expiry_ms: Optional[int] = None,
+        gas_asset_id: Optional[str] = None,
+        fee_sponsor: Optional[str] = None,
+        gas_limit: Any = None,
     ) -> Optional[ContractDeployResponse]:
         """Deploy bytecode via ``POST /v1/contracts/deploy``."""
 
@@ -5991,6 +5994,21 @@ class ToriiClient:
         )
         if lease_expiry_value is not None:
             payload["lease_expiry_ms"] = lease_expiry_value
+        if gas_asset_id is not None:
+            payload["gas_asset_id"] = self._require_non_empty_string(
+                gas_asset_id,
+                "deploy_contract.gas_asset_id",
+            )
+        if fee_sponsor is not None:
+            payload["fee_sponsor"] = self._normalize_canonical_account_id(
+                fee_sponsor,
+                "deploy_contract.fee_sponsor",
+            )
+        if gas_limit is not None:
+            gas_limit_value = self._coerce_int(gas_limit, "deploy_contract.gas_limit")
+            if gas_limit_value <= 0:
+                raise ValueError("deploy_contract.gas_limit must be positive")
+            payload["gas_limit"] = gas_limit_value
         response = self._request(
             "POST",
             "/v1/contracts/deploy",
@@ -6150,7 +6168,7 @@ class ToriiClient:
                 expected_length=64,
             )
         if signature_b64 is not None:
-            request_payload["signature_b64"] = self._normalize_required_base64_payload(
+            request_payload["signature_b64"] = self._normalize_required_exact_base64_payload(
                 signature_b64,
                 "propose_multisig.signature_b64",
             )
@@ -8039,6 +8057,21 @@ class ToriiClient:
             raise RuntimeError(f"{context} must be a valid base64 payload") from exc
         if not decoded:
             raise RuntimeError(f"{context} must not decode to empty bytes")
+        return literal
+
+    @staticmethod
+    def _normalize_required_exact_base64_payload(value: Any, context: str) -> str:
+        literal = _require_exact_non_empty_string(value, context)
+        if any(char.isspace() for char in literal):
+            raise ValueError(f"{context} must be exact standard-base64")
+        try:
+            decoded = base64.b64decode(literal, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise RuntimeError(f"{context} must be a valid base64 payload") from exc
+        if not decoded:
+            raise RuntimeError(f"{context} must not decode to empty bytes")
+        if base64.b64encode(decoded).decode("ascii") != literal:
+            raise ValueError(f"{context} must be exact standard-base64")
         return literal
 
     @staticmethod

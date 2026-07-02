@@ -49,6 +49,8 @@ def multi_provider_probe(
     tiers: list[str] | None = None,
 ) -> dict:
     payload = base("sorafs.potr.multi_provider_probe_canary.v1")
+    providers = [{"name": f"provider-{index:02d}"} for index in range(provider_count)]
+    receipts = [{"name": f"receipt-{index:02d}"} for index in range(receipt_count)]
     payload.update(
         {
             "tiers_observed": ["hot", "warm"] if tiers is None else tiers,
@@ -58,7 +60,9 @@ def multi_provider_probe(
             "proof_stream_replay_verified": True,
             "trace_correlation_verified": True,
             "provider_count": provider_count,
+            "providers": providers,
             "receipt_count": receipt_count,
+            "receipts": receipts,
             "max_hot_latency_ms": hot_latency_ms,
             "max_warm_latency_ms": warm_latency_ms,
             "receipt_summary_digest_hex": DIGEST,
@@ -293,6 +297,66 @@ def test_probe_requires_minimum_receipt_count(tmp_path: Path) -> None:
     write_json(tmp_path / "multi-provider-probe.json", multi_provider_probe(receipt_count=5))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_probe_provider_count_must_match_unique_providers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_provider_probe()
+    payload["provider_count"] += 1
+    write_json(tmp_path / "multi-provider-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_provider_probe"]["artifacts"][0]
+    assert "provider_count must match unique providers count" in artifact["errors"]
+
+
+def test_probe_providers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_provider_probe()
+    payload["providers"].append(dict(payload["providers"][0]))
+    payload["provider_count"] = len(payload["providers"])
+    write_json(tmp_path / "multi-provider-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_provider_probe"]["artifacts"][0]
+    assert "providers must not contain duplicate values" in artifact["errors"]
+    assert "provider_count must match unique providers count" in artifact["errors"]
+
+
+def test_probe_receipt_count_must_match_unique_receipts(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_provider_probe()
+    payload["receipt_count"] += 1
+    write_json(tmp_path / "multi-provider-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_provider_probe"]["artifacts"][0]
+    assert "receipt_count must match unique receipts count" in artifact["errors"]
+
+
+def test_probe_receipts_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_provider_probe()
+    payload["receipts"].append(dict(payload["receipts"][0]))
+    payload["receipt_count"] = len(payload["receipts"])
+    write_json(tmp_path / "multi-provider-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_provider_probe"]["artifacts"][0]
+    assert "receipts must not contain duplicate values" in artifact["errors"]
+    assert "receipt_count must match unique receipts count" in artifact["errors"]
 
 
 def test_hot_latency_above_threshold_fails(tmp_path: Path) -> None:

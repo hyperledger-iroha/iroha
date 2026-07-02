@@ -87,6 +87,29 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    count_option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return reviewed unique inventory labels whose count matches a CLI count."""
+
+    items = list(values)
+    if not items:
+        errors.append(f"{option} is required for proof_generation")
+    for index, item in enumerate(items):
+        validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+    unique_items = set(items)
+    if len(unique_items) != len(items):
+        errors.append(f"{option} must not contain duplicates")
+    if len(unique_items) != expected_count:
+        errors.append(f"{option} unique values must match {count_option}")
+    return items
+
+
 def validate_output_path(path: Path, errors: list[str]) -> None:
     """Reject unsafe output targets before writing a canary artifact."""
 
@@ -171,6 +194,12 @@ def build_route_records(args: argparse.Namespace) -> list[dict[str, Any]]:
     ]
 
 
+def build_inventory_records(names: Sequence[str]) -> list[dict[str, str]]:
+    """Build reviewed payload-free inventory records."""
+
+    return [{"name": name} for name in names]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free PDP rollout canary payload."""
 
@@ -196,8 +225,11 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "provider_count": args.provider_count,
+                "providers": build_inventory_records(args.providers),
                 "challenge_count": args.challenge_count,
+                "challenges": build_inventory_records(args.challenges),
                 "proof_count": args.proof_count,
+                "proofs": build_inventory_records(args.proofs),
                 "provider_signatures_verified": True,
                 "manifest_binding_verified": True,
                 "commitment_binding_verified": True,
@@ -330,6 +362,28 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         )
         if args.route_status_code < 200 or args.route_status_code > 299:
             errors.append("--route-status-code must be a 2xx HTTP status code")
+    elif args.kind == "proof_generation":
+        args.providers = validate_reviewed_inventory(
+            split_csv_values(args.provider),
+            expected_count=args.provider_count,
+            option="--provider",
+            count_option="--provider-count",
+            errors=errors,
+        )
+        args.challenges = validate_reviewed_inventory(
+            split_csv_values(args.challenge),
+            expected_count=args.challenge_count,
+            option="--challenge",
+            count_option="--challenge-count",
+            errors=errors,
+        )
+        args.proofs = validate_reviewed_inventory(
+            split_csv_values(args.proof),
+            expected_count=args.proof_count,
+            option="--proof",
+            count_option="--proof-count",
+            errors=errors,
+        )
     elif args.kind == "validator_replay":
         require_kind_options(
             args,
@@ -466,6 +520,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--archive-summary-digest-hex")
     parser.add_argument("--policy-digest-hex")
     parser.add_argument("--provider-roster-digest-hex")
+    parser.add_argument("--provider", action="append", default=[])
+    parser.add_argument("--challenge", action="append", default=[])
+    parser.add_argument("--proof", action="append", default=[])
     parser.add_argument("--route", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)

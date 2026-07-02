@@ -238,6 +238,30 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    kind: str,
+    count_option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return reviewed unique inventory labels whose count matches a CLI count."""
+
+    items = list(values)
+    if not items:
+        errors.append(f"{option} is required for {kind}")
+    for index, item in enumerate(items):
+        validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+    unique_items = set(items)
+    if len(unique_items) != len(items):
+        errors.append(f"{option} must not contain duplicates")
+    if len(unique_items) != expected_count:
+        errors.append(f"{option} unique values must match {count_option}")
+    return items
+
+
 def validate_output_path(path: Path, errors: list[str]) -> None:
     """Reject unsafe output targets before writing a canary artifact."""
 
@@ -337,6 +361,42 @@ def build_route_records(args: argparse.Namespace, routes: Sequence[str]) -> list
     ]
 
 
+def build_inventory_records(names: Sequence[str]) -> list[dict[str, str]]:
+    """Build reviewed payload-free inventory records."""
+
+    return [{"name": name} for name in names]
+
+
+def build_case_records(names: Sequence[str]) -> list[dict[str, Any]]:
+    """Build reviewed payload-free appeal-intake case records."""
+
+    return [{"name": name, "accepted": True} for name in names]
+
+
+def build_roster_juror_records(names: Sequence[str]) -> list[dict[str, Any]]:
+    """Build reviewed payload-free sortition roster juror records."""
+
+    return [{"name": name, "eligible": True} for name in names]
+
+
+def build_e2e_case_records(names: Sequence[str]) -> list[dict[str, Any]]:
+    """Build reviewed payload-free end-to-end panel case records."""
+
+    return [{"name": name, "passed": True} for name in names]
+
+
+def build_viewer_session_records(names: Sequence[str]) -> list[dict[str, Any]]:
+    """Build reviewed payload-free evidence-viewer session records."""
+
+    return [{"name": name, "attested": True, "logged": True} for name in names]
+
+
+def build_notification_records(names: Sequence[str]) -> list[dict[str, Any]]:
+    """Build reviewed payload-free juror notification records."""
+
+    return [{"name": name, "delivered": True} for name in names]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free moderation panel rollout canary payload."""
 
@@ -351,6 +411,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "routes": routes,
                 "case_count": args.case_count,
                 "accepted_case_count": args.case_count,
+                "cases": build_case_records(args.cases),
             }
         )
     elif args.kind == "sortition_roster":
@@ -359,6 +420,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "pop_snapshot_digest_hex": args.pop_snapshot_digest_hex,
                 "sortition_seed_hex": args.sortition_seed_hex,
                 "panel_size": args.panel_size,
+                "jurors": build_roster_juror_records(args.roster_jurors),
                 "quorum": args.quorum,
             }
         )
@@ -368,6 +430,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "session_count": args.session_count,
                 "attested_session_count": args.session_count,
                 "logged_session_count": args.session_count,
+                "sessions": build_viewer_session_records(args.viewer_sessions),
                 "max_url_ttl_secs": args.max_url_ttl_secs,
                 "roles_tested": args.viewer_roles,
                 "viewer_security_controls": args.viewer_security_controls,
@@ -395,7 +458,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "notification_count": args.notification_count,
                 "delivered_notification_count": args.notification_count,
+                "notifications": build_notification_records(args.notifications),
                 "juror_count": args.juror_count,
+                "jurors": build_inventory_records(args.jurors),
             }
         )
     elif args.kind == "commit_reveal":
@@ -407,7 +472,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "routes": routes,
                 "panel_size": args.panel_size,
                 "commit_count": args.commit_count,
+                "commits": build_inventory_records(args.commits),
                 "reveal_count": args.reveal_count,
+                "reveals": build_inventory_records(args.reveals),
                 "max_event_lag_seconds": args.max_event_lag_seconds,
                 "scenarios_exercised": args.scenarios_exercised,
             }
@@ -423,7 +490,12 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     elif args.kind == "settlement_integration":
-        payload["settlement_count"] = args.settlement_count
+        payload.update(
+            {
+                "settlement_count": args.settlement_count,
+                "settlements": build_inventory_records(args.settlements),
+            }
+        )
     elif args.kind == "transparency_reputation":
         payload["publication_targets"] = args.publication_targets
     elif args.kind == "e2e_panel":
@@ -431,8 +503,11 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "policy_digest_hex": args.policy_digest_hex,
                 "peer_count": args.peer_count,
+                "peers": build_inventory_records(args.peers),
                 "validator_count": args.validator_count,
+                "validators": build_inventory_records(args.validators),
                 "case_count": args.case_count,
+                "cases": build_e2e_case_records(args.panel_cases),
                 "unexpected_failure_count": 0,
             }
         )
@@ -483,6 +558,14 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
     )
     if args.kind == "appeal_intake":
         require_kind_options(args, errors, (("--case-count", args.case_count),))
+        args.cases = validate_reviewed_inventory(
+            split_csv_values(args.case),
+            expected_count=args.case_count or 0,
+            option="--case",
+            kind="appeal_intake",
+            count_option="--case-count",
+            errors=errors,
+        )
         args.intake_routes = validate_name_set(
             split_csv_values(args.intake_route),
             allowed=REQUIRED_INTAKE_ROUTES,
@@ -508,6 +591,14 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
         validate_hex64(
             args.sortition_seed_hex,
             option="--sortition-seed-hex",
+            errors=errors,
+        )
+        args.roster_jurors = validate_reviewed_inventory(
+            split_csv_values(args.roster_juror),
+            expected_count=args.panel_size or 0,
+            option="--roster-juror",
+            kind="sortition_roster",
+            count_option="--panel-size",
             errors=errors,
         )
     elif args.kind == "evidence_viewer":
@@ -549,6 +640,14 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--viewer-export-target",
             errors=errors,
         )
+        args.viewer_sessions = validate_reviewed_inventory(
+            split_csv_values(args.viewer_session),
+            expected_count=args.session_count or 0,
+            option="--viewer-session",
+            kind="evidence_viewer",
+            count_option="--session-count",
+            errors=errors,
+        )
         for option, value in (
             ("--session-manifest-digest-hex", args.session_manifest_digest_hex),
             ("--watermark-metadata-digest-hex", args.watermark_metadata_digest_hex),
@@ -574,6 +673,28 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--juror-count", args.juror_count),
             ),
         )
+        args.notifications = validate_reviewed_inventory(
+            split_csv_values(args.notification),
+            expected_count=args.notification_count or 0,
+            option="--notification",
+            kind="juror_notifications",
+            count_option="--notification-count",
+            errors=errors,
+        )
+        args.jurors = validate_reviewed_inventory(
+            split_csv_values(args.juror),
+            expected_count=args.juror_count or 0,
+            option="--juror",
+            kind="juror_notifications",
+            count_option="--juror-count",
+            errors=errors,
+        )
+        if (
+            args.notification_count is not None
+            and args.juror_count is not None
+            and args.juror_count > args.notification_count
+        ):
+            errors.append("--juror-count must be <= --notification-count")
     elif args.kind == "commit_reveal":
         require_kind_options(
             args,
@@ -585,6 +706,28 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--max-event-lag-seconds", args.max_event_lag_seconds),
             ),
         )
+        args.commits = validate_reviewed_inventory(
+            split_csv_values(args.commit),
+            expected_count=args.commit_count or 0,
+            option="--commit",
+            kind="commit_reveal",
+            count_option="--commit-count",
+            errors=errors,
+        )
+        args.reveals = validate_reviewed_inventory(
+            split_csv_values(args.reveal),
+            expected_count=args.reveal_count or 0,
+            option="--reveal",
+            kind="commit_reveal",
+            count_option="--reveal-count",
+            errors=errors,
+        )
+        if (
+            args.commit_count is not None
+            and args.reveal_count is not None
+            and args.reveal_count > args.commit_count
+        ):
+            errors.append("--reveal-count must be <= --commit-count")
         args.ballot_routes = validate_name_set(
             split_csv_values(args.ballot_route),
             allowed=REQUIRED_BALLOT_ROUTES,
@@ -616,6 +759,14 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             errors,
             (("--settlement-count", args.settlement_count),),
         )
+        args.settlements = validate_reviewed_inventory(
+            split_csv_values(args.settlement),
+            expected_count=args.settlement_count or 0,
+            option="--settlement",
+            kind="settlement_integration",
+            count_option="--settlement-count",
+            errors=errors,
+        )
     elif args.kind == "transparency_reputation":
         args.publication_targets = validate_name_set(
             split_csv_values(args.publication_target),
@@ -639,6 +790,30 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             errors.append(f"--peer-count must be >= {DEFAULT_MIN_PEERS}")
         if args.validator_count is not None and args.validator_count < DEFAULT_MIN_PEERS:
             errors.append(f"--validator-count must be >= {DEFAULT_MIN_PEERS}")
+        args.peers = validate_reviewed_inventory(
+            split_csv_values(args.peer),
+            expected_count=args.peer_count or 0,
+            option="--peer",
+            kind="e2e_panel",
+            count_option="--peer-count",
+            errors=errors,
+        )
+        args.validators = validate_reviewed_inventory(
+            split_csv_values(args.validator),
+            expected_count=args.validator_count or 0,
+            option="--validator",
+            kind="e2e_panel",
+            count_option="--validator-count",
+            errors=errors,
+        )
+        args.panel_cases = validate_reviewed_inventory(
+            split_csv_values(args.panel_case),
+            expected_count=args.case_count or 0,
+            option="--panel-case",
+            kind="e2e_panel",
+            count_option="--case-count",
+            errors=errors,
+        )
     elif args.kind == "metrics_alerts":
         args.metrics = validate_name_set(
             split_csv_values(args.metric),
@@ -754,11 +929,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=40)
     parser.add_argument("--intake-route", action="append", default=[])
     parser.add_argument("--case-count", type=positive_int_arg)
+    parser.add_argument("--case", action="append", default=[])
     parser.add_argument("--pop-snapshot-digest-hex")
     parser.add_argument("--sortition-seed-hex")
     parser.add_argument("--panel-size", type=positive_int_arg)
+    parser.add_argument("--roster-juror", action="append", default=[])
     parser.add_argument("--quorum", type=positive_int_arg)
     parser.add_argument("--session-count", type=positive_int_arg)
+    parser.add_argument("--viewer-session", action="append", default=[])
     parser.add_argument("--max-url-ttl-secs", type=positive_int_arg)
     parser.add_argument("--viewer-role", action="append", default=[])
     parser.add_argument("--viewer-security-control", action="append", default=[])
@@ -772,18 +950,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--audit-digest-hex")
     parser.add_argument("--operator-route", action="append", default=[])
     parser.add_argument("--notification-count", type=positive_int_arg)
+    parser.add_argument("--notification", action="append", default=[])
     parser.add_argument("--juror-count", type=positive_int_arg)
+    parser.add_argument("--juror", action="append", default=[])
     parser.add_argument("--ballot-route", action="append", default=[])
     parser.add_argument("--commit-count", type=positive_int_arg)
+    parser.add_argument("--commit", action="append", default=[])
     parser.add_argument("--reveal-count", type=positive_int_arg)
+    parser.add_argument("--reveal", action="append", default=[])
     parser.add_argument("--max-event-lag-seconds", type=non_negative_int_arg)
     parser.add_argument("--scenario", action="append", default=[])
     parser.add_argument("--decision-route", action="append", default=[])
     parser.add_argument("--outcome", action="append", default=[])
     parser.add_argument("--settlement-count", type=positive_int_arg)
+    parser.add_argument("--settlement", action="append", default=[])
     parser.add_argument("--publication-target", action="append", default=[])
     parser.add_argument("--peer-count", type=positive_int_arg)
+    parser.add_argument("--peer", action="append", default=[])
     parser.add_argument("--validator-count", type=positive_int_arg)
+    parser.add_argument("--validator", action="append", default=[])
+    parser.add_argument("--panel-case", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--policy-digest-hex")
     raw_args = sys.argv[1:] if argv is None else argv

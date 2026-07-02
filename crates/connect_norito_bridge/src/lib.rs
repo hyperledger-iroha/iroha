@@ -86,7 +86,7 @@ use zeroize::Zeroizing;
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 14;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 const SORAFS_ORDERBOOK_SIDE_BID: u32 = 1;
 const SORAFS_ORDERBOOK_SIDE_ASK: u32 = 2;
@@ -4344,9 +4344,9 @@ pub unsafe extern "C" fn connect_norito_verify_detached(
         let message = unsafe { slice::from_raw_parts(message_ptr, message_len as usize) };
         let signature_bytes =
             unsafe { slice::from_raw_parts(signature_ptr, signature_len as usize) };
-        let signature = match Signature::try_from_bytes(signature_bytes) {
-            Ok(signature) => signature,
-            Err(_) => return Ok(()),
+        let signature = match connect_signature_from_algorithm_bytes(algorithm, signature_bytes) {
+            Some(signature) => signature,
+            None => return Ok(()),
         };
         match signature.verify(&public_key, message) {
             Ok(()) => {
@@ -5377,11 +5377,17 @@ fn connect_wallet_signature_from_algorithm_bytes(
     algorithm: Algorithm,
     signature: &[u8],
 ) -> Option<proto::WalletSignatureV1> {
+    connect_signature_from_algorithm_bytes(algorithm, signature)
+        .map(|signature| proto::WalletSignatureV1::new(algorithm, signature))
+}
+
+fn connect_signature_from_algorithm_bytes(
+    algorithm: Algorithm,
+    signature: &[u8],
+) -> Option<Signature> {
     match algorithm {
-        Algorithm::Ed25519 => proto::WalletSignatureV1::from_ed25519_bytes(signature),
-        _ => Signature::try_from_bytes(signature)
-            .ok()
-            .map(|signature| proto::WalletSignatureV1::new(algorithm, signature)),
+        Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(signature).ok(),
+        _ => Signature::try_from_bytes(signature).ok(),
     }
 }
 
@@ -8456,6 +8462,73 @@ fn kagemusha_recursive_spend_append_from_request_archive(
     .map_err(|_| BridgeError::KagemushaProve)
 }
 
+/// Prepare the initial online-to-offline Kagemusha top-up instruction.
+///
+/// Input is Norito archive bytes of
+/// `iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1`.
+/// Output is Norito archive bytes of
+/// `iroha_data_model::isi::offline::KagemushaTransfer`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup(
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_instruction_ptr: *mut *mut c_uchar,
+    out_instruction_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_instruction_ptr, out_instruction_len)?;
+        let bytes =
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
+        let instruction = kagemusha_recursive_spend_topup_from_init_request_archive(&bytes)?;
+        let archive = norito::to_bytes(&instruction).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe {
+            write_kagemusha_archive_bridge(out_instruction_ptr, out_instruction_len, &archive)
+        }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+fn kagemusha_recursive_spend_topup_from_init_request_archive(
+    request_archive: &[u8],
+) -> BridgeResult<iroha_data_model::isi::offline::KagemushaTransfer> {
+    use iroha_core::zk::{
+        kagemusha_verified_folded_public_inputs_from_record_bundle,
+        kagemusha_verified_folded_public_inputs_from_record_bundle_at_height,
+    };
+    use iroha_data_model::{
+        isi::offline::KagemushaTransfer, offline::KagemushaRecursiveSpendInitRequestV1,
+    };
+
+    let request: KagemushaRecursiveSpendInitRequestV1 =
+        norito::decode_from_bytes(request_archive).map_err(|_| BridgeError::KagemushaProve)?;
+    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)?;
+    request
+        .validate_public_binding()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    let _public_inputs = match request.block_height {
+        Some(block_height) => kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(
+            &request.record_bundle,
+            block_height,
+        ),
+        None => kagemusha_verified_folded_public_inputs_from_record_bundle(&request.record_bundle),
+    }
+    .map_err(|_| BridgeError::KagemushaProve)?;
+    let step = request
+        .record_bundle
+        .bundle
+        .steps
+        .first()
+        .ok_or(BridgeError::KagemushaProve)?;
+    Ok(KagemushaTransfer::new(
+        request.record_bundle.bundle.asset.clone(),
+        step.input_nullifiers.clone(),
+        step.output_commitments.clone(),
+        step.attachment.clone(),
+        Some(step.root_before),
+    ))
+}
+
 /// Build the canonical Reserved-lineage transition profile for an init request.
 ///
 /// Input is Norito archive bytes of
@@ -10265,6 +10338,16 @@ mod offline_note_prover_tests {
         norito::decode_from_bytes(&out).expect("decode Kagemusha recursive spend lineage witness")
     }
 
+    fn decode_kagemusha_transfer(
+        out_ptr: *mut c_uchar,
+        out_len: c_ulong,
+    ) -> iroha_data_model::isi::offline::KagemushaTransfer {
+        assert!(!out_ptr.is_null(), "prover output pointer must be set");
+        let out = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        connect_norito_free(out_ptr);
+        norito::decode_from_bytes(&out).expect("decode Kagemusha transfer")
+    }
+
     fn mutate_kagemusha_bundle_hop_envelope(
         bundle: &mut KagemushaVerifiedFoldBundle,
         mutate: impl FnOnce(&mut iroha_data_model::zk::OpenVerifyEnvelope),
@@ -10490,7 +10573,7 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_abi_version_advertises_sorafs_hedging_validation() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 14);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 15);
     }
 
     #[test]
@@ -11787,7 +11870,7 @@ mod offline_note_prover_tests {
         type RecursiveSpendFfi =
             unsafe extern "C" fn(*const c_uchar, c_ulong, *mut *mut c_uchar, *mut c_ulong) -> c_int;
 
-        let entries: [(&str, RecursiveSpendFfi); 8] = [
+        let entries: [(&str, RecursiveSpendFfi); 9] = [
             (
                 "init",
                 connect_norito_kagemusha_recursive_spend_init as RecursiveSpendFfi,
@@ -11795,6 +11878,10 @@ mod offline_note_prover_tests {
             (
                 "append",
                 connect_norito_kagemusha_recursive_spend_append as RecursiveSpendFfi,
+            ),
+            (
+                "top-up",
+                connect_norito_kagemusha_recursive_spend_topup as RecursiveSpendFfi,
             ),
             (
                 "transition profile init",
@@ -12022,6 +12109,64 @@ mod offline_note_prover_tests {
             "missing Reserved-lineage key artifacts must not return bytes"
         );
         assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_topup_bridge_builds_transfer_from_init_request() {
+        let request = sample_recursive_spend_init_request_for_transition_profile();
+        let step = request
+            .record_bundle
+            .bundle
+            .steps
+            .first()
+            .expect("sample init request has one checked hop")
+            .clone();
+        let archive = norito::to_bytes(&request).expect("encode top-up init request");
+
+        let instruction = kagemusha_recursive_spend_topup_from_init_request_archive(&archive)
+            .expect("top-up bridge accepts valid checked one-hop init request");
+        assert_eq!(instruction.asset, request.record_bundle.bundle.asset);
+        assert_eq!(instruction.inputs, step.input_nullifiers);
+        assert_eq!(instruction.outputs, step.output_commitments);
+        assert_eq!(instruction.proof, step.attachment);
+        assert_eq!(instruction.root_hint, Some(step.root_before));
+
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let status = unsafe {
+            connect_norito_kagemusha_recursive_spend_topup(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, 0);
+        let ffi_instruction = decode_kagemusha_transfer(out_ptr, out_len);
+        assert_eq!(ffi_instruction, instruction);
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_topup_bridge_rejects_unchecked_or_wrong_shape_init_requests() {
+        let mut request = sample_recursive_spend_init_request_for_transition_profile();
+        mutate_kagemusha_bundle_hop_envelope(&mut request.record_bundle.bundle, |envelope| {
+            envelope.circuit_id = "bridge-forged-topup-hop-proof-circuit-id".to_owned();
+        });
+        let archive = norito::to_bytes(&request).expect("encode forged top-up init request");
+        assert!(
+            kagemusha_recursive_spend_topup_from_init_request_archive(&archive).is_err(),
+            "top-up bridge must verify the checked fold proof before emitting a transfer"
+        );
+
+        let mut two_hop = sample_recursive_spend_init_request_for_transition_profile();
+        two_hop.record_bundle = sample_two_hop_kagemusha_verified_record_bundle();
+        two_hop.current_note.note_commitment =
+            two_hop.record_bundle.bundle.steps[0].output_commitments[0];
+        let archive = norito::to_bytes(&two_hop).expect("encode two-hop top-up init request");
+        assert!(
+            kagemusha_recursive_spend_topup_from_init_request_archive(&archive).is_err(),
+            "top-up bridge accepts only the one-hop init request shape"
+        );
     }
 
     #[test]
@@ -12720,7 +12865,7 @@ mod offline_note_prover_tests {
                 spend_nullifier: fixed_bytes(b"bridge-lineage-append-current-nullifier"),
                 amount: Numeric::new(7, 0),
             },
-            output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+            output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
                 .to_owned(),
             previous_recursive_proof_open_envelopes_archive,
             lineage_verifier_key: None,
@@ -21839,9 +21984,9 @@ fn java_verify_detached_bytes(
         .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
     let public_key = PublicKey::from_bytes(algorithm, public_key)
         .map_err(|_| "invalid public key bytes".to_string())?;
-    let signature = match Signature::try_from_bytes(signature) {
-        Ok(signature) => signature,
-        Err(_) => return Ok(false),
+    let signature = match connect_signature_from_algorithm_bytes(algorithm, signature) {
+        Some(signature) => signature,
+        None => return Ok(false),
     };
     match signature.verify(&public_key, message) {
         Ok(()) => Ok(true),
@@ -25111,6 +25256,27 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeTopUpSpend(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_recursive_spend_archive(&mut env, request_archive, "top-up", |bytes| {
+        let instruction = kagemusha_recursive_spend_topup_from_init_request_archive(bytes)
+            .map_err(|_| "invalid Kagemusha recursive spend top-up init request".to_owned())?;
+        norito::to_bytes(&instruction)
+            .map_err(|err| format!("failed to encode top-up instruction: {err}"))
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeTransitionProfileInit(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -25582,6 +25748,27 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         let bundle = kagemusha_recursive_spend_append_from_request_archive(bytes)
             .map_err(|_| "invalid Kagemusha recursive spend append request".to_owned())?;
         norito::to_bytes(&bundle).map_err(|err| format!("failed to encode append bundle: {err}"))
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeTopUpSpend(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_recursive_spend_archive(&mut env, request_archive, "top-up", |bytes| {
+        let instruction = kagemusha_recursive_spend_topup_from_init_request_archive(bytes)
+            .map_err(|_| "invalid Kagemusha recursive spend top-up init request".to_owned())?;
+        norito::to_bytes(&instruction)
+            .map_err(|err| format!("failed to encode top-up instruction: {err}"))
     })
 }
 
@@ -27962,12 +28149,26 @@ mod tests {
     #[cfg(feature = "privacy-production-enabled")]
     const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PROVING_FAILED;
 
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
+    }
+
     struct ResetConfig(AccelerationConfig);
 
     impl Drop for ResetConfig {
         fn drop(&mut self) {
             ivm::set_acceleration_config(self.0);
         }
+    }
+
+    fn fixture_key_pair(seed: u8) -> KeyPair {
+        let mut material = [0u8; 32];
+        let domain = b"connect-bridge-test-seed";
+        material[..domain.len()].copy_from_slice(domain);
+        material[31] = seed;
+        KeyPair::try_from_seed(material.to_vec(), Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair")
     }
 
     fn take_privacy_output_bytes(out_ptr: *mut c_uchar, out_len: c_ulong) -> Vec<u8> {
@@ -32375,6 +32576,17 @@ mod tests {
             .expect("generate checked identifier receipt Ed25519 fixture keypair")
     }
 
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     #[test]
     fn identifier_receipt_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_identifier_receipt_ed25519_key_fixture();
@@ -32434,8 +32646,16 @@ mod tests {
         }
     }
 
-    fn sample_identifier_signature_hex() -> String {
-        "ab".repeat(64)
+    fn sample_identifier_receipt_attestation_signer() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x49; 32], Algorithm::Ed25519)
+            .expect("derive canonical identifier receipt attestation signer")
+    }
+
+    fn sample_identifier_signature_hex(payload: &IdentifierResolutionReceiptPayload) -> String {
+        let signer = sample_identifier_receipt_attestation_signer();
+        let signature = SignatureOf::try_new(signer.private_key(), payload)
+            .expect("sign canonical identifier receipt fixture payload");
+        hex::encode(signature.payload())
     }
 
     fn hex_hash(hash: Hash) -> String {
@@ -32586,7 +32806,7 @@ mod tests {
                 ("kind", JsonValue::from("signed")),
                 (
                     "signature",
-                    JsonValue::from(sample_identifier_signature_hex()),
+                    JsonValue::from(sample_identifier_signature_hex(payload)),
                 ),
             ]),
         )
@@ -32629,8 +32849,35 @@ mod tests {
         };
         assert_eq!(
             hex::encode(signature.payload()),
-            sample_identifier_signature_hex()
+            sample_identifier_signature_hex(&payload)
         );
+    }
+
+    #[test]
+    fn parse_identifier_receipt_accepts_mldsa_signed_attestation() {
+        let payload = sample_identifier_receipt_payload();
+        let signer = KeyPair::try_from_seed(b"identifier-receipt-mldsa".to_vec(), Algorithm::MlDsa)
+            .expect("derive ML-DSA identifier receipt attestation signer");
+        let signature = SignatureOf::try_new(signer.private_key(), &payload)
+            .expect("sign ML-DSA identifier receipt fixture payload");
+        let signature_hex = hex::encode(signature.payload());
+        let receipt = parse_identifier_receipt_value(sample_identifier_receipt_json(
+            &payload,
+            json_object([
+                ("kind", JsonValue::from("signed")),
+                ("signature", JsonValue::from(signature_hex.clone())),
+            ]),
+        ))
+        .expect("parse ML-DSA signed structured torii receipt");
+
+        assert_eq!(receipt.payload, payload);
+        let RamLfeReceiptAttestation::Signed(signature) = &receipt.attestation else {
+            panic!("receipt attestation must be signed");
+        };
+        assert_eq!(hex::encode(signature.payload()), signature_hex);
+        receipt
+            .verify(signer.public_key())
+            .expect("ML-DSA identifier receipt signature should verify");
     }
 
     #[test]
@@ -32642,6 +32889,37 @@ mod tests {
         let err = parse_identifier_receipt_value(value)
             .expect_err("all-zero identifier receipt signature must reject");
         assert!(matches!(err, BridgeError::IdentifierReceipt));
+    }
+
+    #[test]
+    fn parse_identifier_receipt_defers_malformed_ed25519_signed_attestation_r() {
+        let payload = sample_identifier_receipt_payload();
+        let signer = sample_identifier_receipt_attestation_signer();
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut signature_bytes =
+                hex::decode(sample_identifier_signature_hex(&payload)).expect("signature hex");
+            signature_bytes[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let mut value = sample_identifier_signed_receipt_json(&payload);
+            set_json_string_at_path(
+                &mut value,
+                &["attestation", "signature"],
+                hex::encode(signature_bytes),
+            );
+
+            let receipt = parse_identifier_receipt_value(value)
+                .expect("malformed Ed25519 identifier receipt signature R stays opaque");
+            let err = receipt
+                .verify(signer.public_key())
+                .expect_err("malformed Ed25519 identifier receipt signature R must not verify");
+            assert!(
+                matches!(err, CryptoError::BadSignature),
+                "{label} signature R produced unexpected verification error: {err:?}"
+            );
+        }
     }
 
     #[test]
@@ -32718,7 +32996,7 @@ mod tests {
             ),
             (
                 vec!["attestation", "signature"],
-                format!("{} ", sample_identifier_signature_hex()),
+                format!("{} ", sample_identifier_signature_hex(&payload)),
             ),
             (vec!["attestation", "kind"], " signed".to_owned()),
         ];
@@ -32805,7 +33083,9 @@ mod tests {
         let err = parse_identifier_receipt_value(json_object([
             (
                 "signature",
-                JsonValue::from(sample_identifier_signature_hex()),
+                JsonValue::from(sample_identifier_signature_hex(
+                    &sample_identifier_receipt_payload(),
+                )),
             ),
             ("signature_payload_hex", JsonValue::from("01020304A0")),
         ]))
@@ -32818,7 +33098,9 @@ mod tests {
         let err = parse_identifier_receipt_value(json_object([
             (
                 "signature",
-                JsonValue::from(sample_identifier_signature_hex()),
+                JsonValue::from(sample_identifier_signature_hex(
+                    &sample_identifier_receipt_payload(),
+                )),
             ),
             (
                 "signature_payload",
@@ -32839,7 +33121,7 @@ mod tests {
         let receipt = IdentifierResolutionReceipt {
             payload: payload.clone(),
             attestation: RamLfeReceiptAttestation::Signed(
-                Signature::from_hex(sample_identifier_signature_hex())
+                Signature::from_hex(sample_identifier_signature_hex(&payload))
                     .expect("valid signature hex"),
             ),
         };
@@ -33041,6 +33323,58 @@ mod tests {
     }
 
     #[test]
+    fn ffi_verify_detached_rejects_noncanonical_ed25519_signature_r() {
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let private = vec![0x11; 32];
+        let message = b"ffi-ed25519-malformed-r";
+        let mut pk_ptr: *mut c_uchar = ptr::null_mut();
+        let mut pk_len: c_ulong = 0;
+        let rc_pk = unsafe {
+            connect_norito_public_key_from_private(
+                Algorithm::Ed25519 as u8,
+                private.as_ptr(),
+                private.len() as c_ulong,
+                &mut pk_ptr,
+                &mut pk_len,
+            )
+        };
+        assert_eq!(rc_pk, 0, "public key derivation must succeed");
+        let public_key = unsafe { slice::from_raw_parts(pk_ptr, pk_len as usize).to_vec() };
+        connect_norito_free(pk_ptr);
+
+        let key_pair =
+            KeyPair::try_from_seed(private, Algorithm::Ed25519).expect("fixture keypair");
+        let mut signature = Signature::try_new(key_pair.private_key(), message)
+            .expect("fixture signature")
+            .payload()
+            .to_vec();
+        signature[..32].copy_from_slice(&NONCANONICAL_R);
+        let mut valid: c_uchar = 1;
+        let rc_verify = unsafe {
+            connect_norito_verify_detached(
+                Algorithm::Ed25519 as u8,
+                public_key.as_ptr(),
+                public_key.len() as c_ulong,
+                message.as_ptr(),
+                message.len() as c_ulong,
+                signature.as_ptr(),
+                signature.len() as c_ulong,
+                &mut valid,
+            )
+        };
+
+        assert_eq!(
+            rc_verify, 0,
+            "verification call must stay fallible only for API errors"
+        );
+        assert_eq!(valid, 0, "noncanonical Ed25519 signature R must not verify");
+    }
+
+    #[test]
     fn ffi_sign_verify_secp256k1() {
         let mut private = [0u8; 32];
         private[31] = 1;
@@ -33104,6 +33438,33 @@ mod tests {
     }
 
     #[test]
+    fn java_detached_verify_helper_rejects_noncanonical_ed25519_signature_r() {
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let private = vec![0x21; 32];
+        let message = b"java-helper-detached-malformed-r";
+        let algorithm = Algorithm::Ed25519 as jni::sys::jint;
+        let public = java_public_key_from_private_bytes(algorithm, &private)
+            .expect("Java public-key helper derives key");
+        let key_pair =
+            KeyPair::try_from_seed(private, Algorithm::Ed25519).expect("fixture keypair");
+        let mut signature = Signature::try_new(key_pair.private_key(), message)
+            .expect("fixture signature")
+            .payload()
+            .to_vec();
+        signature[..32].copy_from_slice(&NONCANONICAL_R);
+
+        assert!(
+            !java_verify_detached_bytes(algorithm, &public, message, &signature)
+                .expect("Java verify helper runs"),
+            "noncanonical Ed25519 signature R must not verify"
+        );
+    }
+
+    #[test]
     fn encode_control_approve_ext_with_alg_rejects_all_zero_signature_material() {
         let sid = [0x11_u8; 32];
         let wallet_pk = [0x22_u8; 32];
@@ -33152,7 +33513,8 @@ mod tests {
         let wallet_pk = [0x22_u8; 32];
         let account = b"wallet-account";
         let algorithm = b"ed25519";
-        let key_pair = fixture_key_pair(0x62);
+        let key_pair =
+            KeyPair::try_from_seed(vec![0x62; 32], Algorithm::Ed25519).expect("fixture keypair");
         let mut signature = Signature::try_new(
             key_pair.private_key(),
             b"connect approve ext with alg malformed R",
@@ -33226,7 +33588,8 @@ mod tests {
             0xff, 0xff, 0xff, 0x7f,
         ];
         let algorithm = b"ed25519";
-        let key_pair = fixture_key_pair(0x63);
+        let key_pair =
+            KeyPair::try_from_seed(vec![0x63; 32], Algorithm::Ed25519).expect("fixture keypair");
         let mut signature = Signature::try_new(
             key_pair.private_key(),
             b"connect envelope sign result malformed R",

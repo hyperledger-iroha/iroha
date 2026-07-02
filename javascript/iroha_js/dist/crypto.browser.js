@@ -424,6 +424,7 @@ export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_comp
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7;
+export const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 15;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1";
 export const KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT =
   "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch";
@@ -462,6 +463,8 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDI
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1 =
   "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME =
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
+export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME =
   "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
 export const KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME =
   "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1";
@@ -1167,6 +1170,10 @@ export function isKagemushaRecursiveSpendNativeAvailable() {
   return false;
 }
 
+export function isKagemushaRecursiveSpendTopUpNativeAvailable() {
+  return false;
+}
+
 export function isKagemushaRecursiveCompactPaymentTokenNativeAvailable() {
   return false;
 }
@@ -1235,6 +1242,10 @@ export function kagemushaRecursiveSpendInit() {
   return unsupported("kagemushaRecursiveSpendInit");
 }
 
+export function kagemushaRecursiveSpendTopUp() {
+  return unsupported("kagemushaRecursiveSpendTopUp");
+}
+
 export function kagemushaRecursiveSpendAppend() {
   return unsupported("kagemushaRecursiveSpendAppend");
 }
@@ -1301,6 +1312,10 @@ export function decodeKagemushaRecursiveSpendBundle() {
 
 export function kagemushaRecursiveSpendInitTyped() {
   return unsupported("kagemushaRecursiveSpendInitTyped");
+}
+
+export function kagemushaRecursiveSpendTopUpTyped() {
+  return unsupported("kagemushaRecursiveSpendTopUpTyped");
 }
 
 export function kagemushaRecursiveSpendAppendTyped() {

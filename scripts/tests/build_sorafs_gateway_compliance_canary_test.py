@@ -69,7 +69,15 @@ def feed_promotion() -> dict:
         "merkle_root_bound": True,
         "update_history_persisted": True,
         "gateway_ack_count": CHECKER.DEFAULT_MIN_GATEWAYS,
+        "gateways": [
+            {"name": f"gateway-{index}"}
+            for index in range(CHECKER.DEFAULT_MIN_GATEWAYS)
+        ],
         "denylist_entry_count": CHECKER.DEFAULT_MIN_DENYLIST_ENTRIES,
+        "denylist_entries": [
+            {"name": f"denylist-entry-{index}"}
+            for index in range(CHECKER.DEFAULT_MIN_DENYLIST_ENTRIES)
+        ],
         "bundle_digest_hex": DIGEST,
         "policy_digest_hex": POLICY_DIGEST,
         "raw_feeds_included": False,
@@ -98,6 +106,16 @@ def controller_args(tmp_path: Path) -> list[str]:
         "--feed-count",
         "7",
     ]
+    for name in (
+        "ofac",
+        "eu-sanctions",
+        "malware",
+        "csam-hash",
+        "legal-hold",
+        "regional-blocklist",
+        "appeal-overrides",
+    ):
+        args.extend(["--feed", name])
     for value in MODULE.CONTROLLER_TRUE_CLAIMS:
         args.extend(["--verified-claim", value])
     return args
@@ -126,6 +144,13 @@ def moderation_args(tmp_path: Path) -> list[str]:
         "--toggle-digest-hex",
         TOGGLE_DIGEST,
     ]
+    for name in (
+        "provider-deny",
+        "appeal-override",
+        "legal-hold",
+        "regional-emergency",
+    ):
+        args.extend(["--toggle", name])
     for value in MODULE.MODERATION_TRUE_CLAIMS:
         args.extend(["--verified-claim", value])
     return args
@@ -142,6 +167,15 @@ def test_builds_payload_free_controller_runtime_canary(tmp_path: Path) -> None:
     assert payload["fetched_feed_count"] == 7
     assert payload["normalized_feed_count"] == 7
     assert payload["signed_feed_count"] == 7
+    assert payload["feeds"] == [
+        {"name": "ofac"},
+        {"name": "eu-sanctions"},
+        {"name": "malware"},
+        {"name": "csam-hash"},
+        {"name": "legal-hold"},
+        {"name": "regional-blocklist"},
+        {"name": "appeal-overrides"},
+    ]
     for claim in MODULE.CONTROLLER_TRUE_CLAIMS:
         assert payload[claim] is True
     for claim in MODULE.FORBIDDEN_PAYLOAD_CLAIMS["controller_runtime"]:
@@ -160,6 +194,12 @@ def test_builds_payload_free_moderation_toggle_canary(tmp_path: Path) -> None:
     assert payload["config_source"] == "iroha_config"
     assert payload["toggle_count"] == 4
     assert payload["approved_toggle_count"] == 4
+    assert payload["toggles"] == [
+        {"name": "provider-deny"},
+        {"name": "appeal-override"},
+        {"name": "legal-hold"},
+        {"name": "regional-emergency"},
+    ]
     assert payload["toggle_digest_hex"] == TOGGLE_DIGEST
     for claim in MODULE.MODERATION_TRUE_CLAIMS:
         assert payload[claim] is True
@@ -234,6 +274,32 @@ def test_missing_verified_claim_fails_closed(tmp_path: Path, capsys) -> None:
     assert not (tmp_path / "controller-runtime.json").exists()
 
 
+def test_missing_controller_feed_inventory_fails_closed(tmp_path: Path, capsys) -> None:
+    args = controller_args(tmp_path)
+    while "--feed" in args:
+        index = args.index("--feed")
+        del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--feed is required for controller_runtime" in captured.err
+    assert not (tmp_path / "controller-runtime.json").exists()
+
+
+def test_duplicate_controller_feed_inventory_fails_closed(tmp_path: Path, capsys) -> None:
+    args = controller_args(tmp_path)
+    args[args.index("--feed-count") + 1] = "8"
+    args.extend(["--feed", "ofac"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--feed must not contain duplicates" in captured.err
+    assert "--feed-count must match the number of unique --feed values" in captured.err
+    assert not (tmp_path / "controller-runtime.json").exists()
+
+
 def test_missing_moderation_toggle_digest_fails_closed(tmp_path: Path, capsys) -> None:
     args = moderation_args(tmp_path)
     index = args.index("--toggle-digest-hex")
@@ -243,6 +309,35 @@ def test_missing_moderation_toggle_digest_fails_closed(tmp_path: Path, capsys) -
 
     captured = capsys.readouterr()
     assert "--toggle-digest-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not (tmp_path / "moderation-toggle.json").exists()
+
+
+def test_missing_moderation_toggle_inventory_fails_closed(tmp_path: Path, capsys) -> None:
+    args = moderation_args(tmp_path)
+    while "--toggle" in args:
+        index = args.index("--toggle")
+        del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--toggle is required for moderation_toggle" in captured.err
+    assert not (tmp_path / "moderation-toggle.json").exists()
+
+
+def test_duplicate_moderation_toggle_inventory_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = moderation_args(tmp_path)
+    args[args.index("--toggle-count") + 1] = "5"
+    args.extend(["--toggle", "provider-deny"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--toggle must not contain duplicates" in captured.err
+    assert "--toggle-count must match the number of unique --toggle values" in captured.err
     assert not (tmp_path / "moderation-toggle.json").exists()
 
 

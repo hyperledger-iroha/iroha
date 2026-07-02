@@ -2239,7 +2239,7 @@ pub mod nexus {
         pub const BPS_TOTAL: u16 = 10_000;
     }
 
-    /// Default number of execution lanes (single-lane placeholder).
+    /// Default number of execution lanes for the primary-lane compatibility profile.
     pub const LANE_COUNT: NonZeroU32 = nonzero!(1u32);
     /// Default alias assigned to the primary lane when no catalog entries are provided.
     pub const DEFAULT_LANE_ALIAS: &str = "default";

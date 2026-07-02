@@ -27977,7 +27977,7 @@ async fn handler_sccp_capabilities(
         crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/capabilities");
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(routing::handle_v1_sccp_capabilities(accept)
+    Ok(routing::handle_v1_sccp_capabilities(&app.state, accept)
         .await?
         .into_response())
 }
@@ -30612,6 +30612,16 @@ fn enforce_sorafs_repair_worker_auth(
             ),
         ));
     };
+    if matches!(
+        signatory.try_algorithm(),
+        Ok(iroha_crypto::Algorithm::Ed25519)
+    ) {
+        iroha_crypto::ed25519_parse_signature(signature.payload()).map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
+                "repair worker signature material malformed: {err}",
+            )))
+        })?;
+    }
     signature.verify(signatory, &payload).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
             "repair worker signature invalid: {err}",
@@ -53130,6 +53140,7 @@ pub(crate) mod tests_runtime_handlers {
             tron_network: "nile".to_owned(),
             chain: "tron-nile".to_owned(),
             chain_id_hex: "0xcd8690dc".to_owned(),
+            ton_finalize_message_value_nano: None,
             explorer_url: None,
             explorer_host: None,
             counterparty_account_codec: None,
@@ -53741,7 +53752,8 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn sccp_capabilities_endpoint_roundtrips_json_and_norito() {
-        let json_response = routing::handle_v1_sccp_capabilities(None)
+        let app = mk_app_state_for_tests();
+        let json_response = routing::handle_v1_sccp_capabilities(app.state.as_ref(), None)
             .await
             .expect("json response");
         assert_eq!(
@@ -53793,9 +53805,10 @@ pub(crate) mod tests_runtime_handlers {
             iroha_sccp::SccpDestinationVerifierPlanV1::TonContractNativeRecursive
         );
 
-        let norito_response = routing::handle_v1_sccp_capabilities(Some(HeaderValue::from_static(
-            crate::utils::NORITO_MIME_TYPE,
-        )))
+        let norito_response = routing::handle_v1_sccp_capabilities(
+            app.state.as_ref(),
+            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
+        )
         .await
         .expect("norito response");
         assert_eq!(
@@ -53908,7 +53921,9 @@ pub(crate) mod tests_runtime_handlers {
         {
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
             let state = Arc::get_mut(&mut app_mut.state).expect("unique core state");
-            state.zk.sccp_route_manifests.push(configured_route.clone());
+            let mut zk = state.zk_snapshot();
+            zk.sccp_route_manifests.push(configured_route.clone());
+            state.set_zk(zk);
         }
 
         let response = routing::handle_v1_sccp_manifests(app.state.as_ref(), None)
@@ -61651,6 +61666,9 @@ pub(crate) mod tests_runtime_handlers {
             contract_alias: "rate-limit::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
             transaction_ttl_ms: None,
+            gas_asset_id: None,
+            fee_sponsor: None,
+            gas_limit: None,
             gov_manifest_approvers: Vec::new(),
         };
         // Exhaust the exact handler key up front so this regression does not depend
@@ -62861,6 +62879,9 @@ pub(crate) mod tests_runtime_handlers {
             contract_alias: "deploy-test::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
             transaction_ttl_ms: None,
+            gas_asset_id: None,
+            fee_sponsor: None,
+            gas_limit: None,
             gov_manifest_approvers: Vec::new(),
         };
         let resp = super::handler_post_contract_deploy(
@@ -65369,6 +65390,72 @@ mod tests {
             &signature,
         );
         assert_eq!(auth.expect("signed worker should be accepted"), worker_id);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn sorafs_repair_worker_auth_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ];
+
+        let app = mk_app_state_for_tests();
+        let report = repair_report("REP-900B", [0x12; 32], [0x23; 32], 1_701_000_020);
+        app.sorafs_node
+            .enqueue_repair_report(&report)
+            .expect("enqueue report");
+
+        let worker_key = checked_torii_test_ed25519_keypair(
+            0x8a,
+            "derive Sorafs malformed-signature repair worker fixture key",
+        );
+        let worker_id = AccountId::new(worker_key.public_key().clone());
+        let worker_id_literal = worker_id.to_string();
+        grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
+
+        let claimed_at = report.submitted_at_unix + 10;
+        let idempotency_key = "claim-900b";
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            manifest_digest: report.evidence.manifest_digest,
+            provider_id: report.evidence.provider_id,
+            worker_id: worker_id_literal.clone(),
+            idempotency_key: idempotency_key.to_string(),
+            action: RepairWorkerActionV1::Claim {
+                claimed_at_unix: claimed_at,
+            },
+        };
+        let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
+            .expect("sign repair worker malformed-signature fixture");
+        let mut signature_payload = signature.payload().to_vec();
+        signature_payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
+            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        let malformed_signature =
+            SignatureOf::from_signature(iroha_crypto::Signature::from_bytes(&signature_payload));
+
+        let auth = enforce_sorafs_repair_worker_auth(
+            &app,
+            &report.ticket_id,
+            &hex::encode(report.evidence.manifest_digest),
+            &worker_id_literal,
+            idempotency_key,
+            RepairWorkerActionV1::Claim {
+                claimed_at_unix: claimed_at,
+            },
+            &malformed_signature,
+        );
+        match auth {
+            Err(Error::Query(ValidationFail::NotPermitted(reason))) => {
+                assert!(
+                    reason.contains("signature material malformed"),
+                    "unexpected rejection reason: {reason}"
+                );
+            }
+            other => panic!("unexpected repair worker auth result: {other:?}"),
+        }
     }
 
     #[cfg(feature = "app_api")]

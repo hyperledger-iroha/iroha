@@ -44,6 +44,9 @@ silently preserve a narrower SCCP support statement.
 Generated release-readiness Markdown and verifier-owned release-bundle Markdown
 also carry the exact no-support sentence so public operator artifacts cannot
 imply hidden Sub&#115;trate/Pol&#107;adot compatibility.
+The retired-network surface guard now decodes nested HTML entities and URL
+percent encodings to stability before matching those retired-family tokens, so
+encoded compatibility wording cannot bypass the active SCCP launch-scope scan.
 The active launch policy is Ethereum-mainnet lane readiness. The active Ethereum launch lane
 can open from complete mainnet source-proof, source-adapter deployment,
 destination rollout, and route-canary evidence without waiting for future
@@ -156,6 +159,14 @@ Release-readiness and bundle verification pin that public blocker-list schema
 as source inventory before published bundle readiness can pass, including
 duplicate rejection, ready-surface empty-blocker checks, and invalid-marker
 rendering for malformed blocker containers.
+Decoded public blocker keys are casefolded consistently in all-lanes evidence,
+standalone readiness, release-bundle generation, and strict verification, so
+encoded or case-varied copied blocker text cannot evade duplicate or checklist
+category routing.
+Lane-local SCCP source, destination, receipt-proof, and live-evidence helper
+CLIs use the same decoded `casefold()` normalization before sensitive-marker
+redaction, and the release public scalar-text source inventory pins those helper
+bodies.
 Sparse inventory checks remove root blocker, copied-corridor blocker,
 padded/duplicate blocker, active-lane blocker, all-lanes root blocker,
 release-note invalid-marker, readiness Markdown invalid-marker, and native
@@ -204,6 +215,14 @@ blockers, and the raw copied path text is not echoed in operator diagnostics.
 Copied `source_inventory` gate names are classified the same way before release
 Markdown can render: non-string, padded, control-character, Markdown-unsafe, and
 non-ASCII gate names become category diagnostics instead of raw public text.
+The readiness renderer, bundle builder, and strict verifier also walk copied
+`source_inventory` gate and row-field keys by exact string keys instead of
+hash/equality-based set membership, so hostile collision keys cannot raise or
+leak before malformed-gate or malformed-field blockers are emitted.
+Strict all-lanes copied lane-schema validation uses the same exact string-key
+traversal for required fields, active-lane selection, and lane-domain consistency,
+so hash-colliding lane keys cannot stand in for canonical release-readiness
+fields.
 It also blocks copied route-canary evidence hashes that replay another lane's
 canary evidence, source-material, destination-binding, or route-allowlist hash
 before release Markdown or JSON is rendered.
@@ -814,6 +833,21 @@ profile-template verifier commitments or aliased verifier roles into later
 deployment steps. This keeps the source-adapter statement format stable while
 leaving the production gate closed until real light-client anchors and immutable
 verifier code hashes are installed.
+Template-derived hash rejection is cross-lane: source-material, deployment, and
+Solana/TON full-light-client audit descriptor hashes cannot reuse any active
+launch lane's profile-template component hash and relabel it as governed live
+verifier material.
+The operator evidence scripts share the same active-template denylist, so ETH,
+BSC, Solana, TON, and TRON release material fails before rendering when any
+source role or Solana/TON audit hash copies another launch lane's template
+digest.
+That shared denylist self-validates lane coverage, field order, non-zero
+bytes32 hashes, duplicate lane roles, and duplicate hash aliases on import, so
+a malformed checked-in template table cannot silently weaken the replay guard.
+Aggregate all-lanes validation, readiness-report public row checks,
+release-bundle construction, and strict bundle verification use that same
+denylist for direct TOML records and copied public source-record, source-gate,
+route-canary, and Solana/TON audit summaries.
 ETH and BSC configured material can satisfy the source-material gate only when
 it matches the canonical mainnet EVM-family profiles and carries
 deployment-supplied component hashes. The
@@ -1386,6 +1420,10 @@ replayed hash match the governed
 `source_bridge_emitter_address` and `source_bridge_emitter_code_hash`. Hash-only
 offline source material is rejected for production launch even if the record
 hashes are internally consistent.
+BSC governed source-adapter deployment material is additionally pinned to the
+source bridge network id, owner address, and config hash, and placeholder replay
+for those fields remains rejected separately from the BSC material-only envelope
+profile used by signed source-proof admission.
 
 Solana configured material can satisfy the source-material gate only when it
 matches the canonical mainnet-beta profile and carries deployment-supplied
@@ -1464,8 +1502,9 @@ deployment-bound proof matching.
 BSC deployment-bound facade coverage also rejects coherent alternate
 production-ready source material/deployment pairs for source trust anchor,
 consensus verifier, message-inclusion verifier, finality policy, governed
-source bridge emitter address/runtime code hash, and deployment receipt. Those
-alternate BSC deployments remain generally source-adapter ready, but the
+source bridge emitter address/runtime code hash, source bridge network id,
+owner address, and deployment receipt. Those alternate BSC deployments remain
+generally source-adapter ready, but the
 original source proof and local-admission artifact cannot match them, pass
 deployment-aware production verification, pass bundle extraction, or survive
 verifier-evidence splicing after OpenVerify binding.
@@ -2687,7 +2726,9 @@ category-only rule to live accountStates address, live `code_boc`, and imported
 `code_boc_base64` parser failures before rendering destination or full-rollout
 TOML. The SCCP source, destination, receipt-proof, and live-evidence helper CLIs
 also redact sensitive top-level failures to fixed evidence categories before
-emitting public operator errors. The release public scalar-text source inventory
+emitting public operator errors; their decoded sensitive-marker scans are
+casefolded consistently with readiness and bundle public blocker handling. The
+release public scalar-text source inventory
 now pins the adversarial `secret-token` inputs for EVM live/source-live runtime
 metadata, TON live transport and imported address/LT parser failures, TRON
 live duplicate-key/solid-block proof failures, and all-lanes Solana
@@ -2858,7 +2899,8 @@ contradictory blocker evidence.
 Runtime TRON route manifests parsed from node configuration are pinned by
 source inventory as well: the Rust parser must retain mainnet metadata checks,
 dynamic destination-binding recomputation, Base58 address canonicalization, and
-post-deploy anchor rejection before runtime config evidence can pass.
+post-deploy anchor plus blocker-list rejection before runtime config evidence
+can pass.
 Ready lanes include the canonical source verifier material, source-adapter
 deployment record hashes, and destination binding, route canary, and route
 allowlist summaries in the JSON output for governance comparison.
@@ -2919,6 +2961,10 @@ oversized TRX files,
 DTD/entity declarations, malformed XML, and
 failed/skipped result XML remain forged evidence even if the console summary
 looks successful.
+TRX metadata checks now walk up to eight percent-decoding rounds and reject
+values that still decode beyond that bound, so deeply nested percent-encoded
+operator paths or secret markers cannot hide in otherwise free-form VSTest
+metadata.
 Published release transcripts must also show the VSTest summary, TRX path, and
 TRX byte markers exactly once after the strict `.NET` test command; duplicated
 success markers in that command window remain forged evidence.
@@ -3004,7 +3050,27 @@ audit material, and the post-deploy canary transcript without digging through
 the raw TOML first. Public release-bundle
 verification also enforces source-adapter gate audit hash role separation, so
 gate evidence cannot be replayed from source material, source deployment,
-destination, route, or sibling audit digests in either embedded all-lanes view.
+destination, route, same-lane route-canary transcript hashes, or sibling audit
+digests in either embedded all-lanes view. The direct all-lanes release
+checklist applies that same route-canary transcript separation before
+governed-deployment readiness can pass, and its inventory pins
+`route_canary.call_data_sha256` as well as `route_canary.message_id` for EVM
+source-gate audit hashes. Those source-gate role checks reserve only
+route-canary hash roles from the template field sets, so scalar metadata cannot
+be relabelled as source-gate hash material.
+Direct all-lanes route-canary template-hash field maps mirror the strict
+verifier's central `ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS` tuple filtered
+through each domain's schema keys, so TRON and cross-domain template replay
+checks cannot drift from bundle verification.
+The public readiness row, release-bundle pre-render, and strict published-bundle
+checks all reserve the full route-canary hash-field set, including
+`route_canary_call_data_sha256`, payload/statement/commitment/finality hashes,
+EVM receipt/message hashes, and TRON transaction/signature hashes, before any
+source-adapter audit hash can be accepted.
+The same full field set is used for route-canary evidence-hash role separation,
+so a copied `route_canary_evidence_hash` cannot be replayed from call-data,
+payload, statement, finality, receipt/message, or TRON signature transcript
+hashes in public readiness or release-bundle artifacts.
 For ETH and BSC mainnet rows, that public gate audit set is the single
 canonical `evm_source_gate_hash`; the active Ethereum release checklist
 requires it to be present, non-zero, and equal to the cryptographic-evidence

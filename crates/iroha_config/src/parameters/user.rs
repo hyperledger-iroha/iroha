@@ -25,6 +25,7 @@ use std::{
     convert::{Infallible, TryFrom, TryInto},
     fmt::Debug,
     io,
+    net::IpAddr,
     num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
@@ -4398,6 +4399,62 @@ pub struct SccpRouteBrowserProverManifestRef {
 }
 
 impl SccpRouteBrowserProverManifestRef {
+    fn is_public_dns_domain(domain: &str) -> bool {
+        let lower = domain.to_ascii_lowercase();
+        !lower.is_empty()
+            && lower != "localhost"
+            && !lower.ends_with(".local")
+            && lower.contains('.')
+            && lower.parse::<IpAddr>().is_err()
+            && lower.split('.').all(|label| {
+                let bytes = label.as_bytes();
+                !label.is_empty()
+                    && label.len() <= 63
+                    && bytes
+                        .first()
+                        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+                    && bytes
+                        .last()
+                        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+                    && bytes
+                        .iter()
+                        .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+            })
+    }
+
+    fn is_package_relative_module_url(module_url: &str) -> bool {
+        if module_url.starts_with('/') || module_url.starts_with("//") || module_url.contains('%') {
+            return false;
+        }
+
+        if module_url.starts_with("./") {
+            if module_url == "./" {
+                return false;
+            }
+        } else {
+            let mut chars = module_url.chars();
+            match chars.next() {
+                Some('@') => {
+                    if !chars
+                        .next()
+                        .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+                    {
+                        return false;
+                    }
+                }
+                Some(ch) if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' => {}
+                _ => return false,
+            }
+        }
+
+        module_url
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '@' | '.' | '/'))
+            && module_url.split('/').enumerate().all(|(index, segment)| {
+                !segment.is_empty() && segment != ".." && (segment != "." || index == 0)
+            })
+    }
+
     fn parse_module_url(role: &str, value: &str) -> String {
         let module_url = value.trim();
         assert!(
@@ -4411,6 +4468,10 @@ impl SccpRouteBrowserProverManifestRef {
         assert!(
             !module_url.contains('?') && !module_url.contains('#'),
             "SCCP route manifest {role} browser prover module_url must not contain query strings or fragments"
+        );
+        assert!(
+            !module_url.contains(';'),
+            "SCCP route manifest {role} browser prover module_url must not contain params"
         );
         assert!(
             !module_url.contains('\\')
@@ -4430,7 +4491,15 @@ impl SccpRouteBrowserProverManifestRef {
                 "SCCP route manifest {role} browser prover module_url must not contain query strings or fragments"
             );
             match parsed.scheme() {
-                "https" => {}
+                "https" => {
+                    assert!(
+                        parsed.host().is_some_and(|host| match host {
+                            url::Host::Domain(domain) => Self::is_public_dns_domain(domain),
+                            url::Host::Ipv4(_) | url::Host::Ipv6(_) => false,
+                        }),
+                        "SCCP route manifest {role} browser prover module_url HTTPS host must use public DNS"
+                    );
+                }
                 "http" => {
                     let is_loopback = parsed.host().is_some_and(|host| match host {
                         url::Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
@@ -4450,9 +4519,7 @@ impl SccpRouteBrowserProverManifestRef {
         }
 
         assert!(
-            (module_url.starts_with('/') || module_url.starts_with("./"))
-                && !module_url.starts_with("//")
-                && !module_url.split('/').any(|segment| segment == ".."),
+            Self::is_package_relative_module_url(module_url),
             "SCCP route manifest {role} browser prover module_url must be HTTPS, loopback HTTP, or package-relative"
         );
         module_url.to_owned()
@@ -4634,6 +4701,21 @@ pub struct SccpRouteManifest {
     pub post_deploy_route_canary_explorer_url: Option<String>,
     /// Hex-encoded offline full TOML SHA-256 digest.
     pub post_deploy_offline_full_toml_sha256: Option<String>,
+    /// Remaining post-deploy blocker aliases from route-config live evidence.
+    #[config(default = "Vec::new()")]
+    pub production_blockers: Vec<String>,
+    /// Remaining post-deploy blocker aliases from route-config live evidence.
+    #[config(default = "Vec::new()")]
+    pub post_deploy_production_blockers: Vec<String>,
+    /// Remaining full-TOML blocker aliases from route-config live evidence.
+    #[config(default = "Vec::new()")]
+    pub full_toml_production_blockers: Vec<String>,
+    /// Remaining source-event blocker aliases from route-config live evidence.
+    #[config(default = "Vec::new()")]
+    pub source_event_transaction_production_blockers: Vec<String>,
+    /// Remaining route-canary blocker aliases from route-config live evidence.
+    #[config(default = "Vec::new()")]
+    pub route_canary_production_blockers: Vec<String>,
 }
 
 impl SccpRouteManifest {
@@ -5023,6 +5105,36 @@ impl SccpRouteManifest {
             assert!(
                 value.is_some(),
                 "SCCP {route_family} route manifest production_ready requires {field}"
+            );
+        }
+    }
+
+    fn validate_post_deploy_blocker_lists(
+        route_family: &str,
+        production_ready: bool,
+        fields: &[(&str, &[String])],
+    ) {
+        for (field, blockers) in fields {
+            let mut seen = BTreeSet::<String>::new();
+            for (index, blocker) in blockers.iter().enumerate() {
+                assert!(
+                    !blocker.is_empty() && blocker.trim() == blocker,
+                    "SCCP {route_family} route manifest {field}[{index}] must be a non-empty canonical string"
+                );
+                assert!(
+                    blocker.bytes().all(|byte| (0x20..=0x7e).contains(&byte)),
+                    "SCCP {route_family} route manifest {field}[{index}] must be printable ASCII"
+                );
+                let normalized = blocker.to_ascii_lowercase();
+                assert!(
+                    seen.insert(normalized),
+                    "SCCP {route_family} route manifest {field} must not contain duplicate blockers"
+                );
+            }
+            assert!(
+                !production_ready || blockers.is_empty(),
+                "SCCP {route_family} route manifest production_ready requires empty post-deploy production blocker lists; {field}: {}",
+                blockers.join("; ")
             );
         }
     }
@@ -6131,6 +6243,38 @@ impl SccpRouteManifest {
                 "SCCP {route_family} route manifest token, bridge, source bridge, and verifier addresses must be distinct"
             );
         }
+        let route_family = if is_bsc_route {
+            "BSC"
+        } else if is_ton_route {
+            "TON"
+        } else if is_tron_route {
+            "TRON"
+        } else {
+            "generic"
+        };
+        Self::validate_post_deploy_blocker_lists(
+            route_family,
+            self.production_ready,
+            &[
+                ("production_blockers", &self.production_blockers),
+                (
+                    "post_deploy_production_blockers",
+                    &self.post_deploy_production_blockers,
+                ),
+                (
+                    "full_toml_production_blockers",
+                    &self.full_toml_production_blockers,
+                ),
+                (
+                    "source_event_transaction_production_blockers",
+                    &self.source_event_transaction_production_blockers,
+                ),
+                (
+                    "route_canary_production_blockers",
+                    &self.route_canary_production_blockers,
+                ),
+            ],
+        );
         if self.production_ready && is_bsc_route {
             Self::validate_post_deploy_evidence(
                 "BSC",
@@ -6341,7 +6485,7 @@ mod sccp_route_manifest_user_config_tests {
             _ => ("81", "82", "83"),
         };
         SccpRouteBrowserProverManifestRef {
-            module_url: format!("/sccp-bsc/{role}-prover.js"),
+            module_url: format!("@sora/sccp-bsc-{role}-prover/{role}-prover.js"),
             module_specifier: Some(format!("@sora/sccp-bsc-{role}-prover")),
             module_hash: format!("0x{}", seed.repeat(32)),
             manifest_hash: format!("0x{}", manifest_seed.repeat(32)),
@@ -6443,7 +6587,57 @@ mod sccp_route_manifest_user_config_tests {
                 "4d".repeat(32)
             )),
             post_deploy_offline_full_toml_sha256: None,
+            production_blockers: Vec::new(),
+            post_deploy_production_blockers: Vec::new(),
+            full_toml_production_blockers: Vec::new(),
+            source_event_transaction_production_blockers: Vec::new(),
+            route_canary_production_blockers: Vec::new(),
         }
+    }
+
+    fn assert_destination_module_url_rejected(module_url: &str, expected: &str) {
+        let result = std::panic::catch_unwind(|| {
+            let mut manifest = route_manifest();
+            manifest
+                .destination_browser_prover
+                .as_mut()
+                .expect("destination prover fixture")
+                .module_url = module_url.to_owned();
+
+            let _ = manifest.parse();
+        });
+        let panic = result.expect_err("module_url was accepted");
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("<non-string panic>");
+        assert!(
+            message.contains(expected),
+            "expected panic containing {expected:?}, got {message:?}"
+        );
+    }
+
+    fn assert_tron_route_manifest_rejected(
+        mutate: impl FnOnce(&mut SccpRouteManifest),
+        expected: &str,
+    ) {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut manifest = production_ready_tron_route_manifest();
+            mutate(&mut manifest);
+
+            let _ = manifest.parse();
+        }));
+        let panic = result.expect_err("TRON route manifest was accepted");
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("<non-string panic>");
+        assert!(
+            message.contains(expected),
+            "expected panic containing {expected:?}, got {message:?}"
+        );
     }
 
     fn bind_bsc_browser_provers_to_route(manifest: &mut SccpRouteManifest) {
@@ -6552,6 +6746,11 @@ mod sccp_route_manifest_user_config_tests {
             post_deploy_route_canary_transaction_id: Some(format!("0x{}", "b4".repeat(32))),
             post_deploy_route_canary_explorer_url: None,
             post_deploy_offline_full_toml_sha256: Some(format!("0x{}", "b5".repeat(32))),
+            production_blockers: Vec::new(),
+            post_deploy_production_blockers: Vec::new(),
+            full_toml_production_blockers: Vec::new(),
+            source_event_transaction_production_blockers: Vec::new(),
+            route_canary_production_blockers: Vec::new(),
         }
     }
 
@@ -6658,6 +6857,11 @@ mod sccp_route_manifest_user_config_tests {
             post_deploy_route_canary_transaction_id: Some(format!("0x{}", "d5".repeat(32))),
             post_deploy_route_canary_explorer_url: None,
             post_deploy_offline_full_toml_sha256: Some(format!("0x{}", "d6".repeat(32))),
+            production_blockers: Vec::new(),
+            post_deploy_production_blockers: Vec::new(),
+            full_toml_production_blockers: Vec::new(),
+            source_event_transaction_production_blockers: Vec::new(),
+            route_canary_production_blockers: Vec::new(),
         };
         bind_ton_browser_provers_to_route(&mut manifest);
         manifest
@@ -6833,6 +7037,47 @@ mod sccp_route_manifest_user_config_tests {
     }
 
     #[test]
+    fn bsc_browser_prover_rejects_root_and_hidden_local_module_urls() {
+        for module_url in [
+            "/sccp-bsc/prover.js",
+            "//provers.sora.org/sccp-bsc/prover.js",
+            ".//sccp-bsc/prover.js",
+            "./sccp-bsc%2ejs",
+            "./sccp-bsc/./prover.js",
+        ] {
+            assert_destination_module_url_rejected(
+                module_url,
+                "module_url must be HTTPS, loopback HTTP, or package-relative",
+            );
+        }
+    }
+
+    #[test]
+    fn bsc_browser_prover_rejects_non_public_https_module_urls() {
+        for module_url in [
+            "https://localhost/sccp-bsc/prover.js",
+            "https://127.0.0.1/sccp-bsc/prover.js",
+            "https://[::1]/sccp-bsc/prover.js",
+            "https://provers/sccp-bsc/prover.js",
+            "https://provers.local/sccp-bsc/prover.js",
+            "https://bad_host.sora.org/sccp-bsc/prover.js",
+        ] {
+            assert_destination_module_url_rejected(
+                module_url,
+                "module_url HTTPS host must use public DNS",
+            );
+        }
+    }
+
+    #[test]
+    fn bsc_browser_prover_rejects_url_params() {
+        assert_destination_module_url_rejected(
+            "https://provers.sora.org/sccp-bsc/prover.js;param",
+            "module_url must not contain params",
+        );
+    }
+
+    #[test]
     fn bsc_browser_prover_accepts_loopback_http_module_url() {
         let mut manifest = route_manifest();
         manifest
@@ -6849,6 +7094,38 @@ mod sccp_route_manifest_user_config_tests {
                 .expect("destination prover")
                 .module_url,
             "http://127.0.0.1:5173/sccp-bsc/prover.js"
+        );
+    }
+
+    #[test]
+    fn bsc_browser_prover_accepts_package_relative_module_url() {
+        let mut manifest = route_manifest();
+        manifest
+            .destination_browser_prover
+            .as_mut()
+            .expect("destination prover fixture")
+            .module_url = "./sccp-bsc/prover.js".to_owned();
+        manifest
+            .source_browser_prover
+            .as_mut()
+            .expect("source prover fixture")
+            .module_url = "@sora/sccp-bsc-source-prover/source-prover.js".to_owned();
+
+        let actual = manifest.parse();
+
+        assert_eq!(
+            actual
+                .destination_browser_prover
+                .expect("destination prover")
+                .module_url,
+            "./sccp-bsc/prover.js"
+        );
+        assert_eq!(
+            actual
+                .source_browser_prover
+                .expect("source prover")
+                .module_url,
+            "@sora/sccp-bsc-source-prover/source-prover.js"
         );
     }
 
@@ -7790,6 +8067,46 @@ mod sccp_route_manifest_user_config_tests {
         manifest.post_deploy_source_event_transaction_id = Some("0x1234".to_owned());
 
         let _ = manifest.parse();
+    }
+
+    #[test]
+    fn production_ready_tron_route_rejects_post_deploy_blocker_lists() {
+        assert_tron_route_manifest_rejected(
+            |manifest| {
+                manifest.source_event_transaction_production_blockers =
+                    vec!["witness seal proof required".to_owned()];
+            },
+            "production_ready requires empty post-deploy production blocker lists; source_event_transaction_production_blockers: witness seal proof required",
+        );
+    }
+
+    #[test]
+    fn tron_route_rejects_malformed_post_deploy_blocker_entries() {
+        assert_tron_route_manifest_rejected(
+            |manifest| {
+                manifest.route_canary_production_blockers = vec![" padded ".to_owned()];
+            },
+            "route_canary_production_blockers[0] must be a non-empty canonical string",
+        );
+        assert_tron_route_manifest_rejected(
+            |manifest| {
+                manifest.full_toml_production_blockers = vec![String::new()];
+            },
+            "full_toml_production_blockers[0] must be a non-empty canonical string",
+        );
+        assert_tron_route_manifest_rejected(
+            |manifest| {
+                manifest.post_deploy_production_blockers = vec!["operator\u{7f}hold".to_owned()];
+            },
+            "post_deploy_production_blockers[0] must be printable ASCII",
+        );
+        assert_tron_route_manifest_rejected(
+            |manifest| {
+                manifest.production_blockers =
+                    vec!["operator hold".to_owned(), "Operator Hold".to_owned()];
+            },
+            "production_blockers must not contain duplicate blockers",
+        );
     }
 
     #[test]

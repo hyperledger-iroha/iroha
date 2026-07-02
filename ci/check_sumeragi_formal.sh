@@ -204,6 +204,7 @@ bash scripts/formal/sumeragi_apalache.sh missing-request-clear-fast
 bash scripts/formal/sumeragi_apalache.sh missing-block-clear-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-budget-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-fast
+bash scripts/formal/sumeragi_apalache.sh proposal-sccp-root-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-defer-warning-fast
 bash scripts/formal/sumeragi_apalache.sh non-rbc-payload-budget-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-batch-fast

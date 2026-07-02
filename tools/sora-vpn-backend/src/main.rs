@@ -253,21 +253,21 @@ fn verify_unix_peer_credentials(
     allowed_gid: Option<u32>,
 ) -> Result<(), BackendError> {
     let credentials = stream.peer_cred()?;
-    if let Some(allowed_uid) = allowed_uid {
-        if credentials.uid() != allowed_uid {
-            return Err(BackendError::InvalidConfig(format!(
-                "unix backend peer uid {} is not allowed",
-                credentials.uid()
-            )));
-        }
+    if let Some(allowed_uid) = allowed_uid
+        && credentials.uid() != allowed_uid
+    {
+        return Err(BackendError::InvalidConfig(format!(
+            "unix backend peer uid {} is not allowed",
+            credentials.uid()
+        )));
     }
-    if let Some(allowed_gid) = allowed_gid {
-        if credentials.gid() != allowed_gid {
-            return Err(BackendError::InvalidConfig(format!(
-                "unix backend peer gid {} is not allowed",
-                credentials.gid()
-            )));
-        }
+    if let Some(allowed_gid) = allowed_gid
+        && credentials.gid() != allowed_gid
+    {
+        return Err(BackendError::InvalidConfig(format!(
+            "unix backend peer gid {} is not allowed",
+            credentials.gid()
+        )));
     }
     Ok(())
 }

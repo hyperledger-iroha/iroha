@@ -3684,69 +3684,11 @@ fn decode_app_api_detached_signature(signature_b64: &str) -> Result<Signature> {
     let signature_bytes = base64::engine::general_purpose::STANDARD
         .decode(signature_b64.as_bytes())
         .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
-    validate_app_api_ed25519_signature_bytes(&signature_bytes)?;
-    Signature::try_from_bytes(&signature_bytes)
-        .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))
-}
-
-#[cfg(feature = "app_api")]
-fn validate_app_api_ed25519_signature_bytes(signature: &[u8]) -> Result<()> {
-    if signature.len() != ed25519_dalek::SIGNATURE_LENGTH {
-        return Err(conversion_error(format!(
-            "invalid signature_b64: signature must be {} bytes",
-            ed25519_dalek::SIGNATURE_LENGTH
-        )));
-    }
-    if signature.iter().all(|byte| *byte == 0) {
-        return Err(conversion_error(
-            "invalid signature_b64: signature payload must not be all zero".to_owned(),
-        ));
-    }
-    let r_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = signature
-        .get(..ed25519_dalek::PUBLIC_KEY_LENGTH)
-        .ok_or_else(|| conversion_error("invalid signature_b64: signature R missing".to_owned()))?
-        .try_into()
-        .map_err(|_| {
-            conversion_error("invalid signature_b64: signature R has invalid length".to_owned())
-        })?;
-    if !app_api_ed25519_compressed_y_is_canonical(&r_bytes) {
-        return Err(conversion_error(
-            "invalid signature_b64: signature R is not a canonical Ed25519 point".to_owned(),
-        ));
-    }
-    let r_point = ed25519_dalek::VerifyingKey::from_bytes(&r_bytes).map_err(|err| {
+    iroha_crypto::ed25519_parse_signature(&signature_bytes).map_err(|err| {
         conversion_error(format!(
-            "invalid signature_b64: signature R is not a canonical Ed25519 point: {err}"
+            "invalid signature_b64: Ed25519 signature failed admission: {err}"
         ))
-    })?;
-    if r_point.is_weak() {
-        return Err(conversion_error(
-            "invalid signature_b64: signature R is small-order".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(feature = "app_api")]
-fn app_api_ed25519_compressed_y_is_canonical(
-    bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
-) -> bool {
-    const ED25519_FIELD_MODULUS_LE: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
-        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0x7f,
-    ];
-
-    let mut y = *bytes;
-    y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
-    for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
-        match y[idx].cmp(&ED25519_FIELD_MODULUS_LE[idx]) {
-            std::cmp::Ordering::Less => return true,
-            std::cmp::Ordering::Greater => return false,
-            std::cmp::Ordering::Equal => {}
-        }
-    }
-    false
+    })
 }
 
 #[cfg(all(feature = "app_api", test))]
@@ -3849,7 +3791,7 @@ mod app_api_transaction_signing_tests {
         let err = decode_app_api_detached_signature(&signature_b64)
             .expect_err("all-zero detached signatures must fail at admission");
 
-        assert!(expect_conversion(err).contains("signature payload must not be all zero"));
+        assert!(expect_conversion(err).contains("Ed25519 signature failed admission"));
     }
 
     #[test]
@@ -3859,18 +3801,18 @@ mod app_api_transaction_signing_tests {
         let short_signature_b64 = base64::engine::general_purpose::STANDARD.encode([0xAA_u8; 3]);
         let err = decode_app_api_detached_signature(&short_signature_b64)
             .expect_err("short detached signature must fail at admission");
-        assert!(expect_conversion(err).contains("signature must be 64 bytes"));
+        assert!(expect_conversion(err).contains("Ed25519 signature failed admission"));
 
         for (label, r_bytes, expected) in [
             (
                 "small-order",
                 ED25519_SMALL_ORDER_POINT,
-                "signature R is small-order",
+                "Ed25519 signature failed admission",
             ),
             (
                 "noncanonical",
                 ED25519_NONCANONICAL_IDENTITY,
-                "signature R is not a canonical Ed25519 point",
+                "Ed25519 signature failed admission",
             ),
         ] {
             let mut signature = [0x42_u8; ed25519_dalek::SIGNATURE_LENGTH];
@@ -4941,6 +4883,16 @@ pub fn verify_signed_query_request(
     query: SignedQuery,
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
     let iroha_data_model::query::QuerySignature(sig) = &query.signature;
+    if matches!(
+        query.payload.authority.signatory().try_algorithm(),
+        Ok(Algorithm::Ed25519)
+    ) {
+        iroha_crypto::ed25519_parse_signature(sig.payload()).map_err(|err| {
+            Error::from(ValidationFail::NotPermitted(format!(
+                "query signature material failed admission: {err}"
+            )))
+        })?;
+    }
     sig.verify(query.payload.authority.signatory(), &query.payload)
         .map_err(|_| {
             Error::from(ValidationFail::NotPermitted(
@@ -4952,9 +4904,10 @@ pub fn verify_signed_query_request(
 
 #[cfg(test)]
 mod signed_query_verification_tests {
+    use iroha_crypto::SignatureOf;
     use iroha_data_model::{
         account::AccountId,
-        query::{QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion},
+        query::{QueryRequest, QuerySignature, SingularQueryBox, runtime::prelude::FindAbiVersion},
     };
 
     use super::*;
@@ -4964,6 +4917,18 @@ mod signed_query_verification_tests {
         QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
             .with_authority(authority)
             .sign(key_pair)
+    }
+
+    const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    fn signature_of_with_malformed_ed25519_r<T>(signature: &SignatureOf<T>) -> SignatureOf<T> {
+        let mut payload = signature.payload().to_vec();
+        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
+            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        SignatureOf::from_signature(Signature::from_bytes(&payload))
     }
 
     #[test]
@@ -5004,6 +4969,28 @@ mod signed_query_verification_tests {
         signed.payload.authority = AccountId::new(other.public_key().clone());
 
         assert!(verify_signed_query_request(signed).is_err());
+    }
+
+    #[test]
+    fn verify_signed_query_rejects_malformed_ed25519_signature_r() {
+        let signer = checked_routing_fixture_keypair(
+            0xe6,
+            Algorithm::Ed25519,
+            "derive signed query malformed signature fixture key",
+        );
+        let mut signed = signed_find_abi_version(&signer);
+        signed.signature =
+            QuerySignature(signature_of_with_malformed_ed25519_r(&signed.signature.0));
+
+        let err = match verify_signed_query_request(signed) {
+            Ok(_) => panic!("malformed signed query signature R must fail admission"),
+            Err(err) => err,
+        };
+        let message = format!("{err:?}");
+        assert!(
+            message.contains("query signature material failed admission"),
+            "unexpected signed query admission error: {message}"
+        );
     }
 }
 
@@ -7353,49 +7340,179 @@ fn sccp_codec_capabilities() -> Result<Vec<SccpCodecCapabilityDto>> {
     .collect()
 }
 
-fn sccp_counterparty_capabilities() -> Result<Vec<SccpCounterpartyCapabilityDto>> {
+fn sccp_configured_counterparty_capability(
+    zk_config: &iroha_config::parameters::actual::Zk,
+    domain: u32,
+) -> Result<SccpCounterpartyCapabilityDto> {
+    let manifest = iroha_sccp::sccp_proof_manifest_for_domain(domain).ok_or_else(|| {
+        conversion_error(format!(
+            "unsupported SCCP domain for manifest discovery: {domain}"
+        ))
+    })?;
+    let mut production_ready = iroha_sccp::sccp_manifest_is_production_ready(&manifest);
+    let mut disabled_reason = manifest.disabled_reason;
+    let mut destination_rollout = manifest.destination_rollout;
+    let mut production_readiness = iroha_sccp::sccp_lane_production_readiness_for_domain(domain)
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "unsupported SCCP domain for production readiness: {domain}"
+            ))
+        })?;
+
+    let configured = (|| -> Result<Option<iroha_sccp::SccpLaneProductionReadinessV1>> {
+        let Some(material) =
+            sccp_configured_source_verifier_material_for_domain(zk_config, domain)?
+        else {
+            return Ok(None);
+        };
+        let Some(deployment) =
+            sccp_configured_source_adapter_deployment_for_domain(zk_config, domain, &material)?
+        else {
+            return Ok(None);
+        };
+        let Some(rollout) = sccp_configured_destination_rollout_for_domain(zk_config, domain)?
+        else {
+            return Ok(None);
+        };
+        let Some(allowlist) = sccp_configured_route_allowlist_for_domain(zk_config, domain)? else {
+            return Ok(None);
+        };
+        destination_rollout = rollout.clone();
+        Ok(
+            iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                domain,
+                &material,
+                &deployment,
+                &rollout,
+                &allowlist,
+            ),
+        )
+    })();
+
+    match configured {
+        Ok(Some(readiness)) => {
+            production_ready = readiness.production_ready;
+            if production_ready {
+                if let Err(error) = sccp_configured_launch_ready_for_domain(zk_config, domain) {
+                    production_ready = false;
+                    disabled_reason = Some(error.to_string());
+                } else {
+                    disabled_reason = None;
+                }
+            } else if disabled_reason.is_none() && !readiness.blockers.is_empty() {
+                disabled_reason = Some(readiness.blockers.join("; "));
+            }
+            production_readiness = readiness;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            production_ready = false;
+            disabled_reason = Some(format!(
+                "configured SCCP lane material for domain {domain} is invalid: {error}"
+            ));
+        }
+    }
+
+    if let Some(route) = sccp_configured_route_manifest_for_domain(zk_config, domain)? {
+        if !route.production_ready {
+            production_ready = false;
+            let reason = route.disabled_reason.clone().unwrap_or_else(|| {
+                format!(
+                    "configured SCCP route manifest `{}` for domain {domain} is not production-ready",
+                    route.route_id
+                )
+            });
+            disabled_reason = Some(reason.clone());
+            production_readiness.production_ready = false;
+            production_readiness.routes_allowlisted = false;
+            production_readiness.route_allowlist.routes_allowlisted = false;
+            if !production_readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker == &reason)
+            {
+                production_readiness.blockers.push(reason);
+            }
+        }
+    }
+
+    Ok(SccpCounterpartyCapabilityDto {
+        domain,
+        chain: manifest.chain,
+        verifier_backend: manifest.verifier_backend,
+        message_backend: manifest.message_backend,
+        registry_backend: manifest.registry_backend,
+        counterparty_account_codec: manifest.counterparty_account_codec,
+        counterparty_account_codec_key: manifest.counterparty_account_codec_key,
+        destination_rollout,
+        production_ready,
+        disabled_reason,
+        production_readiness,
+    })
+}
+
+fn sccp_configured_route_manifest_for_domain<'a>(
+    zk_config: &'a iroha_config::parameters::actual::Zk,
+    domain: u32,
+) -> Result<Option<&'a iroha_config::parameters::actual::SccpRouteManifest>> {
+    let mut matches = zk_config
+        .sccp_route_manifests
+        .iter()
+        .filter(|manifest| manifest.counterparty_domain == domain);
+    let Some(configured) = matches.next() else {
+        return Ok(None);
+    };
+    if matches.next().is_some() {
+        return Err(sccp_bad_request(format!(
+            "SCCP route manifest for domain {domain} is duplicated"
+        )));
+    }
+    Ok(Some(configured))
+}
+
+fn sccp_configured_route_manifest_ready_for_domain(
+    zk_config: &iroha_config::parameters::actual::Zk,
+    domain: u32,
+) -> Result<()> {
+    let Some(route) = sccp_configured_route_manifest_for_domain(zk_config, domain)? else {
+        return Ok(());
+    };
+    if route.production_ready {
+        return Ok(());
+    }
+    let reason = route.disabled_reason.clone().unwrap_or_else(|| {
+        format!(
+            "configured SCCP route manifest `{}` for domain {domain} is not production-ready",
+            route.route_id
+        )
+    });
+    Err(sccp_bad_request(reason))
+}
+
+fn sccp_counterparty_capabilities(
+    zk_config: &iroha_config::parameters::actual::Zk,
+) -> Result<Vec<SccpCounterpartyCapabilityDto>> {
     iroha_sccp::SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1
         .into_iter()
-        .map(|domain| {
-            let manifest = iroha_sccp::sccp_proof_manifest_for_domain(domain).ok_or_else(|| {
-                conversion_error(format!(
-                    "unsupported SCCP domain for manifest discovery: {domain}"
-                ))
-            })?;
-            let production_ready = iroha_sccp::sccp_manifest_is_production_ready(&manifest);
-            Ok(SccpCounterpartyCapabilityDto {
-                domain,
-                chain: manifest.chain,
-                verifier_backend: manifest.verifier_backend,
-                message_backend: manifest.message_backend,
-                registry_backend: manifest.registry_backend,
-                counterparty_account_codec: manifest.counterparty_account_codec,
-                counterparty_account_codec_key: manifest.counterparty_account_codec_key,
-                destination_rollout: manifest.destination_rollout,
-                production_ready,
-                disabled_reason: manifest.disabled_reason,
-                production_readiness: iroha_sccp::sccp_lane_production_readiness_for_domain(domain)
-                    .ok_or_else(|| {
-                        conversion_error(format!(
-                            "unsupported SCCP domain for production readiness: {domain}"
-                        ))
-                    })?,
-            })
-        })
+        .map(|domain| sccp_configured_counterparty_capability(zk_config, domain))
         .collect()
 }
 
-fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
+fn sccp_capabilities_snapshot(state: &CoreState) -> Result<SccpCapabilitiesDto> {
+    let zk_config = state.zk_snapshot();
     let production_policy = iroha_sccp::sccp_production_policy_v1();
     let launch_ready = match production_policy.launch_mode {
         iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => {
-            iroha_sccp::sccp_all_lanes_launch_ready_v1()
+            sccp_configured_all_lanes_launch_ready(&zk_config).is_ok()
         }
         iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => {
-            iroha_sccp::sccp_lane_production_ready_for_domain(iroha_sccp::SCCP_DOMAIN_ETH)
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_ETH).is_ok()
         }
         iroha_sccp::SccpLaunchModeV1::BscMainnetLane => {
-            iroha_sccp::sccp_lane_production_ready_for_domain(iroha_sccp::SCCP_DOMAIN_BSC)
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_BSC).is_ok()
+        }
+        iroha_sccp::SccpLaunchModeV1::TonMainnetLane => {
+            sccp_configured_launch_ready_for_domain(&zk_config, iroha_sccp::SCCP_DOMAIN_TON).is_ok()
         }
     };
     Ok(SccpCapabilitiesDto {
@@ -7421,7 +7538,7 @@ fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
         launch_ready,
         message_payload_kinds: iroha_sccp::sccp_message_payload_kind_keys_v1(),
         codecs: sccp_codec_capabilities()?,
-        counterparties: sccp_counterparty_capabilities()?,
+        counterparties: sccp_counterparty_capabilities(&zk_config)?,
     })
 }
 
@@ -8670,6 +8787,7 @@ fn sccp_configured_all_lanes_launch_ready(
                 "SCCP all-lanes launch policy requires configured production material for domain {domain}"
             ))
         })?;
+        sccp_configured_route_manifest_ready_for_domain(zk_config, domain)?;
 
         source_record_hashes
             .entry(iroha_sccp::sccp_source_verifier_material_hash(
@@ -8742,6 +8860,11 @@ fn sccp_configured_launch_ready_for_domain(
                 "SCCP BSC mainnet lane launch policy",
                 "BSC mainnet",
             ),
+            iroha_sccp::SccpLaunchModeV1::TonMainnetLane => (
+                iroha_sccp::SCCP_DOMAIN_TON,
+                "SCCP TON mainnet lane launch policy",
+                "TON mainnet",
+            ),
         };
     if domain != launch_domain {
         if sccp_configured_source_lane_for_domain(zk_config, domain)?.is_none() {
@@ -8794,6 +8917,7 @@ fn sccp_configured_launch_ready_for_domain(
             )));
         }
     }
+    sccp_configured_route_manifest_ready_for_domain(zk_config, domain)?;
 
     Ok(())
 }
@@ -9366,7 +9490,10 @@ mod sccp_message_backend_tests {
         .expect("valid SCCP message submit lane catalog");
         {
             let mut nexus = state.nexus.write();
+            nexus.enabled = true;
             nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog.clone();
         }
 
@@ -10888,6 +11015,34 @@ mod sccp_message_backend_tests {
         }
     }
 
+    fn sample_route_activate_message_bundle(
+        nonce: u64,
+        asset_id: &[u8],
+        route_id: &[u8],
+    ) -> NexusSccpMessageProofV1 {
+        let payload = SccpPayloadV1::RouteActivate(iroha_sccp::RouteActivatePayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: asset_id.to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: route_id.to_vec(),
+        });
+        let commitment = iroha_sccp::hub_commitment_from_sccp_payload(&payload);
+        let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
+        let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+        NexusSccpMessageProofV1 {
+            version: 1,
+            commitment_root,
+            commitment,
+            merkle_proof,
+            payload,
+            finality_proof: sample_sccp_finality_proof_bytes(commitment_root),
+        }
+    }
+
     fn sample_eth_inbound_message_bundle_with_nexus_finality(
         nonce: u64,
     ) -> NexusSccpMessageProofV1 {
@@ -11965,7 +12120,7 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn destination_binding_query_respects_ethereum_lane_launch_policy() {
+    fn destination_binding_query_respects_ton_lane_launch_policy() {
         let bundle = sample_tron_message_bundle(49);
         let mut fields = SccpEvmDestinationQuery {
             network_id_hex: Some(format!("0x{}", "71".repeat(32))),
@@ -12024,8 +12179,7 @@ mod sccp_message_backend_tests {
         )
         .expect_err("TRON destination bindings must wait for their lane launch");
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP Ethereum mainnet lane launch policy")
-                && message.contains("domain 5")
+            message.contains("SCCP TON mainnet lane launch policy") && message.contains("domain 5")
         }));
 
         let err = validate_sccp_destination_binding_matches_configured_launch_policy(
@@ -12037,13 +12191,12 @@ mod sccp_message_backend_tests {
             "validated strict-disabled destination bindings must still wait for lane launch",
         );
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP Ethereum mainnet lane launch policy")
-                && message.contains("domain 5")
+            message.contains("SCCP TON mainnet lane launch policy") && message.contains("domain 5")
         }));
     }
 
     #[test]
-    fn configured_ethereum_mainnet_lane_launch_accepts_eth_without_all_lanes() {
+    fn configured_single_lane_launch_accepts_eth_without_all_lanes() {
         let mut zk = iroha_core::state::default_zk_config();
         zk.sccp_source_verifier_materials.clear();
         zk.sccp_source_adapter_engine_deployments.clear();
@@ -12079,14 +12232,10 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn configured_ethereum_mainnet_lane_launch_rejects_bsc() {
+    fn configured_non_ton_lane_launch_accepts_bsc_with_activation_material() {
         let zk = test_configured_sccp_all_lanes_zk_config();
-        let err = sccp_configured_launch_ready_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_BSC)
-            .expect_err("BSC must wait until its lane policy opens");
-        assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP Ethereum mainnet lane launch policy")
-                && message.contains("domain 2")
-        }));
+        sccp_configured_launch_ready_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_BSC)
+            .expect("configured BSC lane material should satisfy activation readiness");
     }
 
     #[test]
@@ -13002,7 +13151,12 @@ mod sccp_message_backend_tests {
 
     #[test]
     fn sccp_capabilities_snapshot_lists_remote_domains_and_codecs() {
-        let snapshot = sccp_capabilities_snapshot().expect("capabilities");
+        let state = CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        let snapshot = sccp_capabilities_snapshot(&state).expect("capabilities");
         assert_eq!(snapshot.local_domain, iroha_sccp::SCCP_DOMAIN_SORA);
         assert_eq!(snapshot.local_chain, "sora");
         assert_eq!(
@@ -13117,6 +13271,58 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
+    fn sccp_capabilities_snapshot_respects_disabled_route_manifest() {
+        let mut state = CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        let mut zk = test_configured_sccp_zk_config_for_domains([iroha_sccp::SCCP_DOMAIN_TON]);
+        let disabled_reason = "TON source proof module is not production-ready".to_owned();
+        let mut route = sample_sccp_route_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON);
+        route.route_id = "taira_ton_xor".to_owned();
+        route.asset_key = "xor".to_owned();
+        route.chain = "ton-testnet".to_owned();
+        route.counterparty_domain = iroha_sccp::SCCP_DOMAIN_TON;
+        route.production_ready = false;
+        route.disabled_reason = Some(disabled_reason.clone());
+        zk.sccp_route_manifests.push(route);
+        state.set_zk(zk);
+
+        let snapshot = sccp_capabilities_snapshot(&state).expect("capabilities");
+
+        assert!(
+            !snapshot.launch_ready,
+            "a disabled configured route manifest must keep the launch gate closed"
+        );
+        let ton = snapshot
+            .counterparties
+            .iter()
+            .find(|entry| entry.domain == iroha_sccp::SCCP_DOMAIN_TON)
+            .expect("TON counterparty");
+        assert!(!ton.production_ready);
+        assert_eq!(
+            ton.disabled_reason.as_deref(),
+            Some(disabled_reason.as_str())
+        );
+        assert!(!ton.production_readiness.production_ready);
+        assert!(!ton.production_readiness.routes_allowlisted);
+        assert!(
+            ton.production_readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker == &disabled_reason),
+            "disabled route reason should be surfaced as a capability blocker"
+        );
+        let err = sccp_configured_launch_ready_for_domain(
+            &state.zk_snapshot(),
+            iroha_sccp::SCCP_DOMAIN_TON,
+        )
+        .expect_err("disabled route manifest must fail launch readiness");
+        assert!(conversion_message(&err).is_some_and(|message| message == disabled_reason));
+    }
+
+    #[test]
     fn sccp_proof_manifest_snapshot_matches_counterparty_backends() {
         let state = CoreState::new_for_testing(
             iroha_core::state::World::default(),
@@ -13196,6 +13402,7 @@ mod sccp_message_backend_tests {
             tron_network: chain.clone(),
             chain,
             chain_id_hex: "0x61".to_owned(),
+            ton_finalize_message_value_nano: None,
             explorer_url: is_bsc.then(|| "https://testnet.bscscan.com".to_owned()),
             explorer_host: is_bsc.then(|| "testnet.bscscan.com".to_owned()),
             counterparty_account_codec: is_bsc.then_some(iroha_sccp::SCCP_CODEC_EVM_HEX),
@@ -13559,6 +13766,71 @@ mod sccp_message_backend_tests {
             mint.destination.definition().to_string(),
             "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
         );
+    }
+
+    #[test]
+    fn activate_route_governed_payload_uses_route_local_asset_key_from_scoped_asset_id() {
+        let bundle = sample_route_activate_message_bundle(53, b"xor#universal", b"nexus:eth:xor");
+        let expected_route = "nexus:eth:xor"
+            .parse::<Name>()
+            .expect("expected route name");
+        let (payload, route) =
+            default_activate_route_governed_payload(&bundle, Some(&expected_route))
+                .expect("route activation payload");
+
+        assert_eq!(route, expected_route);
+        let payload_value = norito::json::from_str::<Value>(payload.as_ref())
+            .expect("route activation payload json");
+        let object = payload_value
+            .as_object()
+            .expect("route activation payload object");
+        assert_eq!(
+            object.get("message_id").and_then(Value::as_str),
+            Some(hex::encode(bundle.commitment.message_id).as_str())
+        );
+        assert_eq!(
+            object.get("route").and_then(Value::as_str),
+            Some("nexus:eth:xor")
+        );
+        assert_eq!(object.get("asset_key").and_then(Value::as_str), Some("xor"));
+        assert_eq!(
+            object.get("remote_domain").and_then(Value::as_u64),
+            Some(u64::from(iroha_sccp::SCCP_DOMAIN_SORA))
+        );
+    }
+
+    #[test]
+    fn activate_route_governed_payload_rejects_malformed_asset_scope() {
+        for (nonce, asset_id, expected) in [
+            (
+                54,
+                b"xor#".as_slice(),
+                "asset_id asset scope must not be empty",
+            ),
+            (
+                55,
+                b"xor#universal#shadow".as_slice(),
+                "asset_id must contain at most one `#` scope separator",
+            ),
+            (
+                56,
+                b"#universal".as_slice(),
+                "asset_id route-local asset key must not be empty",
+            ),
+            (
+                57,
+                b"bad key#universal".as_slice(),
+                "asset_id route-local asset key `bad key`",
+            ),
+        ] {
+            let bundle = sample_route_activate_message_bundle(nonce, asset_id, b"nexus:eth:xor");
+            let err = default_activate_route_governed_payload(&bundle, None)
+                .expect_err("malformed route activation asset_id must be rejected");
+            assert!(
+                conversion_message(&err).is_some_and(|message| message.contains(expected)),
+                "expected `{expected}` in {err:?}"
+            );
+        }
     }
 
     #[test]
@@ -14519,9 +14791,10 @@ pub async fn handle_v1_sccp_message_proof_job(
 /// GET /v1/sccp/capabilities — relay-operator SCCP capability discovery for proof backends, codecs, and routes.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_capabilities(
+    state: &CoreState,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let snapshot = sccp_capabilities_snapshot()?;
+    let snapshot = sccp_capabilities_snapshot(state)?;
     sccp_bundle_response(&snapshot, accept.as_ref())
 }
 
@@ -16291,6 +16564,36 @@ mod zk_roots_selector_tests {
 
         assert_eq!(gas_asset_id, Some(definition_id.to_string()));
         assert_eq!(fee_sponsor.as_deref(), Some("sponsor@cbsi"));
+    }
+
+    #[test]
+    fn explicit_fee_metadata_inserts_deploy_sponsor_and_gas_limit() {
+        let mut metadata = Metadata::default();
+
+        apply_explicit_fee_metadata(
+            &mut metadata,
+            Some("xor#sora"),
+            Some("sponsor@sora"),
+            Some(10_000_000),
+        )
+        .expect("fee metadata should be valid");
+
+        let gas_asset_id = metadata
+            .get("gas_asset_id")
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+        let fee_sponsor = metadata
+            .get("fee_sponsor")
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<String>().ok());
+        let gas_limit = metadata
+            .get("gas_limit")
+            .cloned()
+            .and_then(|value| value.try_into_any_norito::<u64>().ok());
+
+        assert_eq!(gas_asset_id.as_deref(), Some("xor#sora"));
+        assert_eq!(fee_sponsor.as_deref(), Some("sponsor@sora"));
+        assert_eq!(gas_limit, Some(10_000_000));
     }
 
     #[test]
@@ -23256,6 +23559,41 @@ fn parse_bridge_name_from_utf8(codec: u8, bytes: &[u8], label: &str) -> Result<N
 }
 
 #[cfg(feature = "app_api")]
+fn parse_sccp_route_asset_key_from_utf8(codec: u8, bytes: &[u8], label: &str) -> Result<Name> {
+    if codec != iroha_sccp::SCCP_CODEC_TEXT_UTF8 {
+        return Err(conversion_error(format!(
+            "{label} must be encoded as UTF-8 text for the proof-driven bridge settlement path"
+        )));
+    }
+    let literal = std::str::from_utf8(bytes)
+        .map_err(|err| conversion_error(format!("{label} is not valid UTF-8: {err}")))?;
+    let mut parts = literal.split('#');
+    let asset_key = parts.next().unwrap_or_default();
+    if asset_key.is_empty() {
+        return Err(conversion_error(format!(
+            "{label} route-local asset key must not be empty"
+        )));
+    }
+    if let Some(scope) = parts.next() {
+        if scope.is_empty() {
+            return Err(conversion_error(format!(
+                "{label} asset scope must not be empty after `#`"
+            )));
+        }
+        if parts.next().is_some() {
+            return Err(conversion_error(format!(
+                "{label} must contain at most one `#` scope separator"
+            )));
+        }
+    }
+    asset_key.parse::<Name>().map_err(|err| {
+        conversion_error(format!(
+            "{label} route-local asset key `{asset_key}` from `{literal}` is not a valid Name: {err}"
+        ))
+    })
+}
+
+#[cfg(feature = "app_api")]
 fn default_finalize_inbound_settlement_payload(
     bundle: &NexusSccpMessageProofV1,
     route: &Name,
@@ -23325,8 +23663,11 @@ fn default_activate_route_governed_payload(
             )));
         }
     }
-    let asset_key =
-        parse_bridge_name_from_utf8(payload.asset_id_codec, &payload.asset_id, "asset_id")?;
+    let asset_key = parse_sccp_route_asset_key_from_utf8(
+        payload.asset_id_codec,
+        &payload.asset_id,
+        "asset_id",
+    )?;
     let mut object = Map::new();
     object.insert(
         "message_id".into(),
@@ -31054,6 +31395,15 @@ pub struct DeployContractDto {
     /// Optional transaction time-to-live in milliseconds; nodes still clamp to their configured maximum.
     #[norito(default)]
     pub transaction_ttl_ms: Option<u64>,
+    /// Optional gas asset identifier override.
+    #[norito(default)]
+    pub gas_asset_id: Option<String>,
+    /// Optional account that sponsors the deployment fee.
+    #[norito(default)]
+    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
+    /// Optional transaction gas limit for fee admission.
+    #[norito(default)]
+    pub gas_limit: Option<u64>,
     /// Optional governance manifest approvers, in addition to the transaction authority.
     #[norito(default)]
     pub gov_manifest_approvers: Vec<iroha_data_model::account::AccountId>,
@@ -31144,6 +31494,15 @@ pub struct DeployContractBundleDto {
     /// Optional transaction time-to-live in milliseconds applied to deploy and init transactions.
     #[norito(default)]
     pub transaction_ttl_ms: Option<u64>,
+    /// Optional gas asset identifier override applied to deploy transactions.
+    #[norito(default)]
+    pub gas_asset_id: Option<String>,
+    /// Optional account that sponsors deploy transaction fees.
+    #[norito(default)]
+    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
+    /// Optional transaction gas limit for deploy fee admission.
+    #[norito(default)]
+    pub gas_limit: Option<u64>,
     /// Optional governance manifest approvers, in addition to the transaction authority.
     #[norito(default)]
     pub gov_manifest_approvers: Vec<iroha_data_model::account::AccountId>,
@@ -31694,6 +32053,32 @@ fn metadata_with_default_gas_asset(state: &CoreState) -> Metadata {
 }
 
 #[cfg(feature = "app_api")]
+fn apply_explicit_fee_metadata(
+    metadata: &mut Metadata,
+    gas_asset_id: Option<&str>,
+    fee_sponsor: Option<&str>,
+    gas_limit: Option<u64>,
+) -> Result<()> {
+    if let Some(asset_id) = gas_asset_id {
+        let gas_asset_key =
+            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
+        metadata.insert(gas_asset_key, IrohaJson::new(asset_id.to_owned()));
+    }
+    if let Some(sponsor) = fee_sponsor {
+        let sponsor_key = Name::from_str("fee_sponsor").expect("static metadata key `fee_sponsor`");
+        metadata.insert(sponsor_key, IrohaJson::new(sponsor.to_owned()));
+    }
+    if let Some(gas_limit) = gas_limit {
+        if gas_limit == 0 {
+            return Err(conversion_error("gas_limit must be positive".to_owned()));
+        }
+        let gas_limit_key = Name::from_str("gas_limit").expect("static metadata key `gas_limit`");
+        metadata.insert(gas_limit_key, IrohaJson::new(gas_limit));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
 fn insert_gov_manifest_approvers_metadata(
     metadata: &mut Metadata,
     approvers: &[iroha_data_model::account::AccountId],
@@ -31840,6 +32225,9 @@ fn contract_bundle_digest(req: &DeployContractBundleDto) -> Result<String> {
         "bundle_name": (req.bundle_name.clone()),
         "authority": (req.authority.clone()),
         "default_dataspace": (req.default_dataspace.clone()),
+        "gas_asset_id": (req.gas_asset_id.clone()),
+        "fee_sponsor": (req.fee_sponsor.clone()),
+        "gas_limit": (req.gas_limit),
         "contracts": (contracts),
         "init_calls": (init_calls),
         "assertions": (assertions),
@@ -34576,10 +34964,16 @@ async fn submit_contract_deploy_request(
         contract_alias,
         lease_expiry_ms,
         transaction_ttl_ms,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
         gov_manifest_approvers,
     } = req;
     let signer = KeyPair::from(private_key.0.clone());
     let prepared = prepare_contract_deployment(&code_b64, &signer)?;
+    let gas_asset_id =
+        normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
+    let fee_sponsor_literal = fee_sponsor.as_ref().map(ToString::to_string);
     let authority: dm::AccountId = authority.into();
     let (dataspace_alias, dataspace_id) =
         resolve_public_contract_deploy_alias(&state, &contract_alias)?;
@@ -34647,6 +35041,12 @@ async fn submit_contract_deploy_request(
         dm::Json::new(next_nonce),
     )));
     let mut metadata = metadata_with_default_gas_asset(&state);
+    apply_explicit_fee_metadata(
+        &mut metadata,
+        gas_asset_id.as_deref(),
+        fee_sponsor_literal.as_deref(),
+        gas_limit,
+    )?;
     insert_gov_manifest_approvers_metadata(&mut metadata, &gov_manifest_approvers);
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone());
     if let Some(transaction_ttl_ms) = transaction_ttl_ms {
@@ -34893,6 +35293,9 @@ async fn execute_contract_bundle_request(
                     contract_alias: contract.contract_alias.clone(),
                     lease_expiry_ms: contract.lease_expiry_ms,
                     transaction_ttl_ms: req.transaction_ttl_ms,
+                    gas_asset_id: req.gas_asset_id.clone(),
+                    fee_sponsor: req.fee_sponsor.clone(),
+                    gas_limit: req.gas_limit,
                     gov_manifest_approvers: req.gov_manifest_approvers.clone(),
                 },
                 Some(deploy_nonce),
@@ -35047,6 +35450,9 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
         contract_alias,
         lease_expiry_ms,
         transaction_ttl_ms,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
         gov_manifest_approvers,
     } = req;
     DeployContractBundleDto {
@@ -35055,6 +35461,9 @@ fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContract
         private_key,
         default_dataspace: None,
         transaction_ttl_ms,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
         gov_manifest_approvers,
         contracts: vec![DeployContractBundleContractDto {
             name: contract_alias.to_string(),
@@ -35338,6 +35747,9 @@ mod contract_bundle_tests {
             private_key,
             default_dataspace: None,
             transaction_ttl_ms: None,
+            gas_asset_id: None,
+            fee_sponsor: None,
+            gas_limit: None,
             gov_manifest_approvers: Vec::new(),
             contracts: vec![DeployContractBundleContractDto {
                 name: "demo.greeter".to_owned(),
@@ -38686,6 +39098,9 @@ mod deploy_tests {
             contract_alias: "fixture::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
             transaction_ttl_ms: None,
+            gas_asset_id: None,
+            fee_sponsor: None,
+            gas_limit: None,
             gov_manifest_approvers: Vec::new(),
         };
 
@@ -81756,6 +82171,100 @@ fn public_lane_reward_record_matches_key_rejects_mismatched_rows() {
     record.lane_id = key.0;
     record.epoch = 9;
     assert!(!public_lane_reward_record_matches_key(&key, &record));
+}
+
+#[cfg(all(test, feature = "app_api"))]
+#[test]
+fn collect_pending_public_lane_rewards_ignores_mismatched_reward_rows() {
+    let account = AccountId::new(
+        checked_routing_fixture_keypair(
+            0x7C,
+            Algorithm::Ed25519,
+            "derive public lane pending reward account fixture",
+        )
+        .public_key()
+        .clone(),
+    );
+    let lane_id = LaneId::new(16);
+    let asset = AssetId::new(
+        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400bb"),
+        account.clone(),
+    );
+    let other_asset = AssetId::new(
+        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400bc"),
+        account.clone(),
+    );
+
+    let mut claims = BTreeMap::new();
+    claims.insert((lane_id, account.clone(), asset.clone()), 1);
+
+    let valid_reward = |epoch, amount| PublicLaneRewardRecord {
+        lane_id,
+        epoch,
+        asset: asset.clone(),
+        total_reward: iroha_primitives::numeric::Numeric::new(amount, 0),
+        shares: vec![PublicLaneRewardShare {
+            account: account.clone(),
+            role: PublicLaneRewardRole::Nominator,
+            amount: iroha_primitives::numeric::Numeric::new(amount, 0),
+        }],
+        metadata: Metadata::default(),
+    };
+    let mismatched_reward = |record_lane_id, record_epoch, amount| PublicLaneRewardRecord {
+        lane_id: record_lane_id,
+        epoch: record_epoch,
+        asset: asset.clone(),
+        total_reward: iroha_primitives::numeric::Numeric::new(amount, 0),
+        shares: vec![PublicLaneRewardShare {
+            account: account.clone(),
+            role: PublicLaneRewardRole::Nominator,
+            amount: iroha_primitives::numeric::Numeric::new(amount, 0),
+        }],
+        metadata: Metadata::default(),
+    };
+
+    let mut rewards = BTreeMap::new();
+    rewards.insert((lane_id, 2), valid_reward(2, 5));
+    rewards.insert((lane_id, 3), mismatched_reward(LaneId::new(17), 3, 99));
+    rewards.insert((lane_id, 4), mismatched_reward(lane_id, 40, 99));
+    rewards.insert((lane_id, 5), valid_reward(5, 7));
+    rewards.insert((lane_id, 6), valid_reward(6, 13));
+    rewards.insert(
+        (LaneId::new(18), 1),
+        PublicLaneRewardRecord {
+            lane_id: LaneId::new(18),
+            epoch: 1,
+            asset: other_asset,
+            total_reward: iroha_primitives::numeric::Numeric::new(111, 0),
+            shares: vec![PublicLaneRewardShare {
+                account: account.clone(),
+                role: PublicLaneRewardRole::Nominator,
+                amount: iroha_primitives::numeric::Numeric::new(111, 0),
+            }],
+            metadata: Metadata::default(),
+        },
+    );
+
+    let pending = collect_pending_public_lane_rewards(
+        lane_id,
+        &account,
+        5,
+        None,
+        claims.iter(),
+        rewards.iter(),
+    )
+    .expect("pending reward collection should succeed");
+
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].lane_id, lane_id);
+    assert_eq!(&pending[0].account, &account);
+    assert_eq!(&pending[0].asset, &asset);
+    assert_eq!(pending[0].last_claimed_epoch, 1);
+    assert_eq!(pending[0].pending_through_epoch, 5);
+    assert_eq!(
+        &pending[0].amount,
+        &iroha_primitives::numeric::Numeric::new(12, 0)
+    );
 }
 
 #[cfg(all(test, feature = "app_api"))]

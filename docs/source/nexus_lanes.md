@@ -202,21 +202,28 @@ LaneConfigEntry {
   the committed Nexus catalog/runtime state under the writer lock. Manual lane
   lifecycle uses the same commit-serialization lock and lock order for geometry
   reconciliation and writer-locked catalog publication. World-backed cleanup for
-  reset lanes runs after the lifecycle storage lock, writer lock, and
-  commit-serialization lock are released, so already-built block overlays cannot
-  deadlock by holding world storage while waiting to enter commit. DA
-  commitment, shard/receipt
-  cursor, confidential-compute
-  receipt, and pin-intent indexes prepared while applying a block are staged on
-  the same side of commit validation, so those runtime and world indexes cannot
-  leak from a block whose height later fails commit validation. Commit also
-  applies the fallible autoscale lifecycle preparation before publishing those
-  staged DA indexes, so a storage failure while reconciling elastic-lane
-  geometry cannot partially publish DA runtime, query state, or block-local WSV
-  cleanup for an uncommitted block. Lane lifecycle and config-swap retirements
-  use the same storage preflight barrier: a failed Kura or tiered retire
-  preflight preserves the committed WSV rows that would otherwise be reset for
-  the retiring lane.
+  reset lanes runs after the block world overlay is committed, while state commit
+  serialization is still active, so cleanup opens fresh committed-world
+  transactions instead of re-entering through an uncommitted block overlay. DA
+  commitment, shard/receipt cursor, confidential-compute receipt, pin-intent
+  indexes, block-hash log entries, latest-header/query-index markers,
+  commit-topology cells, and verified lane relay hydration prepared while
+  applying a block are published only after a registered transaction block
+  commits successfully, so those runtime, topology, and world indexes cannot
+  leak from a block whose transaction commit later fails. Staged autoscale, DA,
+  or verified-relay side effects with a missing inserted transaction block abort
+  before geometry reconciliation, WSV cleanup, or relay-cache hydration.
+  WSV-only commits without an inserted transaction block still persist their
+  world mutations, but do not advance block metadata caches or query-index
+  status.
+  Commit also
+  completes fallible autoscale geometry reconciliation before the transaction
+  commit and publishes the autoscale catalog/runtime reset before staged DA
+  indexes, so a storage failure while reconciling elastic-lane geometry cannot
+  partially publish DA runtime, query state, or block-local WSV cleanup for an
+  uncommitted block. Lane lifecycle and config-swap retirements use the same
+  storage preflight barrier: a failed Kura or tiered retire preflight preserves
+  the committed WSV rows that would otherwise be reset for the retiring lane.
   Lane-geometry reconciliation dry-runs both Kura block/merge storage and
   tiered-state snapshot geometry before either backend is mutated, and then
   prepares tiered-state storage before Kura block/merge storage is provisioned,

@@ -420,9 +420,7 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
   }
 
   private static boolean isSupportedDeviceProofPlatform(final String platform) {
-    return DEVICE_PROOF_PLATFORM_IOS.equals(platform)
-        || DEVICE_PROOF_PLATFORM_ANDROID.equals(platform)
-        || OfflineNoteV2.ANDROID_KEYMINT_PLATFORM.equals(platform);
+    return DEVICE_PROOF_PLATFORM_IOS.equals(platform) || DEVICE_PROOF_PLATFORM_ANDROID.equals(platform);
   }
 
   private URI resolvePath(final String path) {

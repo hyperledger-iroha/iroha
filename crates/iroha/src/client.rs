@@ -25616,6 +25616,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn sorafs_reserve_movement_posts_signed_json_requests() {
         let client = client_with_base_url(base_url());
         let top_up_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -25656,7 +25657,7 @@ mod tests {
             "authority_account": "authority",
             "grace_period_days": 7,
             "default_after_days": 30,
-            "effective_at_unix": 1800000000u64,
+            "effective_at_unix": 1_800_000_000_u64,
             "reason": "initial reserve lifecycle policy",
             "idempotency_key": "policy-1",
         }))
@@ -25830,12 +25831,13 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn sorafs_reserve_readback_gets_are_signed_and_normalize_provider_id() {
         let client = client_with_base_url(base_url());
         let movements_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let balance_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let credit_lines_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let credit_line_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let provider_credit_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let appeals_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let policy_store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
 
@@ -25869,7 +25871,7 @@ mod tests {
             },
         );
         with_mock_http(
-            respond_with(&credit_line_store, json_response(StatusCode::OK, "{}")),
+            respond_with(&provider_credit_store, json_response(StatusCode::OK, "{}")),
             || {
                 client
                     .get_sorafs_reserve_credit_line(&format!("0x{}", "CD".repeat(32)))
@@ -25938,7 +25940,7 @@ mod tests {
             "credit-lines request must be signed"
         );
 
-        let credit_line = credit_line_store.lock().expect("credit-line snapshots");
+        let credit_line = provider_credit_store.lock().expect("credit-line snapshots");
         let credit_line = credit_line.first().expect("credit-line snapshot");
         assert_eq!(credit_line.method, HttpMethod::GET);
         assert_eq!(
@@ -26775,7 +26777,7 @@ mod tests {
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(
             snapshot.url.path(),
-            &format!("/v1/sorafs/moderation/quarantine/{}/object", quarantine_id)
+            &format!("/v1/sorafs/moderation/quarantine/{quarantine_id}/object")
         );
         assert!(snapshot.body.is_empty());
         let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
@@ -27360,6 +27362,13 @@ mod tests {
         };
         let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
         let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
+        let validator_keypair = KeyPair::try_from_seed(vec![0x40; 32], Algorithm::Ed25519)
+            .expect("derive client SCCP transparent-proof validator fixture key");
+        let validator_set = vec![PeerId::from(validator_keypair.public_key().clone())];
+        let validator_set_hash = HashOf::<Vec<PeerId>>::new(&validator_set);
+        let mut validator_set_hash_bytes = [0u8; 32];
+        validator_set_hash_bytes.copy_from_slice(validator_set_hash.as_ref().as_ref());
+        let validator_public_keys = vec![validator_keypair.public_key().to_string()];
         let finality_proof = NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
@@ -27380,8 +27389,9 @@ mod tests {
                 chain_order_hash: [0u8; 32],
                 rechain_seq: 0,
                 highest_qc: None,
+                validator_set_hash: validator_set_hash_bytes,
                 validator_set_hash_version: 1,
-                validator_public_keys: vec!["validator-1".to_owned()],
+                validator_public_keys,
                 validator_set_pops: vec![vec![0xAA]],
                 signers_bitmap: vec![0x01],
                 bls_aggregate_signature: vec![0xBB],

@@ -268,6 +268,7 @@ pub unsafe extern "C" fn norito_binary_sequence_plan(
 
 #[cfg(test)]
 #[allow(dead_code)]
+#[derive(Debug, PartialEq, Eq)]
 enum PlanError {
     Invalid,
     Unavailable,
@@ -281,8 +282,8 @@ fn plan_sequence_cpu(
     flags: u8,
     layout_kind: u32,
 ) -> Result<(Vec<NoritoSequenceSpan>, usize), PlanError> {
-    // TODO: replace this ABI reference path with a CUDA kernel once the span
-    // planner has a tuned grid layout for large transaction batches.
+    // Keep this host implementation as the deterministic reference used by
+    // CUDA parity and malformed-input tests.
     let (count, mut offset) = read_seq_len(bytes)?;
     match layout_kind {
         LAYOUT_LENGTH_PREFIXED => {
@@ -406,9 +407,9 @@ fn varint_len(mut value: u64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        NoritoSequenceSpan, RC_GPU_UNAVAILABLE, RC_INVALID, RC_NO_SPACE, crc64_cpu, crc64_raw,
-        json_stage1_build_tape, json_stage1_build_tape_cpu, norito_binary_sequence_plan,
-        norito_crc64_cuda, scan_structural_offsets,
+        NoritoSequenceSpan, PlanError, RC_GPU_UNAVAILABLE, RC_INVALID, RC_NO_SPACE, crc64_cpu,
+        crc64_raw, json_stage1_build_tape, json_stage1_build_tape_cpu, norito_binary_sequence_plan,
+        norito_crc64_cuda, plan_sequence_cpu, scan_structural_offsets,
     };
 
     const CRC_123456789: u64 = 0x995D_C9BB_DF19_39FA;
@@ -447,6 +448,17 @@ mod tests {
             out.push((seed >> 32) as u8);
         }
         out
+    }
+
+    fn fixed_offset_sequence(offsets: &[u64], data: &[u8]) -> Vec<u8> {
+        assert!(!offsets.is_empty());
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(offsets.len() as u64 - 1).to_le_bytes());
+        for offset in offsets {
+            bytes.extend_from_slice(&offset.to_le_bytes());
+        }
+        bytes.extend_from_slice(data);
+        bytes
     }
 
     #[test]
@@ -762,6 +774,155 @@ mod tests {
         }
         assert_eq!(rc, RC_INVALID);
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn reference_sequence_plan_rejects_adversarial_shapes() {
+        let descending_offsets = fixed_offset_sequence(&[0, 1, 0, 2], b"ab");
+        assert!(matches!(
+            plan_sequence_cpu(&descending_offsets, 0, super::LAYOUT_FIXED_OFFSETS),
+            Err(PlanError::Invalid)
+        ));
+
+        let mut truncated_length_prefixed = Vec::new();
+        truncated_length_prefixed.extend_from_slice(&2u64.to_le_bytes());
+        truncated_length_prefixed.extend_from_slice(&1u64.to_le_bytes());
+        truncated_length_prefixed.push(b'a');
+        truncated_length_prefixed.extend_from_slice(&4u64.to_le_bytes());
+        truncated_length_prefixed.push(b'b');
+        assert!(matches!(
+            plan_sequence_cpu(&truncated_length_prefixed, 0, super::LAYOUT_LENGTH_PREFIXED),
+            Err(PlanError::Invalid)
+        ));
+
+        let mut non_canonical_compact = Vec::new();
+        non_canonical_compact.extend_from_slice(&1u64.to_le_bytes());
+        non_canonical_compact.extend_from_slice(&[0x80, 0x00]);
+        assert!(matches!(
+            plan_sequence_cpu(
+                &non_canonical_compact,
+                super::FLAG_COMPACT_LEN,
+                super::LAYOUT_LENGTH_PREFIXED
+            ),
+            Err(PlanError::Invalid)
+        ));
+    }
+
+    #[test]
+    fn cuda_sequence_plan_invalid_fixed_offsets_do_not_publish_partial_spans_when_available() {
+        let bytes = fixed_offset_sequence(&[0, 1, 0, 2], b"ab");
+        let sentinel = NoritoSequenceSpan {
+            start: usize::MAX,
+            end: usize::MAX,
+        };
+        let mut spans = vec![sentinel; 3];
+        let mut count = 0usize;
+        let mut used = usize::MAX;
+
+        let rc = unsafe {
+            norito_binary_sequence_plan(
+                bytes.as_ptr(),
+                bytes.len(),
+                0,
+                super::LAYOUT_FIXED_OFFSETS,
+                spans.as_mut_ptr(),
+                spans.len(),
+                &mut count,
+                &mut used,
+            )
+        };
+        if skip_if_unavailable(rc, "jsonstage1_cuda sequence planner") {
+            return;
+        }
+        assert_eq!(rc, RC_INVALID);
+        assert_eq!(count, 3);
+        assert_eq!(used, 0);
+        assert!(
+            spans
+                .iter()
+                .all(|span| span.start == sentinel.start && span.end == sentinel.end),
+            "invalid fixed-offset plans must not expose partially written CUDA spans"
+        );
+    }
+
+    #[test]
+    fn cuda_sequence_plan_invalid_length_prefix_do_not_publish_partial_spans_when_available() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2u64.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.push(b'a');
+        bytes.extend_from_slice(&4u64.to_le_bytes());
+        bytes.push(b'b');
+        let sentinel = NoritoSequenceSpan {
+            start: usize::MAX,
+            end: usize::MAX,
+        };
+        let mut spans = vec![sentinel; 2];
+        let mut count = 0usize;
+        let mut used = usize::MAX;
+
+        let rc = unsafe {
+            norito_binary_sequence_plan(
+                bytes.as_ptr(),
+                bytes.len(),
+                0,
+                super::LAYOUT_LENGTH_PREFIXED,
+                spans.as_mut_ptr(),
+                spans.len(),
+                &mut count,
+                &mut used,
+            )
+        };
+        if skip_if_unavailable(rc, "jsonstage1_cuda sequence planner") {
+            return;
+        }
+        assert_eq!(rc, RC_INVALID);
+        assert_eq!(count, 2);
+        assert_eq!(used, 0);
+        assert!(
+            spans
+                .iter()
+                .all(|span| span.start == sentinel.start && span.end == sentinel.end),
+            "invalid length-prefixed plans must not expose partially written CUDA spans"
+        );
+    }
+
+    #[test]
+    fn cuda_sequence_plan_rejects_impossible_length_prefixed_count_when_available() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&100u64.to_le_bytes());
+        let sentinel = NoritoSequenceSpan {
+            start: usize::MAX,
+            end: usize::MAX,
+        };
+        let mut spans = vec![sentinel; 100];
+        let mut count = 0usize;
+        let mut used = usize::MAX;
+
+        let rc = unsafe {
+            norito_binary_sequence_plan(
+                bytes.as_ptr(),
+                bytes.len(),
+                super::FLAG_COMPACT_LEN,
+                super::LAYOUT_LENGTH_PREFIXED,
+                spans.as_mut_ptr(),
+                spans.len(),
+                &mut count,
+                &mut used,
+            )
+        };
+        if skip_if_unavailable(rc, "jsonstage1_cuda sequence planner") {
+            return;
+        }
+        assert_eq!(rc, RC_INVALID);
+        assert_eq!(count, 100);
+        assert_eq!(used, 0);
+        assert!(
+            spans
+                .iter()
+                .all(|span| span.start == sentinel.start && span.end == sentinel.end),
+            "impossible declared counts must fail before publishing CUDA spans"
+        );
     }
 
     #[test]

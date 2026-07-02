@@ -74,6 +74,10 @@ def appeal_intake() -> dict:
             "routes": routes,
             "case_count": 2,
             "accepted_case_count": 2,
+            "cases": [
+                {"name": "appeal-case-00", "accepted": True},
+                {"name": "appeal-case-01", "accepted": True},
+            ],
             "appellant_auth_enforced": True,
             "proof_token_verified": True,
             "deposit_confirmation_bound": True,
@@ -96,6 +100,10 @@ def sortition_roster() -> dict:
             "roster_hash_hex": DIGEST,
             "sortition_seed_hex": DIGEST,
             "panel_size": 7,
+            "jurors": [
+                {"name": f"roster-juror-{index:02d}", "eligible": True}
+                for index in range(7)
+            ],
             "quorum": 5,
             "pop_snapshot_bound": True,
             "juror_eligibility_verified": True,
@@ -124,10 +132,12 @@ def complete_args(tmp_path: Path) -> list[str]:
         DIGEST,
         "--session-count",
         "3",
-        "--attested-session-count",
-        "3",
-        "--logged-session-count",
-        "3",
+        "--viewer-session",
+        "viewer-session-00",
+        "--viewer-session",
+        "viewer-session-01",
+        "--viewer-session",
+        "viewer-session-02",
         "--max-url-ttl-secs",
         "300",
         "--session-manifest-digest-hex",
@@ -170,6 +180,14 @@ def test_builds_payload_free_evidence_viewer_canary(tmp_path: Path) -> None:
     )
     assert payload["access_event_kinds"] == list(MODULE.REQUIRED_VIEWER_EVENT_KINDS)
     assert payload["export_targets"] == list(MODULE.REQUIRED_VIEWER_EXPORT_TARGETS)
+    assert payload["session_count"] == 3
+    assert payload["attested_session_count"] == 3
+    assert payload["logged_session_count"] == 3
+    assert payload["sessions"] == [
+        {"name": "viewer-session-00", "attested": True, "logged": True},
+        {"name": "viewer-session-01", "attested": True, "logged": True},
+        {"name": "viewer-session-02", "attested": True, "logged": True},
+    ]
     for claim in MODULE.VERIFIED_TRUE_CLAIMS:
         assert payload[claim] is True
     for claim in MODULE.FORBIDDEN_PAYLOAD_CLAIMS:
@@ -260,12 +278,27 @@ def test_missing_access_event_coverage_fails_closed(tmp_path: Path, capsys) -> N
 
 def test_session_count_drift_fails_before_write(tmp_path: Path, capsys) -> None:
     args = complete_args(tmp_path)
-    args[args.index("--logged-session-count") + 1] = "2"
+    args[args.index("--session-count") + 1] = "4"
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--logged-session-count must equal --session-count" in captured.err
+    assert "--viewer-session unique values must match --session-count" in captured.err
+    assert not (tmp_path / "evidence-viewer.json").exists()
+
+
+def test_duplicate_session_inventory_fails_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    first_session = args.index("--viewer-session") + 1
+    args.extend(["--viewer-session", args[first_session]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--viewer-session must not contain duplicates" in captured.err
     assert not (tmp_path / "evidence-viewer.json").exists()
 
 

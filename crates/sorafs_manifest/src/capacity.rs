@@ -1188,6 +1188,16 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
 
+    const SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn provider_id(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
@@ -1406,6 +1416,29 @@ mod tests {
             ReplicationOrderSignatureVerificationError::Verification { reason }
                 if reason.contains("all zero")
         ));
+    }
+
+    #[test]
+    fn signed_replication_order_rejects_malformed_ed25519_signature_r() {
+        for (label, replacement_r, expected_reason) in [
+            ("small-order", SMALL_ORDER_R, "small-order"),
+            ("noncanonical", NONCANONICAL_R, "not a canonical"),
+        ] {
+            let mut envelope = sign_replication_order(base_replication_order(), &[0xA7; 32]);
+            envelope.signature.signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
+
+            let err = envelope
+                .verify_signature()
+                .expect_err("malformed replication order signature R must be rejected");
+            assert!(
+                matches!(
+                    &err,
+                    ReplicationOrderSignatureVerificationError::Verification { reason }
+                        if reason.contains(expected_reason)
+                ),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

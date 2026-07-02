@@ -17,11 +17,8 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import org.hyperledger.iroha.android.SigningException;
 import org.hyperledger.iroha.android.address.AccountAddress;
@@ -1671,6 +1668,16 @@ public final class OfflineNoteTest {
     assertThrows(
         () -> OfflineNotePaymentTokenCodec.decodeText(text + "="),
         "padded payment token text should reject");
+    final String nonCanonicalPaymentText = OfflineNotePaymentTokenCodec.TEXT_PREFIX + "AB";
+    assertTrue(
+        OfflineBearerCashTextCodec.payloadKind(nonCanonicalPaymentText) == null,
+        "payment payload kind should reject non-canonical base64url");
+    assertThrows(
+        () -> OfflineNotePaymentTokenCodec.decodeText(nonCanonicalPaymentText),
+        "non-canonical payment token text should reject");
+    assertThrows(
+        () -> OfflineBearerCashTextCodec.decodePaymentText(nonCanonicalPaymentText),
+        "Bearer Cash payment text wrapper should reject non-canonical base64url");
 
     final List<byte[]> frames =
         OfflineNotePaymentTokenCodec.encodeQrFrameBytes(
@@ -1852,6 +1859,17 @@ public final class OfflineNoteTest {
     assertThrows(
         () -> OfflineNoteReceiveRequestCodec.decodeText(text + "="),
         "padded receive request text should reject");
+    final String nonCanonicalReceiveRequestText =
+        OfflineNoteReceiveRequestCodec.TEXT_PREFIX + "AB";
+    assertTrue(
+        OfflineBearerCashTextCodec.payloadKind(nonCanonicalReceiveRequestText) == null,
+        "receive request payload kind should reject non-canonical base64url");
+    assertThrows(
+        () -> OfflineNoteReceiveRequestCodec.decodeText(nonCanonicalReceiveRequestText),
+        "non-canonical receive request text should reject");
+    assertThrows(
+        () -> OfflineBearerCashTextCodec.decodeReceiveRequestText(nonCanonicalReceiveRequestText),
+        "Bearer Cash receive request text wrapper should reject non-canonical base64url");
 
     final List<byte[]> frames =
         OfflineNoteReceiveRequestCodec.encodeQrFrameBytes(
@@ -1924,6 +1942,16 @@ public final class OfflineNoteTest {
     assertThrows(
         () -> OfflineNoteReceiptAckCodec.decodeText(text + "="),
         "padded receipt ACK text should reject");
+    final String nonCanonicalAckText = OfflineNoteReceiptAckCodec.TEXT_PREFIX + "AB";
+    assertTrue(
+        OfflineBearerCashTextCodec.payloadKind(nonCanonicalAckText) == null,
+        "receipt ACK payload kind should reject non-canonical base64url");
+    assertThrows(
+        () -> OfflineNoteReceiptAckCodec.decodeText(nonCanonicalAckText),
+        "non-canonical receipt ACK text should reject");
+    assertThrows(
+        () -> OfflineBearerCashTextCodec.decodeAckText(nonCanonicalAckText),
+        "Bearer Cash receipt ACK text wrapper should reject non-canonical base64url");
 
     final List<byte[]> frames =
         OfflineNoteReceiptAckCodec.encodeQrFrameBytes(ack, new OfflineQrStream.Options(180, 2));
@@ -3072,7 +3100,7 @@ public final class OfflineNoteTest {
                 + "\"extra\":true}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] challengeContentTypeDowngrade =
-        ("{\"kind\":\"challenge\",\"payload\":\"YQ\","
+        ("{\"kind\":\"receive_request\",\"payload\":\"YQ\","
                 + "\"contentType\":\"application/vnd.iroha.offline.receipt-ack+norito\","
                 + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
             .getBytes(StandardCharsets.UTF_8);
@@ -3081,7 +3109,12 @@ public final class OfflineNoteTest {
                 + "\"contentType\":\"application/vnd.iroha.offline.receive-request+norito\"}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] paddedPayload =
-        ("{\"kind\":\"challenge\",\"payload\":\"YQ==\","
+        ("{\"kind\":\"receive_request\",\"payload\":\"YQ==\","
+                + "\"contentType\":\"application/vnd.iroha.offline.receive-request+norito\","
+                + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
+            .getBytes(StandardCharsets.UTF_8);
+    final byte[] nonCanonicalPayload =
+        ("{\"kind\":\"receive_request\",\"payload\":\"AB\","
                 + "\"contentType\":\"application/vnd.iroha.offline.receive-request+norito\","
                 + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
             .getBytes(StandardCharsets.UTF_8);
@@ -3097,19 +3130,22 @@ public final class OfflineNoteTest {
     assertThrows(
         () -> OfflineNoteNearbyEnvelope.decode(paddedPayload),
         "padded nearby envelope payload should fail");
+    assertThrows(
+        () -> OfflineNoteNearbyEnvelope.decode(nonCanonicalPayload),
+        "non-canonical nearby envelope payload should fail");
     final byte[] topLevelArray = "[]".getBytes(StandardCharsets.UTF_8);
     final byte[] invalidBase64Payload =
-        ("{\"kind\":\"challenge\",\"payload\":\"!!!!\","
+        ("{\"kind\":\"receive_request\",\"payload\":\"!!!!\","
                 + "\"contentType\":\"application/vnd.iroha.offline.receive-request+norito\","
                 + "\"pairingChallenge\":\"nearby_pairing_bird\"}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] badPairingObject =
-        ("{\"kind\":\"challenge\",\"payload\":\"YQ\","
+        ("{\"kind\":\"receive_request\",\"payload\":\"YQ\","
                 + "\"contentType\":\"application/vnd.iroha.offline.receive-request+norito\","
                 + "\"pairingChallenge\":{\"assetName\":1}}")
             .getBytes(StandardCharsets.UTF_8);
     final byte[] smuggledPairingObject =
-        ("{\"kind\":\"challenge\",\"payload\":\"YQ\","
+        ("{\"kind\":\"receive_request\",\"payload\":\"YQ\","
                 + "\"contentType\":\"application/vnd.iroha.offline.receive-request+norito\","
                 + "\"pairingChallenge\":{\"assetName\":\"nearby_pairing_bird\",\"extra\":true}}")
             .getBytes(StandardCharsets.UTF_8);
@@ -3460,21 +3496,16 @@ public final class OfflineNoteTest {
             new FixedIdGenerator(string(derivation, "payment_request_id")),
             () -> 1_700_000_001_000L);
 
-    final OfflineNoteWalletNote note =
-        wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount")).get();
-
+    final Throwable cause =
+        assertFutureFailsWithin(
+            wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount")),
+            "retired wallet load should fail");
     assertEquals(
-        string(derivation, "source_note_commitment"),
-        note.noteCommitmentHex(),
-        "wallet load note commitment");
-    assertEquals(
-        string(derivation, "source_note_commitment"),
-        issuerClient.lastIssueRequest.noteCommitmentHex(),
-        "issuer request note commitment");
-    assertEquals(
-        OfflineNoteWalletNoteState.ISSUE_PENDING.name(),
-        note.state().name(),
-        "loaded note state");
+        ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE,
+        cause.getMessage(),
+        "retired wallet load message");
+    assertEquals(0L, issuerClient.prepareLoadCount, "retired load issuer prepare count");
+    assertTrue(issuerClient.lastIssueRequest == null, "retired load issue request");
   }
 
   private static void walletRejectsNonPositiveLoadAmounts() throws Exception {
@@ -3513,10 +3544,11 @@ public final class OfflineNoteTest {
           assertFutureFailsWithin(
               wallet.load(assetDefinitionId, invalidAmount), "nonpositive load should fail");
       assertTrue(
-          cause instanceof IllegalArgumentException,
-          "nonpositive load should fail with IllegalArgumentException");
-      assertTrue(
-          cause.getMessage().contains("Offline Note payment amount must be positive"),
+          cause instanceof IllegalStateException,
+          "nonpositive retired load should fail with IllegalStateException");
+      assertEquals(
+          ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE,
+          cause.getMessage(),
           "nonpositive load failure message");
       assertEquals(0L, issuerClient.prepareLoadCount, "nonpositive load issuer prepare count");
       assertTrue(issuerClient.lastIssueRequest == null, "nonpositive load issue request");
@@ -3560,23 +3592,15 @@ public final class OfflineNoteTest {
             new FixedIdGenerator(string(derivation, "payment_request_id") + "-canonical-load"),
             () -> 1_700_000_012_181L);
 
-    final OfflineNoteWalletNote loaded = loadWallet.load(assetDefinitionId, "001.2300").get();
-    assertEquals("1.2300", issuerClient.lastPrepareAmount, "canonical load prepare amount");
-    assertEquals("1.2300", issuerClient.lastIssueRequest.amount(), "canonical issue amount");
-    assertEquals("1.2300", loaded.amount(), "canonical loaded note amount");
-    assertEquals("1.2300", loaded.canonicalAmount(), "canonical loaded note amount accessor");
-
-    for (final String invalidAmount : Arrays.asList(" 1", "1\n", "1e3", ".", "")) {
-      final Throwable cause =
-          assertFutureFailsWithin(
-              loadWallet.load(assetDefinitionId, invalidAmount),
-              "malformed load amount should fail");
-      assertTrue(
-          cause instanceof IllegalArgumentException,
-          "malformed load amount should fail with IllegalArgumentException");
-      assertEquals(1L, issuerClient.prepareLoadCount, "malformed load issuer prepare count");
-      assertEquals(1L, loadStore.listNotes().size(), "malformed load note count");
-    }
+    final Throwable retiredLoad =
+        assertFutureFailsWithin(
+            loadWallet.load(assetDefinitionId, "001.2300"), "retired canonical load should fail");
+    assertEquals(
+        ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE,
+        retiredLoad.getMessage(),
+        "retired canonical load message");
+    assertEquals(0L, issuerClient.prepareLoadCount, "retired load issuer prepare count");
+    assertEquals(0L, loadStore.listNotes().size(), "retired load note count");
 
     final InMemoryOfflineNoteStore receiveStore = new InMemoryOfflineNoteStore();
     final OfflineNoteWallet receiveWallet =
@@ -3910,7 +3934,8 @@ public final class OfflineNoteTest {
         certificateJson,
         "device_proof.operation is not supported");
 
-    for (final String invalidPlatform : List.of("ios-appattest", "android-keymint ", "Android")) {
+    for (final String invalidPlatform :
+        List.of("ios-appattest", "android-keymint", "android-keymint ", "Android")) {
       proof = deviceProofJson();
       proof.put("platform", invalidPlatform);
       assertToriiIssuerClientRejectsDeviceProof(
@@ -4338,43 +4363,15 @@ public final class OfflineNoteTest {
 
     final CompletableFuture<OfflineNoteWalletNote> load =
         wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount"));
+    final Throwable cause = assertFutureFailsWithin(load, "retired wallet load should fail");
+    assertEquals(
+        ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE,
+        cause.getMessage(),
+        "retired wallet load message");
     assertTrue(
-        issuerClient.issueRequested.await(5, TimeUnit.SECONDS),
-        "wallet load did not submit issue request");
-
-    final OfflineNoteIssueRequest request = issuerClient.lastIssueRequest;
-    final OfflineNoteIssueResponse response =
-        new OfflineNoteIssueResponse(
-            request.noteCommitment(),
-            request.loadContext().operationId(),
-            request.loadContext().lineageId(),
-            request.loadContext().localRevision(),
-            request.loadContext().keyCertificate(),
-            "settlement-entry-hash");
-    final AtomicBoolean completeReturned = new AtomicBoolean(false);
-    final ExecutorService issuerCompleter =
-        Executors.newSingleThreadExecutor(r -> new Thread(r, "offline-note-issuer-completer"));
-    try {
-      issuerCompleter.submit(
-          () -> {
-            issuerClient.issueFuture.complete(response);
-            completeReturned.set(true);
-          });
-      assertTrue(
-          store.entered.await(5, TimeUnit.SECONDS),
-          "wallet load did not enter note persistence after issuer response");
-      assertTrue(
-          completeReturned.get(),
-          "wallet load must not block the issuer completion thread while persisting notes");
-      store.release.countDown();
-      assertEquals(
-          string(derivation, "source_note_commitment"),
-          load.get(5, TimeUnit.SECONDS).noteCommitmentHex(),
-          "wallet load note commitment after asynchronous issue completion");
-    } finally {
-      store.release.countDown();
-      issuerCompleter.shutdownNow();
-    }
+        !issuerClient.issueRequested.await(100, TimeUnit.MILLISECONDS),
+        "retired wallet load must not submit issue request");
+    store.release.countDown();
   }
 
   private static void walletLoadCompletesExceptionallyWhenIssuerThrowsSynchronously()
@@ -4414,8 +4411,11 @@ public final class OfflineNoteTest {
             "synchronous issue failure should fail wallet load");
     assertTrue(
         cause instanceof IllegalStateException,
-        "synchronous issue failure should propagate the issuer exception");
-    assertEquals("issuer exploded", cause.getMessage(), "synchronous issue failure message");
+        "retired wallet load should fail before issuer dispatch");
+    assertEquals(
+        ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE,
+        cause.getMessage(),
+        "retired wallet load message");
   }
 
   private static void walletLifecycleBuildsAuditAcceptAndRedeemTransactions() throws Exception {

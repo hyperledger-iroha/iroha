@@ -26,6 +26,10 @@ duplicate_case_rejected
 invalid_payload_rejected
 --case-count
 2
+--case
+appeal-case-00
+--case
+appeal-case-01
 --intake-route
 appeal_submit
 --intake-route

@@ -87,6 +87,8 @@ def args_for(kind: str, tmp_path: Path, suffix: str = "") -> list[str]:
         args.extend(["--policy-digest-hex", POLICY_DIGEST])
     if kind == "feed_collector":
         args.extend(["--feed-count", "3", "--feed-lag-seconds", "60"])
+        for feed in ("feed-primary", "feed-secondary", "feed-tertiary"):
+            args.extend(["--feed", feed])
     elif kind == "reference_price":
         args.extend(
             [
@@ -102,6 +104,8 @@ def args_for(kind: str, tmp_path: Path, suffix: str = "") -> list[str]:
                 "60",
             ]
         )
+        for feed in ("feed-primary", "feed-secondary", "feed-tertiary"):
+            args.extend(["--feed", feed])
     elif kind == "billing_cycle":
         cycle_index = 2 if suffix == "b" else 1
         args.extend(
@@ -124,14 +128,22 @@ def args_for(kind: str, tmp_path: Path, suffix: str = "") -> list[str]:
                 STATEMENT_DIGEST_A,
                 "--statement-digest-hex",
                 STATEMENT_DIGEST_B,
+                "--statement",
+                "statement-00",
+                "--statement",
+                "statement-01",
             ]
         )
+        for index in range(5):
+            args.extend(["--line-item", f"line-{index:02d}"])
     elif kind == "statement_publication":
         args.extend(["--acknowledgement-probe-count", "1"])
         for route in MODULE.REQUIRED_PUBLICATION_ROUTES:
             args.extend(["--route", route])
     elif kind == "reconciliation":
         args.extend(["--line-item-count", "5"])
+        for index in range(5):
+            args.extend(["--line-item", f"line-{index:02d}"])
         for source in MODULE.REQUIRED_RECONCILIATION_SOURCES:
             args.extend(["--source", source])
     elif kind == "metrics_alerts":
@@ -157,6 +169,17 @@ def test_builds_payload_free_billing_cycle_canary(tmp_path: Path) -> None:
     assert payload["reference_decision_id_hex"] == DECISION_DIGEST
     assert payload["policy_digest_hex"] == POLICY_DIGEST
     assert payload["statement_count"] == 2
+    assert [statement["name"] for statement in payload["statements"]] == [
+        "statement-00",
+        "statement-01",
+    ]
+    assert [line_item["name"] for line_item in payload["line_items"]] == [
+        "line-00",
+        "line-01",
+        "line-02",
+        "line-03",
+        "line-04",
+    ]
     for claim in MODULE.TRUE_CLAIMS["billing_cycle"]:
         assert payload[claim] is True
     for field in MODULE.FORCED_FALSE_FIELDS["billing_cycle"]:
@@ -205,6 +228,11 @@ def test_response_file_can_build_reference_price_canary(tmp_path: Path) -> None:
     payload = json.loads(canary_path(tmp_path, "reference_price").read_text("utf-8"))
     assert payload["decision_id_hex"] == DECISION_DIGEST
     assert payload["reference_price_micro_usd"] == 4_200_000
+    assert [feed["name"] for feed in payload["feeds"]] == [
+        "feed-primary",
+        "feed-secondary",
+        "feed-tertiary",
+    ]
 
 
 def test_duplicate_native_bridge_artifact_id_fails_closed_without_leaking(
@@ -222,6 +250,122 @@ def test_duplicate_native_bridge_artifact_id_fails_closed_without_leaking(
     assert "duplicate --artifact id" in captured.err
     assert artifact_id not in captured.err
     assert not canary_path(tmp_path, "native_bridge_release").exists()
+
+
+def test_billing_cycle_statement_inventory_must_match_statement_digests(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("billing_cycle", tmp_path)
+    args.extend(["--statement", "statement-02"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--statement unique values must match --statement-digest-hex" in captured.err
+    assert not canary_path(tmp_path, "billing_cycle").exists()
+
+
+def test_billing_cycle_statement_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("billing_cycle", tmp_path)
+    first_statement = args.index("--statement") + 1
+    args.extend(["--statement", args[first_statement]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--statement must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "billing_cycle").exists()
+
+
+def test_billing_cycle_line_item_inventory_must_match_line_item_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("billing_cycle", tmp_path)
+    args[args.index("--line-item-count") + 1] = "6"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--line-item unique values must match --line-item-count" in captured.err
+    assert not canary_path(tmp_path, "billing_cycle").exists()
+
+
+def test_billing_cycle_line_item_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("billing_cycle", tmp_path)
+    first_line_item = args.index("--line-item") + 1
+    args.extend(["--line-item", args[first_line_item]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--line-item must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "billing_cycle").exists()
+
+
+def test_reconciliation_line_item_inventory_must_match_line_item_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("reconciliation", tmp_path)
+    args[args.index("--line-item-count") + 1] = "6"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--line-item unique values must match --line-item-count" in captured.err
+    assert not canary_path(tmp_path, "reconciliation").exists()
+
+
+def test_reconciliation_line_item_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("reconciliation", tmp_path)
+    first_line_item = args.index("--line-item") + 1
+    args.extend(["--line-item", args[first_line_item]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--line-item must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "reconciliation").exists()
+
+
+def test_reference_price_feed_inventory_must_match_feed_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("reference_price", tmp_path)
+    args[args.index("--feed-count") + 1] = "4"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--feed unique values must match --feed-count" in captured.err
+    assert not canary_path(tmp_path, "reference_price").exists()
+
+
+def test_reference_price_feed_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("reference_price", tmp_path)
+    first_feed = args.index("--feed") + 1
+    args.extend(["--feed", args[first_feed]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--feed must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "reference_price").exists()
 
 
 def test_missing_verified_claim_fails_closed(tmp_path: Path, capsys) -> None:

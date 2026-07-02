@@ -16,7 +16,7 @@ use std::{
 };
 
 use blake3::hash as blake3_hash;
-use iroha_crypto::{KeyPair, PublicKey, Signature};
+use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use iroha_data_model::taikai::{
     GuardDirectoryId, TaikaiEventId, TaikaiRenditionId, TaikaiSegmentEnvelopeV1, TaikaiStreamId,
 };
@@ -28,6 +28,17 @@ use norito::{
 };
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use thiserror::Error;
+
+fn verify_signature_for_signer(
+    signature: &Signature,
+    signer: &PublicKey,
+    payload: &[u8],
+) -> Result<(), iroha_crypto::Error> {
+    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    }
+    signature.verify(signer, payload)
+}
 
 /// Cache tiers tracked by the hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, Hash)]
@@ -1935,8 +1946,7 @@ impl CacheAdmissionEnvelope {
             });
         }
         let canonical = self.body.canonical_bytes()?;
-        self.signature
-            .verify(self.signer(), &canonical)
+        verify_signature_for_signer(&self.signature, self.signer(), &canonical)
             .map_err(|_| CacheAdmissionError::InvalidSignature)
     }
 
@@ -2095,8 +2105,7 @@ impl CacheAdmissionGossip {
         }
         self.body.envelope.verify(now_unix_ms)?;
         let canonical = self.body.canonical_bytes()?;
-        self.signature
-            .verify(self.signer(), &canonical)
+        verify_signature_for_signer(&self.signature, self.signer(), &canonical)
             .map_err(|_| CacheAdmissionError::InvalidSignature)
     }
 
@@ -2457,6 +2466,18 @@ mod tests {
         CacheAdmissionGossip::sign(body, &key_pair).expect("gossip")
     }
 
+    const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+        let mut payload = signature.payload().to_vec();
+        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
+            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        Signature::from_bytes(&payload)
+    }
+
     #[test]
     fn cache_admission_fixture_keypair_uses_checked_seed_derivation() {
         let key_pair = cache_admission_fixture_keypair();
@@ -2479,6 +2500,49 @@ mod tests {
             .verify(issued_ms)
             .expect("admission envelope verifies");
         gossip.verify(issued_ms).expect("admission gossip verifies");
+    }
+
+    #[test]
+    fn cache_admission_envelope_rejects_malformed_ed25519_signature_r() {
+        let issued_ms = 1_726_000_200_000;
+        let ttl = Duration::from_secs(30);
+        let envelope = cache_admission_gossip(TaikaiShardId(7), 43, issued_ms, ttl)
+            .body()
+            .envelope()
+            .clone();
+        let (body, signer, signature) = envelope.into_parts();
+        let envelope = CacheAdmissionEnvelope::from_parts(
+            body,
+            signer,
+            signature_with_malformed_ed25519_r(&signature),
+        );
+
+        assert!(matches!(
+            envelope
+                .verify(issued_ms)
+                .expect_err("malformed envelope signature R must fail admission"),
+            CacheAdmissionError::InvalidSignature
+        ));
+    }
+
+    #[test]
+    fn cache_admission_gossip_rejects_malformed_ed25519_signature_r() {
+        let issued_ms = 1_726_000_200_000;
+        let ttl = Duration::from_secs(30);
+        let gossip = cache_admission_gossip(TaikaiShardId(7), 44, issued_ms, ttl);
+        let (body, signer, signature) = gossip.into_parts();
+        let gossip = CacheAdmissionGossip::from_parts(
+            body,
+            signer,
+            signature_with_malformed_ed25519_r(&signature),
+        );
+
+        assert!(matches!(
+            gossip
+                .verify(issued_ms)
+                .expect_err("malformed gossip signature R must fail admission"),
+            CacheAdmissionError::InvalidSignature
+        ));
     }
 
     #[test]

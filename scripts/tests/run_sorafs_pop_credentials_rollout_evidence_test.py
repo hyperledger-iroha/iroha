@@ -109,6 +109,10 @@ def test_dry_run_prints_complete_pop_rollout_plan(tmp_path: Path, capsys) -> Non
         in plan["evidence_contract"]["issuer_bundle"]["required_payload_fields"]
     )
     assert (
+        "credentials"
+        in plan["evidence_contract"]["issuer_bundle"]["required_payload_fields"]
+    )
+    assert (
         "published_at_unix"
         in plan["evidence_contract"]["commitment_root"]["required_payload_fields"]
     )
@@ -124,6 +128,10 @@ def test_dry_run_prints_complete_pop_rollout_plan(tmp_path: Path, capsys) -> Non
     )
     assert (
         "proof_probe_count"
+        in plan["evidence_contract"]["verifier_service"]["required_payload_fields"]
+    )
+    assert (
+        "probes"
         in plan["evidence_contract"]["verifier_service"]["required_payload_fields"]
     )
     assert (
@@ -429,6 +437,11 @@ def test_response_file_dry_run_prints_complete_pop_plan(tmp_path: Path, capsys) 
     assert plan["steps"][0]["label"] == "rollout_evidence_gate"
     assert plan["external_evidence"]["juror_client"]
     assert "moderation_integration" in plan["evidence_contract"]
+    moderation_fields = plan["evidence_contract"]["moderation_integration"][
+        "required_payload_fields"
+    ]
+    assert "sortition_probes" in moderation_fields
+    assert "commit_reveal_probes" in moderation_fields
 
 
 def test_split_response_file_dry_run_prints_complete_pop_plan(tmp_path: Path, capsys) -> None:

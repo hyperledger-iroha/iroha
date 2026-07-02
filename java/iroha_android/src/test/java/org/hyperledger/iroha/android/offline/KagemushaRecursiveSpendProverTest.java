@@ -3748,6 +3748,8 @@ public final class KagemushaRecursiveSpendProverTest {
     assertThrows("requestArchive must not be empty",
         () -> KagemushaRecursiveSpendProver.appendSpend(new byte[0]));
     assertThrows("requestArchive must not be empty",
+        () -> KagemushaRecursiveSpendProver.topUpSpend(new byte[0]));
+    assertThrows("requestArchive must not be empty",
         () -> KagemushaRecursiveSpendProver.transitionProfileInit(new byte[0]));
     assertThrows("requestArchive must not be empty",
         () -> KagemushaRecursiveSpendProver.transitionProfileAppend(new byte[0]));
@@ -3852,6 +3854,12 @@ public final class KagemushaRecursiveSpendProverTest {
     assertThrows(
         "requestArchive must contain a non-empty Norito payload",
         () -> KagemushaRecursiveSpendProver.appendSpend(emptyPayloadArchive));
+    assertThrows(
+        "requestArchive must be a valid Norito archive",
+        () -> KagemushaRecursiveSpendProver.topUpSpend(malformedArchive));
+    assertThrows(
+        "requestArchive must contain a non-empty Norito payload",
+        () -> KagemushaRecursiveSpendProver.topUpSpend(emptyPayloadArchive));
     assertThrows(
         "requestArchive must be a valid Norito archive",
         () -> KagemushaRecursiveSpendProver.transitionProfileInit(malformedArchive));

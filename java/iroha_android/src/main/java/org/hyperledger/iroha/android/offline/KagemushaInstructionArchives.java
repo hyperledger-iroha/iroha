@@ -15,6 +15,8 @@ public final class KagemushaInstructionArchives {
       "iroha_data_model::isi::offline::KagemushaTransfer";
   public static final String REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME =
       "iroha_data_model::isi::offline::RedeemKagemushaRecursive";
+  public static final String RECURSIVE_TOP_UP_REQUEST_WIRE_NAME =
+      "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
   public static final String RECURSIVE_REDEEM_REQUEST_WIRE_NAME =
       "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
 
@@ -53,6 +55,15 @@ public final class KagemushaInstructionArchives {
 
   public static InstructionBox recursiveRedeemInstructionBox(final byte[] instructionArchive) {
     return instructionBox(InstructionType.REDEEM_RECURSIVE, instructionArchive);
+  }
+
+  public static InstructionBox topUpInstructionBox(final byte[] instructionArchive) {
+    return instructionBox(InstructionType.TRANSFER, instructionArchive);
+  }
+
+  public static InstructionBox topUpInstructionBoxFromInitRequest(
+      final byte[] initRequestArchive) {
+    return topUpInstructionBox(KagemushaRecursiveSpendProver.topUpSpend(initRequestArchive));
   }
 
   public static InstructionBox recursiveRedeemInstructionBoxFromRequest(
@@ -96,6 +107,45 @@ public final class KagemushaInstructionArchives {
         instructionArchive,
         chainId,
         authority,
+        creationTimeMs,
+        timeToLiveMs,
+        nonce,
+        metadata);
+  }
+
+  public static TransactionPayload topUpTransactionPayload(
+      final byte[] instructionArchive,
+      final String chainId,
+      final String authority,
+      final long creationTimeMs,
+      final Long timeToLiveMs,
+      final Integer nonce,
+      final Map<String, ?> metadata) {
+    return transactionPayload(
+        InstructionType.TRANSFER,
+        instructionArchive,
+        chainId,
+        authority,
+        creationTimeMs,
+        timeToLiveMs,
+        nonce,
+        metadata);
+  }
+
+  public static TransactionPayload topUpTransactionPayloadFromInitRequest(
+      final byte[] initRequestArchive,
+      final String chainId,
+      final String authority,
+      final long creationTimeMs,
+      final Long timeToLiveMs,
+      final Integer nonce,
+      final Map<String, ?> metadata) {
+    final String exactChainId = requireNonBlankUnpadded(chainId, "chainId");
+    final String exactAuthority = requireNonBlankUnpadded(authority, "authority");
+    return topUpTransactionPayload(
+        KagemushaRecursiveSpendProver.topUpSpend(initRequestArchive),
+        exactChainId,
+        exactAuthority,
         creationTimeMs,
         timeToLiveMs,
         nonce,

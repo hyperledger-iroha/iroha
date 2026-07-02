@@ -592,6 +592,19 @@ fn checked_signature_from_bytes(bytes: &[u8], context: &str) -> PyResult<Signatu
         .map_err(|err| PyValueError::new_err(format!("{context} is malformed: {err}")))
 }
 
+fn checked_signature_from_bytes_for_algorithm(
+    bytes: &[u8],
+    algorithm: Algorithm,
+    context: &str,
+) -> PyResult<Signature> {
+    let signature = if algorithm == Algorithm::Ed25519 {
+        ed25519_parse_signature(bytes)
+    } else {
+        Signature::try_from_bytes(bytes).map_err(iroha_crypto::Error::from)
+    };
+    signature.map_err(|err| PyValueError::new_err(format!("{context} is malformed: {err}")))
+}
+
 fn py_text(value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
     let text = value
         .extract::<String>()
@@ -1445,7 +1458,7 @@ fn parse_wallet_signature(fields: &Bound<'_, PyDict>) -> PyResult<WalletSignatur
     };
     Ok(WalletSignatureV1::new(
         algorithm,
-        checked_signature_from_bytes(&sig, "approve.signature")?,
+        checked_signature_from_bytes_for_algorithm(&sig, algorithm, "approve.signature")?,
     ))
 }
 
@@ -4491,6 +4504,7 @@ fn sorafs_sign_orderbook_payload_py(
 
 #[pyfunction]
 #[pyo3(name = "sorafs_build_signed_orderbook_order_request")]
+#[allow(clippy::too_many_arguments)] // Python field-level constructor surface
 fn sorafs_build_signed_orderbook_order_request_py(
     py: Python<'_>,
     order_id: &[u8],
@@ -4554,6 +4568,7 @@ fn sorafs_build_signed_orderbook_order_cancel_py(
 
 #[pyfunction]
 #[pyo3(name = "sorafs_build_signed_orderbook_settlement_receipt")]
+#[allow(clippy::too_many_arguments)] // Python field-level constructor surface
 fn sorafs_build_signed_orderbook_settlement_receipt_py(
     py: Python<'_>,
     receipt_id: &[u8],
@@ -4843,82 +4858,6 @@ fn zk_ace_build_transfer_authorization_v1_py(
         from_account_id,
         to_account_id,
     )
-}
-
-#[pyfunction]
-#[pyo3(name = "zk_ace_verifying_key_registration_payload_v1")]
-fn zk_ace_verifying_key_registration_payload_v1_py() -> PyResult<String> {
-    let record = zk_ace_prover::zk_ace_verifying_key_record_v1(1).map_err(|err| {
-        PyValueError::new_err(format!(
-            "failed to build ZK-ACE verifying key record: {err}"
-        ))
-    })?;
-    let key = record
-        .key
-        .as_ref()
-        .ok_or_else(|| PyValueError::new_err("ZK-ACE verifying key record has no key bytes"))?;
-
-    let mut value = json::Map::new();
-    value.insert(
-        "backend".to_owned(),
-        json::Value::String(key.backend.as_str().to_owned()),
-    );
-    value.insert(
-        "name".to_owned(),
-        json::Value::String(iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned()),
-    );
-    value.insert(
-        "version".to_owned(),
-        json::to_value(&record.version)
-            .map_err(|err| PyValueError::new_err(format!("serialize ZK-ACE key version: {err}")))?,
-    );
-    value.insert(
-        "circuit_id".to_owned(),
-        json::Value::String(record.circuit_id.clone()),
-    );
-    value.insert(
-        "public_inputs_schema_hash_hex".to_owned(),
-        json::Value::String(hex_encode(record.public_inputs_schema_hash)),
-    );
-    value.insert(
-        "curve".to_owned(),
-        json::Value::String(record.curve.clone()),
-    );
-    if let Some(gas_schedule_id) = record.gas_schedule_id.as_deref() {
-        value.insert(
-            "gas_schedule_id".to_owned(),
-            json::Value::String(gas_schedule_id.to_owned()),
-        );
-    }
-    value.insert(
-        "vk_len".to_owned(),
-        json::to_value(&record.vk_len)
-            .map_err(|err| PyValueError::new_err(format!("serialize ZK-ACE key length: {err}")))?,
-    );
-    value.insert(
-        "max_proof_bytes".to_owned(),
-        json::to_value(&record.max_proof_bytes).map_err(|err| {
-            PyValueError::new_err(format!("serialize ZK-ACE max proof bytes: {err}"))
-        })?,
-    );
-    value.insert(
-        "vk_bytes".to_owned(),
-        json::Value::String(BASE64.encode(&key.bytes)),
-    );
-    value.insert(
-        "commitment_hex".to_owned(),
-        json::Value::String(hex_encode(record.commitment)),
-    );
-    value.insert(
-        "status".to_owned(),
-        json::Value::String("Active".to_owned()),
-    );
-
-    json::to_string(&json::Value::Object(value)).map_err(|err| {
-        PyValueError::new_err(format!(
-            "failed to serialize ZK-ACE verifier-key registration payload: {err}"
-        ))
-    })
 }
 
 fn py_sequence_items<'py>(
@@ -5232,6 +5171,18 @@ fn build_confidential_transfer_proof_v2_py(
     )
     .map_err(PyValueError::new_err)?;
     confidential_transfer_proof_v2_py_dict(py, proof)
+}
+
+#[pyfunction]
+#[pyo3(name = "compute_confidential_root_v2", signature = (tree_commitments))]
+fn compute_confidential_root_v2_py(
+    py: Python<'_>,
+    tree_commitments: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyBytes>> {
+    let tree_commitments = py_fixed_array_list(tree_commitments, "tree_commitments")?;
+    let root = iroha_core::zk::confidential_v2::compute_confidential_root_v2(&tree_commitments)
+        .map_err(PyValueError::new_err)?;
+    Ok(PyBytes::new(py, &root).unbind())
 }
 
 #[pyfunction]
@@ -5773,7 +5724,7 @@ fn kagemusha_verify_recursive_compact_payment_token_py(
 #[pyfunction]
 #[pyo3(name = "kagemusha_recursive_spend_native_bridge_abi_version")]
 fn kagemusha_recursive_spend_native_bridge_abi_version_py() -> u32 {
-    7
+    15
 }
 
 #[pyfunction]
@@ -5826,6 +5777,60 @@ fn kagemusha_recursive_spend_init_py(
         py,
         &bundle,
         "failed to encode Kagemusha recursive spend init bundle",
+    )
+}
+
+fn kagemusha_recursive_spend_topup_instruction_from_init_request(
+    request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1,
+) -> Result<iroha_data_model::isi::offline::KagemushaTransfer, String> {
+    use iroha_core::zk::{
+        kagemusha_verified_folded_public_inputs_from_record_bundle,
+        kagemusha_verified_folded_public_inputs_from_record_bundle_at_height,
+    };
+
+    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)
+        .map_err(|err| err.to_string())?;
+    request
+        .validate_public_binding()
+        .map_err(|err| err.to_string())?;
+    let _public_inputs = match request.block_height {
+        Some(block_height) => kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(
+            &request.record_bundle,
+            block_height,
+        ),
+        None => kagemusha_verified_folded_public_inputs_from_record_bundle(&request.record_bundle),
+    }
+    .map_err(|err| err.to_string())?;
+    let step = request.record_bundle.bundle.steps.first().ok_or_else(|| {
+        "Kagemusha recursive spend top-up init request has no fold steps".to_owned()
+    })?;
+    Ok(iroha_data_model::isi::offline::KagemushaTransfer::new(
+        request.record_bundle.bundle.asset.clone(),
+        step.input_nullifiers.clone(),
+        step.output_commitments.clone(),
+        step.attachment.clone(),
+        Some(step.root_before),
+    ))
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_recursive_spend_topup")]
+fn kagemusha_recursive_spend_topup_py(
+    py: Python<'_>,
+    request_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 =
+        decode_kagemusha_recursive_archive(request_archive, "Kagemusha recursive spend top-up")?;
+    let instruction = kagemusha_recursive_spend_topup_instruction_from_init_request(request)
+        .map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid Kagemusha recursive spend top-up request: {err}"
+            ))
+        })?;
+    encode_kagemusha_recursive_archive(
+        py,
+        &instruction,
+        "failed to encode Kagemusha recursive spend top-up instruction",
     )
 }
 
@@ -6574,6 +6579,109 @@ mod tests {
     }
 
     #[test]
+    fn checked_ed25519_signature_from_bytes_rejects_malformed_r_before_backend() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let key_pair = KeyPair::try_from_seed(
+            b"python-wallet-ed25519-signature-r-admission".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive checked Ed25519 wallet fixture keypair");
+        let signature = Signature::try_new(
+            key_pair.private_key(),
+            b"python wallet Ed25519 signature admission",
+        )
+        .expect("checked wallet fixture signature");
+        checked_signature_from_bytes_for_algorithm(
+            signature.payload(),
+            Algorithm::Ed25519,
+            "signature",
+        )
+        .expect("valid Ed25519 signature material is admitted");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = signature.payload().to_vec();
+            malformed[..32].copy_from_slice(&replacement_r);
+            let err = py_err_message(
+                checked_signature_from_bytes_for_algorithm(
+                    &malformed,
+                    Algorithm::Ed25519,
+                    "signature",
+                )
+                .expect_err("malformed Ed25519 R must fail admission"),
+            );
+            assert!(
+                err.contains("signature is malformed"),
+                "unexpected {label} R admission error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_wallet_signature_rejects_malformed_ed25519_r_before_storage() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let key_pair = KeyPair::try_from_seed(
+            b"python-connect-wallet-ed25519-r-admission".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive checked Connect wallet fixture keypair");
+        let signature = Signature::try_new(
+            key_pair.private_key(),
+            b"connect wallet signature admission",
+        )
+        .expect("checked Connect wallet fixture signature");
+
+        ensure_python();
+        Python::attach(|py| {
+            let fields = PyDict::new(py);
+            fields
+                .set_item("signature", PyBytes::new(py, signature.payload()))
+                .expect("set valid wallet signature");
+            parse_wallet_signature(&fields).expect("valid wallet signature parses");
+
+            for (label, replacement_r) in [
+                ("small-order", SMALL_ORDER_R),
+                ("noncanonical", NONCANONICAL_R),
+            ] {
+                let mut malformed = signature.payload().to_vec();
+                malformed[..32].copy_from_slice(&replacement_r);
+                fields
+                    .set_item("signature", PyBytes::new(py, &malformed))
+                    .expect("set malformed wallet signature");
+                let err = match parse_wallet_signature(&fields) {
+                    Ok(_) => panic!("{label} Ed25519 R unexpectedly parsed"),
+                    Err(err) => err,
+                };
+                let message = err.value(py).to_string();
+                assert!(
+                    message.contains("approve.signature is malformed"),
+                    "unexpected {label} R parser error: {message}"
+                );
+            }
+        });
+    }
+
+    #[test]
     fn verify_ed25519_rejects_malformed_signature_r_before_backend() {
         const SMALL_ORDER_R: [u8; 32] = [
             1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -6810,47 +6918,44 @@ mod tests {
 
     #[test]
     fn zk_ace_verifier_key_registration_payload_matches_native_record() {
-        let raw = zk_ace_verifying_key_registration_payload_v1_py()
-            .expect("serialize ZK-ACE verifier-key registration payload");
-        let payload: json::Value =
-            json::from_str(&raw).expect("ZK-ACE verifier-key payload is JSON");
-        let object = payload
-            .as_object()
-            .expect("ZK-ACE verifier-key payload is an object");
         let record = zk_ace_prover::zk_ace_verifying_key_record_v1(1)
             .expect("native ZK-ACE verifier-key record");
         let key = record.key.as_ref().expect("record carries key bytes");
 
-        assert_eq!(
-            object.get("backend").and_then(json::Value::as_str),
-            Some(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND)
-        );
-        assert_eq!(
-            object.get("name").and_then(json::Value::as_str),
-            Some(iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID)
-        );
-        assert_eq!(
-            object.get("circuit_id").and_then(json::Value::as_str),
-            Some(iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID)
-        );
-        assert_eq!(
-            object
-                .get("public_inputs_schema_hash_hex")
-                .and_then(json::Value::as_str),
-            Some(hex_encode(record.public_inputs_schema_hash).as_str())
-        );
-        assert_eq!(
-            object.get("commitment_hex").and_then(json::Value::as_str),
-            Some(hex_encode(record.commitment).as_str())
-        );
-        assert_eq!(
-            object.get("vk_bytes").and_then(json::Value::as_str),
-            Some(BASE64.encode(&key.bytes).as_str())
-        );
-        assert_eq!(
-            object.get("status").and_then(json::Value::as_str),
-            Some("Active")
-        );
+        ensure_python();
+        Python::attach(|py| {
+            let raw = zk_ace_verifying_key_registration_payload_v1_py(py)
+                .expect("serialize ZK-ACE verifier-key registration payload");
+            let object = raw
+                .bind(py)
+                .cast::<PyDict>()
+                .expect("ZK-ACE verifier-key payload is a dict");
+            let get_str = |key: &str| -> String {
+                object
+                    .get_item(key)
+                    .expect("read ZK-ACE payload field")
+                    .unwrap_or_else(|| panic!("missing ZK-ACE payload field `{key}`"))
+                    .extract()
+                    .unwrap_or_else(|_| panic!("ZK-ACE payload field `{key}` is a string"))
+            };
+
+            assert_eq!(get_str("backend"), ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND);
+            assert_eq!(
+                get_str("name"),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
+            );
+            assert_eq!(
+                get_str("circuit_id"),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
+            );
+            assert_eq!(
+                get_str("public_inputs_schema_hash_hex"),
+                hex_encode(record.public_inputs_schema_hash)
+            );
+            assert_eq!(get_str("commitment_hex"), hex_encode(record.commitment));
+            assert_eq!(get_str("vk_bytes"), BASE64.encode(&key.bytes));
+            assert_eq!(get_str("status"), "Active");
+        });
     }
 
     #[test]
@@ -12855,6 +12960,11 @@ mod tests {
                         as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
                 ),
                 (
+                    "top-up",
+                    kagemusha_recursive_spend_topup_py
+                        as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
+                ),
+                (
                     "append",
                     kagemusha_recursive_spend_append_py
                         as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
@@ -13145,6 +13255,10 @@ mod tests {
                 kagemusha_recursive_spend_init_py(py, &init_request_archive),
             );
             assert_empty_nested_pallas_archive_rejected_python(
+                "top-up",
+                kagemusha_recursive_spend_topup_py(py, &init_request_archive),
+            );
+            assert_empty_nested_pallas_archive_rejected_python(
                 "transition profile init",
                 kagemusha_recursive_spend_transition_profile_init_py(py, &init_request_archive),
             );
@@ -13189,8 +13303,8 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_native_bridge_abi_version_python_function_is_additive_seven() {
-        assert_eq!(kagemusha_recursive_spend_native_bridge_abi_version_py(), 7);
+    fn kagemusha_recursive_spend_native_bridge_abi_version_python_function_is_additive_fifteen() {
+        assert_eq!(kagemusha_recursive_spend_native_bridge_abi_version_py(), 15);
     }
 
     #[test]
@@ -19781,12 +19895,13 @@ impl TransactionBuilder {
             )));
         }
 
-        let signed = self
-            .to_model_builder()
-            .build_with_signature(checked_signature_from_bytes(
+        let signed = self.to_model_builder().build_with_signature(
+            checked_signature_from_bytes_for_algorithm(
                 signature,
+                Algorithm::Ed25519,
                 "Ed25519 signature",
-            )?);
+            )?,
+        );
         signed.verify_signature().map_err(|err| {
             PyValueError::new_err(format!("signature verification failed: {err}"))
         })?;
@@ -23547,13 +23662,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        zk_ace_verifying_key_registration_payload_v1_py,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
         build_confidential_transfer_proof_v2_py,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(compute_confidential_root_v2_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         build_confidential_unshield_proof_v3_py,
         module
@@ -23603,6 +23715,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(kagemusha_recursive_spend_init_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_recursive_spend_topup_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(
         kagemusha_recursive_spend_append_py,
         module

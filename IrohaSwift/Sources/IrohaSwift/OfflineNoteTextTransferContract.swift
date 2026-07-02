@@ -65,7 +65,8 @@ public enum OfflineNoteTextTransferContract {
     }
 
     public static func base64URLDecodedData(_ value: String) -> Data? {
-        guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard !value.isEmpty,
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.contains("="),
               value.unicodeScalars.allSatisfy(isBase64URLScalarAllowed) else {
             return nil
@@ -75,7 +76,11 @@ public enum OfflineNoteTextTransferContract {
             .replacingOccurrences(of: "_", with: "/")
         let padding = (4 - normalized.count % 4) % 4
         normalized.append(String(repeating: "=", count: padding))
-        return Data(base64Encoded: normalized)
+        guard let decoded = Data(base64Encoded: normalized),
+              base64URLEncodedString(decoded) == value else {
+            return nil
+        }
+        return decoded
     }
 
     private static func isBase64URLScalarAllowed(_ scalar: Unicode.Scalar) -> Bool {

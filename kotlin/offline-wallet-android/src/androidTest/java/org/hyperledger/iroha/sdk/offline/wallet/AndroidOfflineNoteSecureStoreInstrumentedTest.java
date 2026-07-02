@@ -11,6 +11,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.hyperledger.iroha.sdk.client.JsonParser;
@@ -321,6 +323,103 @@ public final class AndroidOfflineNoteSecureStoreInstrumentedTest {
     }
   }
 
+  @Test
+  public void testWalletNoteJsonRejectsNonCanonicalAmount() throws Exception {
+    final OfflineNoteWalletNote note = sourceWalletNote(loadFixture());
+    final String json = new String(encodeWalletNoteJson(note), StandardCharsets.UTF_8);
+    final String canonicalField = "\"amount\":\"" + note.getCanonicalAmount() + "\"";
+    assertTrue(json.contains(canonicalField));
+
+    try {
+      decodeWalletNoteJson(
+          json.replace(canonicalField, "\"amount\":\"0" + note.getCanonicalAmount() + "\"")
+              .getBytes(StandardCharsets.UTF_8));
+      fail("non-canonical wallet-note amount should reject");
+    } catch (final IllegalArgumentException expected) {
+      assertTrue(expected.getMessage().contains("amount must be canonical"));
+    }
+  }
+
+  @Test
+  public void testWalletNoteJsonRejectsNonExactCommitmentHex() throws Exception {
+    final OfflineNoteWalletNote note = sourceWalletNote(loadFixture());
+    final String json = new String(encodeWalletNoteJson(note), StandardCharsets.UTF_8);
+    final String canonicalCommitment = note.noteCommitmentHex();
+    final String canonicalField = "\"note_commitment_hex\":\"" + canonicalCommitment + "\"";
+    assertTrue(json.contains(canonicalField));
+
+    for (final String nonExactCommitment : nonExactLowerHex32(canonicalCommitment)) {
+      try {
+        decodeWalletNoteJson(
+            json.replace(
+                    canonicalField, "\"note_commitment_hex\":\"" + nonExactCommitment + "\"")
+                .getBytes(StandardCharsets.UTF_8));
+        fail("non-exact wallet-note commitment should reject: " + nonExactCommitment);
+      } catch (final IllegalArgumentException expected) {
+        assertTrue(expected.getMessage().contains("note_commitment_hex must be 32-byte lowercase hex"));
+      }
+    }
+  }
+
+  @Test
+  public void testWalletNoteJsonRejectsNonExactIntegerFields() throws Exception {
+    final OfflineNoteWalletNote note = sourceWalletNote(loadFixture());
+    final String json = new String(encodeWalletNoteJson(note), StandardCharsets.UTF_8);
+    final OfflineNote.CommitmentOrigin.IssuerLoad origin =
+        (OfflineNote.CommitmentOrigin.IssuerLoad) note.getOrigin();
+
+    assertWalletNoteIntegerRejects(
+        json, "\"version\":1", "\"version\":\"1\"", "quoted wallet-note version should reject");
+    assertWalletNoteIntegerRejects(
+        json, "\"version\":1", "\"version\":1.5", "fractional wallet-note version should reject");
+    assertWalletNoteIntegerRejects(
+        json,
+        "\"created_at_ms\":" + note.getCreatedAtMs(),
+        "\"created_at_ms\":\"" + note.getCreatedAtMs() + "\"",
+        "quoted wallet-note creation timestamp should reject");
+    assertWalletNoteIntegerRejects(
+        json,
+        "\"updated_at_ms\":" + note.getUpdatedAtMs(),
+        "\"updated_at_ms\":" + note.getUpdatedAtMs() + ".5",
+        "fractional wallet-note update timestamp should reject");
+    assertWalletNoteIntegerRejects(
+        json,
+        "\"local_revision\":" + origin.getLocalRevision(),
+        "\"local_revision\":\"" + origin.getLocalRevision() + "\"",
+        "quoted issuer-load local revision should reject");
+
+    final OfflineNoteWalletNote p2pNote =
+        new OfflineNoteWalletNote(
+            note.getChainId(),
+            note.getAccountId(),
+            note.getAssetId(),
+            note.getCanonicalAmount(),
+            note.getKeyCertificate(),
+            note.noteCommitment(),
+            note.noteSecret(),
+            new OfflineNote.CommitmentOrigin.P2pOutput("payment-request-1", 7),
+            note.getState(),
+            note.getCreatedAtMs(),
+            note.getUpdatedAtMs());
+    final String p2pJson = new String(encodeWalletNoteJson(p2pNote), StandardCharsets.UTF_8);
+    assertWalletNoteIntegerRejects(
+        p2pJson,
+        "\"output_index\":7",
+        "\"output_index\":\"7\"",
+        "quoted P2P output index should reject");
+    assertWalletNoteIntegerRejects(
+        p2pJson,
+        "\"output_index\":7",
+        "\"output_index\":7.5",
+        "fractional P2P output index should reject");
+    assertWalletNoteIntegerRejects(
+        p2pJson,
+        "\"output_index\":7",
+        "\"output_index\":2147483648",
+        "overflowing P2P output index should reject",
+        "must fit in signed 32-bit range");
+  }
+
   private static Map<String, ?> snapshot(final SharedPreferences preferences) {
     return new HashMap<>(preferences.getAll());
   }
@@ -376,6 +475,30 @@ public final class AndroidOfflineNoteSecureStoreInstrumentedTest {
         throw (IllegalArgumentException) exception.getCause();
       }
       throw exception;
+    }
+  }
+
+  private static void assertWalletNoteIntegerRejects(
+      final String json, final String expectedField, final String replacementField, final String label)
+      throws Exception {
+    assertWalletNoteIntegerRejects(json, expectedField, replacementField, label, "must be an integer");
+  }
+
+  private static void assertWalletNoteIntegerRejects(
+      final String json,
+      final String expectedField,
+      final String replacementField,
+      final String label,
+      final String expectedMessage)
+      throws Exception {
+    if (!json.contains(expectedField)) {
+      throw new IllegalArgumentException("missing field for test: " + expectedField);
+    }
+    try {
+      decodeWalletNoteJson(json.replace(expectedField, replacementField).getBytes(StandardCharsets.UTF_8));
+      fail(label);
+    } catch (final IllegalArgumentException expected) {
+      assertTrue(expected.getMessage().contains(expectedMessage));
     }
   }
 
@@ -504,5 +627,14 @@ public final class AndroidOfflineNoteSecureStoreInstrumentedTest {
       out[index] = (byte) ((hi << 4) | lo);
     }
     return out;
+  }
+
+  private static List<String> nonExactLowerHex32(final String canonicalHex) {
+    return Arrays.asList(
+        canonicalHex.toUpperCase(Locale.ROOT),
+        "0x" + canonicalHex,
+        canonicalHex.substring(2),
+        canonicalHex + "00",
+        canonicalHex.substring(0, 63) + "g");
   }
 }

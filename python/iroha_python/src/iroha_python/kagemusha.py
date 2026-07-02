@@ -35,6 +35,9 @@ KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME = (
 KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME = (
     "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1"
 )
+KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME = (
+    "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1"
+)
 KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME = (
     "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1"
 )
@@ -73,6 +76,7 @@ KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES = {
 }
 KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6
 KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7
+KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 15
 KAGEMUSHA_MAX_NATIVE_BRIDGE_ABI_VERSION = 0xFFFF_FFFF
 KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1"
 KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT = (
@@ -167,6 +171,7 @@ __all__ = [
     "KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME",
     "KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME",
@@ -181,6 +186,7 @@ __all__ = [
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES",
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
     "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
@@ -245,6 +251,7 @@ __all__ = [
     "is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available",
     "is_kagemusha_recursive_compact_unavailable",
     "is_kagemusha_recursive_spend_available",
+    "is_kagemusha_recursive_spend_topup_available",
     "preferred_kagemusha_offline_spend_mode_for_capabilities",
     "preferred_kagemusha_offline_spend_mode",
     "kagemusha_prove_verified_compact_payment_token_with_records",
@@ -257,6 +264,7 @@ __all__ = [
     _RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_METHOD,
     _RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_AT_HEIGHT_METHOD,
     "kagemusha_recursive_spend_init",
+    "kagemusha_recursive_spend_topup",
     "kagemusha_recursive_spend_append",
     "kagemusha_recursive_spend_transition_profile_init",
     "kagemusha_recursive_spend_transition_profile_append",
@@ -270,12 +278,15 @@ __all__ = [
     "decode_kagemusha_recursive_spend_verify_result",
     "decode_kagemusha_recursive_spend_bundle",
     "kagemusha_recursive_spend_init_typed",
+    "kagemusha_recursive_spend_topup_typed",
     "kagemusha_recursive_spend_append_typed",
     "kagemusha_recursive_spend_verify_typed",
     "kagemusha_recursive_spend_redeem_typed",
     "kagemusha_instruction_archive_instruction",
+    "kagemusha_recursive_topup_instruction",
     "kagemusha_recursive_redeem_instruction",
     "build_kagemusha_instruction_transaction",
+    "build_kagemusha_recursive_topup_transaction",
     "build_kagemusha_recursive_redeem_transaction",
     "kagemusha_recursive_spend_verify",
     "kagemusha_recursive_spend_redeem",
@@ -292,6 +303,7 @@ _NATIVE_METHODS = (
     "kagemusha_recursive_spend_verify",
     "kagemusha_recursive_spend_redeem",
 )
+_TOPUP_NATIVE_METHOD = "kagemusha_recursive_spend_topup"
 _RECURSIVE_SPEND_ABI_VERSION_METHOD = "kagemusha_recursive_spend_native_bridge_abi_version"
 _MALFORMED_NATIVE_PROBE_ARCHIVE = b"\x00"
 _KAGEMUSHA_NORITO_HEADER_BYTES = 40
@@ -756,6 +768,14 @@ def _has_recursive_compact_abi(module: object) -> bool:
     )
 
 
+def _has_recursive_topup_abi(module: object) -> bool:
+    version = _recursive_spend_abi_version(module)
+    return (
+        version is not None
+        and version >= KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
+    )
+
+
 def is_kagemusha_recursive_compact_unavailable(error: object) -> bool:
     message = str(error)
     return (
@@ -790,6 +810,28 @@ def _require_complete_recursive_spend_surface(module: object) -> None:
         raise RuntimeError(
             "recursive Kagemusha support requires native bridge methods to "
             "reject malformed probe archives"
+        )
+
+
+def _require_recursive_spend_topup_surface(module: object) -> None:
+    if not _has_recursive_topup_abi(module):
+        raise RuntimeError(
+            "recursive Kagemusha top-up support requires native bridge ABI "
+            f"{KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION}"
+        )
+    if not callable(getattr(module, _TOPUP_NATIVE_METHOD, None)):
+        raise RuntimeError(
+            "recursive Kagemusha top-up support requires the native bridge "
+            f"symbol {_TOPUP_NATIVE_METHOD}"
+        )
+    if not _probe_native_archive_method(
+        module,
+        _TOPUP_NATIVE_METHOD,
+        _MALFORMED_NATIVE_PROBE_ARCHIVE,
+    ):
+        raise RuntimeError(
+            "recursive Kagemusha top-up support requires the native bridge method "
+            "to reject malformed probe archives"
         )
 
 
@@ -916,6 +958,21 @@ def is_kagemusha_recursive_spend_available() -> bool:
         _has_recursive_spend_abi(module)
         and not _missing_recursive_spend_methods(module)
         and _probe_recursive_spend_surface(module)
+    )
+
+
+def is_kagemusha_recursive_spend_topup_available() -> bool:
+    try:
+        module = load_crypto_extension()
+    except RuntimeError:
+        return False
+    return (
+        _has_recursive_topup_abi(module)
+        and _probe_native_archive_method(
+            module,
+            _TOPUP_NATIVE_METHOD,
+            _MALFORMED_NATIVE_PROBE_ARCHIVE,
+        )
     )
 
 
@@ -2148,6 +2205,14 @@ def kagemusha_recursive_spend_init_typed(
     request: KagemushaRecursiveSpendInitRequest,
 ) -> bytes:
     return kagemusha_recursive_spend_init(
+        encode_kagemusha_recursive_spend_init_request(request)
+    )
+
+
+def kagemusha_recursive_spend_topup_typed(
+    request: KagemushaRecursiveSpendInitRequest,
+) -> bytes:
+    return kagemusha_recursive_spend_topup(
         encode_kagemusha_recursive_spend_init_request(request)
     )
 
@@ -4014,6 +4079,16 @@ def kagemusha_recursive_redeem_instruction(redeem_request_archive: BytesLike) ->
     return builder(request)
 
 
+def kagemusha_recursive_topup_instruction(init_request_archive: BytesLike) -> object:
+    """Derive an online-to-offline recursive Kagemusha top-up instruction."""
+
+    instruction_archive = kagemusha_recursive_spend_topup(init_request_archive)
+    return kagemusha_instruction_archive_instruction(
+        KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER,
+        instruction_archive,
+    )
+
+
 def build_kagemusha_instruction_transaction(
     chain_id: str,
     authority: str,
@@ -4034,6 +4109,37 @@ def build_kagemusha_instruction_transaction(
         instruction_type,
         instruction_archive,
     )
+    private_key_bytes = _archive_bytes_named(private_key, "private_key")
+    from .crypto import build_signed_transaction
+
+    return build_signed_transaction(
+        chain_id,
+        authority,
+        private_key_bytes,
+        instructions=(instruction,),
+        creation_time_ms=creation_time_ms,
+        ttl_ms=ttl_ms,
+        nonce=nonce,
+        metadata=metadata,
+    )
+
+
+def build_kagemusha_recursive_topup_transaction(
+    chain_id: str,
+    authority: str,
+    private_key: BytesLike,
+    init_request_archive: BytesLike,
+    *,
+    creation_time_ms: Optional[int] = None,
+    ttl_ms: Optional[int] = None,
+    nonce: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> object:
+    """Derive the native recursive top-up instruction, then sign its transaction."""
+
+    _kagemusha_require_non_blank_unpadded(chain_id, "chain_id")
+    _kagemusha_require_non_blank_unpadded(authority, "authority")
+    instruction = kagemusha_recursive_topup_instruction(init_request_archive)
     private_key_bytes = _archive_bytes_named(private_key, "private_key")
     from .crypto import build_signed_transaction
 
@@ -4082,6 +4188,19 @@ def build_kagemusha_recursive_redeem_transaction(
 
 def kagemusha_recursive_spend_init(request_archive: BytesLike) -> bytes:
     return _call_recursive_spend_method("kagemusha_recursive_spend_init", request_archive)
+
+
+def kagemusha_recursive_spend_topup(request_archive: BytesLike) -> bytes:
+    request = _norito_archive_bytes_named(request_archive, "request_archive")
+    module = load_crypto_extension()
+    _require_recursive_spend_topup_surface(module)
+    method = getattr(module, _TOPUP_NATIVE_METHOD, None)
+    if method is None:
+        raise RuntimeError(
+            f"{_TOPUP_NATIVE_METHOD} requires a compiled iroha_python._crypto extension "
+            "with recursive Kagemusha top-up support"
+        )
+    return _require_kagemusha_native_output(_TOPUP_NATIVE_METHOD, method(request))
 
 
 def kagemusha_recursive_spend_append(request_archive: BytesLike) -> bytes:

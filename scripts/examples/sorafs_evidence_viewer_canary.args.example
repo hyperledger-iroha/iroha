@@ -10,8 +10,9 @@
 --case-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --roster-hash-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --session-count 3
---attested-session-count 3
---logged-session-count 3
+--viewer-session viewer-session-00
+--viewer-session viewer-session-01
+--viewer-session viewer-session-02
 --max-url-ttl-secs 300
 --role juror
 --role auditor

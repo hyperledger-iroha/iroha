@@ -39,6 +39,7 @@ def base(schema: str) -> dict:
 
 
 def auditor_roster(*, auditor_count: int = 3) -> dict:
+    auditors = [{"name": f"auditor-{index:02d}"} for index in range(auditor_count)]
     payload = base("sorafs.repair.auditor_roster_canary.v1")
     payload.update(
         {
@@ -48,6 +49,7 @@ def auditor_roster(*, auditor_count: int = 3) -> dict:
             "runbook_published": True,
             "auditor_notifications_configured": True,
             "auditor_count": auditor_count,
+            "auditors": auditors,
             "roster_digest_hex": DIGEST,
             "raw_roster_included": False,
         }
@@ -318,6 +320,38 @@ def test_auditor_roster_requires_minimum_auditors(tmp_path: Path) -> None:
     write_json(tmp_path / "auditor-roster.json", auditor_roster(auditor_count=2))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_auditor_roster_auditor_count_must_match_unique_auditors(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = auditor_roster()
+    payload["auditor_count"] += 1
+    write_json(tmp_path / "auditor-roster.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["auditor_roster"]["artifacts"][0]
+    assert "auditor_count must match unique auditors count" in artifact["errors"]
+
+
+def test_auditor_roster_auditors_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = auditor_roster()
+    payload["auditors"].append(dict(payload["auditors"][0]))
+    payload["auditor_count"] = len(payload["auditors"])
+    write_json(tmp_path / "auditor-roster.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["auditor_roster"]["artifacts"][0]
+    assert "auditors must not contain duplicate values" in artifact["errors"]
+    assert "auditor_count must match unique auditors count" in artifact["errors"]
 
 
 def test_auditor_api_without_authz_fails(tmp_path: Path) -> None:

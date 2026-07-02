@@ -188,6 +188,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     + (
         "feed_count",
         "accepted_feed_count",
+        "feeds",
         "primary_feed_present",
         "secondary_feed_present",
         "rejected_feed_count",
@@ -204,6 +205,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "reference_price_micro_usd",
         "feed_count",
         "accepted_feed_count",
+        "feeds",
         "rejected_feed_count",
         "stale_feed_count",
         "divergence_bps",
@@ -218,7 +220,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "generated_at_unix",
         "statement_count",
         "signed_statement_count",
+        "statements",
         "line_item_count",
+        "line_items",
         "total_micro_xor",
         "total_usd_micro",
         "reference_price_bound",
@@ -249,6 +253,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "source_count",
         "sources",
         "line_item_count",
+        "line_items",
         "reconciled_line_item_count",
         "mismatch_count",
         "unmatched_event_count",
@@ -348,6 +353,16 @@ def validate_feed_collector(
 ) -> None:
     feed_count = require_count_equal(payload, "feed_count", "accepted_feed_count", errors)
     require_minimum_value(feed_count, "feed_count", 2, errors)
+    require_string_inventory_count_match(
+        payload,
+        "feeds",
+        "feed_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "feeds", errors):
+        require_string(record, "name", errors)
     require_bool_true(payload, "primary_feed_present", errors)
     require_bool_true(payload, "secondary_feed_present", errors)
     require_zero_count(payload, "rejected_feed_count", errors)
@@ -366,15 +381,23 @@ def validate_reference_price(
     require_bool_true(payload, "feed_quorum_met", errors)
     require_bool_true(payload, "signed_payload_verified", errors)
     require_positive_int(payload, "reference_price_micro_usd", errors)
-    feed_count = require_positive_int(payload, "feed_count", errors)
-    accepted = require_positive_int(payload, "accepted_feed_count", errors)
+    feed_count = require_count_equal(payload, "feed_count", "accepted_feed_count", errors)
     require_minimum_value(
-        min(feed_count, accepted),
-        "feed_count and accepted_feed_count",
+        feed_count,
+        "feed_count",
         2,
         errors,
-        message="feed_count and accepted_feed_count must both be at least 2",
     )
+    require_string_inventory_count_match(
+        payload,
+        "feeds",
+        "feed_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "feeds", errors):
+        require_string(record, "name", errors)
     require_zero_count(payload, "rejected_feed_count", errors)
     require_zero_count(payload, "stale_feed_count", errors)
     require_maximum_number(payload, "divergence_bps", options.max_divergence_bps, errors)
@@ -407,7 +430,27 @@ def validate_billing_cycle(
         payload, "statement_count", "signed_statement_count", errors
     )
     require_minimum_value(statement_count, "statement_count", 1, errors)
+    require_string_inventory_count_match(
+        payload,
+        "statements",
+        "statement_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "statements", errors):
+        require_string(record, "name", errors)
     require_positive_int(payload, "line_item_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "line_items",
+        "line_item_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "line_items", errors):
+        require_string(record, "name", errors)
     require_positive_int(payload, "total_micro_xor", errors)
     require_positive_int(payload, "total_usd_micro", errors)
     require_bool_true(payload, "reference_price_bound", errors)
@@ -475,6 +518,16 @@ def validate_reconciliation(payload: dict[str, Any], errors: list[str]) -> None:
         allow_scalar_items=False,
     )
     require_count_equal(payload, "line_item_count", "reconciled_line_item_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "line_items",
+        "line_item_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "line_items", errors):
+        require_string(record, "name", errors)
     require_zero_count(payload, "mismatch_count", errors)
     require_zero_count(payload, "unmatched_event_count", errors)
     require_false(payload, "raw_financial_records_included", errors)

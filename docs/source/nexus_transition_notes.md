@@ -217,15 +217,23 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   only during `StateBlock::commit()` after transaction-height validation, so a
   height-mismatch validation failure cannot leak a lane addition, retirement,
   runtime reset, or cooldown marker. DA commitment, shard/receipt cursor,
-  confidential-compute receipt, and pin-intent indexes prepared during block
-  application are staged behind the same commit validation boundary, so a block
-  that fails height validation cannot partially publish those runtime or world
-  indexes either. The commit path runs the fallible autoscale lifecycle
-  preparation before publishing staged DA indexes, so storage errors during
-  elastic-lane geometry reconciliation cannot leak DA runtime, query state, or
-  block-local WSV cleanup from an uncommitted block. Operator-driven lifecycle
-  and config-swap retirements use the same preflight barrier: Kura or tiered
-  retire conflicts preserve the committed emergency overrides, AXT replay
+  confidential-compute receipt, pin-intent indexes, block-hash log entries,
+  latest-header/query-index markers, and commit-topology cells prepared during
+  block application are published only after a registered transaction block
+  commits successfully, so a block whose transaction commit fails cannot
+  partially publish those runtime, topology, or world indexes either. Staged
+  autoscale or DA side effects with a missing inserted transaction block abort
+  before geometry reconciliation or WSV cleanup. WSV-only commits without an
+  inserted transaction block still persist world mutations, but do not advance
+  block metadata caches or query-index status. The commit path runs the fallible
+  autoscale geometry
+  reconciliation before transaction commit, publishes the autoscale
+  catalog/runtime reset before staged DA indexes, and prunes committed WSV rows
+  only after the block world overlay commits. Storage errors during
+  elastic-lane geometry reconciliation therefore cannot leak DA runtime, query
+  state, or block-local WSV cleanup from an uncommitted block. Operator-driven
+  lifecycle and config-swap retirements use the same preflight barrier: Kura or
+  tiered retire conflicts preserve the committed emergency overrides, AXT replay
   entries, verified relay state, public-lane validator activity, and
   public-lane economic rows that would otherwise be reset. State-level lane
   geometry reconciliation dry-runs

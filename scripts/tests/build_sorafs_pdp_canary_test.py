@@ -65,6 +65,13 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     if kind == "provider_transport":
         for route in MODULE.REQUIRED_ROUTES:
             args.extend(["--route", route])
+    elif kind == "proof_generation":
+        for index in range(CHECKER.DEFAULT_MIN_PROVIDERS):
+            args.extend(["--provider", f"provider-{index:02d}"])
+        for index in range(CHECKER.DEFAULT_MIN_CHALLENGES):
+            args.extend(["--challenge", f"challenge-{index:02d}"])
+        for index in range(CHECKER.DEFAULT_MIN_PROOFS):
+            args.extend(["--proof", f"proof-{index:02d}"])
     elif kind == "validator_replay":
         args.extend(["--validation-bundle-digest-hex", VALIDATION_DIGEST])
     elif kind == "governance_repair":
@@ -136,6 +143,77 @@ def test_response_file_can_build_observability_canary(tmp_path: Path) -> None:
 
     payload = json.loads(canary_path(tmp_path, "observability").read_text("utf-8"))
     assert payload["metrics"] == list(MODULE.REQUIRED_METRICS)
+
+
+def test_response_file_can_build_proof_generation_canary(tmp_path: Path) -> None:
+    args_file = tmp_path / "proof-generation.args"
+    args_file.write_text(
+        "\n".join(args_for("proof_generation", tmp_path)),
+        encoding="utf-8",
+    )
+
+    assert MODULE.main([f"@{args_file}"]) == 0
+
+    payload = json.loads(canary_path(tmp_path, "proof_generation").read_text("utf-8"))
+    assert payload["providers"] == [
+        {"name": f"provider-{index:02d}"}
+        for index in range(CHECKER.DEFAULT_MIN_PROVIDERS)
+    ]
+    assert payload["challenges"] == [
+        {"name": f"challenge-{index:02d}"}
+        for index in range(CHECKER.DEFAULT_MIN_CHALLENGES)
+    ]
+    assert payload["proofs"] == [
+        {"name": f"proof-{index:02d}"}
+        for index in range(CHECKER.DEFAULT_MIN_PROOFS)
+    ]
+
+
+def test_proof_generation_provider_inventory_must_match_provider_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("proof_generation", tmp_path)
+    index = args.index("--provider")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider unique values must match --provider-count" in captured.err
+    assert not canary_path(tmp_path, "proof_generation").exists()
+
+
+def test_proof_generation_challenge_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("proof_generation", tmp_path)
+    first_challenge_index = args.index("--challenge")
+    args[first_challenge_index + 1] = "challenge-01"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--challenge must not contain duplicates" in captured.err
+    assert "--challenge unique values must match --challenge-count" in captured.err
+    assert not canary_path(tmp_path, "proof_generation").exists()
+
+
+def test_proof_generation_proof_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("proof_generation", tmp_path)
+    first_proof_index = args.index("--proof")
+    args[first_proof_index + 1] = "proof-01"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--proof must not contain duplicates" in captured.err
+    assert "--proof unique values must match --proof-count" in captured.err
+    assert not canary_path(tmp_path, "proof_generation").exists()
 
 
 def test_missing_route_coverage_fails_closed(tmp_path: Path, capsys) -> None:

@@ -597,6 +597,9 @@ extern "C" int norito_sequence_plan_cuda_impl(const uint8_t* input_ptr,
         return RC_INVALID;
     }
     size_t count = (size_t)count64;
+    if (count > SIZE_MAX / sizeof(NoritoSequenceSpanCuda)) {
+        return RC_INVALID;
+    }
     *out_count = count;
     *out_used = 0;
     if (count > out_capacity) {
@@ -635,14 +638,25 @@ extern "C" int norito_sequence_plan_cuda_impl(const uint8_t* input_ptr,
             return RC_INVALID;
         }
         fixed_used = data_start + data_len;
-        *out_used = fixed_used;
         if (count == 0) {
-            return data_len == 0 ? RC_OK : RC_INVALID;
+            if (data_len != 0) {
+                return RC_INVALID;
+            }
+            *out_used = fixed_used;
+            return RC_OK;
         }
     } else if (layout_kind == LAYOUT_LENGTH_PREFIXED) {
         if (count == 0) {
             *out_used = 8ULL;
             return RC_OK;
+        }
+        if (input_len < 8ULL) {
+            return RC_INVALID;
+        }
+        size_t payload_len = input_len - 8ULL;
+        size_t min_encoded_len = (flags & FLAG_COMPACT_LEN) == 0U ? 8ULL : 1ULL;
+        if (count > payload_len / min_encoded_len) {
+            return RC_INVALID;
         }
     } else {
         return RC_GPU_UNAVAILABLE;
@@ -742,6 +756,16 @@ extern "C" int norito_sequence_plan_cuda_impl(const uint8_t* input_ptr,
         ret = RC_BACKEND_ERROR;
         goto cleanup;
     }
+    err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+        ret = RC_BACKEND_ERROR;
+        goto cleanup;
+    }
+    if (status != RC_OK) {
+        ret = RC_INVALID;
+        *out_used = 0;
+        goto cleanup;
+    }
     err = cudaMemcpyAsync(out_spans,
                           d_spans,
                           count * sizeof(NoritoSequenceSpanCuda),
@@ -756,8 +780,8 @@ extern "C" int norito_sequence_plan_cuda_impl(const uint8_t* input_ptr,
         ret = RC_BACKEND_ERROR;
         goto cleanup;
     }
-    ret = status == RC_OK ? RC_OK : RC_INVALID;
-    if (layout_kind == LAYOUT_FIXED_OFFSETS && ret == RC_OK) {
+    ret = RC_OK;
+    if (layout_kind == LAYOUT_FIXED_OFFSETS) {
         *out_used = fixed_used;
     }
 

@@ -750,7 +750,7 @@ fn verify_signature(
         PublicKey::from_bytes(Algorithm::Ed25519, &signature.public_key).map_err(|err| {
             format!("failed to parse Ed25519 public key for artefact verification: {err}")
         })?;
-    let sig = Signature::try_from_bytes(&signature.signature).map_err(|err| {
+    let sig = iroha_crypto::ed25519_parse_signature(&signature.signature).map_err(|err| {
         format!("failed to parse Ed25519 signature for artefact verification: {err}")
     })?;
     let typed = SignatureOf::<RansTablesV1>::from_signature(sig);
@@ -1006,6 +1006,39 @@ mod tests {
         let mut tampered = signature;
         tampered.signature[0] ^= 0xFF;
         assert!(verify_signature(&payload, &tampered).is_err());
+    }
+
+    #[test]
+    fn verify_signature_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let payload = sample_payload(8);
+        let key_file = write_ed25519_key([0x12; 32]);
+        let signature = sign_payload(&payload, key_file.path()).expect("sign payload");
+        verify_signature(&payload, &signature).expect("valid signature verifies");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = signature.clone();
+            malformed.signature[..32].copy_from_slice(&replacement_r);
+            let err = verify_signature(&payload, &malformed)
+                .expect_err("malformed Ed25519 R must fail admission");
+            assert!(
+                err.to_string()
+                    .contains("failed to parse Ed25519 signature"),
+                "unexpected {label} R error: {err}"
+            );
+        }
     }
 
     #[test]

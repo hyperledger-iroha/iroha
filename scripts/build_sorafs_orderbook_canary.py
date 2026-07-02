@@ -157,6 +157,30 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    kind: str,
+    count_option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return reviewed unique inventory labels whose count matches a CLI count."""
+
+    items = list(values)
+    if not items:
+        errors.append(f"{option} is required for {kind}")
+    for index, item in enumerate(items):
+        validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+    unique_items = set(items)
+    if len(unique_items) != len(items):
+        errors.append(f"{option} must not contain duplicates")
+    if len(unique_items) != expected_count:
+        errors.append(f"{option} unique values must match {count_option}")
+    return items
+
+
 def validate_output_path(path: Path, errors: list[str]) -> None:
     """Reject unsafe output targets before writing a canary artifact."""
 
@@ -281,6 +305,12 @@ def build_stream_records(args: argparse.Namespace) -> list[dict[str, Any]]:
     ]
 
 
+def build_inventory_records(names: Sequence[str]) -> list[dict[str, str]]:
+    """Build reviewed payload-free inventory records."""
+
+    return [{"name": name} for name in names]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free orderbook rollout canary payload."""
 
@@ -330,6 +360,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "peer_count": args.peer_count,
+                "peers": build_inventory_records(args.peers),
                 "source_count": len(args.sources),
                 "sources": [{"name": source} for source in args.sources],
                 "mismatch_count": 0,
@@ -410,6 +441,14 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
     elif args.kind == "reconciliation":
         if args.peer_count is None:
             errors.append("--peer-count is required for reconciliation")
+        args.peers = validate_reviewed_inventory(
+            split_csv_values(args.peer),
+            expected_count=args.peer_count or 0,
+            option="--peer",
+            kind="reconciliation",
+            count_option="--peer-count",
+            errors=errors,
+        )
         args.sources = validate_name_set(
             split_csv_values(args.source),
             allowed=REQUIRED_RECONCILIATION_SOURCES,
@@ -534,6 +573,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--artifact", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--peer-count", type=positive_int_arg)
+    parser.add_argument("--peer", action="append", default=[])
     parser.add_argument("--source", action="append", default=[])
     raw_args = sys.argv[1:] if argv is None else argv
     try:

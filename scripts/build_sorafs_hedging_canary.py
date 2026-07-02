@@ -133,6 +133,30 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    kind: str,
+    count_option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return reviewed unique inventory labels whose count matches a CLI count."""
+
+    items = list(values)
+    if not items:
+        errors.append(f"{option} is required for {kind}")
+    for index, item in enumerate(items):
+        validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+    unique_items = set(items)
+    if len(unique_items) != len(items):
+        errors.append(f"{option} must not contain duplicates")
+    if len(unique_items) != expected_count:
+        errors.append(f"{option} unique values must match {count_option}")
+    return items
+
+
 def validate_output_path(path: Path, errors: list[str]) -> None:
     """Reject unsafe output targets before writing a canary artifact."""
 
@@ -251,6 +275,12 @@ def build_route_records(args: argparse.Namespace) -> list[dict[str, Any]]:
     ]
 
 
+def build_inventory_records(names: Sequence[str]) -> list[dict[str, str]]:
+    """Build reviewed payload-free inventory records."""
+
+    return [{"name": name} for name in names]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free hedging/billing rollout canary payload."""
 
@@ -261,6 +291,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "feed_count": args.feed_count,
                 "accepted_feed_count": args.feed_count,
+                "feeds": build_inventory_records(args.feeds),
                 "rejected_feed_count": 0,
                 "stale_feed_count": 0,
                 "feed_lag_seconds": args.feed_lag_seconds,
@@ -273,6 +304,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "reference_price_micro_usd": args.reference_price_micro_usd,
                 "feed_count": args.feed_count,
                 "accepted_feed_count": args.feed_count,
+                "feeds": build_inventory_records(args.feeds),
                 "rejected_feed_count": 0,
                 "stale_feed_count": 0,
                 "divergence_bps": args.divergence_bps,
@@ -286,7 +318,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "cycle_index": args.cycle_index,
                 "statement_count": len(args.statement_digests_hex),
                 "signed_statement_count": len(args.statement_digests_hex),
+                "statements": build_inventory_records(args.statements),
                 "line_item_count": args.line_item_count,
+                "line_items": build_inventory_records(args.line_items),
                 "total_micro_xor": args.total_micro_xor,
                 "total_usd_micro": args.total_usd_micro,
                 "reference_decision_id_hex": args.reference_decision_id_hex,
@@ -311,6 +345,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "source_count": len(args.sources),
                 "sources": [{"name": source} for source in args.sources],
                 "line_item_count": args.line_item_count,
+                "line_items": build_inventory_records(args.line_items),
                 "reconciled_line_item_count": args.line_item_count,
                 "mismatch_count": 0,
                 "unmatched_event_count": 0,
@@ -375,6 +410,14 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--feed-lag-seconds", args.feed_lag_seconds),
             ),
         )
+        args.feeds = validate_reviewed_inventory(
+            split_csv_values(args.feed),
+            expected_count=args.feed_count or 0,
+            option="--feed",
+            kind="feed_collector",
+            count_option="--feed-count",
+            errors=errors,
+        )
     elif args.kind == "reference_price":
         require_kind_options(
             args,
@@ -388,6 +431,14 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             ),
         )
         validate_hex64(args.decision_id_hex, option="--decision-id-hex", errors=errors)
+        args.feeds = validate_reviewed_inventory(
+            split_csv_values(args.feed),
+            expected_count=args.feed_count or 0,
+            option="--feed",
+            kind="reference_price",
+            count_option="--feed-count",
+            errors=errors,
+        )
     elif args.kind == "billing_cycle":
         require_kind_options(
             args,
@@ -414,6 +465,22 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             errors.append("--statement-digest-hex must include at least one value")
         for index, digest in enumerate(args.statement_digests_hex):
             validate_hex64(digest, option=f"--statement-digest-hex[{index}]", errors=errors)
+        args.statements = validate_reviewed_inventory(
+            split_csv_values(args.statement),
+            expected_count=len(args.statement_digests_hex),
+            option="--statement",
+            kind="billing_cycle",
+            count_option="--statement-digest-hex",
+            errors=errors,
+        )
+        args.line_items = validate_reviewed_inventory(
+            split_csv_values(args.line_item),
+            expected_count=args.line_item_count or 0,
+            option="--line-item",
+            kind="billing_cycle",
+            count_option="--line-item-count",
+            errors=errors,
+        )
     elif args.kind == "statement_publication":
         require_kind_options(
             args,
@@ -436,6 +503,14 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             split_csv_values(args.source),
             allowed=REQUIRED_RECONCILIATION_SOURCES,
             option="--source",
+            errors=errors,
+        )
+        args.line_items = validate_reviewed_inventory(
+            split_csv_values(args.line_item),
+            expected_count=args.line_item_count or 0,
+            option="--line-item",
+            kind="reconciliation",
+            count_option="--line-item-count",
             errors=errors,
         )
     elif args.kind == "metrics_alerts":
@@ -554,6 +629,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--now-unix", type=positive_int_arg)
     parser.add_argument("--verified-claim", action="append", default=[])
     parser.add_argument("--feed-count", type=positive_int_arg)
+    parser.add_argument("--feed", action="append", default=[])
     parser.add_argument("--feed-lag-seconds", type=non_negative_int_arg)
     parser.add_argument("--decision-id-hex")
     parser.add_argument("--reference-price-micro-usd", type=positive_int_arg)
@@ -562,6 +638,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cycle-id")
     parser.add_argument("--cycle-index", type=positive_int_arg)
     parser.add_argument("--line-item-count", type=positive_int_arg)
+    parser.add_argument("--line-item", action="append", default=[])
     parser.add_argument("--total-micro-xor", type=positive_int_arg)
     parser.add_argument("--total-usd-micro", type=positive_int_arg)
     parser.add_argument("--reference-decision-id-hex")
@@ -569,6 +646,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--statement-bundle-digest-hex")
     parser.add_argument("--reconciliation-digest-hex")
     parser.add_argument("--statement-digest-hex", action="append", default=[])
+    parser.add_argument("--statement", action="append", default=[])
     parser.add_argument("--acknowledgement-probe-count", type=positive_int_arg)
     parser.add_argument("--route", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)

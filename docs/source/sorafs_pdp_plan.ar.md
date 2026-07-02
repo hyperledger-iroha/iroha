@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/sorafs_pdp_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4494c3f07b85e5064344f7ebe495a232fe69ddb1662c8fbc27aac1a62a033e8a
-source_last_modified: "2026-07-01T19:31:44.160457+00:00"
-translation_last_reviewed: 2026-07-01
+source_hash: fb4f60fe5ae278b9207530f4b3f7e01aae3619bfe267ff97d4c8af98a21e338d
+source_last_modified: "2026-07-02T08:01:52.733347+00:00"
+translation_last_reviewed: 2026-07-02
 ---
 
 # Sora-PDP Hot Storage Proofs
@@ -48,7 +48,11 @@ Implemented locally:
   its `policy_digest_hex` and `provider_roster_digest_hex` to the matching
   valid proof-generation digests. Provider-transport artifacts also bind
   `route_count` to the unique canonical `routes[].name` inventory and reject
-  duplicate route entries before promotion can report ready.
+  duplicate route entries before promotion can report ready. Proof-generation
+  artifacts also bind `provider_count`, `challenge_count`, and `proof_count` to
+  the unique canonical `providers[].name`, `challenges[].name`, and
+  `proofs[].name` inventories and reject duplicate provider, challenge, or
+  proof entries before promotion can report ready.
   Proof-summary mismatches are recorded on the offending artifact in the JSON
   summary before required-kind validity is reported. Policy and provider-roster
   mismatches are recorded on the offending governance approval artifact through
@@ -66,10 +70,11 @@ Implemented locally:
   governance/repair, observability, and governance approval evidence. The
   builder requires reviewed deployment context, complete PDP route and metric
   coverage where applicable, proof-summary digest bindings, provider/challenge/
-  proof minimum counts, route/proof latency thresholds, config-backed
-  governance metadata, and reviewed policy and provider-roster digest input for
-  proof-generation and governance-approval canaries, then validates every
-  generated artifact through
+  proof minimum counts, reviewed provider/challenge/proof names whose unique
+  inventories match their scalar counts, route/proof latency thresholds,
+  config-backed governance metadata, and reviewed policy and provider-roster
+  digest input for proof-generation and governance-approval canaries, then
+  validates every generated artifact through
   `scripts/check_sorafs_pdp_rollout_evidence.py` before writing. Checked-in
   response-file examples cover provider transport and proof-generation
   canaries.

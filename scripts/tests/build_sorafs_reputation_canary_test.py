@@ -60,6 +60,10 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         MERKLE_ROOT,
         "--provider-id",
         PROVIDER_ID,
+        "--provider-name",
+        "provider-a",
+        "--provider-name",
+        "provider-b",
     ]
     if kind == "provider":
         args.extend(["--sibling-hex", PROOF_SIBLING])
@@ -74,6 +78,8 @@ def test_builds_payload_free_metrics_canary(tmp_path: Path) -> None:
     assert payload["schema"] == "sorafs.reputation.metrics_canary.v1"
     assert payload["status"] == "passed"
     assert payload["metrics_scrape_success"] is True
+    assert payload["provider_count"] == 2
+    assert payload["providers"] == [{"name": "provider-a"}, {"name": "provider-b"}]
     assert payload["response_bodies_included"] is False
     errors = MODULE.validate_generated_payload(payload, MODULE.parse_args(args_for("metrics", tmp_path)))
     assert errors == []
@@ -151,6 +157,56 @@ def test_metrics_thresholds_fail_before_write(tmp_path: Path, capsys) -> None:
     captured = capsys.readouterr()
     assert "--snapshot-age-seconds must be <=" in captured.err
     assert "--ingest-lag-seconds must be <=" in captured.err
+    assert not canary_path(tmp_path, "metrics").exists()
+
+
+def test_provider_inventory_is_required_before_write(tmp_path: Path, capsys) -> None:
+    args = args_for("metrics", tmp_path)
+    while "--provider-name" in args:
+        index = args.index("--provider-name")
+        del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider-name is required" in captured.err
+    assert (
+        "--provider-count must match the number of unique --provider-name values"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "metrics").exists()
+
+
+def test_provider_inventory_must_match_count_before_write(
+    tmp_path: Path, capsys
+) -> None:
+    args = args_for("metrics", tmp_path)
+    provider_count_index = args.index("--provider-count") if "--provider-count" in args else -1
+    if provider_count_index == -1:
+        args.extend(["--provider-count", "3"])
+    else:
+        args[provider_count_index + 1] = "3"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--provider-count must match the number of unique --provider-name values"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "metrics").exists()
+
+
+def test_provider_inventory_must_not_duplicate_before_write(
+    tmp_path: Path, capsys
+) -> None:
+    args = args_for("metrics", tmp_path)
+    args.extend(["--provider-name", "provider-a"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider-name must not contain duplicates" in captured.err
     assert not canary_path(tmp_path, "metrics").exists()
 
 

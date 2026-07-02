@@ -28,7 +28,8 @@ use crate::{
     smartcontracts::isi::asset::isi::assert_numeric_spec_with,
     state::{
         ConsensusKeyGate, WorldReadOnly, WorldTransaction, peer_consensus_key_gate,
-        public_lane_reward_record_matches_key, public_lane_validator_record_matches_key,
+        public_lane_reward_record_matches_key, public_lane_stake_share_matches_key,
+        public_lane_validator_record_matches_key,
     },
     sumeragi::status as sumeragi_status,
     telemetry::StateTelemetry,
@@ -1481,6 +1482,14 @@ fn slash_within_limit(amount: &Numeric, total: &Numeric, max_bps: u16) -> Result
     Ok(lhs <= rhs)
 }
 
+fn is_self_stake_share_staker(
+    staker: &AccountId,
+    validator: &AccountId,
+    stake_account: &AccountId,
+) -> bool {
+    staker == validator || staker == stake_account
+}
+
 fn scale_amount_to(amount: &Numeric, target_scale: u32) -> Result<BigInt, Error> {
     let current_scale = amount.scale();
     if target_scale < current_scale {
@@ -1636,15 +1645,16 @@ pub(crate) fn apply_slash_to_validator(
     #[cfg(not(feature = "telemetry"))] _telemetry: Option<&crate::telemetry::StateTelemetry>,
 ) -> Result<(), Error> {
     let validator_key = validator_storage_key(lane_id, validator);
-    let stake_account = world
+    let validator_snapshot = world
         .public_lane_validators
         .get(&validator_key)
         .map(|record| {
             ensure_public_lane_validator_record_matches_key(&validator_key, record)?;
-            Ok::<AccountId, Error>(record.stake_account.clone())
+            Ok::<PublicLaneValidatorRecord, Error>(record.clone())
         })
         .transpose()?
         .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
+    let stake_account = validator_snapshot.stake_account.clone();
     let stake_ctx = stake_context(
         world,
         dataspace_catalog,
@@ -1659,48 +1669,101 @@ pub(crate) fn apply_slash_to_validator(
         .ok_or_else(|| Error::InvariantViolation("stake asset definition missing".into()))?
         .spec();
     assert_numeric_spec_with(amount, spec)?;
-    let mut remaining = amount.clone();
     let slashed_status = PublicLaneValidatorStatus::Slashed(slash_id);
     #[cfg(feature = "telemetry")]
-    let previous_status: Option<PublicLaneValidatorStatus>;
-    {
-        let validator = world
-            .public_lane_validators
-            .get_mut(&validator_key)
-            .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
-        ensure_public_lane_validator_record_matches_key(&validator_key, validator)?;
-        let allowed =
-            slash_within_limit(amount, &validator.total_stake, staking_cfg.max_slash_bps)?;
-        if !allowed {
-            return Err(Error::InvariantViolation(
-                "slash exceeds configured maximum ratio".into(),
-            ));
-        }
+    let previous_status = Some(validator_snapshot.status.clone());
 
-        #[cfg(feature = "telemetry")]
-        {
-            previous_status = Some(validator.status.clone());
-        }
-        if validator.total_stake < amount.clone() {
-            return Err(Error::InvariantViolation(
-                "slash exceeds total stake".into(),
-            ));
-        }
-
-        validator.total_stake = numeric_sub(validator.total_stake.clone(), amount.clone())?;
-        let self_slash = min_numeric(validator.self_stake.clone(), remaining.clone());
-        if !self_slash.is_zero() {
-            validator.self_stake = numeric_sub(validator.self_stake.clone(), self_slash.clone())?;
-            remaining = numeric_sub(remaining, self_slash)?;
-        }
-        validator.status = slashed_status.clone();
+    let allowed = slash_within_limit(
+        amount,
+        &validator_snapshot.total_stake,
+        staking_cfg.max_slash_bps,
+    )?;
+    if !allowed {
+        return Err(Error::InvariantViolation(
+            "slash exceeds configured maximum ratio".into(),
+        ));
+    }
+    if validator_snapshot.total_stake < amount.clone() {
+        return Err(Error::InvariantViolation(
+            "slash exceeds total stake".into(),
+        ));
     }
 
+    let new_total_stake = numeric_sub(validator_snapshot.total_stake.clone(), amount.clone())?;
+    let mut new_self_stake = validator_snapshot.self_stake.clone();
+    let mut remaining = amount.clone();
+    let self_slash = min_numeric(validator_snapshot.self_stake.clone(), remaining.clone());
+    if !self_slash.is_zero() {
+        new_self_stake = numeric_sub(validator_snapshot.self_stake.clone(), self_slash.clone())?;
+        remaining = numeric_sub(remaining, self_slash.clone())?;
+    }
+
+    let mut share_updates: Vec<((LaneId, AccountId, AccountId), Option<PublicLaneStakeShare>)> =
+        Vec::new();
+    if !self_slash.is_zero() {
+        let mut self_remaining = self_slash.clone();
+        let self_share_snapshots: Vec<_> = world
+            .public_lane_stake_shares
+            .iter()
+            .filter(|((lane, validator_id, staker), share)| {
+                *lane == lane_id
+                    && validator_id == validator
+                    && is_self_stake_share_staker(
+                        staker,
+                        validator,
+                        &validator_snapshot.stake_account,
+                    )
+                    && public_lane_stake_share_matches_key(
+                        &(*lane, validator_id.clone(), staker.clone()),
+                        share,
+                    )
+            })
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+
+        for (key, mut share) in self_share_snapshots {
+            if self_remaining.is_zero() {
+                break;
+            }
+            if share.bonded.is_zero() {
+                continue;
+            }
+            let slash_part = min_numeric(share.bonded.clone(), self_remaining.clone());
+            if slash_part.is_zero() {
+                continue;
+            }
+            share.bonded = numeric_sub(share.bonded, slash_part.clone())?;
+            if share.bonded.is_zero() && share.pending_unbonds.is_empty() {
+                share_updates.push((key, None));
+            } else {
+                share_updates.push((key, Some(share)));
+            }
+            self_remaining = numeric_sub(self_remaining, slash_part)?;
+        }
+
+        if !self_remaining.is_zero() {
+            return Err(Error::InvariantViolation(
+                "slash could not be satisfied by stake shares".into(),
+            ));
+        }
+    }
     if !remaining.is_zero() {
         let share_snapshots: Vec<_> = world
             .public_lane_stake_shares
             .iter()
-            .filter(|((lane, validator_id, _), _)| *lane == lane_id && validator_id == validator)
+            .filter(|((lane, validator_id, staker), share)| {
+                *lane == lane_id
+                    && validator_id == validator
+                    && !is_self_stake_share_staker(
+                        staker,
+                        validator,
+                        &validator_snapshot.stake_account,
+                    )
+                    && public_lane_stake_share_matches_key(
+                        &(*lane, validator_id.clone(), staker.clone()),
+                        share,
+                    )
+            })
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect();
 
@@ -1717,9 +1780,9 @@ pub(crate) fn apply_slash_to_validator(
             }
             share.bonded = numeric_sub(share.bonded, slash_part.clone())?;
             if share.bonded.is_zero() && share.pending_unbonds.is_empty() {
-                world.public_lane_stake_shares.remove(key);
+                share_updates.push((key, None));
             } else {
-                world.public_lane_stake_shares.insert(key, share);
+                share_updates.push((key, Some(share)));
             }
             remaining = numeric_sub(remaining, slash_part)?;
         }
@@ -1729,6 +1792,24 @@ pub(crate) fn apply_slash_to_validator(
         return Err(Error::InvariantViolation(
             "slash could not be satisfied by stake shares".into(),
         ));
+    }
+
+    {
+        let validator = world
+            .public_lane_validators
+            .get_mut(&validator_key)
+            .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
+        ensure_public_lane_validator_record_matches_key(&validator_key, validator)?;
+        validator.total_stake = new_total_stake;
+        validator.self_stake = new_self_stake;
+        validator.status = slashed_status.clone();
+    }
+    for (key, share) in share_updates {
+        if let Some(share) = share {
+            world.public_lane_stake_shares.insert(key, share);
+        } else {
+            world.public_lane_stake_shares.remove(key);
+        }
     }
 
     world.withdraw_numeric_asset(&stake_ctx.escrow_asset, amount)?;
@@ -5830,6 +5911,28 @@ mod tests {
             .expect("slash sink asset");
         assert_eq!(escrow_balance.as_ref(), &Numeric::new(1_100, 0));
         assert_eq!(sink_balance.as_ref(), &Numeric::new(9_900, 0));
+
+        let validator_record = view
+            .world
+            .public_lane_validators()
+            .get(&(LaneId::new(13), validator.clone()))
+            .expect("validator after slash");
+        assert_eq!(validator_record.total_stake, Numeric::new(1_100, 0));
+        assert_eq!(validator_record.self_stake, Numeric::new(600, 0));
+
+        let self_share = view
+            .world
+            .public_lane_stake_shares()
+            .get(&(LaneId::new(13), validator.clone(), validator.clone()))
+            .expect("self stake share after slash");
+        assert_eq!(self_share.bonded, Numeric::new(600, 0));
+
+        let delegator_share = view
+            .world
+            .public_lane_stake_shares()
+            .get(&(LaneId::new(13), validator, delegator))
+            .expect("delegator stake share after slash");
+        assert_eq!(delegator_share.bonded, Numeric::new(500, 0));
     }
 
     #[test]
@@ -5884,6 +5987,99 @@ mod tests {
             .expect("mismatched record remains present");
         assert!(matches!(record.status, PublicLaneValidatorStatus::Active));
         assert_eq!(record.total_stake, Numeric::new(1_000, 0));
+    }
+
+    #[test]
+    fn slash_ignores_mismatched_public_lane_stake_share_rows() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, delegator, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
+        let lane_id = LaneId::new(171);
+        stx.nexus.staking.max_slash_bps = 10_000;
+        RegisterPublicLaneValidator {
+            lane_id,
+            peer_id: validator_peer_id(&validator),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Numeric::new(1_000, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&validator, &mut stx)
+        .expect("register validator");
+        BondPublicLaneStake {
+            lane_id,
+            validator: validator.clone(),
+            staker: delegator.clone(),
+            amount: Numeric::new(100, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&delegator, &mut stx)
+        .expect("bond delegator stake");
+
+        let validator_key = (lane_id, validator.clone());
+        let share_key = (lane_id, validator.clone(), delegator.clone());
+        let validator_before = stx
+            .world
+            .public_lane_validators
+            .get(&validator_key)
+            .expect("validator before slash")
+            .clone();
+        assert_eq!(validator_before.total_stake, Numeric::new(1_100, 0));
+        let mut malformed_share = stx
+            .world
+            .public_lane_stake_shares
+            .get(&share_key)
+            .expect("delegator share before corruption")
+            .clone();
+        malformed_share.lane_id = LaneId::new(172);
+        stx.world
+            .public_lane_stake_shares
+            .insert(share_key.clone(), malformed_share);
+
+        let err = SlashPublicLaneValidator {
+            lane_id,
+            validator: validator.clone(),
+            slash_id: Hash::new("slash-mismatched-share-row"),
+            amount: Numeric::new(1_100, 0),
+            reason_code: "evidence".to_string(),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("mismatched stake-share row must not satisfy slash");
+
+        assert!(
+            matches!(err, Error::InvariantViolation(msg) if msg.contains("could not be satisfied by stake shares"))
+        );
+        let validator_after = stx
+            .world
+            .public_lane_validators
+            .get(&validator_key)
+            .expect("validator after rejected slash");
+        assert_eq!(
+            validator_after.total_stake, validator_before.total_stake,
+            "rejected slash must not reduce validator total stake"
+        );
+        assert_eq!(
+            validator_after.self_stake, validator_before.self_stake,
+            "rejected slash must not reduce validator self stake"
+        );
+        assert!(
+            !matches!(
+                validator_after.status,
+                PublicLaneValidatorStatus::Slashed(_)
+            ),
+            "rejected slash must not mark validator as slashed"
+        );
+        let share_after = stx
+            .world
+            .public_lane_stake_shares
+            .get(&share_key)
+            .expect("malformed share remains as stored");
+        assert_eq!(share_after.lane_id, LaneId::new(172));
+        assert_eq!(share_after.bonded, Numeric::new(100, 0));
     }
 
     #[test]

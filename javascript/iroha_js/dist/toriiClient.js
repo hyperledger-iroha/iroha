@@ -19438,6 +19438,42 @@ function normalizeRequiredBase64Payload(value, name) {
   return Buffer.from(buffer).toString("base64");
 }
 
+function normalizeRequiredExactBase64Payload(value, name) {
+  if (typeof value === "string") {
+    if (!value || value.trim() !== value || /\s/u.test(value)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} must be exact standard-base64`,
+        name,
+      );
+    }
+    try {
+      const decoded = strictDecodeBase64(value);
+      const canonical = Buffer.from(decoded).toString("base64");
+      if (canonical !== value) {
+        throw new Error("noncanonical base64 payload");
+      }
+      return canonical;
+    } catch (error) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} must be exact standard-base64`,
+        name,
+        error instanceof Error ? error : undefined,
+      );
+    }
+  }
+  const buffer = toBuffer(value);
+  if (buffer.length === 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be exact standard-base64`,
+      name,
+    );
+  }
+  return Buffer.from(buffer).toString("base64");
+}
+
 function normalizeBase64Token(value, name) {
   if (typeof value !== "string") {
     throw createValidationError(
@@ -21885,7 +21921,7 @@ function normalizeMultisigProposeRequest(input) {
   }
   const signatureB64 = pickOverride(record, "signature_b64", "signatureB64");
   if (signatureB64 !== undefined && signatureB64 !== null) {
-    payload.signature_b64 = normalizeRequiredBase64Payload(
+    payload.signature_b64 = normalizeRequiredExactBase64Payload(
       signatureB64,
       "proposeMultisig request.signature_b64",
     );
@@ -22029,7 +22065,7 @@ function normalizeMultisigContractCallProposeRequest(input) {
   }
   const signatureB64 = pickOverride(record, "signature_b64", "signatureB64");
   if (signatureB64 !== undefined && signatureB64 !== null) {
-    payload.signature_b64 = normalizeRequiredBase64Payload(
+    payload.signature_b64 = normalizeRequiredExactBase64Payload(
       signatureB64,
       "proposeMultisigContractCall request.signature_b64",
     );
@@ -22102,7 +22138,7 @@ function normalizeMultisigContractCallApproveRequest(input) {
   }
   const signatureB64 = pickOverride(record, "signature_b64", "signatureB64");
   if (signatureB64 !== undefined && signatureB64 !== null) {
-    payload.signature_b64 = normalizeRequiredBase64Payload(
+    payload.signature_b64 = normalizeRequiredExactBase64Payload(
       signatureB64,
       "approveMultisigContractCall request.signature_b64",
     );
@@ -28014,7 +28050,10 @@ function normalizeBridgeProofSubmitPayload(payload, context) {
   }
   const signatureB64 = pick("signatureB64", "signature_b64");
   if (signatureB64 !== undefined) {
-    normalized.signature_b64 = requireNonEmptyString(signatureB64, `${context}.signatureB64`);
+    normalized.signature_b64 = normalizeRequiredExactBase64Payload(
+      signatureB64,
+      `${context}.signatureB64`,
+    );
   }
   const burnBundle = pick("burnBundle", "burn_bundle");
   if (burnBundle !== undefined) {
@@ -28171,7 +28210,10 @@ function normalizeBridgeMessageSubmitPayload(payload, context) {
   }
   const signatureB64 = pick("signatureB64", "signature_b64");
   if (signatureB64 !== undefined) {
-    normalized.signature_b64 = requireNonEmptyString(signatureB64, `${context}.signatureB64`);
+    normalized.signature_b64 = normalizeRequiredExactBase64Payload(
+      signatureB64,
+      `${context}.signatureB64`,
+    );
   }
   const networkIdHex = pick("networkIdHex", "network_id_hex");
   if (networkIdHex !== undefined) {

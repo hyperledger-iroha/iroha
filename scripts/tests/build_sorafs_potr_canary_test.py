@@ -62,6 +62,10 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     if kind == "multi_provider_probe":
         for tier in MODULE.REQUIRED_TIERS:
             args.extend(["--tier", tier])
+        for index in range(CHECKER.DEFAULT_MIN_PROVIDERS):
+            args.extend(["--provider", f"provider-{index:02d}"])
+        for index in range(CHECKER.DEFAULT_MIN_RECEIPTS):
+            args.extend(["--receipt", f"receipt-{index:02d}"])
     elif kind == "receipt_validation":
         args.extend(["--validation-bundle-digest-hex", VALIDATION_DIGEST])
         args.extend(["--pq-key-roster-digest-hex", PQ_KEY_ROSTER_DIGEST])
@@ -158,8 +162,49 @@ def test_response_file_can_build_multi_provider_probe_canary(tmp_path: Path) -> 
         canary_path(tmp_path, "multi_provider_probe").read_text("utf-8")
     )
     assert payload["tiers_observed"] == list(MODULE.REQUIRED_TIERS)
+    assert payload["provider_count"] == CHECKER.DEFAULT_MIN_PROVIDERS
+    assert payload["providers"] == [
+        {"name": f"provider-{index:02d}"}
+        for index in range(CHECKER.DEFAULT_MIN_PROVIDERS)
+    ]
+    assert payload["receipt_count"] == CHECKER.DEFAULT_MIN_RECEIPTS
+    assert payload["receipts"] == [
+        {"name": f"receipt-{index:02d}"}
+        for index in range(CHECKER.DEFAULT_MIN_RECEIPTS)
+    ]
     assert payload["raw_receipts_included"] is False
     assert payload["fetch_transcripts_included"] is False
+
+
+def test_probe_provider_inventory_must_match_provider_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_provider_probe", tmp_path)
+    index = args.index("--provider")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider unique values must match --provider-count" in captured.err
+    assert not canary_path(tmp_path, "multi_provider_probe").exists()
+
+
+def test_probe_receipt_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_provider_probe", tmp_path)
+    first_receipt_index = args.index("--receipt")
+    args[first_receipt_index + 1] = "receipt-01"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--receipt must not contain duplicates" in captured.err
+    assert "--receipt unique values must match --receipt-count" in captured.err
+    assert not canary_path(tmp_path, "multi_provider_probe").exists()
 
 
 def test_missing_proof_stream_route_coverage_fails_closed(

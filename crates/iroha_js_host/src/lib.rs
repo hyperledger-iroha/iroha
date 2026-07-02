@@ -1587,9 +1587,15 @@ pub fn crypto_verify(
     let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
     let public_key =
         PublicKey::from_bytes(algorithm, public_key.as_ref()).map_err(norito_to_napi)?;
-    let signature = match Signature::try_from_bytes(signature.as_ref()) {
-        Ok(signature) => signature,
-        Err(_) => return Ok(false),
+    let signature = match algorithm {
+        Algorithm::Ed25519 => match iroha_crypto::ed25519_parse_signature(signature.as_ref()) {
+            Ok(signature) => signature,
+            Err(_) => return Ok(false),
+        },
+        _ => match Signature::try_from_bytes(signature.as_ref()) {
+            Ok(signature) => signature,
+            Err(_) => return Ok(false),
+        },
     };
     Ok(signature.verify(&public_key, message.as_ref()).is_ok())
 }
@@ -2862,7 +2868,7 @@ fn kagemusha_pallas_open_envelopes_from_record_bundle(
 /// Native ABI level required by the recursive Kagemusha spend helpers.
 #[napi(js_name = "connectNoritoBridgeAbiVersion")]
 pub fn connect_norito_bridge_abi_version() -> u32 {
-    8
+    15
 }
 
 /// Build metadata-bound Pallas open envelopes for a Kagemusha verified record bundle.
@@ -3188,6 +3194,47 @@ pub fn kagemusha_recursive_spend_init(request_archive: Uint8Array) -> napi::Resu
     encode_kagemusha_recursive_archive(
         &bundle,
         "failed to encode Kagemusha recursive spend init bundle",
+    )
+}
+
+/// Build the online-to-offline top-up Kagemusha transfer instruction from an init request archive.
+#[napi(js_name = "kagemushaRecursiveSpendTopUp")]
+pub fn kagemusha_recursive_spend_topup(request_archive: Uint8Array) -> napi::Result<Buffer> {
+    use iroha_core::zk::{
+        kagemusha_verified_folded_public_inputs_from_record_bundle,
+        kagemusha_verified_folded_public_inputs_from_record_bundle_at_height,
+    };
+
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 =
+        decode_kagemusha_recursive_archive(&request_archive, "Kagemusha recursive spend top-up")?;
+    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)?;
+    request
+        .validate_public_binding()
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
+    let _public_inputs = match request.block_height {
+        Some(block_height) => kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(
+            &request.record_bundle,
+            block_height,
+        ),
+        None => kagemusha_verified_folded_public_inputs_from_record_bundle(&request.record_bundle),
+    }
+    .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
+    let step = request.record_bundle.bundle.steps.first().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "Kagemusha recursive spend top-up init request has no fold steps",
+        )
+    })?;
+    let instruction = iroha_data_model::isi::offline::KagemushaTransfer::new(
+        request.record_bundle.bundle.asset.clone(),
+        step.input_nullifiers.clone(),
+        step.output_commitments.clone(),
+        step.attachment.clone(),
+        Some(step.root_before),
+    );
+    encode_kagemusha_recursive_archive(
+        &instruction,
+        "failed to encode Kagemusha recursive spend top-up instruction",
     )
 }
 
@@ -7321,9 +7368,10 @@ pub fn sorafs_sign_orderbook_payload(
     Ok(Buffer::from(signed))
 }
 
-/// Build and sign a canonical SoraFS orderbook order request from fields.
+/// Build and sign a canonical `SoraFS` orderbook order request from fields.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+#[allow(clippy::too_many_arguments)] // N-API field-level constructor surface
 pub fn sorafs_build_signed_orderbook_order_request(
     order_id: Uint8Array,
     side: String,
@@ -7363,7 +7411,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
         .map_err(norito_to_napi)
 }
 
-/// Build and sign a canonical SoraFS orderbook cancellation from fields.
+/// Build and sign a canonical `SoraFS` orderbook cancellation from fields.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
 pub fn sorafs_build_signed_orderbook_order_cancel(
@@ -7384,9 +7432,10 @@ pub fn sorafs_build_signed_orderbook_order_cancel(
         .map_err(norito_to_napi)
 }
 
-/// Build and sign a canonical SoraFS settlement receipt from fields.
+/// Build and sign a canonical `SoraFS` settlement receipt from fields.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
+#[allow(clippy::too_many_arguments)] // N-API field-level constructor surface
 pub fn sorafs_build_signed_orderbook_settlement_receipt(
     receipt_id: Uint8Array,
     channel_id: Uint8Array,
@@ -14864,7 +14913,7 @@ mod tests {
     };
 
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         HasMetadata,
         account::AccountId,
@@ -18847,6 +18896,47 @@ mod tests {
     }
 
     #[test]
+    fn crypto_verify_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let seed = vec![0x33; 32];
+        let message = b"js-host-crypto-sign";
+        let keypair =
+            KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect("checked seed keypair");
+        let (_, public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("checked public-key payload");
+        let valid_signature = Signature::try_new(keypair.private_key(), message)
+            .expect("checked Ed25519 JS host fixture signature");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut signature = valid_signature.payload().to_vec();
+            signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let verified = crypto_verify(
+                "ed25519".to_owned(),
+                Uint8Array::from(public_key.to_vec()),
+                Uint8Array::from(message.to_vec()),
+                Uint8Array::from(signature),
+            )
+            .expect("crypto verify should return false for malformed material");
+
+            assert!(!verified, "{label} Ed25519 signature R must not verify");
+        }
+    }
+
+    #[test]
     fn crypto_multihash_helpers_use_checked_formatters() {
         let seed = vec![0x5A; 32];
         let keypair =
@@ -18964,8 +19054,8 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_bridge_abi_version_is_additive_eight() {
-        assert_eq!(connect_norito_bridge_abi_version(), 8);
+    fn kagemusha_recursive_spend_bridge_abi_version_is_additive_fifteen() {
+        assert_eq!(connect_norito_bridge_abi_version(), 15);
     }
 
     fn empty_kagemusha_record_bundle_archive_for_js_host() -> Vec<u8> {
@@ -22038,6 +22128,7 @@ mod tests {
             lineage_witness: None,
             change_output: None,
             lineage_verifier_record: None,
+            lineage_verifier_records: Vec::new(),
             block_height: None,
             lineage_verifier_records: Vec::new(),
         }

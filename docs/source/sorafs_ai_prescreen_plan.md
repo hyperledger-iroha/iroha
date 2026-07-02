@@ -63,6 +63,16 @@ artifacts surface their execution-summary digests as
 `valid_executor_summary_digests`, so the final aggregate production gate can
 bind deployed transport and executor proof facts back to recognized artifact
 fingerprints instead of trusting summary-only metadata.
+Committee artifacts also bind `result_count` to the unique canonical
+`results[].name` inventory and reject duplicate committee-result entries before
+promotion can report ready.
+Juror notification transport artifacts also bind `probe_count` and
+`accepted_count` to the unique canonical `probes[].delivery_id` inventory and
+reject duplicate notification delivery probes before promotion can report
+ready. Transparency publication artifacts also bind `probe_count`,
+`passed_probe_count`, and `source_entry_probe_count` to the unique canonical
+`probes[].source_kind` inventory and reject duplicate source-entry probes before
+promotion can report ready.
 Commit/reveal executor artifacts also bind `artifact_count` and
 `passed_artifact_count` to the unique canonical `artifacts[].name` inventory and
 reject duplicate artifact entries before promotion can report ready.
@@ -840,7 +850,9 @@ Completed local foundations:
   workflow, juror notification transport, commit/reveal executor, moderation
   transparency source-entry, Governance DAG, and end-to-end workflow evidence;
   cross-artifact runner/workflow binding failures are reflected on the
-  offending artifacts in the emitted summary. Operator workflow artifacts also
+  offending artifacts in the emitted summary. Committee artifacts also bind
+  `result_count` to the unique canonical `results[].name` inventory and reject
+  duplicate committee-result entries before promotion can report ready. Operator workflow artifacts also
   bind `route_count` and `passed_route_count` to the unique canonical
   `routes[].name` inventory and reject duplicate route entries before promotion
   can report ready. The checker exports its required top-level payload fields
@@ -859,7 +871,8 @@ Completed local foundations:
   operator workflow, juror notification transport, commit/reveal executor,
   transparency publication, Governance DAG, and end-to-end workflow artifacts.
   The builder requires reviewed deployment context, runner tuple digests,
-  workflow digest bindings, complete operator route/transparency
+  workflow digest bindings, reviewed committee-result labels whose unique
+  inventory matches `--result-count`, complete operator route/transparency
   source/Governance DAG producer/workflow-step coverage where applicable, and
   validates every generated artifact through
   `scripts/check_sorafs_ai_prescreen_rollout_evidence.py` before writing.

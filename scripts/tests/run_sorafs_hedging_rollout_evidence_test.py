@@ -106,8 +106,28 @@ def test_dry_run_prints_complete_hedging_rollout_plan(tmp_path: Path, capsys) ->
         "sorafs.billing.cycle_canary.v1"
     )
     assert (
+        "feeds"
+        in plan["evidence_contract"]["feed_collector"]["required_payload_fields"]
+    )
+    assert (
+        "feeds"
+        in plan["evidence_contract"]["reference_price"]["required_payload_fields"]
+    )
+    assert (
         "statement_digests_hex"
         in plan["evidence_contract"]["billing_cycle"]["required_payload_fields"]
+    )
+    assert (
+        "statements"
+        in plan["evidence_contract"]["billing_cycle"]["required_payload_fields"]
+    )
+    assert (
+        "line_items"
+        in plan["evidence_contract"]["billing_cycle"]["required_payload_fields"]
+    )
+    assert (
+        "line_items"
+        in plan["evidence_contract"]["reconciliation"]["required_payload_fields"]
     )
     assert (
         "reconciled_line_item_count"

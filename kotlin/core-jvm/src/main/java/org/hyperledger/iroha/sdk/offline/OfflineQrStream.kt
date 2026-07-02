@@ -52,7 +52,15 @@ object OfflineQrStream {
             } else {
                 value
             }
-            return java.util.Base64.getDecoder().decode(payload)
+            return decodeExactBase64(payload)
+        }
+
+        private fun decodeExactBase64(value: String): ByteArray {
+            val decoded = java.util.Base64.getDecoder().decode(value)
+            require(java.util.Base64.getEncoder().encodeToString(decoded) == value) {
+                "QR text payload must be canonical base64"
+            }
+            return decoded
         }
     }
 

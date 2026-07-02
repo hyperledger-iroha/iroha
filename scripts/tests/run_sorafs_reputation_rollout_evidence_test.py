@@ -88,6 +88,12 @@ def test_dry_run_prints_complete_reputation_rollout_plan(tmp_path: Path, capsys)
         "generated_at_unix"
         in plan["evidence_contract"]["latest"]["required_payload_fields"]
     )
+    assert "providers" in plan["evidence_contract"]["publish"][
+        "required_payload_fields"
+    ]
+    assert "providers" in plan["evidence_contract"]["latest"][
+        "required_payload_fields"
+    ]
     assert (
         "provider"
         in plan["evidence_contract"]["provider"]["required_payload_fields"]
@@ -96,9 +102,15 @@ def test_dry_run_prints_complete_reputation_rollout_plan(tmp_path: Path, capsys)
         "proof_verified"
         in plan["evidence_contract"]["verify"]["required_payload_fields"]
     )
+    assert "providers" in plan["evidence_contract"]["verify"][
+        "required_payload_fields"
+    ]
     assert plan["evidence_contract"]["metrics"]["schema"] == (
         "sorafs.reputation.metrics_canary.v1"
     )
+    assert "providers" in plan["evidence_contract"]["metrics"][
+        "required_payload_fields"
+    ]
     assert (
         "sse_connected"
         in plan["evidence_contract"]["transport"]["required_payload_fields"]
@@ -107,6 +119,9 @@ def test_dry_run_prints_complete_reputation_rollout_plan(tmp_path: Path, capsys)
         "routing_score_consumed"
         in plan["evidence_contract"]["consumption"]["required_payload_fields"]
     )
+    assert "providers" in plan["evidence_contract"]["consumption"][
+        "required_payload_fields"
+    ]
     labels = [step["label"] for step in plan["steps"]]
     assert labels == [
         "publish_snapshot",

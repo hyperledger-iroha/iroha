@@ -14,9 +14,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.LongSupplier
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -1537,6 +1535,9 @@ class OfflineNoteTest {
             OfflineQrStream.TextCodec.decode("$encoded\n", OfflineQrStream.FrameEncoding.BASE64)
         }
         assertFailsWith<IllegalArgumentException> {
+            OfflineQrStream.TextCodec.decode("iroha:qr:AB==", OfflineQrStream.FrameEncoding.BASE64)
+        }
+        assertFailsWith<IllegalArgumentException> {
             OfflineQrStream.TextCodec.decode(retiredPrefix, OfflineQrStream.FrameEncoding.BASE64)
         }
     }
@@ -1596,6 +1597,14 @@ class OfflineNoteTest {
         }
         assertFailsWith<IllegalArgumentException> {
             OfflineNotePaymentTokenCodec.decodeText("$text=")
+        }
+        val nonCanonicalPaymentText = OfflineNotePaymentTokenCodec.TEXT_PREFIX + "AB"
+        assertNull(OfflineBearerCashTextCodec.payloadKind(nonCanonicalPaymentText))
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNotePaymentTokenCodec.decodeText(nonCanonicalPaymentText)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineBearerCashTextCodec.decodePaymentText(nonCanonicalPaymentText)
         }
 
         val frames = OfflineNotePaymentTokenCodec.encodeQrFrameBytes(
@@ -1746,6 +1755,14 @@ class OfflineNoteTest {
         assertFailsWith<IllegalArgumentException> {
             OfflineNoteReceiveRequestCodec.decodeText("$text=")
         }
+        val nonCanonicalReceiveRequestText = OfflineNoteReceiveRequestCodec.TEXT_PREFIX + "AB"
+        assertNull(OfflineBearerCashTextCodec.payloadKind(nonCanonicalReceiveRequestText))
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiveRequestCodec.decodeText(nonCanonicalReceiveRequestText)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineBearerCashTextCodec.decodeReceiveRequestText(nonCanonicalReceiveRequestText)
+        }
 
         val frames = OfflineNoteReceiveRequestCodec.encodeQrFrameBytes(
             request,
@@ -1799,6 +1816,14 @@ class OfflineNoteTest {
         }
         assertFailsWith<IllegalArgumentException> {
             OfflineNoteReceiptAckCodec.decodeText("$text=")
+        }
+        val nonCanonicalAckText = OfflineNoteReceiptAckCodec.TEXT_PREFIX + "AB"
+        assertNull(OfflineBearerCashTextCodec.payloadKind(nonCanonicalAckText))
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteReceiptAckCodec.decodeText(nonCanonicalAckText)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineBearerCashTextCodec.decodeAckText(nonCanonicalAckText)
         }
 
         val frames = OfflineNoteReceiptAckCodec.encodeQrFrameBytes(
@@ -2737,10 +2762,14 @@ class OfflineNoteTest {
         val paddedPayload = """
             {"kind":"receive_request","payload":"YQ==","contentType":"application/vnd.iroha.offline.receive-request+norito","pairingChallenge":"nearby_pairing_bird"}
         """.trimIndent().toByteArray()
+        val nonCanonicalPayload = """
+            {"kind":"receive_request","payload":"AB","contentType":"application/vnd.iroha.offline.receive-request+norito","pairingChallenge":"nearby_pairing_bird"}
+        """.trimIndent().toByteArray()
         assertFailsWith<IllegalArgumentException> { OfflineNoteNearbyEnvelope.decode(unknownField) }
         assertFailsWith<IllegalArgumentException> { OfflineNoteNearbyEnvelope.decode(challengeContentTypeDowngrade) }
         assertFailsWith<IllegalArgumentException> { OfflineNoteNearbyEnvelope.decode(ackContentTypeDowngrade) }
         assertFailsWith<IllegalArgumentException> { OfflineNoteNearbyEnvelope.decode(paddedPayload) }
+        assertFailsWith<IllegalArgumentException> { OfflineNoteNearbyEnvelope.decode(nonCanonicalPayload) }
 
         val topLevelArray = "[]".toByteArray()
         val invalidBase64Payload = """
@@ -2977,14 +3006,14 @@ class OfflineNoteTest {
             clock = { 1_700_000_001_000L },
         )
 
-        val note = wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount")).get()
+        val failure = assertFailsWith<ExecutionException> {
+            wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount"))
+                .get(5, TimeUnit.SECONDS)
+        }
 
-        assertEquals(string(derivation, "source_note_commitment"), note.noteCommitmentHex())
-        assertEquals(
-            string(derivation, "source_note_commitment"),
-            issuerClient.lastIssueRequest?.noteCommitmentHex(),
-        )
-        assertEquals(OfflineNoteWalletNoteState.ISSUE_PENDING, note.state)
+        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, failure.cause?.message)
+        assertEquals(0, issuerClient.prepareLoadCount)
+        assertNull(issuerClient.lastIssueRequest)
     }
 
     @Test
@@ -3024,8 +3053,8 @@ class OfflineNoteTest {
                 wallet.load(assetDefinitionId, invalidAmount).get(5, TimeUnit.SECONDS)
             }
             val cause = failure.cause
-            assertTrue(cause is IllegalArgumentException)
-            assertTrue(cause.message.orEmpty().contains("Offline Note payment amount must be positive"))
+            assertTrue(cause is IllegalStateException)
+            assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, cause.message)
             assertEquals(0, issuerClient.prepareLoadCount)
             assertNull(issuerClient.lastIssueRequest)
             assertTrue(store.listNotes().isEmpty())
@@ -3062,12 +3091,13 @@ class OfflineNoteTest {
             clock = { 1_700_000_012_220L },
         )
 
-        val loaded = loadWallet.load(assetDefinitionId, "001.2300").get(5, TimeUnit.SECONDS)
+        val retiredLoad = assertFailsWith<ExecutionException> {
+            loadWallet.load(assetDefinitionId, "001.2300").get(5, TimeUnit.SECONDS)
+        }
 
-        assertEquals("1.2300", issuerClient.lastPrepareAmount)
-        assertEquals("1.2300", issuerClient.lastIssueRequest?.amount)
-        assertEquals("1.2300", loaded.amount)
-        assertEquals("1.2300", loaded.canonicalAmount)
+        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, retiredLoad.cause?.message)
+        assertEquals(0, issuerClient.prepareLoadCount)
+        assertNull(issuerClient.lastIssueRequest)
 
         val testIssuer = TestIssuerCertificateSigner()
         val recipientSigner = TestOwnerCertificateSigner()
@@ -3161,34 +3191,10 @@ class OfflineNoteTest {
         )
 
         val load = wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount"))
-        assertTrue(issuerClient.issueRequested.await(5, TimeUnit.SECONDS))
-        val request = requireNotNull(issuerClient.lastIssueRequest)
-        val response = OfflineNoteIssueResponse(
-            noteCommitment = request.noteCommitment(),
-            operationId = request.loadContext.operationId,
-            lineageId = request.loadContext.lineageId,
-            localRevision = request.loadContext.localRevision,
-            keyCertificate = request.loadContext.keyCertificate,
-            settlementEntryHashHex = "settlement-entry-hash",
-        )
-        val completeReturned = AtomicBoolean(false)
-        val issuerCompleter = Executors.newSingleThreadExecutor { Thread(it, "offline-note-issuer-completer") }
-        try {
-            issuerCompleter.submit {
-                issuerClient.issueFuture.complete(response)
-                completeReturned.set(true)
-            }
-            assertTrue(store.entered.await(5, TimeUnit.SECONDS))
-            assertTrue(completeReturned.get())
-            store.release.countDown()
-            assertEquals(
-                string(derivation, "source_note_commitment"),
-                load.get(5, TimeUnit.SECONDS).noteCommitmentHex(),
-            )
-        } finally {
-            store.release.countDown()
-            issuerCompleter.shutdownNow()
-        }
+        val failure = assertFailsWith<ExecutionException> { load.get(5, TimeUnit.SECONDS) }
+        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, failure.cause?.message)
+        assertFalse(issuerClient.issueRequested.await(100, TimeUnit.MILLISECONDS))
+        store.release.countDown()
     }
 
     @Test
@@ -3225,7 +3231,7 @@ class OfflineNoteTest {
                 .get(5, TimeUnit.SECONDS)
         }
         assertTrue(failure.cause is IllegalStateException)
-        assertEquals("issuer exploded", failure.cause?.message)
+        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, failure.cause?.message)
     }
 
     @Test
@@ -4249,10 +4255,13 @@ class OfflineNoteTest {
             clock = { 1_700_000_001_000L },
         )
 
-        val note = wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount")).get()
+        val failure = assertFailsWith<ExecutionException> {
+            wallet.load(assetDefinitionFromAssetId(string(issue, "asset_id")), string(issue, "amount"))
+                .get(5, TimeUnit.SECONDS)
+        }
 
-        assertEquals(OfflineNoteWalletNoteState.ISSUE_PENDING, note.state)
-        assertEquals(OfflineNoteWalletNoteState.ISSUE_PENDING, store.findNote(note.noteCommitment())?.state)
+        assertEquals(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE, failure.cause?.message)
+        assertTrue(store.listNotes().isEmpty())
     }
 
     @Test

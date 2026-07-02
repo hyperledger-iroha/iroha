@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 
 use blake2::digest::Digest;
-use iroha_crypto::{Blake2b256, PublicKey, SignatureOf};
+use iroha_crypto::{Algorithm, Blake2b256, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -221,7 +221,9 @@ impl ModerationReproManifestV1 {
             if !seen.insert(signer.public_key.clone()) {
                 return Err(ModerationReproValidationError::DuplicateSigner);
             }
-            if let Err(source) = signer.signature.verify(&signer.public_key, &self.body) {
+            if let Err(source) =
+                verify_repro_signature(&signer.signature, &signer.public_key, &self.body)
+            {
                 return Err(ModerationReproValidationError::BadSignature {
                     role: signer.role.clone(),
                     source,
@@ -241,6 +243,17 @@ impl ModerationReproManifestV1 {
             signer_count,
         })
     }
+}
+
+fn verify_repro_signature(
+    signature: &SignatureOf<ModerationReproBodyV1>,
+    public_key: &PublicKey,
+    body: &ModerationReproBodyV1,
+) -> Result<(), iroha_crypto::Error> {
+    if matches!(public_key.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    }
+    signature.verify(public_key, body)
 }
 
 /// `SoraFS` moderation-panel vote choices.
@@ -738,7 +751,7 @@ impl AdversarialCorpusManifestV1 {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{KeyPair, Signature};
 
     use super::*;
 
@@ -801,6 +814,26 @@ mod tests {
         ModerationReproManifestV1 { body, signatures }
     }
 
+    const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_with_malformed_ed25519_r(
+        signature: &SignatureOf<ModerationReproBodyV1>,
+        replacement_r: &[u8; 32],
+    ) -> SignatureOf<ModerationReproBodyV1> {
+        let mut payload = signature.payload().to_vec();
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
+        SignatureOf::from_signature(Signature::from_bytes(&payload))
+    }
+
     #[test]
     fn validate_happy_path() {
         let manifest = sign_manifest(sample_body(), &["council", "sre"]);
@@ -836,6 +869,34 @@ mod tests {
             err,
             ModerationReproValidationError::DuplicateSigner
         ));
+    }
+
+    #[test]
+    fn validate_rejects_malformed_ed25519_signature_r() {
+        let manifest = sign_manifest(sample_body(), &["council"]);
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            let mut invalid_manifest = manifest.clone();
+            invalid_manifest.signatures[0].signature = signature_with_malformed_ed25519_r(
+                &manifest.signatures[0].signature,
+                &replacement_r,
+            );
+
+            let err = invalid_manifest
+                .validate()
+                .expect_err("malformed moderation signature R must fail admission");
+            let ModerationReproValidationError::BadSignature { source, .. } = err else {
+                panic!("expected bad moderation signature error: {err:?}");
+            };
+            assert_eq!(
+                source,
+                iroha_crypto::Error::BadSignature,
+                "{label} moderation signature R produced unexpected error"
+            );
+        }
     }
 
     #[test]

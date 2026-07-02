@@ -94,6 +94,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 "2200",
             ]
         )
+        for provider in ("provider-a", "provider-b", "provider-c", "provider-d"):
+            args.extend(["--provider", provider])
     elif kind == "telemetry_slo":
         for metric in MODULE.REQUIRED_METRICS:
             args.extend(["--metric", metric])
@@ -122,6 +124,16 @@ def test_builds_payload_free_staging_load_canary(tmp_path: Path) -> None:
     assert payload["suite_report_digest_hex"] == SUITE_DIGEST
     assert payload["staging_report_digest_hex"] == STAGING_DIGEST
     assert payload["policy_digest_hex"] == POLICY_DIGEST
+    assert payload["stream_count"] == 1200
+    assert payload["streams"][0] == {"name": "stream-0000"}
+    assert payload["streams"][-1] == {"name": "stream-1199"}
+    assert payload["provider_count"] == 4
+    assert payload["providers"] == [
+        {"name": "provider-a"},
+        {"name": "provider-b"},
+        {"name": "provider-c"},
+        {"name": "provider-d"},
+    ]
     assert payload["response_bodies_included"] is False
     assert payload["raw_payloads_included"] is False
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
@@ -202,6 +214,43 @@ def test_staging_policy_digest_is_required(tmp_path: Path, capsys) -> None:
 
     captured = capsys.readouterr()
     assert "--policy-digest-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, "staging_load").exists()
+
+
+def test_staging_provider_inventory_is_required(tmp_path: Path, capsys) -> None:
+    args = args_for("staging_load", tmp_path)
+    while "--provider" in args:
+        index = args.index("--provider")
+        del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider is required for staging_load" in captured.err
+    assert "--provider-count must match the number of unique --provider values" in captured.err
+    assert not canary_path(tmp_path, "staging_load").exists()
+
+
+def test_staging_provider_inventory_must_match_count(tmp_path: Path, capsys) -> None:
+    args = args_for("staging_load", tmp_path)
+    provider_count_index = args.index("--provider-count")
+    args[provider_count_index + 1] = "5"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider-count must match the number of unique --provider values" in captured.err
+    assert not canary_path(tmp_path, "staging_load").exists()
+
+
+def test_staging_provider_inventory_must_not_duplicate(tmp_path: Path, capsys) -> None:
+    args = args_for("staging_load", tmp_path)
+    args.extend(["--provider", "provider-a"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider must not contain duplicates" in captured.err
     assert not canary_path(tmp_path, "staging_load").exists()
 
 

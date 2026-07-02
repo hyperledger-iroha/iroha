@@ -149,6 +149,7 @@ def test_dry_run_prints_complete_collection_plan(tmp_path: Path, capsys) -> None
     )
     assert "manifest_id_hex" in plan["evidence_contract"]["runner"]["required_payload_fields"]
     assert "policy_digest_hex" in plan["evidence_contract"]["runner"]["required_payload_fields"]
+    assert "results" in plan["evidence_contract"]["committee"]["required_payload_fields"]
     assert (
         "workflow_digest_hex"
         in plan["evidence_contract"]["operator_workflow"]["required_payload_fields"]

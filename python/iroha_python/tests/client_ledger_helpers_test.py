@@ -1566,12 +1566,18 @@ def test_deploy_contract_bundle_reads_code_file_and_waits(tmp_path) -> None:
         wait=True,
         timeout_ms=1000,
         interval=0,
+        gas_asset_id="xor#sora",
+        fee_sponsor="sponsor@sora",
+        gas_limit=10_000_000,
     )
 
     assert result["terminal_kind"] == "Applied"
     assert result["tx_hashes"] == [tx_hash]
     deploy_payload = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert deploy_payload["code_b64"] == "Y29udHJhY3QtY29kZQ=="
+    assert deploy_payload["gas_asset_id"] == "xor#sora"
+    assert deploy_payload["fee_sponsor"] == "sponsor@sora"
+    assert deploy_payload["gas_limit"] == 10_000_000
 
 
 def test_call_contract_and_wait_posts_typed_request() -> None:

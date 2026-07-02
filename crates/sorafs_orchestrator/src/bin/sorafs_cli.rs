@@ -4808,10 +4808,10 @@ fn moderation_registry_handle_stream(
         if request.len() > max_body_bytes.saturating_add(8192) {
             break;
         }
-        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request) {
-            if content_len > max_body_bytes || request.len() >= header_len + content_len {
-                break;
-            }
+        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request)
+            && (content_len > max_body_bytes || request.len() >= header_len + content_len)
+        {
+            break;
         }
     }
     let response = moderation_registry_http_response(service, &request, max_body_bytes);
@@ -5079,10 +5079,7 @@ fn moderation_registry_snapshot_response_json(
         .state
         .lock()
         .map_err(|_| "moderation model registry state lock poisoned".to_string())?;
-    Ok(moderation_registry_snapshot_json(
-        &state,
-        service.snapshot_limit,
-    )?)
+    moderation_registry_snapshot_json(&state, service.snapshot_limit)
 }
 
 fn moderation_registry_state_digest_hex(
@@ -7101,7 +7098,7 @@ fn moderation_committee_median_score(mut scores: Vec<u16>) -> u16 {
     if scores.len() % 2 == 1 {
         scores[mid]
     } else {
-        ((u32::from(scores[mid - 1]) + u32::from(scores[mid]) + 1) / 2) as u16
+        (u32::from(scores[mid - 1]) + u32::from(scores[mid])).div_ceil(2) as u16
     }
 }
 
@@ -7288,10 +7285,10 @@ fn moderation_committee_handle_stream(
         if request.len() > max_body_bytes.saturating_add(8192) {
             break;
         }
-        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request) {
-            if content_len > max_body_bytes || request.len() >= header_len + content_len {
-                break;
-            }
+        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request)
+            && (content_len > max_body_bytes || request.len() >= header_len + content_len)
+        {
+            break;
         }
     }
     let response = moderation_committee_http_response(service, &request, max_body_bytes);
@@ -7772,6 +7769,16 @@ fn moderation_committee_canary_evidence_json(
             "committee aggregate response requires numeric `result_count`".to_string()
         })?;
 
+    let result_sources = input.result_sources;
+    let result_rows: Vec<Value> = result_sources
+        .iter()
+        .map(|source| {
+            let mut row = Map::new();
+            row.insert("name".into(), Value::from(source.clone()));
+            Value::Object(row)
+        })
+        .collect();
+
     let mut output = Map::new();
     output.insert(
         "schema".into(),
@@ -7802,6 +7809,7 @@ fn moderation_committee_canary_evidence_json(
     output.insert("quorum".into(), Value::from(input.quorum as u64));
     output.insert("aggregation".into(), Value::from("median_score_bps"));
     output.insert("result_count".into(), Value::from(result_count));
+    output.insert("results".into(), Value::Array(result_rows));
     output.insert("subject".into(), Value::from(subject.to_string()));
     output.insert(
         "subject_digest_hex".into(),
@@ -7819,7 +7827,7 @@ fn moderation_committee_canary_evidence_json(
     );
     output.insert(
         "result_sources".into(),
-        Value::Array(input.result_sources.into_iter().map(Value::from).collect()),
+        Value::Array(result_sources.into_iter().map(Value::from).collect()),
     );
     output.insert("committee_status".into(), input.status_response);
     output.insert("committee_aggregate".into(), input.aggregate_response);
@@ -8071,7 +8079,7 @@ impl moderation_runner_grpc::runner_server::Runner for ModerationRunnerGrpcHandl
     ) -> Result<tonic::Response<ModerationRunnerScreenResponse>, tonic::Status> {
         moderation_runner_screen_request_proto(&self.service, request.into_inner())
             .map(tonic::Response::new)
-            .map_err(|message| tonic::Status::invalid_argument(message))
+            .map_err(tonic::Status::invalid_argument)
     }
 }
 
@@ -8260,10 +8268,10 @@ fn moderation_runner_handle_stream(
         if request.len() > max_body_bytes.saturating_add(8192) {
             break;
         }
-        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request) {
-            if content_len > max_body_bytes || request.len() >= header_len + content_len {
-                break;
-            }
+        if let Some((header_len, content_len)) = moderation_runner_request_lengths(&request)
+            && (content_len > max_body_bytes || request.len() >= header_len + content_len)
+        {
+            break;
         }
     }
     let response = moderation_runner_http_response(service, &request, max_body_bytes);
@@ -11244,6 +11252,20 @@ mod manifest_tests {
         );
         assert_eq!(object.get("quorum").and_then(Value::as_u64), Some(2));
         assert_eq!(object.get("result_count").and_then(Value::as_u64), Some(3));
+        let results = object
+            .get("results")
+            .and_then(Value::as_array)
+            .expect("results array");
+        assert_eq!(results.len(), 3);
+        let expected_first_result = result_b.display().to_string();
+        assert_eq!(
+            results
+                .first()
+                .and_then(Value::as_object)
+                .and_then(|row| row.get("name"))
+                .and_then(Value::as_str),
+            Some(expected_first_result.as_str())
+        );
         assert_eq!(
             object.get("subject_digest_hex").and_then(Value::as_str),
             Some(hex_encode(blake3_hash(payload).as_bytes()).as_str())

@@ -56,7 +56,7 @@ use iroha::{
     },
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
-use iroha_core::da::proof_policy_bundle;
+use iroha_core::{da::proof_policy_bundle, sumeragi::network_topology::commit_quorum_from_len};
 use iroha_crypto::{
     BfvEvaluationKeyBundle, BfvParameters, Hash, RamLfeBackend, RamLfeVerificationMode, Signature,
     SignatureOf, bfv_programmed_policy_commitment_with_program,
@@ -4164,19 +4164,18 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         network.client().submit::<InstructionBox>(
             Log::new(Level::INFO, "status endpoint bootstrap tick".to_owned()).into(),
         )?;
-        wait_for_converged_height(&network, 2, Duration::from_secs(45)).await?;
+        let warmup_statuses =
+            wait_for_height_quorum_with_bounded_lag(&network, 2, Duration::from_secs(45)).await?;
         let peer = network
             .peers()
             .first()
             .cloned()
             .ok_or_else(|| eyre!("network started without peers"))?;
 
-        let before_height = collect_statuses(&network, STATUS_POLL_TIMEOUT)
-            .await?
-            .iter()
-            .map(|status| status.blocks)
-            .min()
-            .unwrap_or_default();
+        let before_height = quorum_low_watermark_height(
+            &warmup_statuses,
+            tolerated_lagging_peers(network.peers().len()),
+        );
         let alice_client = peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
         let bob_client = peer.client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
         let alice_probe_submitted = submit_route_probe_with_retry(
@@ -4194,7 +4193,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         )
         .await?;
         if alice_probe_submitted || bob_probe_submitted {
-            wait_for_converged_height(
+            wait_for_height_quorum_with_bounded_lag(
                 &network,
                 before_height.saturating_add(1),
                 Duration::from_secs(45),
@@ -7757,6 +7756,124 @@ fn throughput_status_summary_uses_strict_min_without_lag_tolerance() {
 }
 
 #[test]
+fn height_quorum_with_bounded_lag_accepts_one_block_tail_lag() {
+    let statuses = [
+        iroha::client::Status {
+            blocks: 2,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 3,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 3,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 3,
+            ..Default::default()
+        },
+    ];
+
+    assert!(height_quorum_with_bounded_lag(&statuses, 3, 3));
+}
+
+#[test]
+fn height_quorum_with_bounded_lag_accepts_tolerated_tail_lag() {
+    let statuses = [
+        iroha::client::Status {
+            blocks: 1,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 3,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 4,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 4,
+            ..Default::default()
+        },
+    ];
+
+    assert!(height_quorum_with_bounded_lag(&statuses, 3, 3));
+}
+
+#[test]
+fn height_quorum_with_bounded_lag_rejects_missing_quorum_or_split_quorum() {
+    let missing_quorum = [
+        iroha::client::Status {
+            blocks: 2,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 2,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 3,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 3,
+            ..Default::default()
+        },
+    ];
+    assert!(!height_quorum_with_bounded_lag(&missing_quorum, 3, 3));
+
+    let split_quorum = [
+        iroha::client::Status {
+            blocks: 1,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 3,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 3,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 5,
+            ..Default::default()
+        },
+    ];
+    assert!(!height_quorum_with_bounded_lag(&split_quorum, 3, 3));
+    assert!(!height_quorum_with_bounded_lag(&[], 3, 3));
+}
+
+#[test]
+fn quorum_low_watermark_height_ignores_tolerated_tail_lag() {
+    let statuses = [
+        iroha::client::Status {
+            blocks: 1,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 2,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 2,
+            ..Default::default()
+        },
+        iroha::client::Status {
+            blocks: 2,
+            ..Default::default()
+        },
+    ];
+
+    assert_eq!(quorum_low_watermark_height(&statuses, 1), 2);
+    assert_eq!(quorum_low_watermark_height(&statuses, 0), 1);
+    assert_eq!(quorum_low_watermark_height(&[], 1), 0);
+}
+
+#[test]
 fn realistic_artifact_summary_counts_load_samples_and_keeps_zero_block_rates_finite() {
     let load_end = ThroughputStatusSummary {
         min_txs_approved: 10,
@@ -8565,6 +8682,103 @@ async fn wait_for_converged_height(
         }
         sleep(Duration::from_millis(200)).await;
     }
+}
+
+async fn wait_for_height_quorum_with_bounded_lag(
+    network: &Network,
+    target_height: u64,
+    timeout: Duration,
+) -> Result<Vec<iroha::client::Status>> {
+    let deadline = Instant::now() + timeout;
+    let peer_count = network.peers().len();
+    let quorum = commit_quorum_from_len(peer_count).max(1);
+    let tolerated_lagging = tolerated_lagging_peers(peer_count);
+    let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
+    let mut last_log = Instant::now()
+        .checked_sub(STATUS_LOG_INTERVAL)
+        .unwrap_or_else(Instant::now);
+    loop {
+        match collect_statuses(network, STATUS_POLL_TIMEOUT).await {
+            Ok(statuses) => {
+                let snapshot: Vec<StatusSnapshot> =
+                    statuses.iter().map(StatusSnapshot::from_status).collect();
+                if snapshot != last_snapshot || last_log.elapsed() >= STATUS_LOG_INTERVAL {
+                    eprintln!(
+                        "localnet status quorum snapshot (target_height={target_height}, quorum={quorum}, tolerated_lagging={tolerated_lagging}): {snapshot:?}"
+                    );
+                    last_log = Instant::now();
+                }
+                last_snapshot = snapshot;
+                if height_quorum_with_bounded_lag(&statuses, target_height, quorum) {
+                    return Ok(statuses);
+                }
+                if Instant::now() >= deadline {
+                    return Err(eyre!(
+                        "height quorum failed to reach {target_height} within {:?}: quorum={quorum}, tolerated_lagging={tolerated_lagging}, last_snapshot={last_snapshot:?}",
+                        timeout
+                    ));
+                }
+            }
+            Err(err) => {
+                if Instant::now() >= deadline {
+                    return Err(eyre!(
+                        "height quorum failed to reach {target_height} within {:?}: quorum={quorum}, tolerated_lagging={tolerated_lagging}, last_snapshot={last_snapshot:?}, last_error={err:?}",
+                        timeout
+                    ));
+                }
+            }
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+fn height_quorum_with_bounded_lag(
+    statuses: &[iroha::client::Status],
+    target_height: u64,
+    quorum: usize,
+) -> bool {
+    if statuses.is_empty() {
+        return false;
+    }
+    if statuses
+        .iter()
+        .filter(|status| status.blocks >= target_height)
+        .count()
+        < quorum
+    {
+        return false;
+    }
+    let Some((_min_height, max_height)) = status_height_span(statuses) else {
+        return false;
+    };
+    if max_height < target_height {
+        return false;
+    }
+    let tolerated_lagging = statuses.len().saturating_sub(quorum);
+    let low_watermark = quorum_low_watermark_height(statuses, tolerated_lagging);
+    max_height.saturating_sub(low_watermark) <= 1
+}
+
+fn status_height_span(statuses: &[iroha::client::Status]) -> Option<(u64, u64)> {
+    let min_height = statuses.iter().map(|status| status.blocks).min()?;
+    let max_height = statuses.iter().map(|status| status.blocks).max()?;
+    Some((min_height, max_height))
+}
+
+fn tolerated_lagging_peers(peer_count: usize) -> usize {
+    peer_count.saturating_sub(commit_quorum_from_len(peer_count).max(1))
+}
+
+fn quorum_low_watermark_height(
+    statuses: &[iroha::client::Status],
+    tolerated_lagging: usize,
+) -> u64 {
+    let mut heights: Vec<_> = statuses.iter().map(|status| status.blocks).collect();
+    if heights.is_empty() {
+        return 0;
+    }
+    heights.sort_unstable();
+    heights[tolerated_lagging.min(heights.len().saturating_sub(1))]
 }
 
 fn scale_duration(duration: Duration, factor: u64) -> Duration {

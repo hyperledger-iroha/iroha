@@ -49,6 +49,7 @@ public enum KagemushaOfflineSpendMode: String, Equatable {
 public enum KagemushaRecursiveSpendProver {
     public static let requiredNativeBridgeAbiVersion: UInt32 = 6
     public static let recursiveCompactRequiredNativeBridgeAbiVersion: UInt32 = 7
+    public static let topUpRequiredNativeBridgeAbiVersion: UInt32 = 15
     public static let recursiveAggregationProofCircuitIdV1 = "kagemusha-recursive-aggregation-v1"
     public static let recursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1"
     public static let recursiveAggregationProofBackend = "halo2/ipa"
@@ -103,6 +104,10 @@ public enum KagemushaRecursiveSpendProver {
 
     public static var isNativeAvailable: Bool {
         NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
+    }
+
+    public static var isTopUpNativeAvailable: Bool {
+        NoritoNativeBridge.shared.isKagemushaRecursiveSpendTopUpAvailable
     }
 
     public static var preferredMode: KagemushaOfflineSpendMode? {
@@ -694,6 +699,15 @@ public enum KagemushaRecursiveSpendProver {
             bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
         ) {
             try NoritoNativeBridge.shared.kagemushaRecursiveSpendAppend(requestArchive: $0)
+        }
+    }
+
+    public static func topUpSpend(requestArchive: Data) throws -> Data {
+        try call(
+            requestArchive: requestArchive,
+            bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveSpendTopUpAvailable
+        ) {
+            try NoritoNativeBridge.shared.kagemushaRecursiveSpendTopUp(requestArchive: $0)
         }
     }
 

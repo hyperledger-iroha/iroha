@@ -90,6 +90,30 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    kind: str,
+    count_option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return reviewed unique inventory labels whose count matches a CLI count."""
+
+    items = list(values)
+    if not items:
+        errors.append(f"{option} is required for {kind}")
+    for index, item in enumerate(items):
+        validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+    unique_items = set(items)
+    if len(unique_items) != len(items):
+        errors.append(f"{option} must not contain duplicates")
+    if len(unique_items) != expected_count:
+        errors.append(f"{option} unique values must match {count_option}")
+    return items
+
+
 def validate_output_path(path: Path, errors: list[str]) -> None:
     """Reject unsafe output targets before writing a canary artifact."""
 
@@ -315,6 +339,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "quorum": args.quorum,
                 "aggregation": "median_score_bps",
                 "result_count": args.result_count,
+                "results": [{"name": name} for name in args.committee_results],
                 "subject": args.subject,
                 "subject_digest_hex": args.subject_digest_hex,
                 "aggregated_score_bps": args.score_bps,
@@ -531,6 +556,14 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
         validate_runner_binding_inputs(args, errors)
         if args.result_count < args.quorum:
             errors.append("--result-count must be >= --quorum")
+        args.committee_results = validate_reviewed_inventory(
+            split_csv_values(args.committee_result),
+            expected_count=args.result_count,
+            option="--committee-result",
+            kind="committee",
+            count_option="--result-count",
+            errors=errors,
+        )
     elif args.kind == "operator_workflow":
         require_kind_options(
             args,
@@ -752,6 +785,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verdict", default="quarantine")
     parser.add_argument("--quorum", type=positive_int_arg, default=2)
     parser.add_argument("--result-count", type=positive_int_arg, default=3)
+    parser.add_argument("--committee-result", action="append", default=[])
     parser.add_argument("--operator-route", action="append", default=[])
     parser.add_argument("--transparency-source-kind", action="append", default=[])
     parser.add_argument("--governance-producer", action="append", default=[])

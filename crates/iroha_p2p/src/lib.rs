@@ -127,6 +127,7 @@ pub enum Error {
     /// Incoming frame exceeds configured maximum size
     FrameTooLarge,
     /// Outbound {priority} frame queue full ({queued_frames}/{max_frames} frames, {queued_bytes}/{max_bytes} bytes)
+    #[allow(clippy::doc_markdown)]
     OutboundFrameQueueFull {
         /// Queue priority label.
         priority: &'static str,

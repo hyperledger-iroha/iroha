@@ -4693,6 +4693,17 @@ case "$mode" in
     cfg_file="$spec_dir/SumeragiProposalBackpressureGate_bug_${cfg_bug_name}.cfg"
     expect_failure=1
     ;;
+  proposal-sccp-root-fast)
+    module="SumeragiProposalSccpRootGate"
+    cfg_file="$spec_dir/SumeragiProposalSccpRootGate_fast.cfg"
+    ;;
+  proposal-sccp-root-bug-*)
+    bug_name="${mode#proposal-sccp-root-bug-}"
+    cfg_bug_name="${bug_name//-/_}"
+    module="SumeragiProposalSccpRootGate"
+    cfg_file="$spec_dir/SumeragiProposalSccpRootGate_bug_${cfg_bug_name}.cfg"
+    expect_failure=1
+    ;;
   proposal-defer-warning-fast)
     module="SumeragiProposalDeferWarningThrottleGate"
     cfg_file="$spec_dir/SumeragiProposalDeferWarningThrottleGate_fast.cfg"

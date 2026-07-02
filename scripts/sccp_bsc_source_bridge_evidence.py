@@ -29,6 +29,11 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from path_safety import first_symlinked_existing_path_component  # noqa: E402
 from sccp_client_loader import load_sccp_module  # noqa: E402
+from sccp_source_template_hashes import (  # noqa: E402
+    sccp_active_source_template_component_hashes,
+    sccp_source_template_hash_human_label,
+    sccp_source_template_hash_match,
+)
 
 
 _keccak_256 = load_sccp_module()._keccak_256
@@ -788,9 +793,23 @@ def _template_component_hashes(bsc_network: str | None = None) -> dict[str, byte
     }
 
 
+def _supported_template_component_hashes(
+    bsc_network: str | None = None,
+) -> dict[str, bytes]:
+    selected_network = _bsc_network_from_value(bsc_network)
+    template_hashes = dict(_template_component_hashes(selected_network))
+    for candidate_network in BSC_NETWORK_PROFILES:
+        if candidate_network == selected_network:
+            continue
+        for field, template_hash in _template_component_hashes(candidate_network).items():
+            template_hashes[f"{candidate_network}_{field}"] = template_hash
+    return template_hashes
+
+
 def _require_live_component_hashes(args: argparse.Namespace) -> None:
     bsc_network = getattr(args, "bsc_network", None)
     template_hashes = _template_component_hashes(bsc_network)
+    supported_template_hashes = _supported_template_component_hashes(bsc_network)
     for field, template_hash in template_hashes.items():
         if getattr(args, field) == template_hash:
             label = field.replace("_", " ")
@@ -802,14 +821,17 @@ def _require_live_component_hashes(args: argparse.Namespace) -> None:
         supplied_hash = getattr(args, field, None)
         if supplied_hash is None:
             continue
-        for template_field, template_hash in template_hashes.items():
-            if supplied_hash == template_hash:
-                label = field.replace("_", " ")
-                template_label = template_field.replace("_", " ")
-                raise ValueError(
-                    f"BSC production source evidence requires live {label}; "
-                    f"template-derived {template_label} is not deployable"
-                )
+        match = sccp_source_template_hash_match(
+            supplied_hash,
+            local_template_hashes=supported_template_hashes,
+        )
+        if match is not None:
+            label = field.replace("_", " ")
+            template_label = sccp_source_template_hash_human_label(match)
+            raise ValueError(
+                f"BSC production source evidence requires live {label}; "
+                f"template-derived {template_label} is not deployable"
+            )
 
 
 def _require_canonical_adapter_verifier_vk_hash(args: argparse.Namespace) -> None:
@@ -1515,7 +1537,7 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
         return fallback
     if _decoded_cli_error_text_issue(text):
         return fallback
-    normalized_text = _decoded_public_blocker_text(text).lower()
+    normalized_text = _decoded_public_blocker_text(text).casefold()
     if any(marker in normalized_text for marker in SENSITIVE_CLI_ERROR_MARKERS):
         return fallback
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):

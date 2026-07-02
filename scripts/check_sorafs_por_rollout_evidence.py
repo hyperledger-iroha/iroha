@@ -198,6 +198,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "deterministic_seed_replay_verified",
         "forced_challenge_policy_verified",
         "provider_count",
+        "providers",
         "challenge_count",
         "seed_replay_digest_hex",
         "policy_digest_hex",
@@ -348,6 +349,16 @@ def validate_randomness(
     require_bool_true(payload, "deterministic_seed_replay_verified", errors)
     require_bool_true(payload, "forced_challenge_policy_verified", errors)
     require_minimum_int(payload, "provider_count", options.min_providers, errors)
+    require_string_inventory_count_match(
+        payload,
+        "providers",
+        "provider_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "providers", errors):
+        require_string(record, "name", errors)
     require_minimum_int(payload, "challenge_count", options.min_challenges, errors)
     require_hex(payload, "seed_replay_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)

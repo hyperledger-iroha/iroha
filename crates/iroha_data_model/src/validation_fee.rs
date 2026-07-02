@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::Hash;
-use iroha_crypto::{PublicKey, SignatureOf};
+use iroha_crypto::{Algorithm, PublicKey, SignatureOf};
 use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -706,9 +706,7 @@ impl SignedValidationFeePolicyV1 {
             if !seen.insert(signature.public_key.clone()) {
                 return Err(ValidationFeePolicySignatureError::DuplicateSigner);
             }
-            signature
-                .signature
-                .verify(&signature.public_key, &payload)
+            verify_policy_signature(&signature.signature, &signature.public_key, &payload)
                 .map_err(|_| ValidationFeePolicySignatureError::InvalidSignature)?;
             collected = collected.saturating_add(*weight);
         }
@@ -725,11 +723,22 @@ impl SignedValidationFeePolicyV1 {
     }
 }
 
+fn verify_policy_signature(
+    signature: &SignatureOf<ValidationFeePolicySigningPayloadV1>,
+    public_key: &PublicKey,
+    payload: &ValidationFeePolicySigningPayloadV1,
+) -> Result<(), iroha_crypto::Error> {
+    if matches!(public_key.try_algorithm(), Ok(Algorithm::Ed25519)) {
+        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    }
+    signature.verify(public_key, payload)
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr as _;
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
 
     use super::*;
     use crate::{account::AccountId, asset::AssetDefinitionId, domain::DomainId, name::Name};
@@ -809,6 +818,26 @@ mod tests {
                 .collect(),
             policy,
         }
+    }
+
+    const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_with_malformed_ed25519_r(
+        signature: &SignatureOf<ValidationFeePolicySigningPayloadV1>,
+        replacement_r: &[u8; 32],
+    ) -> SignatureOf<ValidationFeePolicySigningPayloadV1> {
+        let mut payload = signature.payload().to_vec();
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
+        SignatureOf::from_signature(Signature::from_bytes(&payload))
     }
 
     fn successor_policy(previous: &ValidationFeePolicyV1) -> ValidationFeePolicyV1 {
@@ -973,6 +1002,30 @@ mod tests {
             signed.verify_against_keyset(&keyset),
             Err(ValidationFeePolicySignatureError::InvalidSignature)
         );
+    }
+
+    #[test]
+    fn signed_policy_rejects_malformed_ed25519_signature_r() {
+        let first = key_pair(21);
+        let keyset = keyset(&[&first], 1);
+        let signed = signed_policy(policy(), &[&first]);
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            let mut invalid_signed = signed.clone();
+            invalid_signed.signatures[0].signature = signature_with_malformed_ed25519_r(
+                &signed.signatures[0].signature,
+                &replacement_r,
+            );
+
+            assert_eq!(
+                invalid_signed.verify_against_keyset(&keyset),
+                Err(ValidationFeePolicySignatureError::InvalidSignature),
+                "{label} validation-fee policy signature R was not rejected"
+            );
+        }
     }
 
     #[test]

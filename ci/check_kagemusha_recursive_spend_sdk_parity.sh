@@ -62,6 +62,10 @@ REQUIRED_C_SYMBOLS = (
     "connect_norito_kagemusha_recursive_spend_redeem",
 )
 
+ADDITIVE_ABI15_C_SYMBOLS = (
+    "connect_norito_kagemusha_recursive_spend_topup",
+)
+
 REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS = (
     "connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
     "connect_norito_kagemusha_verify_recursive_compact_payment_token",
@@ -87,6 +91,7 @@ REQUIRED_JS_NATIVE_METHODS = (
     "kagemushaRecursiveSpendLineageWitnessAppendResult",
     "kagemushaRecursiveSpendVerify",
     "kagemushaRecursiveSpendRedeem",
+    "kagemushaRecursiveSpendTopUp",
 )
 
 REQUIRED_RECURSIVE_COMPACT_JS_METHODS = (
@@ -158,6 +163,7 @@ REQUIRED_JS_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_EXPORTS = (
     "buildKagemushaInstructionArchiveInstruction",
     "buildKagemushaInstructionTransaction",
     "buildKagemushaRecursiveRedeemTransaction",
+    "buildKagemushaRecursiveTopUpTransaction",
 )
 
 REQUIRED_PYTHON_NATIVE_METHODS = (
@@ -170,6 +176,7 @@ REQUIRED_PYTHON_NATIVE_METHODS = (
     "kagemusha_recursive_spend_lineage_witness_append_result",
     "kagemusha_recursive_spend_verify",
     "kagemusha_recursive_spend_redeem",
+    "kagemusha_recursive_spend_topup",
 )
 
 REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS = (
@@ -224,12 +231,15 @@ REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS = (
     "KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME",
     "KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES",
     "KagemushaInstructionArchiveType",
     "kagemusha_instruction_archive_instruction",
     "kagemusha_recursive_redeem_instruction",
+    "kagemusha_recursive_topup_instruction",
     "build_kagemusha_instruction_transaction",
     "build_kagemusha_recursive_redeem_transaction",
+    "build_kagemusha_recursive_topup_transaction",
 )
 
 REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS = (
@@ -255,6 +265,7 @@ REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_PYTHON_PUBLIC_METHODS = (
     "KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME",
@@ -278,6 +289,7 @@ REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_PYTHON_PUBLIC_METHODS = (
     "kagemusha_recursive_spend_append_typed",
     "kagemusha_recursive_spend_verify_typed",
     "kagemusha_recursive_spend_redeem_typed",
+    "kagemusha_recursive_spend_topup_typed",
 )
 
 REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS = (
@@ -286,6 +298,7 @@ REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS = (
     "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME",
@@ -305,6 +318,7 @@ REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS = (
     "kagemushaRecursiveSpendAppendTyped",
     "kagemushaRecursiveSpendVerifyTyped",
     "kagemushaRecursiveSpendRedeemTyped",
+    "kagemushaRecursiveSpendTopUpTyped",
 )
 
 REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_DECLARATIONS = (
@@ -330,10 +344,12 @@ REQUIRED_PUBLIC_METHODS = (
     "lineageWitnessAppendResult",
     "verifySpend",
     "redeemSpend",
+    "topUpSpend",
 )
 
 REQUIRED_JS_PUBLIC_EXPORTS = REQUIRED_JS_NATIVE_METHODS + (
     "isKagemushaRecursiveSpendNativeAvailable",
+    "isKagemushaRecursiveSpendTopUpNativeAvailable",
     "preferredKagemushaOfflineSpendMode",
     "canRedeemKagemushaRecursiveSpendWitnessless",
     "requiresKagemushaRecursiveSpendLineageWitnessForRedeem",
@@ -349,10 +365,12 @@ REQUIRED_JS_PUBLIC_EXPORTS = REQUIRED_JS_NATIVE_METHODS + (
     "canProveKagemushaRecursiveSpendAppendOutputProofCircuitId",
     "canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId",
     "requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend",
+    "KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
 ) + REQUIRED_LINEAGE_KEY_ARTIFACT_JS_ALL_PUBLIC_EXPORTS + REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_JS_PUBLIC_EXPORTS
 
 REQUIRED_PYTHON_PUBLIC_METHODS = REQUIRED_PYTHON_NATIVE_METHODS + (
     "is_kagemusha_recursive_spend_available",
+    "is_kagemusha_recursive_spend_topup_available",
     "preferred_kagemusha_offline_spend_mode",
     "can_redeem_kagemusha_recursive_spend_witnessless",
     "requires_kagemusha_recursive_spend_lineage_witness_for_redeem",
@@ -366,6 +384,7 @@ REQUIRED_PYTHON_PUBLIC_METHODS = REQUIRED_PYTHON_NATIVE_METHODS + (
     "can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id",
     "can_select_kagemusha_recursive_spend_append_output_proof_circuit_id",
     "requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append",
+    "KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
 ) + REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_ALL_PUBLIC_METHODS + REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS + REQUIRED_RECURSIVE_SPEND_REQUEST_CODEC_PYTHON_PUBLIC_METHODS
 
 JNI_METHODS = (
@@ -379,6 +398,7 @@ JNI_METHODS = (
     "nativeLineageWitnessAppendResult",
     "nativeVerifySpend",
     "nativeRedeemSpend",
+    "nativeTopUpSpend",
 )
 
 REQUIRED_RECURSIVE_COMPACT_JNI_METHODS = (
@@ -4398,8 +4418,9 @@ def check_c_bridge(texts, errors):
         header,
         r"int32_t\s+(connect_norito_kagemusha_recursive_spend_[a-z0-9_]+)\s*\(",
     )
-    require_same_set(rust_exports, REQUIRED_C_SYMBOLS, "Rust C recursive Kagemusha exports", errors)
-    require_same_set(header_exports, REQUIRED_C_SYMBOLS, "C header recursive Kagemusha declarations", errors)
+    required_current_c_symbols = REQUIRED_C_SYMBOLS + ADDITIVE_ABI15_C_SYMBOLS
+    require_same_set(rust_exports, required_current_c_symbols, "Rust C recursive Kagemusha exports", errors)
+    require_same_set(header_exports, required_current_c_symbols, "C header recursive Kagemusha declarations", errors)
     rust_record_exports = names_from_matches(
         rust,
         r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
@@ -4477,7 +4498,7 @@ def check_c_bridge(texts, errors):
     require_regex(
         texts,
         "crates/connect_norito_bridge/src/lib.rs",
-        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*14\s*;",
+        r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*15\s*;",
         "C native bridge ABI version",
         errors,
     )
@@ -7617,7 +7638,7 @@ def check_node_host(texts, errors):
     require_regex(
         texts,
         relative,
-        r"pub\s+fn\s+connect_norito_bridge_abi_version\s*\(\)\s*->\s*u32\s*\{\s*8\s*\}",
+        r"pub\s+fn\s+connect_norito_bridge_abi_version\s*\(\)\s*->\s*u32\s*\{\s*15\s*\}",
         "Node NAPI native bridge ABI version",
         errors,
     )
@@ -8716,7 +8737,7 @@ def check_mobile_offline_readiness_coverage(texts, errors):
         (
             "private struct KagemushaReadinessFamily",
             "let hasRecursiveCompactFamily = Self.containsAny(",
-            "try Self.rejectRemovedAbi7Fields(in: container)",
+            "try Self.rejectRemovedAbi7Fields(in: readinessContainer)",
             "private static func rejectRemovedAbi7Fields(",
             "private static func decodeRecursiveCompactFamily(",
             "private static func decodeRequiredExactString(",
@@ -9012,6 +9033,7 @@ def check_mobile_bearer_cash_policy_validation(texts, errors):
 def check_mobile_offline_bearer_cash_text_exactness(texts, errors):
     swift_note_source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
     swift_text_source = "IrohaSwift/Sources/IrohaSwift/OfflineBearerCashWallet.swift"
+    swift_contract_source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteTextTransferContract.swift"
     swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
     java_base64_source = (
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBase64Url.java"
@@ -9060,10 +9082,17 @@ def check_mobile_offline_bearer_cash_text_exactness(texts, errors):
             f"{label} whitespace normalization",
             errors,
         )
-    swift_note_text = texts[swift_note_source]
-    require(
-        swift_note_text.count('guard !value.isEmpty,\n              !value.contains("="),') >= 3,
-        "Swift Offline Bearer Cash base64url text exactness source missing exact empty-payload checks",
+    require_contains(
+        texts,
+        swift_contract_source,
+        (
+            "public static func base64URLDecodedData(_ value: String) -> Data?",
+            "guard !value.isEmpty,\n              value == value.trimmingCharacters(in: .whitespacesAndNewlines),",
+            "!value.contains(\"=\")",
+            "value.unicodeScalars.allSatisfy(isBase64URLScalarAllowed)",
+            "base64URLEncodedString(decoded) == value",
+        ),
+        "Swift Offline Bearer Cash base64url text exactness source",
         errors,
     )
     require_not_regex(
@@ -9077,7 +9106,7 @@ def check_mobile_offline_bearer_cash_text_exactness(texts, errors):
         texts,
         swift_text_source,
         "public static func payloadKind(_ text: String)",
-        "private static func isBase64UrlCharacter",
+        "private static func hasExactUnpaddedBase64UrlPayload",
         (
             "hasExactUnpaddedBase64UrlPayload(text, prefix: receiveRequestTextPrefix)",
             "hasExactUnpaddedBase64UrlPayload(text, prefix: paymentTextPrefix)",
@@ -9086,16 +9115,14 @@ def check_mobile_offline_bearer_cash_text_exactness(texts, errors):
         "Swift Offline Bearer Cash payload kind exactness source block",
         errors,
     )
-    require_block_contains(
+    require_contains(
         texts,
         swift_text_source,
-        "private static func hasExactUnpaddedBase64UrlPayload",
-        "private static func isBase64UrlCharacter",
         (
+            "private static func hasExactUnpaddedBase64UrlPayload",
             "guard text.hasPrefix(prefix)",
-            "payload.trimmingCharacters(in: .whitespacesAndNewlines) == payload",
-            "!payload.contains(\"=\")",
-            "payload.unicodeScalars.allSatisfy(isBase64UrlCharacter)",
+            "let payload = String(text.dropFirst(prefix.count))",
+            "OfflineNoteTextTransferContract.base64URLDecodedData(payload) != nil",
         ),
         "Swift Offline Bearer Cash payload kind payload exactness source block",
         errors,
@@ -9421,8 +9448,8 @@ def check_kotlin_offline_bearer_cash_text_exactness(texts, errors):
         "private fun isBase64UrlCharacter",
         (
             "if (!text.startsWith(prefix)) return false",
-            "payload.trim() == payload",
-            "!payload.contains(\"=\")",
+            "payload.trim() != payload",
+            "payload.contains(\"=\")",
             "payload.all(::isBase64UrlCharacter)",
         ),
         "Kotlin Offline Bearer Cash payload kind payload exactness source block",
@@ -9708,7 +9735,6 @@ def check_swift_transfer_text_payload_exactness(texts, errors):
         texts,
         handoff,
         (
-            "guard !value.isEmpty,\n              value == value.trimmingCharacters(in: .whitespacesAndNewlines),",
             "if value.hasPrefix(receiveRequestPrefix)",
             "encoded = value.dropFirst(receiveRequestPrefix.count)",
             "if value.hasPrefix(paymentTokenPrefix)",
@@ -9720,7 +9746,10 @@ def check_swift_transfer_text_payload_exactness(texts, errors):
             "if hasExactTextPayload(value, prefix: paymentTokenPrefix)",
             "if hasExactTextPayload(value, prefix: receiptAckPrefix)",
             "private static func hasExactTextPayload(_ value: String, prefix: String) -> Bool",
+            "guard value.hasPrefix(prefix) else { return false }",
             "base64UrlDecode(String(value.dropFirst(prefix.count))) != nil",
+            "private static func base64UrlDecode(_ value: String) -> Data?",
+            "OfflineNoteTextTransferContract.base64URLDecodedData(value)",
         ),
         "Swift transfer text payload exactness source",
         errors,
@@ -9771,7 +9800,10 @@ def check_mobile_qr_stream_text_exactness(texts, errors):
         swift_source,
         (
             "guard let stripped = value.stripPrefix(base64Prefix) else",
-            "guard let decoded = Data(base64Encoded: stripped) else",
+            "guard let decoded = decodeExactBase64(stripped) else",
+            "private static func decodeExactBase64(_ value: String) -> Data?",
+            "guard let decoded = Data(base64Encoded: value),",
+            "decoded.base64EncodedString() == value else",
         ),
         "Swift QR stream text exactness source",
         errors,
@@ -10360,6 +10392,7 @@ def check_kotlin_offline_wallet_device_binding_alias_strictness(texts, errors):
         "data class OfflineDeviceBinding",
         "data class OfflineAttestationReceipt",
         (
+            "require(isSupportedFirstReleaseDevicePlatform(platform))",
             "require(devicePublicKey == null)",
             "require(appAttestPublicKeyBase64 == null)",
         ),
@@ -10372,6 +10405,7 @@ def check_kotlin_offline_wallet_device_binding_alias_strictness(texts, errors):
         (
             "offlineDeviceBindingRejectsRetiredAssertionPublicKeyAliases",
             'for (retiredKey in listOf("device_public_key", "app_attest_public_key_base64"))',
+            'for (invalidPlatform in listOf("android-keymint", "ios-appattest", "ios-app-attest", "android-keymint ", "Android"))',
             "Json.decodeFromString<OfflineDeviceBinding>(json)",
             '"$retiredKey is retired; use assertion_public_key"',
         ),
@@ -10391,7 +10425,7 @@ def check_kotlin_offline_wallet_attestation_payload_strictness(texts, errors):
             '@SerialName("assertion_usage_count_limit") val assertionUsageCountLimit: Int? = null',
             "data class OfflineDeviceProof",
             "private fun expectedAssertionUsageCountLimit(platform: String): Int?",
-            "private fun isSupportedFirstReleasePlatform(platform: String): Boolean",
+            "private fun isSupportedFirstReleaseDevicePlatform(platform: String): Boolean",
             "private fun String.isExactNonEmptyProtocolString(): Boolean",
         ),
         "Kotlin offline wallet attestation payload strictness source",
@@ -10427,7 +10461,7 @@ def check_kotlin_offline_wallet_attestation_payload_strictness(texts, errors):
         "data class OfflineDeviceProof",
         "data class OfflineSpendAuthorization",
         (
-            "require(isSupportedFirstReleasePlatform(platform))",
+            "require(isSupportedFirstReleaseDevicePlatform(platform))",
             "require(attestationKeyId.isExactNonEmptyProtocolString())",
             "require(challengeHashHex.isLowerHex32())",
             'requireCanonicalNonEmptyBase64(assertionBase64, "assertion_base64")',
@@ -10443,6 +10477,8 @@ def check_kotlin_offline_wallet_attestation_payload_strictness(texts, errors):
             "attestationReceiptRejectsNonCanonicalProfileAndEncodingFields",
             "deviceProofRejectsNonCanonicalPlatformHashAndAssertion",
             "OfflineNoteV2.IOS_APP_ATTEST_PLATFORM",
+            'assertEquals("android", deviceProof().platform)',
+            'for (invalidPlatform in listOf("android-keymint", "ios-appattest", "ios-app-attest", "android-keymint ", "Android"))',
             '"version must be 1"',
             '"account_id must be an exact non-empty string"',
             '"assertion_usage_count_limit must be 1"',
@@ -10949,7 +10985,7 @@ def check_kotlin_offline_note_issued_claim_amount_exactness(texts, errors):
             "keyCertificatePayloadHash = keyCertificate.payloadHash()",
             "this.amount = canonicalAmount",
             "canonicalAmount = canonicalPositivePaymentAmountString(amount)",
-            "issuer.prepareLoad(chainId, accountId, assetDefinition(assetId), canonicalAmount)",
+            "IllegalStateException(ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE)",
             "val canonicalAmount = canonicalPositivePaymentAmountString(amount)",
             "private fun canonicalPositivePaymentAmountString(amount: String): String",
         ),
@@ -10964,8 +11000,8 @@ def check_kotlin_offline_note_issued_claim_amount_exactness(texts, errors):
             "AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null).address.toI105(1)",
             "OfflineNote.canonicalAmountString(nonCanonicalAmount)",
             "walletCanonicalizesLoadAndReceiveAmounts",
-            'loadWallet.load(assetDefinitionId, "001.2300").get(5, TimeUnit.SECONDS)',
-            'assertEquals("1.2300", issuerClient.lastPrepareAmount)',
+            "ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE",
+            "assertEquals(0, issuerClient.prepareLoadCount)",
             'val receiveRequest = receiveWallet.prepareReceive(assetDefinitionId, "+10")',
             'assertEquals("10", receiveStore.listNotes().single().amount)',
         ),
@@ -13625,6 +13661,15 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
         "Android Java retired Offline Note issuer exact platform profile source",
         errors,
     )
+    require_block_not_regex(
+        texts,
+        android_source,
+        "private static boolean isSupportedDeviceProofPlatform",
+        "private URI resolvePath",
+        r"ANDROID_KEYMINT_PLATFORM",
+        "Android Java retired Offline Note issuer device proof platform source",
+        errors,
+    )
     require(
         re.search(
             r"public CompletableFuture<OfflineNoteIssueResponse> issueNote\(\s*"
@@ -13660,6 +13705,7 @@ def check_mobile_retired_offline_note_issuers(texts, errors):
             '"deviceId must be exact non-empty text"',
             '"offlinePublicKey must be exact non-empty text"',
             '"device_binding.attestation_key_id must be exact non-empty text"',
+            'List.of("ios-appattest", "android-keymint", "android-keymint ", "Android")',
             'currentIssuerCertificateJson(obj(obj(fixture, "payment_token"), "sender_key_certificate"))',
             'List.of("apple-appattest-counter", "android-keymint-ecdsa-p256-usage-limit")',
             'List.of("ecdsa-p256-sha256", "ed25519")',
@@ -14848,7 +14894,7 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
     require_regex(
         texts,
         swift,
-        r"public func load\(assetDefinitionId: String, amount: String\) async throws -> OfflineNoteWalletNote \{[\s\S]*?guard let issuerClient else \{[\s\S]*?\}[\s\S]*?let canonicalAmount = try canonicalPositivePaymentAmountString\(amount\)[\s\S]*?issuerClient\.prepareLoad\([\s\S]*?amount: canonicalAmount",
+        r"public func load\(assetDefinitionId: String, amount: String\) async throws -> OfflineNoteWalletNote \{\s*throw ToriiOfflineNoteIssuerClientError\.retiredOfflineNoteIssue\s*\}",
         "Swift Offline Note wallet positive amount source",
         errors,
     )
@@ -14870,7 +14916,9 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
             'XCTAssertEqual(error as? OfflineNoteWalletError, .invalidField("amount"))',
             "XCTAssertEqual(issuerClient.prepareLoadCount, 0)",
             "XCTAssertNil(issuerClient.lastIssueRequest)",
-            'XCTAssertEqual(issuerClient.lastPrepareLoadAmount, "1.2300")',
+            "ToriiOfflineNoteIssuerClientError, .retiredOfflineNoteIssue",
+            "XCTAssertNil(issuerClient.lastPrepareLoadAmount)",
+            "func testWalletLoadDoesNotForwardRetiredIssueToIssuerClient() async throws",
             'XCTAssertEqual(receiveRequest.amount, "10")',
             'XCTAssertEqual(storedReceive.amount, "10")',
             'for nonCanonicalAmount in ["010", "+10"]',
@@ -14903,7 +14951,7 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
     require_regex(
         texts,
         kotlin,
-        r"fun load\(assetDefinitionId: String, amount: String\): CompletableFuture<OfflineNoteWalletNote> \{[\s\S]*?val canonicalAmount: String[\s\S]*?canonicalAmount = canonicalPositivePaymentAmountString\(amount\)[\s\S]*?issuer\.prepareLoad\(chainId, accountId, assetDefinition\(assetId\), canonicalAmount\)",
+        r"fun load\(assetDefinitionId: String, amount: String\): CompletableFuture<OfflineNoteWalletNote> \{[\s\S]*?IllegalStateException\(ToriiOfflineNoteIssuerClient\.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE\)",
         "Kotlin Offline Note wallet positive amount source",
         errors,
     )
@@ -14919,6 +14967,7 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
             'assertIllegalArgumentContains("amount must be canonical")',
             "AccountAddress.parseEncodedIgnoringCurveSupport(receiveRequest.accountId, null).address.toI105(1)",
             'assertIllegalArgumentContains("asset_id must be canonical")',
+            "ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE",
             "assertEquals(0, issuerClient.prepareLoadCount)",
             "assertNull(issuerClient.lastIssueRequest)",
             "OfflineNoteReceiveRequest(",
@@ -14939,8 +14988,7 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
             'throw new IllegalArgumentException("Offline Note payment amount must be an exact amount string");',
             'throw new IllegalArgumentException(\n            "Offline Note payment amount must contain only decimal digits");',
             "canonicalAmount = canonicalPositivePaymentAmountString(amount);",
-            "issuerClient.prepareLoad(chainId, accountId, assetDefinition(assetId), canonicalAmount)",
-            "deriveNoteCommitment(\n                                context.keyCertificate(),\n                                assetId,\n                                canonicalAmount,",
+            "ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE",
             "requirePositivePaymentAmount(receiveRequest.canonicalAmount())",
         ),
         "Android Java Offline Note wallet positive amount source",
@@ -14964,7 +15012,7 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
     require_regex(
         texts,
         android,
-        r"public CompletableFuture<OfflineNoteWalletNote> load\([\s\S]*?if \(issuerClient == null\) \{[\s\S]*?\}[\s\S]*?final String canonicalAmount;[\s\S]*?canonicalAmount = canonicalPositivePaymentAmountString\(amount\);[\s\S]*?issuerClient\.prepareLoad\(chainId, accountId, assetDefinition\(assetId\), canonicalAmount\)",
+        r"public CompletableFuture<OfflineNoteWalletNote> load\([\s\S]*?ToriiOfflineNoteIssuerClient\.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE",
         "Android Java Offline Note wallet positive amount source",
         errors,
     )
@@ -14976,15 +15024,13 @@ def check_mobile_offline_note_wallet_positive_amounts(texts, errors):
             "private static void walletRejectsNonPositiveLoadAmounts()",
             "walletCanonicalizesLoadAndReceiveAmountsAndRejectsMalformedAmounts();",
             "private static void walletCanonicalizesLoadAndReceiveAmountsAndRejectsMalformedAmounts()",
-            'assertEquals("1.2300", issuerClient.lastPrepareAmount, "canonical load prepare amount")',
-            'assertEquals("1.2300", issuerClient.lastIssueRequest.amount(), "canonical issue amount")',
+            "ToriiOfflineNoteIssuerClient.RETIRED_OFFLINE_NOTE_ISSUE_MESSAGE",
             'assertEquals("10", receiveRequest.amount(), "canonical receive request amount")',
             'for (final String nonCanonicalAmount : Arrays.asList("010", "+10"))',
             '"amount must be canonical"',
             "AccountAddress.parseEncodedIgnoringCurveSupport(receiveRequest.accountId(), null)",
             "OfflineNote.canonicalAssetId(nonCanonicalAssetId)",
             '"asset_id must be canonical"',
-            'Arrays.asList(" 1", "1\\n", "1e3", ".", "")',
             "walletRejectsNonPositiveReceiveAndPaymentAmounts();",
             "private static void walletRejectsNonPositiveReceiveAndPaymentAmounts()",
             'for (final String invalidAmount : Arrays.asList("0", "-1"))',
@@ -18287,9 +18333,13 @@ def check_javascript(texts, errors):
             "KagemushaRecursiveRedeemTransactionBaseInput",
             "KagemushaRecursiveRedeemArchiveInput",
             "KagemushaRecursiveRedeemTransactionInput",
+            "KagemushaRecursiveTopUpTransactionBaseInput",
+            "KagemushaRecursiveTopUpArchiveInput",
+            "KagemushaRecursiveTopUpTransactionInput",
             "KagemushaInstructionArchive:",
             "bytes_base64: string;",
             "redeemRequestArchive: BinaryLike;",
+            "initRequestArchive: BinaryLike;",
         ),
         "JavaScript TypeScript Kagemusha instruction transaction declarations",
         errors,
@@ -18320,6 +18370,8 @@ def check_javascript(texts, errors):
                 "must not contain surrounding whitespace",
                 "kagemushaRecursiveSpendRedeem",
                 "kagemushaRecursiveRedeem.redeemRequestArchive",
+                "kagemushaRecursiveSpendTopUp",
+                "kagemushaRecursiveTopUp.initRequestArchive",
                 "Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength))",
                 "Buffer.from(new Uint8Array(value))",
             ),
@@ -18331,6 +18383,13 @@ def check_javascript(texts, errors):
             relative,
             r"buildKagemushaRecursiveRedeemTransaction[\s\S]*?kagemushaRecursiveSpendRedeem[\s\S]*?buildKagemushaInstructionTransaction",
             f"{relative} Kagemusha recursive redeem transaction flow",
+            errors,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"buildKagemushaRecursiveTopUpTransaction[\s\S]*?kagemushaRecursiveSpendTopUp[\s\S]*?buildKagemushaInstructionTransaction",
+            f"{relative} Kagemusha recursive top-up transaction flow",
             errors,
         )
         require_block_contains(
@@ -18381,6 +18440,7 @@ def check_javascript(texts, errors):
             "bytesBase64 must be canonical standard base64",
             "buildKagemushaInstructionTransaction wraps one archive instruction",
             "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
+            "buildKagemushaRecursiveTopUpTransaction derives transfer instruction before signing",
             "transaction builders reject padded authority and asset definition IDs before native dispatch",
             "authority must not contain surrounding whitespace",
             r"assetDefinition\.assetDefinitionId must not contain surrounding whitespace",
@@ -18395,11 +18455,15 @@ def check_javascript(texts, errors):
             r"privateEndKaigi\.chainId must not contain surrounding whitespace",
             r"privateEndKaigi\.callId must not contain surrounding whitespace",
             "redeemRequestArchive must be a Buffer or ArrayBuffer view",
+            "initRequestArchive must be a Buffer or ArrayBuffer view",
             "redeem native rejected",
+            "top-up native rejected",
             "buildKagemusha transaction helpers copy mutable buffers before native calls",
             "mutableTransferArchive",
             "mutableRedeemInstructionArchive",
             "mutableRedeemRequestArchive",
+            "mutableTopUpInstructionArchive",
+            "mutableInitRequestArchive",
             "mutablePrivateKey",
             "fill(0xa5)",
         ),
@@ -18424,9 +18488,12 @@ def check_javascript(texts, errors):
             "buildKagemushaInstructionArchiveInstruction",
             "buildKagemushaInstructionTransaction",
             "buildKagemushaRecursiveRedeemTransaction",
+            "buildKagemushaRecursiveTopUpTransaction",
             "mutableTransferArchive",
             "mutableRedeemInstructionArchive",
             "mutableRedeemRequestArchive",
+            "mutableTopUpInstructionArchive",
+            "mutableInitRequestArchive",
             "mutablePrivateKey",
             "fill(0xa5)",
         ),
@@ -20674,7 +20741,10 @@ def check_python(texts, errors):
             "instructions=(instruction,)",
             "_archive_bytes_named(private_key, \"private_key\")",
             "_norito_archive_bytes_named(redeem_request_archive, \"redeem_request_archive\")",
+            "instruction_archive = kagemusha_recursive_spend_topup(init_request_archive)",
+            "kagemusha_instruction_archive_instruction(\n        KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER,",
             "instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)",
+            "instruction = kagemusha_recursive_topup_instruction(init_request_archive)",
         ),
         "Python Kagemusha instruction transaction builder",
         errors,
@@ -20683,12 +20753,24 @@ def check_python(texts, errors):
         texts,
         wrapper,
         "def build_kagemusha_instruction_transaction(",
-        "def build_kagemusha_recursive_redeem_transaction(",
+        "def build_kagemusha_recursive_topup_transaction(",
         (
             '_kagemusha_require_non_blank_unpadded(chain_id, "chain_id")',
             '_kagemusha_require_non_blank_unpadded(authority, "authority")',
         ),
         "Python Kagemusha instruction archive transaction builder exact identifiers",
+        errors,
+    )
+    require_block_contains(
+        texts,
+        wrapper,
+        "def build_kagemusha_recursive_topup_transaction(",
+        "def build_kagemusha_recursive_redeem_transaction(",
+        (
+            '_kagemusha_require_non_blank_unpadded(chain_id, "chain_id")',
+            '_kagemusha_require_non_blank_unpadded(authority, "authority")',
+        ),
+        "Python Kagemusha recursive top-up transaction builder exact identifiers",
         errors,
     )
     require_block_contains(
@@ -20740,6 +20822,8 @@ def check_python(texts, errors):
             "kagemusha_instruction_archive_instruction",
             "def kagemusha_recursive_redeem(",
             "kagemusha_recursive_redeem_instruction",
+            "def kagemusha_recursive_topup(",
+            "kagemusha_recursive_topup_instruction",
             "self.add_instruction(",
         ),
         "Python TransactionDraft Kagemusha instruction helpers",
@@ -20775,10 +20859,13 @@ def check_python(texts, errors):
             "fn kagemusha_instruction_archive_box(",
             "fn kagemusha_instruction_archive(",
             "fn kagemusha_recursive_redeem(",
+            "fn kagemusha_recursive_spend_topup_instruction_from_init_request(",
+            "fn kagemusha_recursive_spend_topup_py(",
             "KagemushaTransfer",
             "RedeemKagemushaRecursive",
             "decode_from_bytes(instruction_archive)",
             "kagemusha_recursive_spend_redeem_instruction_from_request(request)",
+            "failed to encode Kagemusha recursive spend top-up instruction",
             "kagemusha_instruction_archive_box_accepts_transfer_and_redeem_archives",
             "kagemusha_instruction_archive_box_rejects_adversarial_archives",
         ),
@@ -20791,6 +20878,7 @@ def check_python(texts, errors):
         (
             "test_kagemusha_instruction_archive_transaction_helpers_wrap_redeem_archive",
             "test_kagemusha_recursive_redeem_transaction_helper_derives_instruction_before_signing",
+            "test_kagemusha_recursive_topup_transaction_helper_derives_transfer_before_signing",
             "test_kagemusha_instruction_transaction_helpers_copy_mutable_archives_before_building",
             "test_kagemusha_instruction_transaction_helpers_reject_padded_chain_and_authority_before_signing",
             "test_python_transaction_builder_rejects_padded_chain_and_authority_before_signing",
@@ -20810,12 +20898,17 @@ def check_python(texts, errors):
             "iroha_python.build_signed_transaction(",
             "redeem_instruction_archive = bytearray(",
             "redeem_request_archive = bytearray(",
+            "top_up_instruction_archive = bytearray(",
+            "init_request_archive = bytearray(",
             "private_key = bytearray(keypair.private_key)",
             "memoryview(redeem_instruction_archive)",
             "memoryview(redeem_request_archive)",
+            "expected_top_up_instruction_archive = bytes(top_up_instruction_archive)",
+            "memoryview(init_request_archive)",
             "memoryview(private_key)",
             "_shared_recursive_spend_abi7_archive(\"redeem_instruction\")",
             "_shared_recursive_spend_abi7_archive(\"redeem_request\")",
+            "_shared_recursive_spend_archive(\"init_request\")",
             "_instruction_archive_bytes(instruction)",
             "committed_instruction = kagemusha.kagemusha_instruction_archive_instruction",
             "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
@@ -20833,6 +20926,7 @@ def check_python(texts, errors):
             "bad_request_flags[39] = 0x20",
             "redeem_request_archive must be a valid Norito archive",
             "draft.kagemusha_recursive_redeem(request_archive)",
+            "draft.kagemusha_recursive_topup(init_request_archive)",
         ),
         "Python Kagemusha instruction transaction tests",
         errors,
@@ -21180,7 +21274,7 @@ def check_python(texts, errors):
     require_regex(
         texts,
         host,
-        r"fn\s+kagemusha_recursive_spend_native_bridge_abi_version_py\s*\(\)\s*->\s*u32\s*\{\s*7\s*\}",
+        r"fn\s+kagemusha_recursive_spend_native_bridge_abi_version_py\s*\(\)\s*->\s*u32\s*\{\s*15\s*\}",
         "Python recursive spend ABI version",
         errors,
     )
@@ -21984,7 +22078,7 @@ def check_swift(texts, errors):
         (
             "private static func supportedPlatform(",
             "switch value {",
-            'case "ios", "android":',
+            "case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:",
             "return value",
             "guard binding.platform == Self.platform else",
             "guard proof.platform == Self.platform else",
@@ -24025,6 +24119,7 @@ def check_swift(texts, errors):
         errors,
     )
     require_contains(texts, bridge, REQUIRED_C_SYMBOLS, "Swift C symbol loader", errors)
+    require_contains(texts, bridge, ADDITIVE_ABI15_C_SYMBOLS, "Swift ABI-15 top-up C symbol loader", errors)
     require_contains(
         texts,
         bridge,
@@ -40185,9 +40280,9 @@ if mode == "--negative-control-kotlin-offline-wallet-attestation-payload-strictn
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
-            "require(isSupportedFirstReleasePlatform(platform))",
-            "check(isSupportedFirstReleasePlatform(platform))",
-            "Kotlin offline wallet device proof strictness source block missing require(isSupportedFirstReleasePlatform(platform))",
+            "require(isSupportedFirstReleaseDevicePlatform(platform))",
+            "check(isSupportedFirstReleaseDevicePlatform(platform))",
+            "Kotlin offline wallet device proof strictness source block missing require(isSupportedFirstReleaseDevicePlatform(platform))",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/BearerOfflineWalletModels.kt",
@@ -66804,10 +66899,10 @@ if mode == "--negative-control-swift-offline-proof-platform-exactness":
     source_replacements = (
         (
             '        switch value {\n'
-            '        case "ios", "android":\n'
+            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
             "            return value\n",
             '        switch value.lowercased() {\n'
-            '        case "ios", "android":\n'
+            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
             "            return value.lowercased()\n",
         ),
         (
@@ -71088,11 +71183,11 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     target = "crates/connect_norito_bridge/src/lib.rs"
     original = mutated[target]
     updated = original.replace(
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 14;",
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;",
         1,
     )
-    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 14;" in updated:
+    if updated == original or "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;" in updated:
         raise SystemExit("negative control failed: unable to mutate native C bridge ABI version")
     mutated[target] = updated
     try:
@@ -71100,7 +71195,7 @@ if mode == "--negative-control-native-c-bridge-abi-version":
     except ParityError as error:
         message = str(error)
         expected_labels = (
-            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*14\s*;",
+            r"C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*15\s*;",
         )
         missing = [label for label in expected_labels if label not in message]
         if missing:
@@ -71918,7 +72013,7 @@ if mode:
     raise SystemExit(f"unknown mode: {mode}")
 
 run_checks(texts)
-print("recursive Kagemusha ABI-6/ABI-7 SDK parity is consistent")
+print("recursive Kagemusha ABI-15 SDK parity is consistent")
 PY
 
 if [[ -z "$MODE" && "$(uname -s)" == "Darwin" ]]; then

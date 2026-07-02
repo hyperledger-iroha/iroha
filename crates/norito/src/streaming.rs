@@ -6187,7 +6187,8 @@ pub mod codec {
         }
     }
 
-    /// TODO: consider SIMD/GPU acceleration for the fixed-point DCT path.
+    /// Deterministic scalar fixed-point DCT used as the cross-hardware reference.
+    /// Accelerated variants must prove bit-exact parity against this path.
     #[cfg(feature = "streaming-fixed-point-dct")]
     pub(crate) fn forward_dct(block: &[i16; BLOCK_PIXELS]) -> [i32; BLOCK_PIXELS] {
         let mut out = [0i32; BLOCK_PIXELS];
@@ -8725,10 +8726,18 @@ pub mod codec {
             87, 79, 69, 68, 65, 76, 78, 94,
         ];
 
+        #[cfg(not(feature = "streaming-fixed-point-dct"))]
         const JPEG_SAMPLE_DCT_Q4: [i32; BLOCK_PIXELS] = [
             609, -30, -61, 27, 56, -20, -2, 0, 4, -22, -61, 10, 13, -7, -9, 5, -47, 7, 77, -25,
             -29, 10, 5, -6, -49, 12, 34, -15, -10, 6, 2, 2, 12, -7, -13, -4, -2, 2, -3, 3, -8, 3,
             2, -6, -2, 1, 4, 2, -1, 0, 0, -2, -1, -3, 4, -1, 0, 0, -1, -4, -1, 0, 1, 2,
+        ];
+
+        #[cfg(feature = "streaming-fixed-point-dct")]
+        const JPEG_SAMPLE_DCT_Q4: [i32; BLOCK_PIXELS] = [
+            609, -31, -62, 27, 56, -21, -3, 0, 4, -23, -62, 10, 13, -8, -10, 5, -48, 7, 77, -26,
+            -30, 10, 5, -7, -50, 12, 34, -16, -11, 6, 2, 2, 12, -8, -14, -5, -3, 2, -4, 3, -9, 3,
+            2, -7, -3, 1, 4, 2, -2, 0, 0, -3, -2, -4, 4, -2, -1, 0, -2, -5, -2, -1, 1, 2,
         ];
 
         const JPEG_SAMPLE_QUANT_Q4: [i16; BLOCK_PIXELS] = [

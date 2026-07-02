@@ -845,6 +845,52 @@ def test_receipt_json_rpc_redacts_invalid_json_parser_details():
         raise AssertionError("invalid receipt JSON-RPC payload was accepted")
 
 
+def test_receipt_json_rpc_url_rejects_hidden_request_state():
+    module = load_module()
+
+    assert module._normalize_evm_rpc_url("https://rpc.example") == (
+        "https://rpc.example"
+    )
+    assert module._normalize_evm_rpc_url("https://rpc.example/provider-token") == (
+        "https://rpc.example/provider-token"
+    )
+    assert module._normalize_evm_rpc_url("http://127.0.0.1:8545") == (
+        "http://127.0.0.1:8545"
+    )
+
+    def forbidden_opener(_request, timeout=15.0):
+        raise AssertionError("malformed receipt RPC URL reached the opener")
+
+    for rpc_url, expected_error in (
+        ("https://token@rpc.example", "credentials"),
+        ("https://rpc.example/root;param", "params, query, or fragment"),
+        ("https://rpc.example?api_key=secret", "params, query, or fragment"),
+        ("https://rpc.example#fragment", "params, query, or fragment"),
+        ("http://rpc.example", "HTTPS unless it is loopback HTTP"),
+        ("https://localhost", "public DNS"),
+        ("https://127.0.0.1", "public DNS"),
+        ("https://ethereum", "public DNS"),
+        ("https://ethereum.local", "public DNS"),
+        ("https://bad_host.rpc.example", "public DNS"),
+        (" https://rpc.example", "exact http(s) URL"),
+        ("https://rpc.example\nsecret", "exact http(s) URL"),
+    ):
+        try:
+            module._json_rpc(
+                rpc_url,
+                "eth_chainId",
+                [],
+                opener=forbidden_opener,
+                timeout=3.0,
+            )
+        except ValueError as exc:
+            assert expected_error in str(exc)
+        else:
+            raise AssertionError(
+                f"hidden receipt RPC URL state {rpc_url!r} was accepted"
+            )
+
+
 def test_receipt_json_rpc_redacts_transport_and_error_response_details():
     module = load_module()
 

@@ -4370,7 +4370,12 @@ fn decode_p256_der_signature(signature_value: &[u8]) -> Result<P256Signature, Ms
     if !signature_value.is_empty() && signature_value.iter().all(|byte| *byte == 0) {
         return Err(MsgError::ValidationFailed);
     }
-    P256Signature::from_der(signature_value).map_err(|_| MsgError::ValidationFailed)
+    let signature =
+        P256Signature::from_der(signature_value).map_err(|_| MsgError::ValidationFailed)?;
+    if signature.normalize_s().is_some() {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(signature)
 }
 
 fn parse_p256_verifying_key(public_key: &[u8]) -> Result<P256VerifyingKey, MsgError> {
@@ -15365,6 +15370,26 @@ mod tests {
     fn supported_xml_p256_der_signature_rejects_all_zero_signature_material() {
         let err = decode_p256_der_signature(&[0_u8; 72])
             .expect_err("all-zero DER P-256 signatures must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn supported_p256_der_signature_rejects_high_s() {
+        let signing_key = xml_signature_test_signing_key();
+        let signature: P256Signature = signing_key.sign(b"high-s der regression");
+        let low_s = low_s_p256_signature(signature);
+        decode_p256_der_signature(low_s.to_der().as_bytes())
+            .expect("low-S DER signatures should be accepted");
+
+        let high_s = high_s_p256_signature(low_s);
+        signing_key
+            .verifying_key()
+            .verify(b"high-s der regression", &high_s)
+            .expect("high-S counterpart remains mathematically valid ECDSA");
+
+        let err = decode_p256_der_signature(high_s.to_der().as_bytes())
+            .expect_err("high-S DER P-256 signatures must fail closed");
 
         assert!(matches!(err, MsgError::ValidationFailed));
     }

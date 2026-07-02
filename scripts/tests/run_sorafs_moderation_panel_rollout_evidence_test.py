@@ -123,14 +123,46 @@ def test_dry_run_prints_complete_moderation_panel_rollout_plan(
         "viewer_security_controls"
         in plan["evidence_contract"]["evidence_viewer"]["required_payload_fields"]
     )
+    assert "cases" in plan["evidence_contract"]["appeal_intake"]["required_payload_fields"]
+    assert "jurors" in plan["evidence_contract"]["sortition_roster"]["required_payload_fields"]
+    assert (
+        "sessions"
+        in plan["evidence_contract"]["evidence_viewer"]["required_payload_fields"]
+    )
+    assert (
+        "notifications"
+        in plan["evidence_contract"]["juror_notifications"][
+            "required_payload_fields"
+        ]
+    )
+    assert (
+        "jurors"
+        in plan["evidence_contract"]["juror_notifications"][
+            "required_payload_fields"
+        ]
+    )
     assert (
         "scenarios_exercised"
         in plan["evidence_contract"]["commit_reveal"]["required_payload_fields"]
+    )
+    assert "commits" in plan["evidence_contract"]["commit_reveal"]["required_payload_fields"]
+    assert "reveals" in plan["evidence_contract"]["commit_reveal"]["required_payload_fields"]
+    assert (
+        "settlements"
+        in plan["evidence_contract"]["settlement_integration"][
+            "required_payload_fields"
+        ]
     )
     assert (
         "policy_digest_hex"
         in plan["evidence_contract"]["e2e_panel"]["required_payload_fields"]
     )
+    assert "peers" in plan["evidence_contract"]["e2e_panel"]["required_payload_fields"]
+    assert (
+        "validators"
+        in plan["evidence_contract"]["e2e_panel"]["required_payload_fields"]
+    )
+    assert "cases" in plan["evidence_contract"]["e2e_panel"]["required_payload_fields"]
     assert "metrics" in plan["evidence_contract"]["metrics_alerts"]["required_payload_fields"]
     assert (
         "iroha_config_bound"

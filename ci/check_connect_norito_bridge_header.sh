@@ -85,6 +85,7 @@ bridge_abi_declaration = re.search(
 required_abi6 = {
     "connect_norito_kagemusha_recursive_spend_init",
     "connect_norito_kagemusha_recursive_spend_append",
+    "connect_norito_kagemusha_recursive_spend_topup",
     "connect_norito_kagemusha_recursive_spend_transition_profile_init",
     "connect_norito_kagemusha_recursive_spend_transition_profile_append",
     "connect_norito_kagemusha_recursive_spend_lineage_append_boundary",
@@ -135,6 +136,11 @@ expected_recursive_signatures = {
         "connect_norito_kagemusha_recursive_spend_append",
         "out_bundle_ptr",
         "out_bundle_len",
+    ),
+    "connect_norito_kagemusha_recursive_spend_topup": recursive_request_signature(
+        "connect_norito_kagemusha_recursive_spend_topup",
+        "out_instruction_ptr",
+        "out_instruction_len",
     ),
     "connect_norito_kagemusha_recursive_spend_transition_profile_init": recursive_request_signature(
         "connect_norito_kagemusha_recursive_spend_transition_profile_init",
@@ -364,7 +370,7 @@ if errors:
 
 print(
     "connect_norito_bridge.h declares all "
-    f"{len(required_abi6)} ABI-6 recursive spend symbols and "
+    f"{len(required_abi6)} recursive spend symbols and "
     f"{len(required_privacy_ffi)} privacy FFI symbols and "
     f"{len(required_sorafs_reference_ffi)} SoraFS reference symbols"
 )

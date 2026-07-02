@@ -6951,7 +6951,7 @@ mod state {
         Ok(())
     }
 
-    fn handshake_signature_payload<K: Kex, E: Enc>(
+    pub(super) fn handshake_signature_payload<K: Kex, E: Enc>(
         cryptographer: &Cryptographer<E>,
         advertised_addr: &iroha_primitives::addr::SocketAddr,
         local_pk: &K::PublicKey,
@@ -8256,9 +8256,15 @@ mod state {
                 Ok(pk) => pk,
                 Err(e) => return Err(crate::Error::from(iroha_crypto::error::Error::from(e))),
             };
-            let signature = Signature::try_from_bytes(&signature)
-                .map_err(iroha_crypto::error::Error::from)
-                .map_err(crate::Error::Keys)?;
+            let signature = match algorithm {
+                iroha_crypto::Algorithm::Ed25519 => {
+                    iroha_crypto::ed25519_parse_signature(&signature)
+                }
+                _ => {
+                    Signature::try_from_bytes(&signature).map_err(iroha_crypto::error::Error::from)
+                }
+            }
+            .map_err(crate::Error::Keys)?;
 
             let payload = handshake_signature_payload::<K, E>(
                 &cryptographer,
@@ -8423,7 +8429,7 @@ mod tests {
     };
 
     use iroha_crypto::{
-        KeyGenOption, KeyPair,
+        KeyGenOption, KeyPair, Signature,
         encryption::ChaCha20Poly1305,
         kex::{KeyExchangeScheme, X25519Sha256 as KexAlgo},
     };
@@ -9157,6 +9163,117 @@ mod tests {
             matches!(err, crate::Error::Keys(_)),
             "expected signature parse failure, got {err:?}"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_malformed_ed25519_signature_r() {
+        use tokio::io::AsyncWriteExt;
+
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let kx = KexAlgo::new();
+            let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
+            let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
+            let addr: SocketAddr = "127.0.0.1:1443".parse().unwrap();
+            let key_pair = KeyPair::random();
+            let (algorithm, public_key) = key_pair
+                .public_key()
+                .try_to_bytes()
+                .expect("fixture public key must be valid");
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[13u8; 32]).unwrap();
+            let payload = handshake_signature_payload::<KexAlgo, ChaCha20Poly1305>(
+                &cryptographer,
+                &addr,
+                &sender_kx,
+                &receiver_kx,
+                None,
+                None,
+            );
+            let mut signature = Signature::try_new(key_pair.private_key(), &payload)
+                .expect("checked handshake fixture signature")
+                .payload()
+                .to_vec();
+            signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+
+            let hello = HandshakeHelloV1 {
+                algorithm,
+                public_key: public_key.to_vec(),
+                signature,
+                addr,
+                relay: RelayRole::Disabled,
+                consensus: HandshakeConsensusMeta {
+                    mode_tag: None,
+                    proto_version: None,
+                    consensus_fingerprint: None,
+                    config: None,
+                },
+                confidential: HandshakeConfidentialMeta {
+                    enabled: None,
+                    assume_valid: None,
+                    verifier_backend: None,
+                    features: None,
+                },
+                crypto: HandshakeCryptoMeta {
+                    sm_enabled: None,
+                    sm_openssl_preview: None,
+                },
+                trust: HandshakeTrustMeta {
+                    trust_gossip: true,
+                    scion_supported: false,
+                },
+            };
+            let encoded =
+                encode_handshake_message(&cryptographer, &hello).expect("encode crafted hello");
+
+            let (stream_a, stream_b) = tokio::io::duplex(4096);
+            let (_sender_read, mut sender_write) = tokio::io::split(stream_a);
+            let (receiver_read, receiver_write) = tokio::io::split(stream_b);
+            sender_write
+                .write_u16(encoded.len() as u16)
+                .await
+                .expect("write hello length");
+            sender_write
+                .write_all(&encoded)
+                .await
+                .expect("write hello bytes");
+
+            let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+                connection: Connection::from_split(15, receiver_read, receiver_write),
+                expected_peer_id: None,
+                kx_local_pk: receiver_kx,
+                kx_remote_pk: sender_kx,
+                cryptographer,
+                chain_id: None,
+                consensus_caps: None,
+                confidential_caps: None,
+                crypto_caps: None,
+                relay_role: RelayRole::Disabled,
+                local_scion_supported: true,
+                trust_gossip: true,
+            };
+
+            let err = match GetKey::read_their_public_key(get_key).await {
+                Ok(_) => panic!("{label} Ed25519 handshake signature R must be rejected"),
+                Err(err) => err,
+            };
+            assert!(
+                matches!(err, crate::Error::Keys(_)),
+                "expected {label} signature parse failure, got {err:?}"
+            );
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
