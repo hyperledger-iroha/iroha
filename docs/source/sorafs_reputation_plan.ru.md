@@ -2,10 +2,11 @@
 lang: ru
 direction: ltr
 source: docs/source/sorafs_reputation_plan.md
-status: needs-update
-source_hash: 90a0df7f136a68ee55011332d1ecad2dd8314953b2dcae130db22273ee06fd52
-source_last_modified: "2026-06-25T18:04:39+00:00"
-translation_last_reviewed: 2026-06-25
+status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: d776a5b168e7febad8f83a7dd8115f27276defc820ab5b0a71acee93ed7d4a08
+source_last_modified: "2026-07-02T00:00:00+00:00"
+translation_last_reviewed: 2026-07-02
 ---
 
 # SoraFS Provider Reputation Oracle
@@ -19,7 +20,15 @@ CLI verification and publication helpers, SDK convenience clients, and
 observability assets. Remaining rollout work is deploying the live
 ingest/publisher service and archiving production evidence that passes the
 rollout evidence gate, not the local scoring, proof, API, CLI, SDK, dashboard,
-or verifier foundations.
+or verifier foundations. `scripts/build_sorafs_reputation_canary.py` builds
+individual payload-free SFM-3 canary artifacts for publish/latest snapshots,
+provider proofs, events, proof verification, metrics, transport, and
+routing/incentive consumption evidence. The builder requires reviewed
+deployment context, snapshot id/root bindings, provider proof inputs where
+applicable, unique provider proof sibling hashes, snapshot-age and ingest-lag
+threshold facts, bounded event-watch `limit`/`count` facts, and validates every generated artifact through
+`scripts/check_sorafs_reputation_rollout_evidence.py` before writing.
+Checked-in response-file examples cover provider and metrics canaries.
 
 ## Goals & Scope
 - Produce deterministic, governance-auditable reputation scores for each SoraFS provider to inform routing, incentives, staking, and compliance decisions.
@@ -211,8 +220,11 @@ CREATE TABLE reputation_snapshots (
   payload-bearing fields. The checker exports its required top-level payload
   fields as `EVIDENCE_REQUIRED_FIELDS`, allowing dry-run collection plans and
   downstream automation to inspect the exact SFM-3 evidence contract before
-  live collection. It supports shell-style `@ARGFILE` inputs for direct replay
-  of reviewed evidence directories and explicit artifacts.
+  live collection. Event-watch evidence must carry a positive `limit`, keep
+  `count` equal to the `events[]` length, and reject `count` values above that
+  limit before transport evidence can report ready. It supports shell-style
+  `@ARGFILE` inputs for direct replay of reviewed evidence directories and
+  explicit artifacts.
 - `scripts/run_sorafs_reputation_rollout_evidence.py` collects the deployed
   rollout bundle with bounded `sorafs_cli reputation publish|snapshot|fetch|watch|verify`
   commands, supports shell-style `@ARGFILE` response files, checks provider
@@ -345,6 +357,10 @@ Completed local foundations:
 - Governance DAG payload validation and local filesystem publisher artifacts.
 - Torii latest, provider, snapshot, weights, events, SSE, and WebSocket surfaces.
 - CLI `reputation verify`, `publish`, `snapshot`, `fetch`, and `watch`.
+- The rollout evidence gate now emits aggregate-compatible required-kind
+  metadata, evidence counts, required-row `present`/`artifact_count` fields,
+  threshold metadata, and reviewed deployment-context fingerprints so the final
+  production readiness aggregate can consume real reputation summaries directly.
 - JavaScript/TypeScript and Python convenience clients for reads, event polling,
   and SSE consumption.
 - Scheduler consumption through `reputation_score_bps`.
@@ -354,6 +370,13 @@ Completed local foundations:
   artifacts. The gate now fails closed when any recognized artifact is invalid,
   including stale duplicate artifacts or optional artifacts outside the required
   subset.
+- `scripts/build_sorafs_reputation_canary.py` provides checked-in payload-free
+  canary generation for the local SFM-3 rollout gate. Provider proof canaries
+  reject duplicate Merkle sibling hashes before writing, and the rollout checker
+  enforces the same uniqueness on externally supplied provider proof evidence.
+  Event-watch canaries and externally supplied event artifacts must also prove a
+  positive polling `limit`, exact `count`/`events[]` length agreement, and
+  `count <= limit` before readiness is reported.
 - Rollout evidence collection harness that publishes, reads back, watches, proof
   replays, and verifies the deployed reputation evidence bundle from one
   response-file driven operator command.

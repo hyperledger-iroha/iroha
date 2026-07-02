@@ -64,6 +64,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     require_zero_count,
 )
 from sorafs_required_kinds import (  # noqa: E402
@@ -348,6 +349,12 @@ def validate_ingest_service(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "quarantine_invalid_blocks", errors)
     require_positive_int(payload, "source_count", errors)
     require_string_coverage(payload, "payload_kinds", "", REQUIRED_PAYLOAD_KINDS, errors)
+    require_string_inventory_count_match(
+        payload,
+        "payload_kinds",
+        "source_count",
+        errors,
+    )
     require_false(payload, "payload_bytes_included", errors)
 
 
@@ -410,6 +417,14 @@ def validate_dashboard_api(
     require_hex(payload, "public_head_cid_hex", HEX64_LEN, errors)
     require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_string_coverage(payload, "routes", "name", REQUIRED_DASHBOARD_ROUTES, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     require_bool_true(payload, "runtime_ipfs_backed", errors)
     require_false(payload, "response_bodies_included", errors)
     validate_routes(payload, errors, options)

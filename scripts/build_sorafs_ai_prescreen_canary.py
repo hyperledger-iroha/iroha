@@ -331,6 +331,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "workflow_digest_hex": args.workflow_digest_hex,
                 "quarantine_id_hex": args.quarantine_id_hex,
                 "route_count": len(routes),
+                "passed_route_count": len(routes),
                 "payload_bytes_included": False,
                 "private_payloads_included": False,
                 "routes": routes,

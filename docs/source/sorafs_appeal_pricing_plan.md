@@ -48,7 +48,10 @@ artifact in the same bundle. Pricing-config artifacts also carry
 `valid_policy_digests`, and governance approval evidence must bind its
 `policy_digest_hex` to one of those valid pricing-config policy digests.
 Config- and policy-digest mismatches are recorded on the offending artifact in
-the JSON summary before required-kind validity is reported. The checker also
+the JSON summary before required-kind validity is reported. Quote API, deposit
+lifecycle, and settlement execution artifacts also bind `route_count` to the
+unique canonical `routes[].name` inventory and reject duplicate route entries
+before promotion can report ready. The checker also
 exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and
 `scripts/run_sorafs_appeal_finance_rollout_evidence.py` provides the matching
 reviewed evidence collection planner/runner with a dry-run

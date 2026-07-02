@@ -4,9 +4,11 @@ direction: ltr
 source: docs/source/sorafs_governance_dag_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0fa58b4b6a1ede4cbf5af1690bcd17a55e6435c3f445edd79dcb47165d55f29c
-source_last_modified: "2026-06-25T17:58:13+00:00"
-translation_last_reviewed: 2026-06-25
+source_hash: f497082020ce6cb104520052e89fed9eb3aee75ad740cff0f9b282bb8c1b788b
+source_last_modified: "2026-07-01T21:22:44.360826+00:00"
+translation_last_reviewed: 2026-07-02
+title: Governance DAG Publishing Pipeline
+summary: SF-12 implementation status for governance log schemas, local filesystem publishers, validation tooling, and remaining IPFS/IPNS DAG rollout.
 ---
 
 # Governance DAG Publishing Pipeline
@@ -86,9 +88,12 @@ Implemented foundations include:
   dry-run emits the checker-backed `evidence_contract` map for selected SF-12
   evidence kinds, and validates the schema-closed collection plan, required
   kinds, thresholds, external evidence map, evidence contract, and command steps
-  before dry-run output or verifier execution. Mirror datastore, checkpoint
-  recovery, dashboard, observability, IPFS/IPNS end-to-end, and governance
-  approval artifacts must carry the same `public_head_cid_hex` as a valid
+  before dry-run output or verifier execution. That validation now also rejects
+  non-canonical nested required-kind, threshold, external-evidence,
+  evidence-contract, and command-step shapes. Mirror
+  datastore, checkpoint recovery, dashboard, observability, IPFS/IPNS
+  end-to-end, and governance approval artifacts must carry the same
+  `public_head_cid_hex` as a valid
   publisher-service artifact in the same bundle, so rollout evidence cannot mix
   mirror, recovery, dashboard, public IPFS/IPNS, or approval records from
   different signed DAG heads. Publisher-service artifacts must also carry
@@ -497,6 +502,16 @@ The rollout evidence scripts have focused Python coverage in:
   to inspect the local signed runtime DAG index before a RocksDB/IPLD mirror or
   public IPFS/IPNS head exists. Digest/kind lookup block arrays are bounded by
   `limit` while total match counts remain visible.
+- Use `scripts/build_sorafs_governance_dag_canary.py` to turn reviewed SF-12
+  deployment facts into payload-free canary JSON before running the rollout
+  gate. The payload-free Governance DAG canary builder covers ingest service,
+  publisher service, mirror datastore, operator recovery, dashboard API,
+  observability, IPFS/IPNS end-to-end, and governance approval artifacts. It
+  requires every positive proof claim explicitly, requires complete payload-kind,
+  dashboard-route, or metric coverage where applicable, forces raw block/head/
+  CAR/checkpoint/response inclusion flags to `false`, validates the generated
+  artifact through the SF-12 checker, and writes atomically without following
+  output symlinks.
 - Keep `configs/taikai_cache/` and `cargo xtask sorafs-taikai-cache-bundle` documented as Taikai cache governance bundle tooling, not as the full DAG publisher.
 - Add live-head, public checkpoint recovery, and dashboard runbooks only when
   the IPFS/IPNS pipeline and metrics actually exist.
@@ -514,12 +529,22 @@ python3 scripts/check_sorafs_governance_dag_rollout_evidence.py \
 ```
 
 For staged collections with reviewed evidence paths, prefer the planner so the
-verifier command and summary path are reproducible:
+verifier command, summary path, thresholds, and current required payload-free
+field contract are reproducible:
 
 ```sh
 python3 scripts/run_sorafs_governance_dag_rollout_evidence.py \
   @scripts/examples/sorafs_governance_dag_rollout_collection.args.example \
   --dry-run
+```
+
+Build reviewed payload-free publisher-service and dashboard canaries:
+
+```sh
+python3 scripts/build_sorafs_governance_dag_canary.py \
+  @scripts/examples/sorafs_governance_dag_publisher_canary.args.example
+python3 scripts/build_sorafs_governance_dag_canary.py \
+  @scripts/examples/sorafs_governance_dag_dashboard_canary.args.example
 ```
 
 The checker recognizes `sorafs.governance_dag.*` SF-12 rollout schemas for
@@ -530,8 +555,33 @@ every recognized artifact is valid, raw DAG blocks, raw heads, CAR payloads,
 node payloads, response bodies, private keys, bearer tokens, signed
 transactions, and ledgers are absent, route latency, IPFS pin lag, and public
 head age stay under configured thresholds, enough public blocks and payload
-kinds are covered, and governance is bound to `iroha_config`.
+kinds are covered, and governance is bound to `iroha_config`. Ingest-service
+artifacts also bind `source_count` to the unique canonical `payload_kinds`
+inventory and reject duplicate payload-kind entries before promotion can report
+ready. Dashboard API artifacts also bind `route_count` to the unique canonical
+`routes[].name` inventory and reject duplicate route entries before promotion
+can report ready. Valid
+operator-recovery artifacts now publish their reviewed `checkpoint_digest_hex`
+values as `valid_checkpoint_digests`, and the aggregate production-readiness
+gate accepts those digests only as payload-free lowercase-hex metadata tethered
+to recognized artifact fingerprints. The collection
+planner dry-run JSON also includes the checker-backed `evidence_contract` map so operators
+can inspect the exact required fields for each requested evidence kind, and the
+runner validates the schema-closed collection plan, required kinds, thresholds,
+external evidence map, evidence contract, and command steps before collecting
+or submitting live publication artifacts. It also rejects non-canonical nested
+required-kind, threshold, external-evidence, evidence-contract, and command-step
+shapes. Use the
+canary builder for reviewed SF-12 promotion evidence so public-head binding,
+freshness thresholds,
+payload-free inclusion flags, and checker prevalidation stay consistent with the
+rollout gate. This does not replace the missing always-on ingest/publisher
+services, public IPFS/IPNS publication, runtime RocksDB/IPLD mirror, or
+runtime/IPFS-backed dashboard API.
 
 ## Rollout Status
-- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with local `publish-index.json` including appeal finance reports, weekly rollups, and settlement receipts, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, runtime-local `car-queue.json` and CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs with `limit`-bounded top-level/lookup arrays and full total counts, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, local Governance DAG publication metrics/dashboard/alerts, fail-closed rollout evidence gate, collection planner with dry-run evidence-contract export and schema-closed plan validation, operator argfile templates, and focused tests.
+- Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with local `publish-index.json` including appeal finance reports, weekly rollups, and settlement receipts, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, runtime-local `car-queue.json` and CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs with `limit`-bounded top-level/lookup arrays and full total counts, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, local Governance DAG publication metrics/dashboard/alerts, fail-closed rollout evidence gate, collection planner with dry-run evidence-contract export and schema-closed plan validation, payload-free canary builder for all SF-12 evidence kinds, operator argfile templates, and focused tests.
+- Done addendum: valid SF-12 operator-recovery evidence now surfaces
+  `valid_checkpoint_digests`, and aggregate readiness validates those checkpoint
+  digests as payload-free metadata tied to recognized artifact fingerprints.
 - Remaining: implement the always-on ingest/publisher services, IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service, live-head/public-checkpoint publication and recovery operator commands, runtime/IPFS-backed dashboard API, live public IPFS/IPNS head and pin/mirror metric emission, IPFS-backed tests, and staged/live publication evidence that passes the SF-12 gate.

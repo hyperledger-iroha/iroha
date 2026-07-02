@@ -162,6 +162,8 @@ def enforcement_probe(*, reasons: list[str] | None = None) -> dict:
             "geofence_verified": True,
             "proof_token_required": True,
             "response_bodies_included": False,
+            "route_count": 3,
+            "passed_route_count": 3,
             "routes": [route("manifest"), route("cid"), route("provider")],
         }
     )
@@ -492,6 +494,38 @@ def test_enforcement_requires_denial_reason_coverage(tmp_path: Path) -> None:
     write_json(tmp_path / "enforcement-probe.json", enforcement_probe(reasons=["provider"]))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_enforcement_route_count_must_match_unique_routes(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = enforcement_probe()
+    payload["route_count"] += 1
+    payload["passed_route_count"] = payload["route_count"]
+    write_json(tmp_path / "enforcement-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["enforcement_probe"]["artifacts"][0]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_enforcement_routes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = enforcement_probe()
+    payload["routes"].append(route("manifest"))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "enforcement-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["enforcement_probe"]["artifacts"][0]
+    assert "routes must not contain duplicate values" in artifact["errors"]
+    assert "route_count must match unique routes count" in artifact["errors"]
 
 
 def test_honey_audit_requires_minimum_probe_count(tmp_path: Path) -> None:

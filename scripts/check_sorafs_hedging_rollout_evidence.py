@@ -73,6 +73,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     record_string_value_binding_errors,
     require_zero_count,
 )
@@ -434,6 +435,14 @@ def validate_statement_publication(payload: dict[str, Any], errors: list[str]) -
     require_hex(payload, "statement_bundle_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "reconciliation_digest_hex", HEX64_LEN, errors)
     require_count_equal(payload, "route_count", "passed_route_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     require_positive_int(payload, "acknowledgement_probe_count", errors)
     require_string_coverage(
         payload,
@@ -456,6 +465,14 @@ def validate_reconciliation(payload: dict[str, Any], errors: list[str]) -> None:
         "name",
         REQUIRED_RECONCILIATION_SOURCES,
         errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "sources",
+        "source_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
     )
     require_count_equal(payload, "line_item_count", "reconciled_line_item_count", errors)
     require_zero_count(payload, "mismatch_count", errors)
@@ -489,6 +506,14 @@ def validate_native_bridge_release(payload: dict[str, Any], errors: list[str]) -
         "artifact_count",
         "artifacts",
         errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "artifacts",
+        "artifact_count",
+        errors,
+        field="id",
+        allow_scalar_items=False,
     )
     for _index, record in artifact_records:
         require_string(record, "id", errors)

@@ -20,7 +20,7 @@ provider proofs, events, proof verification, metrics, transport, and
 routing/incentive consumption evidence. The builder requires reviewed
 deployment context, snapshot id/root bindings, provider proof inputs where
 applicable, unique provider proof sibling hashes, snapshot-age and ingest-lag
-threshold facts, and validates every generated artifact through
+threshold facts, bounded event-watch `limit`/`count` facts, and validates every generated artifact through
 `scripts/check_sorafs_reputation_rollout_evidence.py` before writing.
 Checked-in response-file examples cover provider and metrics canaries.
 
@@ -214,8 +214,11 @@ CREATE TABLE reputation_snapshots (
   payload-bearing fields. The checker exports its required top-level payload
   fields as `EVIDENCE_REQUIRED_FIELDS`, allowing dry-run collection plans and
   downstream automation to inspect the exact SFM-3 evidence contract before
-  live collection. It supports shell-style `@ARGFILE` inputs for direct replay
-  of reviewed evidence directories and explicit artifacts.
+  live collection. Event-watch evidence must carry a positive `limit`, keep
+  `count` equal to the `events[]` length, and reject `count` values above that
+  limit before transport evidence can report ready. It supports shell-style
+  `@ARGFILE` inputs for direct replay of reviewed evidence directories and
+  explicit artifacts.
 - `scripts/run_sorafs_reputation_rollout_evidence.py` collects the deployed
   rollout bundle with bounded `sorafs_cli reputation publish|snapshot|fetch|watch|verify`
   commands, supports shell-style `@ARGFILE` response files, checks provider
@@ -365,6 +368,9 @@ Completed local foundations:
   canary generation for the local SFM-3 rollout gate. Provider proof canaries
   reject duplicate Merkle sibling hashes before writing, and the rollout checker
   enforces the same uniqueness on externally supplied provider proof evidence.
+  Event-watch canaries and externally supplied event artifacts must also prove a
+  positive polling `limit`, exact `count`/`events[]` length agreement, and
+  `count <= limit` before readiness is reported.
 - Rollout evidence collection harness that publishes, reads back, watches, proof
   replays, and verifies the deployed reputation evidence bundle from one
   response-file driven operator command.

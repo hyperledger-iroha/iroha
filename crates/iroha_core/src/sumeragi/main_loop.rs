@@ -1039,6 +1039,8 @@ mod requeue_block_transaction_tests {
             nexus.enabled = true;
             nexus.routing_policy = policy.clone();
             nexus.lane_catalog = current_lane_catalog.clone();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog.clone();
             nexus.fees.base_fee = Numeric::zero();
             nexus.fees.per_byte_fee = Numeric::zero();

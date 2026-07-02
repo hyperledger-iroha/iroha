@@ -35,7 +35,9 @@ summary: Implemented SF-14 timed-retrieval receipt capture, validation, and repl
 > replay, reputation integration, observability, and governance approval
 > evidence. The builder requires reviewed deployment context, complete
 > hot/warm tier, proof-stream route, and metric coverage where applicable,
-> receipt-summary digest bindings, provider and receipt minimum counts,
+> proof-stream `route_count` binding to the unique canonical `routes[].name`
+> inventory, duplicate route rejection, receipt-summary digest bindings,
+> provider and receipt minimum counts,
 > route and hot/warm latency threshold facts, governed PQ key-roster and
 > reputation-weight policy digest bindings, config-backed governance metadata,
 > reviewed governance policy digests surfaced as `valid_policy_digests`,

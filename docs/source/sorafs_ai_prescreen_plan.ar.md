@@ -4,9 +4,11 @@ direction: rtl
 source: docs/source/sorafs_ai_prescreen_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 949c368256155de63ac22fad76c8186915ab2bdb7728db2dbe2e027ed6f769a9
-source_last_modified: "2026-06-25T17:14:40+00:00"
-translation_last_reviewed: 2026-06-25
+source_hash: 986e3d72da7872e7a939378047710a5efcb8ce62ef9b20fee80056571bc416eb
+source_last_modified: "2026-07-02T06:28:26.092651+00:00"
+translation_last_reviewed: 2026-07-02
+title: SoraFS AI Pre-screening & Quarantine
+summary: SFM-4a implementation status for moderation reproducibility, honey-audit tooling, and remaining quarantine service gates.
 ---
 
 # SoraFS AI Pre-screening & Quarantine
@@ -35,6 +37,8 @@ local commit/reveal executor canary evidence tooling,
 local payload-free operator workflow canary evidence tooling,
 local AI pre-screening rollout evidence gate tooling,
 local AI pre-screening rollout evidence collection planning,
+local AI pre-screening dry-run evidence-contract export,
+local AI pre-screening payload-free canary artifact builder,
 standalone persistent model-registry service foundation, deterministic local
 runner CLI output, HTTP service mode, unary gRPC service mode, supervised
 bundle generation, HTTP canary evidence, deterministic local committee
@@ -60,7 +64,22 @@ evidence must also carry a `policy_digest_hex` matching a valid runner
 artifact, so the DAG policy surface is tied to the screening policy that was
 actually deployed. Runner-bound, workflow-bound, and policy-bound mismatches
 mark the offending artifact invalid in the summary instead of only blocking the
-top-level promotion status.
+top-level promotion status. Valid juror-notification transport artifacts now
+also surface their `manifest_body_blake3` values as
+`valid_notification_manifest_digests`, and valid commit/reveal executor
+artifacts surface their execution-summary digests as
+`valid_executor_summary_digests`, so the final aggregate production gate can
+bind deployed transport and executor proof facts back to recognized artifact
+fingerprints instead of trusting summary-only metadata.
+Commit/reveal executor artifacts also bind `artifact_count` and
+`passed_artifact_count` to the unique canonical `artifacts[].name` inventory and
+reject duplicate artifact entries before promotion can report ready.
+Governance DAG artifacts also bind `producer_count` to the unique canonical
+`producers[].name` inventory and reject duplicate producer entries before
+promotion can report ready. End-to-end workflow artifacts also bind
+`step_count` and `passed_step_count` to the unique canonical `steps[].name`
+inventory and reject duplicate workflow-step entries before promotion can
+report ready.
 
 Implemented locally:
 
@@ -829,8 +848,11 @@ Completed local foundations:
   workflow, juror notification transport, commit/reveal executor, moderation
   transparency source-entry, Governance DAG, and end-to-end workflow evidence;
   cross-artifact runner/workflow binding failures are reflected on the
-  offending artifacts in the emitted summary. The checker exports its required
-  top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`.
+  offending artifacts in the emitted summary. Operator workflow artifacts also
+  bind `route_count` and `passed_route_count` to the unique canonical
+  `routes[].name` inventory and reject duplicate route entries before promotion
+  can report ready. The checker exports its required top-level payload fields
+  as `EVIDENCE_REQUIRED_FIELDS`.
 - Provide `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` as the
   collection planner/runner that composes existing runner, committee, operator,
   notification, executor, and transparency canaries before invoking the gate;
@@ -840,6 +862,20 @@ Completed local foundations:
   evidence contract, and command steps before dry-run output or live canaries.
   It also rejects duplicate or unsupported `--source-entry` kinds before
   dry-run output or live canaries.
+- Provide `scripts/build_sorafs_ai_prescreen_canary.py` as a fail-closed
+  payload-free SFM-4a canary builder for individual runner, committee,
+  operator workflow, juror notification transport, commit/reveal executor,
+  transparency publication, Governance DAG, and end-to-end workflow artifacts.
+  The builder requires reviewed deployment context, runner tuple digests,
+  workflow digest bindings, complete operator route/transparency
+  source/Governance DAG producer/workflow-step coverage where applicable, and
+  validates every generated artifact through
+  `scripts/check_sorafs_ai_prescreen_rollout_evidence.py` before writing.
+  Checked-in response-file examples cover the end-to-end workflow anchor,
+  juror notification transport, and commit/reveal executor canaries. Valid
+  transport and executor artifacts publish their notification-manifest and
+  execution-summary digests in the lane summary for aggregate production
+  binding checks.
 - Provide moderation validation CLI commands.
 - Provide standalone persistent HTTP model-registry service admission/status and
   bounded snapshot endpoints backed by a Norito checkpoint.
@@ -877,5 +913,7 @@ payload-free commit/reveal coordination status, local commit/reveal executor
 CLI automation, local supervised commit/reveal executor job bundle generation,
 local commit/reveal executor canary evidence tooling, local operator workflow
 canary evidence tooling, local AI pre-screening rollout evidence gate and
-collection planner, documented operator role-provisioning runbook, GAR policy
-plumbing, bounded denylist catalog readback, or observability fixtures.
+collection planner/dry-run evidence-contract export, local AI pre-screening
+payload-free canary artifact builder, documented operator role-provisioning
+runbook, GAR policy plumbing, bounded denylist catalog readback, or
+observability fixtures.

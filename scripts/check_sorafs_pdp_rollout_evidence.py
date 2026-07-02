@@ -63,6 +63,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
 )
 from sorafs_required_kinds import (  # noqa: E402
     parse_required_kinds as parse_required_evidence_kinds,
@@ -332,6 +333,14 @@ def validate_provider_transport(
 ) -> None:
     require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_string_coverage(payload, "routes", "name", REQUIRED_ROUTES, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     require_bool_true(payload, "provider_protocol_enabled", errors)
     require_bool_true(payload, "torii_pdp_fail_closed_guard_removed", errors)
     require_bool_true(payload, "challenge_fetch_verified", errors)

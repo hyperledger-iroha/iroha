@@ -348,6 +348,38 @@ def test_proof_stream_requires_norito_routes(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_proof_stream_route_count_must_match_unique_routes(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_stream()
+    payload["route_count"] += 1
+    payload["passed_route_count"] = payload["route_count"]
+    write_json(tmp_path / "proof-stream.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_stream"]["artifacts"][0]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_proof_stream_routes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_stream()
+    payload["routes"].append(dict(payload["routes"][0]))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "proof-stream.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_stream"]["artifacts"][0]
+    assert "routes must not contain duplicate values" in artifact["errors"]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
 def test_reputation_receipt_summary_digest_must_match(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"

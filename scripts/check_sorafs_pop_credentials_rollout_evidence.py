@@ -66,6 +66,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     require_string_not_equal,
     record_evidence_digest_mismatch_errors,
     require_sum_equal,
@@ -406,6 +407,14 @@ def validate_revocation_registry(
 
 def validate_enrollment_portal(payload: dict[str, Any], errors: list[str]) -> None:
     require_count_equal(payload, "route_count", "passed_route_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
     require_bool_true(payload, "issuer_approval_required", errors)
     require_bool_true(payload, "renewal_flow_verified", errors)
     require_bool_true(payload, "rate_limit_configured", errors)

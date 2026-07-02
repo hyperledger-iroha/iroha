@@ -392,6 +392,54 @@ def test_missing_signed_routes_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_route_count_must_match_unique_routes_for_route_artifacts(
+    tmp_path: Path,
+) -> None:
+    route_artifacts = (
+        ("lifecycle_service", "lifecycle-service.json", lifecycle_service),
+        ("signed_routes", "signed-routes.json", signed_routes),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["route_count"] += 1
+        payload["passed_route_count"] = payload["route_count"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_routes_must_not_duplicate_for_route_artifacts(tmp_path: Path) -> None:
+    route_artifacts = (
+        ("lifecycle_service", "lifecycle-service.json", lifecycle_service),
+        ("signed_routes", "signed-routes.json", signed_routes),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["routes"].append(dict(payload["routes"][0]))
+        payload["route_count"] = len(payload["routes"])
+        payload["passed_route_count"] = len(payload["routes"])
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "routes must not contain duplicate values" in artifact["errors"]
+        assert "route_count must match unique routes count" in artifact["errors"]
+
+
 def test_stale_ledger_digest_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     stale = NOW_UNIX - MODULE.DEFAULT_MAX_LEDGER_AGE_SECS - 1
