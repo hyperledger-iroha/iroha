@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from collections import Counter
@@ -40,7 +41,9 @@ from sorafs_evidence_sensitivity import (  # noqa: E402
     visit_sensitive_fields,
 )
 from sorafs_evidence_validation import (  # noqa: E402
+    evidence_schema_by_kind,
     evidence_gate_status,
+    numbered_rollout_marker_token,
     require_rollout_deployment_id,
 )
 from sorafs_path_identity import resolve_path_identity  # noqa: E402
@@ -55,54 +58,71 @@ from sorafs_response_args import (  # noqa: E402
 )
 from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as AI_PRESCREEN_REQUIRED_KINDS,
+    KIND_BY_NAME as AI_PRESCREEN_KIND_BY_NAME,
 )
 from check_sorafs_appeal_finance_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as APPEAL_FINANCE_REQUIRED_KINDS,
+    KIND_BY_NAME as APPEAL_FINANCE_KIND_BY_NAME,
 )
 from check_sorafs_gateway_compliance_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GATEWAY_COMPLIANCE_REQUIRED_KINDS,
+    KIND_BY_NAME as GATEWAY_COMPLIANCE_KIND_BY_NAME,
 )
 from check_sorafs_gateway_load_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GATEWAY_LOAD_REQUIRED_KINDS,
+    KIND_BY_NAME as GATEWAY_LOAD_KIND_BY_NAME,
 )
 from check_sorafs_governance_dag_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GOVERNANCE_DAG_REQUIRED_KINDS,
+    KIND_BY_NAME as GOVERNANCE_DAG_KIND_BY_NAME,
 )
 from check_sorafs_hedging_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as HEDGING_BILLING_REQUIRED_KINDS,
+    KIND_BY_NAME as HEDGING_BILLING_KIND_BY_NAME,
 )
 from check_sorafs_moderation_panel_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as MODERATION_PANEL_REQUIRED_KINDS,
+    KIND_BY_NAME as MODERATION_PANEL_KIND_BY_NAME,
 )
 from check_sorafs_orderbook_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as ORDERBOOK_REQUIRED_KINDS,
+    KIND_BY_NAME as ORDERBOOK_KIND_BY_NAME,
 )
 from check_sorafs_pdp_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as PDP_REQUIRED_KINDS,
+    KIND_BY_NAME as PDP_KIND_BY_NAME,
 )
 from check_sorafs_pop_credentials_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as POP_CREDENTIALS_REQUIRED_KINDS,
+    KIND_BY_NAME as POP_CREDENTIALS_KIND_BY_NAME,
 )
 from check_sorafs_por_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as POR_REQUIRED_KINDS,
+    KIND_BY_NAME as POR_KIND_BY_NAME,
 )
 from check_sorafs_potr_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as POTR_REQUIRED_KINDS,
+    KIND_BY_NAME as POTR_KIND_BY_NAME,
 )
 from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as REFERENCE_SDK_REQUIRED_KINDS,
+    KIND_BY_NAME as REFERENCE_SDK_KIND_BY_NAME,
 )
 from check_sorafs_repair_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as REPAIR_REQUIRED_KINDS,
+    KIND_BY_NAME as REPAIR_KIND_BY_NAME,
 )
 from check_sorafs_reputation_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as REPUTATION_REQUIRED_KINDS,
+    KIND_BY_NAME as REPUTATION_KIND_BY_NAME,
 )
 from check_sorafs_reserve_rent_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as RESERVE_RENT_REQUIRED_KINDS,
+    KIND_BY_NAME as RESERVE_RENT_KIND_BY_NAME,
 )
 from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as TRANSPARENCY_REQUIRED_KINDS,
+    KIND_BY_NAME as TRANSPARENCY_KIND_BY_NAME,
 )
 
 
@@ -111,6 +131,8 @@ MAX_SUMMARY_BYTES = 4 * 1024 * 1024
 DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS = 14 * 24 * 60 * 60
 LOWER_HEX_DIGITS = set("0123456789abcdef")
 PRODUCTION_READY_ENVIRONMENTS = frozenset({"prod", "production"})
+FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS = frozenset({"stage", "staging"})
+SUCCESS_ARTIFACT_STATUSES = frozenset({"passed", "verified"})
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -140,17 +162,38 @@ SENSITIVE_KEYS = {
 }
 
 GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
-    "ai_prescreen": frozenset({"valid_runner_bindings", "valid_workflow_digests"}),
-    "appeal_finance": frozenset({"valid_config_digests", "valid_multi_peer_runs"}),
-    "gateway_compliance": frozenset({"valid_bundle_digests"}),
-    "gateway_load": frozenset(
-        {"valid_staging_report_digests", "valid_suite_report_digests"}
+    "ai_prescreen": frozenset(
+        {
+            "valid_executor_summary_digests",
+            "valid_notification_manifest_digests",
+            "valid_policy_digests",
+            "valid_runner_bindings",
+            "valid_workflow_digests",
+        }
     ),
-    "governance_dag": frozenset({"valid_public_head_cids"}),
+    "appeal_finance": frozenset(
+        {"valid_config_digests", "valid_multi_peer_runs", "valid_policy_digests"}
+    ),
+    "gateway_compliance": frozenset({"valid_bundle_digests", "valid_policy_digests"}),
+    "gateway_load": frozenset(
+        {
+            "valid_policy_digests",
+            "valid_staging_report_digests",
+            "valid_suite_report_digests",
+        }
+    ),
+    "governance_dag": frozenset(
+        {
+            "valid_checkpoint_digests",
+            "valid_policy_digests",
+            "valid_public_head_cids",
+        }
+    ),
     "hedging_billing": frozenset(
         {
             "valid_billing_cycles",
             "valid_cycle_bindings",
+            "valid_policy_digests",
             "valid_reference_decision_ids",
         }
     ),
@@ -159,19 +202,59 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
             "deployment_context",
             "valid_case_digests",
             "valid_e2e_runs",
+            "valid_evidence_viewer_digest_sets",
+            "valid_policy_digests",
             "valid_roster_bindings",
             "valid_tally_bindings",
         }
     ),
-    "orderbook": frozenset({"valid_contract_digests"}),
-    "pdp": frozenset({"valid_proof_summary_digests"}),
-    "pop_credentials": frozenset(
-        {"valid_revocation_list_digests", "valid_root_digests"}
+    "orderbook": frozenset({"valid_contract_digests", "valid_policy_digests"}),
+    "pdp": frozenset(
+        {
+            "valid_policy_digests",
+            "valid_proof_summary_digests",
+            "valid_provider_roster_digests",
+        }
     ),
-    "por": frozenset({"valid_seed_replay_digests"}),
-    "potr": frozenset({"valid_receipt_summary_digests"}),
-    "reference_sdk_release": frozenset({"valid_release_manifest_digests"}),
-    "repair": frozenset({"valid_failure_bundle_digests", "valid_roster_digests"}),
+    "pop_credentials": frozenset(
+        {
+            "valid_juror_sync_bindings",
+            "valid_policy_digests",
+            "valid_pop_snapshot_digests",
+            "valid_revocation_list_digests",
+            "valid_root_digests",
+        }
+    ),
+    "por": frozenset({"valid_policy_digests", "valid_seed_replay_digests"}),
+    "potr": frozenset(
+        {
+            "valid_policy_digests",
+            "valid_pq_key_roster_digests",
+            "valid_receipt_summary_digests",
+            "valid_reputation_weight_policy_digests",
+        }
+    ),
+    "reference_sdk_release": frozenset(
+        {
+            "valid_archive_index_digests",
+            "valid_ffi_contract_digests",
+            "valid_header_digests",
+            "valid_package_index_digests",
+            "valid_policy_digests",
+            "valid_release_key_fingerprints",
+            "valid_release_manifest_digests",
+            "valid_release_manifest_reference_digests",
+            "valid_smoke_output_digests",
+        }
+    ),
+    "repair": frozenset(
+        {
+            "valid_failure_bundle_digests",
+            "valid_handoff_digests",
+            "valid_policy_digests",
+            "valid_roster_digests",
+        }
+    ),
     "reputation": frozenset(
         {
             "merkle_root_hex",
@@ -220,16 +303,31 @@ PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS = frozenset(
     {
         "valid_bundle_digests",
         "valid_case_digests",
+        "valid_checkpoint_digests",
         "valid_config_digests",
         "valid_contract_digests",
         "valid_cycle_digests",
+        "valid_executor_summary_digests",
         "valid_failure_bundle_digests",
+        "valid_handoff_digests",
+        "valid_notification_manifest_digests",
         "valid_policy_digests",
+        "valid_pop_snapshot_digests",
+        "valid_pq_key_roster_digests",
         "valid_proof_summary_digests",
+        "valid_provider_roster_digests",
         "valid_public_head_cids",
         "valid_receipt_summary_digests",
+        "valid_reputation_weight_policy_digests",
         "valid_reference_decision_ids",
+        "valid_archive_index_digests",
+        "valid_ffi_contract_digests",
+        "valid_header_digests",
+        "valid_package_index_digests",
+        "valid_release_key_fingerprints",
         "valid_release_manifest_digests",
+        "valid_release_manifest_reference_digests",
+        "valid_smoke_output_digests",
         "valid_revocation_list_digests",
         "valid_root_digests",
         "valid_roster_digests",
@@ -244,6 +342,10 @@ PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS = {
     "valid_cycle_bindings": {
         "statement_bundle_digest_hex": 64,
         "reconciliation_digest_hex": 64,
+    },
+    "valid_juror_sync_bindings": {
+        "synced_root_digest_hex": 64,
+        "synced_revocation_list_digest_hex": 64,
     },
     "valid_policy_matrix_bindings": {
         "policy_digest_hex": 64,
@@ -283,6 +385,7 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
             {"cycle_index", "generated_at_unix", "statement_count"}
         ),
         "hex": {
+            "policy_digest_hex": 64,
             "reference_decision_id_hex": 64,
             "statement_bundle_digest_hex": 64,
             "reconciliation_digest_hex": 64,
@@ -299,6 +402,20 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
             "tally_digest_hex": 64,
         },
     },
+    "valid_evidence_viewer_digest_sets": {
+        "strings": frozenset(),
+        "positive_ints": frozenset(),
+        "hex": {
+            "case_digest_hex": 64,
+            "roster_hash_hex": 64,
+            "session_manifest_digest_hex": 64,
+            "watermark_metadata_digest_hex": 64,
+            "access_log_digest_hex": 64,
+            "legal_hold_receipt_digest_hex": 64,
+            "transparency_report_digest_hex": 64,
+            "audit_digest_hex": 64,
+        },
+    },
     "valid_multi_peer_runs": {
         "strings": frozenset({"deployment_id", "environment"}),
         "positive_ints": frozenset(
@@ -311,15 +428,34 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
         "positive_ints": frozenset(
             {"completed_at_unix", "provider_count", "started_at_unix"}
         ),
-        "hex": {},
+        "hex": {
+            "ledger_digest_hex": 64,
+            "matrix_digest_hex": 64,
+            "policy_digest_hex": 64,
+        },
         "ordered_int_pairs": (("started_at_unix", "completed_at_unix"),),
     },
 }
 PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS = {
     "valid_billing_cycles": "billing_cycle",
     "valid_e2e_runs": "e2e_panel",
+    "valid_evidence_viewer_digest_sets": "evidence_viewer",
     "valid_multi_peer_runs": "multi_peer_reconciliation",
     "valid_provider_bakes": "provider_bake",
+}
+PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS = {
+    ("appeal_finance", "valid_multi_peer_runs"): "multi_peer_reconciliation",
+    ("hedging_billing", "valid_billing_cycles"): "billing_cycle",
+    ("moderation_panel", "valid_e2e_runs"): "e2e_panel",
+    ("moderation_panel", "valid_evidence_viewer_digest_sets"): "evidence_viewer",
+    ("reserve_rent", "valid_provider_bakes"): "provider_bake",
+}
+PAYLOAD_FREE_SUMMARY_OBJECT_LIST_FINGERPRINT_HEX_BINDINGS = {
+    field: {
+        metadata_field: metadata_field
+        for metadata_field in schema.get("hex", {})
+    }
+    for field, schema in PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS.items()
 }
 PAYLOAD_FREE_SUMMARY_STRING_METADATA_FIELDS = frozenset(
     {"merkle_root_hex", "snapshot_id_hex"}
@@ -331,16 +467,31 @@ PAYLOAD_FREE_SUMMARY_HEX_METADATA_LENGTHS = {
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS = {
     "valid_bundle_digests": "bundle_digest_hex",
     "valid_case_digests": "case_digest_hex",
+    "valid_checkpoint_digests": "checkpoint_digest_hex",
     "valid_config_digests": "config_digest_hex",
     "valid_contract_digests": "contract_digest_hex",
     "valid_cycle_digests": "cycle_digest_hex",
+    "valid_executor_summary_digests": "execution_summary_digest_hex",
     "valid_failure_bundle_digests": "evidence_bundle_digest_hex",
+    "valid_handoff_digests": "handoff_digest_hex",
+    "valid_notification_manifest_digests": "manifest_body_blake3",
     "valid_policy_digests": "policy_digest_hex",
+    "valid_pop_snapshot_digests": "pop_snapshot_digest_hex",
+    "valid_pq_key_roster_digests": "pq_key_roster_digest_hex",
     "valid_proof_summary_digests": "proof_summary_digest_hex",
+    "valid_provider_roster_digests": "provider_roster_digest_hex",
     "valid_public_head_cids": "public_head_cid_hex",
     "valid_receipt_summary_digests": "receipt_summary_digest_hex",
+    "valid_reputation_weight_policy_digests": "reputation_weight_policy_digest_hex",
     "valid_reference_decision_ids": "decision_id_hex",
+    "valid_archive_index_digests": "archive_index_digest_hex",
+    "valid_ffi_contract_digests": "ffi_contract_digest_hex",
+    "valid_header_digests": "header_digest_hex",
+    "valid_package_index_digests": "package_index_digest_hex",
+    "valid_release_key_fingerprints": "public_key_fingerprint_hex",
     "valid_release_manifest_digests": "manifest_digest_hex",
+    "valid_release_manifest_reference_digests": "release_manifest_digest_hex",
+    "valid_smoke_output_digests": "smoke_output_digest_hex",
     "valid_revocation_list_digests": "revocation_list_digest_hex",
     "valid_root_digests": "root_digest_hex",
     "valid_roster_digests": "roster_digest_hex",
@@ -350,14 +501,104 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS = {
     "valid_suite_report_digests": "suite_report_digest_hex",
     "valid_workflow_digests": "workflow_digest_hex",
 }
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS = {
+    ("ai_prescreen", "valid_executor_summary_digests"): ("commit_reveal_executor",),
+    ("ai_prescreen", "valid_notification_manifest_digests"): (
+        "notification_transport",
+    ),
+    ("ai_prescreen", "valid_policy_digests"): ("runner",),
+    ("ai_prescreen", "valid_workflow_digests"): ("end_to_end_workflow",),
+    ("appeal_finance", "valid_config_digests"): ("pricing_config",),
+    ("appeal_finance", "valid_policy_digests"): ("pricing_config",),
+    ("gateway_compliance", "valid_bundle_digests"): ("feed_promotion",),
+    ("gateway_compliance", "valid_policy_digests"): ("feed_promotion",),
+    ("gateway_load", "valid_policy_digests"): ("staging_load",),
+    ("gateway_load", "valid_staging_report_digests"): ("staging_load",),
+    ("gateway_load", "valid_suite_report_digests"): ("local_conformance",),
+    ("governance_dag", "valid_checkpoint_digests"): ("operator_recovery",),
+    ("governance_dag", "valid_policy_digests"): ("publisher_service",),
+    ("governance_dag", "valid_public_head_cids"): ("publisher_service",),
+    ("hedging_billing", "valid_policy_digests"): ("billing_cycle",),
+    ("hedging_billing", "valid_reference_decision_ids"): ("reference_price",),
+    ("moderation_panel", "valid_case_digests"): ("appeal_intake",),
+    ("moderation_panel", "valid_policy_digests"): ("e2e_panel",),
+    ("orderbook", "valid_contract_digests"): ("contract_surface",),
+    ("orderbook", "valid_policy_digests"): ("contract_surface",),
+    ("pdp", "valid_policy_digests"): ("proof_generation",),
+    ("pdp", "valid_proof_summary_digests"): ("proof_generation",),
+    ("pdp", "valid_provider_roster_digests"): ("proof_generation",),
+    ("pop_credentials", "valid_policy_digests"): ("verifier_service",),
+    ("pop_credentials", "valid_pop_snapshot_digests"): ("moderation_integration",),
+    ("pop_credentials", "valid_revocation_list_digests"): (
+        "issuer_bundle",
+        "revocation_registry",
+    ),
+    ("pop_credentials", "valid_root_digests"): ("issuer_bundle", "commitment_root"),
+    ("por", "valid_policy_digests"): ("randomness",),
+    ("por", "valid_seed_replay_digests"): ("randomness",),
+    ("potr", "valid_policy_digests"): ("governance_approval",),
+    ("potr", "valid_pq_key_roster_digests"): ("governance_approval",),
+    ("potr", "valid_receipt_summary_digests"): ("multi_provider_probe",),
+    ("potr", "valid_reputation_weight_policy_digests"): ("governance_approval",),
+    ("reference_sdk_release", "valid_policy_digests"): ("signed_manifest",),
+    ("reference_sdk_release", "valid_archive_index_digests"): ("release_archive",),
+    ("reference_sdk_release", "valid_ffi_contract_digests"): (
+        "ffi_header_contract",
+    ),
+    ("reference_sdk_release", "valid_header_digests"): ("ffi_header_contract",),
+    ("reference_sdk_release", "valid_package_index_digests"): (
+        "downstream_bindings",
+    ),
+    ("reference_sdk_release", "valid_release_key_fingerprints"): (
+        "signed_manifest",
+    ),
+    ("reference_sdk_release", "valid_release_manifest_digests"): (
+        "signed_manifest",
+    ),
+    ("reference_sdk_release", "valid_release_manifest_reference_digests"): (
+        "release_archive",
+        "downstream_bindings",
+        "cookbook_smoke",
+        "ffi_header_contract",
+        "governance_approval",
+    ),
+    ("reference_sdk_release", "valid_smoke_output_digests"): ("cookbook_smoke",),
+    ("repair", "valid_failure_bundle_digests"): ("failure_capture",),
+    ("repair", "valid_handoff_digests"): ("governance_handoff",),
+    ("repair", "valid_policy_digests"): ("governance_handoff",),
+    ("repair", "valid_roster_digests"): ("auditor_roster",),
+    ("reserve_rent", "valid_policy_digests"): ("policy_config",),
+    ("transparency", "valid_cycle_digests"): ("publication",),
+    ("transparency", "valid_source_batch_digests"): ("source_entry",),
+}
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_BINDINGS = {
     "merkle_root_hex": "merkle_root_hex",
     "snapshot_id_hex": "snapshot_id_hex",
+}
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS = {
+    ("reputation", "merkle_root_hex"): ("publish", "latest"),
+    ("reputation", "snapshot_id_hex"): ("publish", "latest"),
+}
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS = {
+    "provider_ids": "provider_id",
+}
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS = {
+    ("reputation", "provider_ids"): ("provider",),
+}
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS = {
+    "provider_count_values": "provider_count",
+}
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS = {
+    ("reputation", "provider_count_values"): ("publish", "latest"),
 }
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_FIELDS = {
     "valid_cycle_bindings": (
         "statement_bundle_digest_hex",
         "reconciliation_digest_hex",
+    ),
+    "valid_juror_sync_bindings": (
+        "synced_root_digest_hex",
+        "synced_revocation_list_digest_hex",
     ),
     "valid_policy_matrix_bindings": (
         "policy_digest_hex",
@@ -386,6 +627,16 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_FIELDS = {
         "roster_hash_hex",
         "tally_digest_hex",
     ),
+}
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS = {
+    ("ai_prescreen", "valid_runner_bindings"): ("runner",),
+    ("hedging_billing", "valid_cycle_bindings"): ("billing_cycle",),
+    ("moderation_panel", "valid_roster_bindings"): ("sortition_roster",),
+    ("moderation_panel", "valid_tally_bindings"): ("commit_reveal",),
+    ("pop_credentials", "valid_juror_sync_bindings"): ("juror_client",),
+    ("reputation", "valid_snapshot_bindings"): ("publish", "latest"),
+    ("reserve_rent", "valid_policy_matrix_bindings"): ("quote_matrix",),
+    ("reserve_rent", "valid_policy_matrix_ledger_bindings"): ("ledger_digest",),
 }
 PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS = {
     "deployment_context": frozenset({"deployment_id", "environment"}),
@@ -555,6 +806,25 @@ GATE_SUMMARY_KINDS: tuple[GateSummaryKind, ...] = (
 SCHEMA_TO_GATE = {kind.schema: kind for kind in GATE_SUMMARY_KINDS}
 GATE_BY_NAME = {kind.name: kind for kind in GATE_SUMMARY_KINDS}
 DEFAULT_REQUIRED_GATES = tuple(kind.name for kind in GATE_SUMMARY_KINDS)
+GATE_REQUIRED_KIND_SCHEMAS = {
+    "ai_prescreen": evidence_schema_by_kind(AI_PRESCREEN_KIND_BY_NAME),
+    "appeal_finance": evidence_schema_by_kind(APPEAL_FINANCE_KIND_BY_NAME),
+    "gateway_compliance": evidence_schema_by_kind(GATEWAY_COMPLIANCE_KIND_BY_NAME),
+    "gateway_load": evidence_schema_by_kind(GATEWAY_LOAD_KIND_BY_NAME),
+    "governance_dag": evidence_schema_by_kind(GOVERNANCE_DAG_KIND_BY_NAME),
+    "hedging_billing": evidence_schema_by_kind(HEDGING_BILLING_KIND_BY_NAME),
+    "moderation_panel": evidence_schema_by_kind(MODERATION_PANEL_KIND_BY_NAME),
+    "orderbook": evidence_schema_by_kind(ORDERBOOK_KIND_BY_NAME),
+    "pdp": evidence_schema_by_kind(PDP_KIND_BY_NAME),
+    "pop_credentials": evidence_schema_by_kind(POP_CREDENTIALS_KIND_BY_NAME),
+    "por": evidence_schema_by_kind(POR_KIND_BY_NAME),
+    "potr": evidence_schema_by_kind(POTR_KIND_BY_NAME),
+    "reference_sdk_release": evidence_schema_by_kind(REFERENCE_SDK_KIND_BY_NAME),
+    "repair": evidence_schema_by_kind(REPAIR_KIND_BY_NAME),
+    "reputation": evidence_schema_by_kind(REPUTATION_KIND_BY_NAME),
+    "reserve_rent": evidence_schema_by_kind(RESERVE_RENT_KIND_BY_NAME),
+    "transparency": evidence_schema_by_kind(TRANSPARENCY_KIND_BY_NAME),
+}
 
 
 @dataclass(frozen=True)
@@ -601,6 +871,45 @@ def require_reviewed_deployment_id_value(
     )
     for error in field_errors:
         errors.append(error.replace("deployment_id", path, 1))
+    return deployment_id
+
+
+def require_production_deployment_id_value(
+    value: Any,
+    errors: list[str],
+    path: str,
+) -> str:
+    """Return a final-production deployment id or record path-scoped diagnostics."""
+
+    deployment_id = require_reviewed_deployment_id_value(value, errors, path)
+    if not deployment_id:
+        return ""
+    tokens = [
+        token for token in re.split(r"[._-]+", deployment_id.lower()) if token
+    ]
+    forbidden = sorted(
+        {
+            token
+            for token in set(tokens)
+            if token in FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS
+        }
+        | {
+            marker
+            for token in tokens
+            if (
+                marker := numbered_rollout_marker_token(
+                    token,
+                    FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS,
+                )
+            )
+            is not None
+        }
+    )
+    if forbidden:
+        errors.append(
+            f"{path} must not contain non-production deployment markers {forbidden}"
+        )
+        return ""
     return deployment_id
 
 
@@ -663,6 +972,14 @@ def require_positive_int_field(
         errors.append(f"{field} must be a positive integer")
         return None
     return value
+
+
+def canonical_int_value(value: Any) -> int | None:
+    """Return an integer value while excluding booleans."""
+
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
 
 
 def require_empty_error_list(value: Any, path: str, errors: list[str]) -> bool:
@@ -1083,6 +1400,9 @@ def canonical_lower_hex(value: Any, expected_hex_length: int) -> str | None:
 
 def payload_free_summary_artifact_fingerprints(
     payload: dict[str, Any],
+    *,
+    kind_name: str | None = None,
+    kind_names: tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     """Return recognized artifact fingerprints that can anchor metadata."""
 
@@ -1092,6 +1412,10 @@ def payload_free_summary_artifact_fingerprints(
     fingerprints: list[dict[str, Any]] = []
     for artifact in artifacts:
         if not isinstance(artifact, dict):
+            continue
+        if kind_name is not None and artifact.get("kind") != kind_name:
+            continue
+        if kind_names is not None and artifact.get("kind") not in kind_names:
             continue
         fingerprint = artifact.get("fingerprint")
         if isinstance(fingerprint, dict):
@@ -1133,6 +1457,100 @@ def payload_free_hex_binding_metadata_values(
     return values
 
 
+def payload_free_string_list_metadata_values(value: Any) -> set[str] | None:
+    """Return canonical values from top-level string metadata lists."""
+
+    if not isinstance(value, list):
+        return None
+    values: set[str] = set()
+    for item in value:
+        item_label = canonical_string(item)
+        if item_label is None:
+            return None
+        values.add(item_label)
+    return values
+
+
+def payload_free_positive_int_list_metadata_values(value: Any) -> set[int] | None:
+    """Return positive integers from top-level integer metadata lists."""
+
+    if not isinstance(value, list):
+        return None
+    values: set[int] = set()
+    for item in value:
+        if not isinstance(item, int) or isinstance(item, bool) or item <= 0:
+            return None
+        values.add(item)
+    return values
+
+
+def payload_free_object_list_hex_metadata_values(
+    field: str,
+    value: Any,
+) -> dict[str, set[str]] | None:
+    """Return canonical hex values from top-level object-list metadata."""
+
+    if not isinstance(value, list):
+        return None
+    schema = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field]
+    values = {hex_field: set() for hex_field in schema.get("hex", {})}
+    for item in value:
+        if not isinstance(item, dict):
+            return None
+        for hex_field, expected_hex_length in schema.get("hex", {}).items():
+            item_value = canonical_lower_hex(
+                item.get(hex_field),
+                expected_hex_length,
+            )
+            if item_value is None:
+                return None
+            values[hex_field].add(item_value)
+    return values
+
+
+def payload_free_object_list_metadata_identities(
+    field: str,
+    value: Any,
+) -> set[tuple[tuple[str, Any], ...]] | None:
+    """Return exact comparable identities from object-list metadata."""
+
+    if not isinstance(value, list):
+        return None
+    schema = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field]
+    identities: set[tuple[tuple[str, Any], ...]] = set()
+    for item in value:
+        identity = payload_free_object_list_metadata_identity(item, schema)
+        if identity is None:
+            return None
+        identities.add(identity)
+    return identities
+
+
+def fingerprint_object_list_metadata_identities(
+    field: str,
+    fingerprints: list[dict[str, Any]],
+) -> set[tuple[tuple[str, Any], ...]]:
+    """Return exact object-list metadata identities from artifact fingerprints."""
+
+    schema = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field]
+    allowed_fields = (
+        set(schema.get("strings", frozenset()))
+        | set(schema.get("positive_ints", frozenset()))
+        | set(schema.get("hex", {}))
+    )
+    identities: set[tuple[tuple[str, Any], ...]] = set()
+    for fingerprint in fingerprints:
+        item = {
+            key: fingerprint[key]
+            for key in allowed_fields
+            if key in fingerprint
+        }
+        identity = payload_free_object_list_metadata_identity(item, schema)
+        if identity is not None:
+            identities.add(identity)
+    return identities
+
+
 def fingerprint_hex_values(
     fingerprints: list[dict[str, Any]],
     fingerprint_field: str,
@@ -1151,6 +1569,34 @@ def fingerprint_hex_values(
             )
         ]
         if value is not None
+    }
+
+
+def fingerprint_string_values(
+    fingerprints: list[dict[str, Any]],
+    fingerprint_field: str,
+) -> set[str]:
+    """Return canonical string values carried by recognized artifact fingerprints."""
+
+    return {
+        value
+        for fingerprint in fingerprints
+        for value in [canonical_string(fingerprint.get(fingerprint_field))]
+        if value is not None
+    }
+
+
+def fingerprint_positive_int_values(
+    fingerprints: list[dict[str, Any]],
+    fingerprint_field: str,
+) -> set[int]:
+    """Return positive integer values carried by recognized artifact fingerprints."""
+
+    return {
+        value
+        for fingerprint in fingerprints
+        for value in [fingerprint.get(fingerprint_field)]
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0
     }
 
 
@@ -1188,7 +1634,6 @@ def validate_payload_free_summary_metadata_fingerprint_tethers(
     """Require top-level valid metadata claims to be backed by artifacts."""
 
     allowed_metadata_fields = GATE_METADATA_FIELDS.get(gate.name, frozenset())
-    fingerprints = payload_free_summary_artifact_fingerprints(payload)
     for field, fingerprint_field in (
         PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS.items()
     ):
@@ -1200,7 +1645,22 @@ def validate_payload_free_summary_metadata_fingerprint_tethers(
         )
         if metadata_values is None or not metadata_values:
             continue
-        fingerprint_values = fingerprint_hex_values(fingerprints, fingerprint_field)
+        source_kinds = PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS.get(
+            (gate.name, field),
+        )
+        if source_kinds is None:
+            errors.append(
+                f"{field} source-kind tether is not configured for `{gate.name}`"
+            )
+            continue
+        source_fingerprints = payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_names=source_kinds,
+        )
+        fingerprint_values = fingerprint_hex_values(
+            source_fingerprints,
+            fingerprint_field,
+        )
         if not metadata_values <= fingerprint_values:
             errors.append(f"{field} must match recognized artifact fingerprints")
 
@@ -1213,12 +1673,82 @@ def validate_payload_free_summary_metadata_fingerprint_tethers(
         metadata_value = canonical_lower_hex(payload.get(field), expected_hex_length)
         if metadata_value is None:
             continue
+        source_kinds = PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS.get(
+            (gate.name, field),
+        )
+        if source_kinds is None:
+            errors.append(
+                f"{field} source-kind tether is not configured for `{gate.name}`"
+            )
+            continue
+        source_fingerprints = payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_names=source_kinds,
+        )
         fingerprint_values = fingerprint_hex_values(
-            fingerprints,
+            source_fingerprints,
             fingerprint_field,
             expected_hex_length=expected_hex_length,
         )
         if metadata_value not in fingerprint_values:
+            errors.append(f"{field} must match recognized artifact fingerprints")
+
+    for field, fingerprint_field in (
+        PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS.items()
+    ):
+        if field not in allowed_metadata_fields or field not in payload:
+            continue
+        metadata_values = payload_free_string_list_metadata_values(payload.get(field))
+        if metadata_values is None or not metadata_values:
+            continue
+        source_kinds = PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS.get(
+            (gate.name, field),
+        )
+        if source_kinds is None:
+            errors.append(
+                f"{field} source-kind tether is not configured for `{gate.name}`"
+            )
+            continue
+        source_fingerprints = payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_names=source_kinds,
+        )
+        fingerprint_values = fingerprint_string_values(
+            source_fingerprints,
+            fingerprint_field,
+        )
+        if not metadata_values <= fingerprint_values:
+            errors.append(f"{field} must match recognized artifact fingerprints")
+
+    for field, fingerprint_field in (
+        PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS.items()
+    ):
+        if field not in allowed_metadata_fields or field not in payload:
+            continue
+        metadata_values = payload_free_positive_int_list_metadata_values(
+            payload.get(field),
+        )
+        if metadata_values is None or not metadata_values:
+            continue
+        source_kinds = (
+            PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS.get(
+                (gate.name, field),
+            )
+        )
+        if source_kinds is None:
+            errors.append(
+                f"{field} source-kind tether is not configured for `{gate.name}`"
+            )
+            continue
+        source_fingerprints = payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_names=source_kinds,
+        )
+        fingerprint_values = fingerprint_positive_int_values(
+            source_fingerprints,
+            fingerprint_field,
+        )
+        if not metadata_values <= fingerprint_values:
             errors.append(f"{field} must match recognized artifact fingerprints")
 
     for field, fingerprint_fields in (
@@ -1232,13 +1762,87 @@ def validate_payload_free_summary_metadata_fingerprint_tethers(
         )
         if metadata_values is None or not metadata_values:
             continue
+        source_kinds = (
+            PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS.get(
+                (gate.name, field),
+            )
+        )
+        if source_kinds is None:
+            errors.append(
+                f"{field} source-kind tether is not configured for `{gate.name}`"
+            )
+            continue
+        source_fingerprints = payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_names=source_kinds,
+        )
         fingerprint_values = fingerprint_hex_binding_values(
-            fingerprints,
+            source_fingerprints,
             field,
             fingerprint_fields,
         )
         if not metadata_values <= fingerprint_values:
             errors.append(f"{field} must match recognized artifact fingerprints")
+
+    for field, field_bindings in (
+        PAYLOAD_FREE_SUMMARY_OBJECT_LIST_FINGERPRINT_HEX_BINDINGS.items()
+    ):
+        if field not in allowed_metadata_fields or field not in payload:
+            continue
+        metadata_values_by_field = payload_free_object_list_hex_metadata_values(
+            field,
+            payload.get(field),
+        )
+        if metadata_values_by_field is None:
+            continue
+        required_kind = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS[field]
+        source_kind = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS.get(
+            (gate.name, field),
+        )
+        if source_kind is None:
+            errors.append(
+                f"{field} source-kind tether is not configured for `{gate.name}`"
+            )
+            continue
+        if source_kind != required_kind:
+            errors.append(
+                f"{field} source-kind tether must match required artifact count "
+                f"kind for `{gate.name}`"
+            )
+            continue
+        kind_fingerprints = payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_name=source_kind,
+        )
+        metadata_identities = payload_free_object_list_metadata_identities(
+            field,
+            payload.get(field),
+        )
+        if metadata_identities is not None:
+            fingerprint_identities = fingerprint_object_list_metadata_identities(
+                field,
+                kind_fingerprints,
+            )
+            if not metadata_identities <= fingerprint_identities:
+                errors.append(
+                    f"{field} entries must match recognized artifact fingerprints"
+                )
+        for metadata_field, fingerprint_field in field_bindings.items():
+            metadata_values = metadata_values_by_field.get(metadata_field, set())
+            if not metadata_values:
+                continue
+            expected_hex_length = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[
+                field
+            ]["hex"][metadata_field]
+            fingerprint_values = fingerprint_hex_values(
+                kind_fingerprints,
+                fingerprint_field,
+                expected_hex_length=expected_hex_length,
+            )
+            if not metadata_values <= fingerprint_values:
+                errors.append(
+                    f"{field}.{metadata_field} must match recognized artifact fingerprints"
+                )
 
 
 def required_artifact_count_for_kind(
@@ -1339,9 +1943,12 @@ def validate_payload_free_summary_metadata(
     payload: dict[str, Any],
     errors: list[str],
 ) -> None:
-    """Validate optional top-level lane metadata shapes."""
+    """Validate required top-level lane metadata shapes."""
 
     allowed_metadata_fields = GATE_METADATA_FIELDS.get(gate.name, frozenset())
+    for field in sorted(allowed_metadata_fields):
+        if field not in payload:
+            errors.append(f"{field} is required for `{gate.name}` lane metadata")
     for field in sorted(PAYLOAD_FREE_SUMMARY_METADATA_FIELDS):
         if field not in payload:
             continue
@@ -1355,6 +1962,8 @@ def validate_payload_free_summary_metadata(
         ):
             errors.append(f"{field} must be a payload-free metadata list")
             continue
+        if field in PAYLOAD_FREE_SUMMARY_LIST_METADATA_FIELDS and not value:
+            errors.append(f"{field} must not be empty for `{gate.name}` lane metadata")
         if field in PAYLOAD_FREE_SUMMARY_ORDERED_LIST_METADATA_FIELDS:
             validate_payload_free_ordered_list_metadata(field, value, errors)
         object_list_schema = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS.get(field)
@@ -1415,6 +2024,11 @@ def validate_payload_free_summary_metadata(
                 if not isinstance(item, int) or isinstance(item, bool) or item <= 0:
                     errors.append(f"{field}[{index}] must be a positive integer")
             continue
+        if field in PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS:
+            for index, item in enumerate(value):
+                if canonical_string(item) is None:
+                    errors.append(f"{field}[{index}] must be a canonical string")
+            continue
         if field in PAYLOAD_FREE_SUMMARY_STRING_METADATA_FIELDS:
             expected_hex_length = PAYLOAD_FREE_SUMMARY_HEX_METADATA_LENGTHS[field]
             if (
@@ -1431,7 +2045,7 @@ def validate_payload_free_summary_metadata(
         if object_fields is not None:
             validate_payload_free_object_metadata(field, value, object_fields, errors)
             continue
-        validate_payload_free_metadata_value(value, field, errors)
+        errors.append(f"{field} validator is not configured for `{gate.name}`")
 
 
 def require_payload_free_artifact_fields(
@@ -1561,6 +2175,9 @@ def validate_summary_artifact(
     require_artifact_identity_fields(artifact, path, errors)
     require_optional_artifact_label(artifact, "schema", path, errors)
     require_optional_artifact_label(artifact, "status", path, errors)
+    status = canonical_string(artifact.get("status"))
+    if status is not None and status not in SUCCESS_ARTIFACT_STATUSES:
+        errors.append(f"{path}.status must be a successful status")
     if artifact.get("valid") is not True:
         errors.append(f"{path}.valid must be true")
     require_empty_error_list(
@@ -1592,6 +2209,7 @@ def validate_summary_artifact(
 def validate_required_row(
     gate_name: str,
     kind_name: str,
+    expected_schema: str | None,
     row: Any,
     options: ValidationOptions,
     errors: list[str],
@@ -1603,8 +2221,13 @@ def validate_required_row(
         errors.append(f"{path} must be an object")
         return 0, [], set()
     require_payload_free_required_row_fields(row, path, errors)
-    if "schema" in row and canonical_string(row.get("schema")) is None:
-        errors.append(f"{path}.schema must be canonical when present")
+    row_schema = canonical_string(row.get("schema"))
+    if row_schema is None:
+        errors.append(f"{path}.schema must be canonical")
+    elif expected_schema is None:
+        errors.append(f"{path}.schema gate contract is not configured")
+    elif row_schema != expected_schema:
+        errors.append(f"{path}.schema must match required evidence schema")
     if row.get("present") is not True:
         errors.append(f"{path}.present must be true")
     if row.get("valid") is not True:
@@ -1621,9 +2244,15 @@ def validate_required_row(
     artifacts = row.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
         errors.append(f"{path}.artifacts must be a non-empty array")
-        return artifact_count, [], set()
-    if artifact_count and artifact_count != len(artifacts):
-        errors.append(f"{path}.artifact_count must match artifacts length")
+        if artifact_count:
+            errors.append(f"{path}.artifact_count must match artifact object count")
+        return 0, [], set()
+    observed_artifact_count = sum(
+        1 for artifact in artifacts if isinstance(artifact, dict)
+    )
+    if artifact_count and artifact_count != observed_artifact_count:
+        errors.append(f"{path}.artifact_count must match artifact object count")
+    artifact_count = observed_artifact_count
 
     generated_times: list[int] = []
     deployment_contexts: set[tuple[str, str]] = set()
@@ -1643,6 +2272,13 @@ def validate_required_row(
                 errors.append(f"{artifact_path}.kind must be canonical when present")
             elif artifact_kind != kind_name:
                 errors.append(f"{artifact_path}.kind must match required row kind")
+        artifact_schema = canonical_string(artifact.get("schema"))
+        if artifact_schema is None:
+            errors.append(f"{artifact_path}.schema must be canonical")
+        elif expected_schema is None:
+            errors.append(f"{artifact_path}.schema gate contract is not configured")
+        elif artifact_schema != expected_schema:
+            errors.append(f"{artifact_path}.schema must match required evidence schema")
         identity = artifact_identity(kind_name, artifact)
         if identity is not None:
             artifact_identities[identity] += 1
@@ -1668,23 +2304,33 @@ def validate_recognized_artifacts(
     recognized_artifact_count: int | None,
     options: ValidationOptions,
     errors: list[str],
-) -> tuple[list[int], set[tuple[str, str]], int | None]:
+) -> tuple[list[int], set[tuple[str, str]], int | None, int | None]:
     """Validate required top-level recognized artifact inventory rows."""
 
     if "recognized_artifacts" not in payload:
         errors.append("recognized_artifacts must be present")
-        return [], set(), None
+        return [], set(), None, None
     artifacts = payload.get("recognized_artifacts")
     path = "recognized_artifacts"
     if not isinstance(artifacts, list) or not artifacts:
         errors.append(f"{path} must be a non-empty array")
-        return [], set(), None
+        return [], set(), None, None
+    recognized_artifact_object_count = sum(
+        1 for artifact in artifacts if isinstance(artifact, dict)
+    )
     if (
         recognized_artifact_count is not None
         and len(artifacts) != recognized_artifact_count
     ):
         errors.append(
             "recognized_artifacts length must match recognized_artifact_count"
+        )
+    if (
+        recognized_artifact_count is not None
+        and recognized_artifact_object_count != recognized_artifact_count
+    ):
+        errors.append(
+            "recognized_artifact_count must match recognized artifact object count"
         )
 
     generated_times: list[int] = []
@@ -1694,7 +2340,11 @@ def validate_recognized_artifacts(
     expected_required_kinds = set(gate.required_kinds)
     expected_artifact_counts = {
         kind_name: (
-            len(row.get("artifacts"))
+            sum(
+                1
+                for artifact in row.get("artifacts")
+                if isinstance(artifact, dict)
+            )
             if isinstance(row, dict) and isinstance(row.get("artifacts"), list)
             else 0
         )
@@ -1724,7 +2374,9 @@ def validate_recognized_artifacts(
             errors.append(f"{artifact_path} must be an object")
             continue
         artifact_file_path = canonical_string(artifact.get("path"))
-        if artifact_file_path is not None:
+        if artifact_file_path is not None and is_archive_portable_artifact_path(
+            artifact_file_path
+        ):
             recognized_artifact_paths.add(artifact_file_path)
             recognized_artifact_path_counts[artifact_file_path] += 1
         kind_name = canonical_string(artifact.get("kind"))
@@ -1772,7 +2424,12 @@ def validate_recognized_artifacts(
     unexpected_identities = recognized_artifact_identities - expected_artifact_identities
     if missing_identities or unexpected_identities:
         errors.append("recognized_artifacts must match required artifact identities")
-    return generated_times, deployment_contexts, len(recognized_artifact_paths)
+    return (
+        generated_times,
+        deployment_contexts,
+        recognized_artifact_object_count,
+        len(recognized_artifact_paths),
+    )
 
 
 def validate_aggregate_gate_row_output(
@@ -1816,6 +2473,31 @@ def validate_aggregate_gate_row_output(
         value = row.get(field)
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             errors.append(f"{gate.name} aggregate row {field} must be a positive integer")
+    evidence_file_count = canonical_int_value(row.get("evidence_file_count"))
+    recognized_artifact_count = canonical_int_value(
+        row.get("recognized_artifact_count")
+    )
+    artifact_count = canonical_int_value(row.get("artifact_count"))
+    if (
+        evidence_file_count is not None
+        and recognized_artifact_count is not None
+        and evidence_file_count > 0
+        and recognized_artifact_count > 0
+        and evidence_file_count > recognized_artifact_count
+    ):
+        errors.append(
+            f"{gate.name} aggregate row evidence_file_count must not exceed recognized_artifact_count"
+        )
+    if (
+        recognized_artifact_count is not None
+        and artifact_count is not None
+        and recognized_artifact_count > 0
+        and artifact_count > 0
+        and recognized_artifact_count != artifact_count
+    ):
+        errors.append(
+            f"{gate.name} aggregate row recognized_artifact_count must match artifact_count"
+        )
     oldest = row.get("oldest_generated_at_unix")
     newest = row.get("newest_generated_at_unix")
     if (
@@ -1830,17 +2512,27 @@ def validate_aggregate_gate_row_output(
         errors.append(
             f"{gate.name} aggregate row newest_generated_at_unix must be >= oldest_generated_at_unix"
         )
+    if row.get("required_kind_count") != len(gate.required_kinds):
+        errors.append(
+            f"{gate.name} aggregate row required_kind_count must match gate contract"
+        )
+    if row.get("expected_required_kind_count") != len(gate.required_kinds):
+        errors.append(
+            f"{gate.name} aggregate row expected_required_kind_count must match gate contract"
+        )
     thresholds_errors: list[str] = []
     require_threshold_map(row, "thresholds", thresholds_errors)
     for threshold_error in thresholds_errors:
         errors.append(f"{gate.name} aggregate row {threshold_error}")
-    require_reviewed_deployment_id_value(
+    require_production_deployment_id_value(
         row.get("deployment_id"),
         errors,
         f"{gate.name} aggregate row deployment_id",
     )
     if canonical_string(row.get("environment")) is None:
         errors.append(f"{gate.name} aggregate row environment must be canonical")
+    elif not is_production_ready_environment(row.get("environment")):
+        errors.append(f"{gate.name} aggregate row environment must be production")
     expected_required_kinds = row.get("expected_required_kinds")
     if list(gate.required_kinds) != expected_required_kinds:
         errors.append(
@@ -1883,10 +2575,16 @@ def validate_aggregate_row_error_list(
         return
     if require_non_empty and not value:
         errors.append(f"{path} must not be empty")
+    seen_errors: set[str] = set()
     for error in value:
-        if canonical_string(error) is None:
+        error_label = canonical_string(error)
+        if error_label is None:
             errors.append(f"{path} must contain canonical strings")
             return
+        if error_label in seen_errors:
+            errors.append(f"{path} must not contain duplicate diagnostics")
+            return
+        seen_errors.add(error_label)
 
 
 def validate_aggregate_required_row_output(
@@ -1952,21 +2650,60 @@ def validate_aggregate_required_row_output(
         validate_aggregate_gate_row_output(gate, row, errors)
         return
     for field in (
-        "required_kind_count",
-        "expected_required_kind_count",
         "evidence_file_count",
         "recognized_artifact_count",
         "artifact_count",
-        "oldest_generated_at_unix",
-        "newest_generated_at_unix",
     ):
         value = row.get(field)
-        if value is not None and (
-            not isinstance(value, int) or isinstance(value, bool) or value < 0
-        ):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             errors.append(
-                f"{gate.name} aggregate invalid row {field} must be a non-negative integer when present"
+                f"{gate.name} aggregate invalid row {field} must be a non-negative integer"
             )
+    evidence_file_count = canonical_int_value(row.get("evidence_file_count"))
+    recognized_artifact_count = canonical_int_value(
+        row.get("recognized_artifact_count")
+    )
+    artifact_count = canonical_int_value(row.get("artifact_count"))
+    if (
+        evidence_file_count is not None
+        and recognized_artifact_count is not None
+        and evidence_file_count >= 0
+        and recognized_artifact_count >= 0
+        and evidence_file_count > recognized_artifact_count
+    ):
+        errors.append(
+            f"{gate.name} aggregate invalid row evidence_file_count must not exceed recognized_artifact_count"
+        )
+    if (
+        recognized_artifact_count is not None
+        and artifact_count is not None
+        and recognized_artifact_count >= 0
+        and artifact_count >= 0
+        and recognized_artifact_count != artifact_count
+    ):
+        errors.append(
+            f"{gate.name} aggregate invalid row recognized_artifact_count must match artifact_count"
+        )
+    for field in ("oldest_generated_at_unix", "newest_generated_at_unix"):
+        value = row.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            errors.append(
+                f"{gate.name} aggregate invalid row {field} must be a positive integer"
+            )
+    for field in ("required_kind_count", "expected_required_kind_count"):
+        value = row.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            errors.append(
+                f"{gate.name} aggregate invalid row {field} must be a positive integer"
+            )
+    if row.get("required_kind_count") != len(gate.required_kinds):
+        errors.append(
+            f"{gate.name} aggregate invalid row required_kind_count must match gate contract"
+        )
+    if row.get("expected_required_kind_count") != len(gate.required_kinds):
+        errors.append(
+            f"{gate.name} aggregate invalid row expected_required_kind_count must match gate contract"
+        )
     oldest = row.get("oldest_generated_at_unix")
     newest = row.get("newest_generated_at_unix")
     if (
@@ -1988,18 +2725,21 @@ def validate_aggregate_required_row_output(
     if (
         row.get("deployment_id") is not None
     ):
-        require_reviewed_deployment_id_value(
+        require_production_deployment_id_value(
             row.get("deployment_id"),
             errors,
             f"{gate.name} aggregate invalid row deployment_id",
         )
-    if (
-        row.get("environment") is not None
-        and canonical_string(row.get("environment")) is None
-    ):
-        errors.append(
-            f"{gate.name} aggregate invalid row environment must be canonical when present"
-        )
+    environment = row.get("environment")
+    if environment is not None:
+        if canonical_string(environment) is None:
+            errors.append(
+                f"{gate.name} aggregate invalid row environment must be canonical when present"
+            )
+        elif not is_production_ready_environment(environment):
+            errors.append(
+                f"{gate.name} aggregate invalid row environment must be production when present"
+            )
     if row.get("expected_required_kinds") != list(gate.required_kinds):
         errors.append(
             f"{gate.name} aggregate invalid row expected_required_kinds must match gate contract"
@@ -2054,12 +2794,47 @@ def validate_aggregate_summary_output(
     if summary.get("status") not in {"ready", "failed", "blocked"}:
         errors.append("aggregate summary status must be ready, failed, or blocked")
     required_gates_value = summary.get("required_gates")
+    if not isinstance(required_gates_value, list):
+        errors.append("aggregate summary required_gates must be a list")
+    else:
+        seen_required_gates: set[str] = set()
+        emitted_required_gate_diagnostics: set[str] = set()
+        for gate_name in required_gates_value:
+            gate_name_label = canonical_string(gate_name)
+            if gate_name_label is None:
+                diagnostic = (
+                    "aggregate summary required_gates must contain canonical strings"
+                )
+                if diagnostic not in emitted_required_gate_diagnostics:
+                    errors.append(diagnostic)
+                    emitted_required_gate_diagnostics.add(diagnostic)
+                continue
+            if gate_name_label in seen_required_gates:
+                diagnostic = (
+                    "aggregate summary required_gates must not contain duplicate gates"
+                )
+                if diagnostic not in emitted_required_gate_diagnostics:
+                    errors.append(diagnostic)
+                    emitted_required_gate_diagnostics.add(diagnostic)
+            else:
+                seen_required_gates.add(gate_name_label)
+            if gate_name_label not in GATE_BY_NAME:
+                diagnostic = (
+                    "aggregate summary required_gates must use known gate names"
+                )
+                if diagnostic not in emitted_required_gate_diagnostics:
+                    errors.append(diagnostic)
+                    emitted_required_gate_diagnostics.add(diagnostic)
     if list(required_gates) != required_gates_value:
         errors.append("aggregate summary required_gates must match requested gates")
     thresholds_errors: list[str] = []
     thresholds = require_threshold_map(summary, "thresholds", thresholds_errors)
     if "max_summary_artifact_age_secs" not in thresholds:
         thresholds_errors.append("thresholds.max_summary_artifact_age_secs must be present")
+    if thresholds and set(thresholds) != {"max_summary_artifact_age_secs"}:
+        thresholds_errors.append(
+            "thresholds must contain only max_summary_artifact_age_secs"
+        )
     for threshold_error in thresholds_errors:
         errors.append(f"aggregate summary {threshold_error}")
     for field in ("summary_file_count", "recognized_summary_count"):
@@ -2088,6 +2863,8 @@ def validate_aggregate_summary_output(
         )
     deployment = summary.get("deployment")
     allowed_deployment_fields = {"deployment_id", "environment"}
+    aggregate_deployment_id = None
+    aggregate_environment = None
     if not isinstance(deployment, dict):
         errors.append("aggregate summary deployment must be an object")
     else:
@@ -2106,14 +2883,15 @@ def validate_aggregate_summary_output(
                     f"aggregate summary deployment {key_diagnostic_label} is not allowed"
                 )
         if deployment_fields == allowed_deployment_fields:
-            require_reviewed_deployment_id_value(
+            aggregate_deployment_id = require_production_deployment_id_value(
                 deployment.get("deployment_id"),
                 errors,
                 "aggregate summary deployment_id",
             )
-            if canonical_string(deployment.get("environment")) is None:
+            aggregate_environment = canonical_string(deployment.get("environment"))
+            if aggregate_environment is None:
                 errors.append("aggregate summary environment must be a canonical string")
-            elif not is_production_ready_environment(deployment.get("environment")):
+            elif not is_production_ready_environment(aggregate_environment):
                 errors.append("aggregate summary environment must be production")
     required = summary.get("required")
     if not isinstance(required, dict):
@@ -2148,10 +2926,37 @@ def validate_aggregate_summary_output(
                     row,
                     errors,
                 )
+                if row.get("present") is True:
+                    row_deployment_id = canonical_string(row.get("deployment_id"))
+                    if (
+                        aggregate_deployment_id is not None
+                        and row_deployment_id is not None
+                        and row_deployment_id != aggregate_deployment_id
+                    ):
+                        errors.append(
+                            f"{gate_name_label} aggregate required row deployment_id must match aggregate deployment_id"
+                        )
+                    row_environment = canonical_string(row.get("environment"))
+                    if (
+                        aggregate_environment is not None
+                        and row_environment is not None
+                        and row_environment != aggregate_environment
+                    ):
+                        errors.append(
+                            f"{gate_name_label} aggregate required row environment must match aggregate environment"
+                        )
     if summary.get("status") == "ready":
         if not isinstance(deployment, dict) or set(deployment) != allowed_deployment_fields:
             errors.append(
                 "aggregate summary ready deployment must include deployment_id and environment"
+            )
+        if (
+            isinstance(summary_file_count, int)
+            and not isinstance(summary_file_count, bool)
+            and summary_file_count != len(required_gates)
+        ):
+            errors.append(
+                "aggregate summary ready summary_file_count must match required gate count"
             )
         if (
             isinstance(recognized_summary_count, int)
@@ -2172,10 +2977,18 @@ def validate_aggregate_summary_output(
     if not isinstance(error_values, list):
         errors.append("aggregate summary errors must be a list")
     else:
+        seen_errors: set[str] = set()
         for error in error_values:
-            if canonical_string(error) is None:
+            error_label = canonical_string(error)
+            if error_label is None:
                 errors.append("aggregate summary errors must contain canonical strings")
                 break
+            if error_label in seen_errors:
+                errors.append(
+                    "aggregate summary errors must not contain duplicate diagnostics"
+                )
+                break
+            seen_errors.add(error_label)
         if summary.get("status") != evidence_gate_status(error_values):
             errors.append("aggregate summary status must match aggregate diagnostics")
 
@@ -2262,10 +3075,15 @@ def validate_gate_summary(
     artifact_total = 0
     generated_times: list[int] = []
     deployment_contexts: set[tuple[str, str]] = set()
+    required_kind_schemas = GATE_REQUIRED_KIND_SCHEMAS.get(gate.name, {})
+    expected_required_kind_set = set(expected_required_kinds)
     for kind_name in required_kinds:
+        if kind_name not in expected_required_kind_set:
+            continue
         artifact_count, row_times, row_contexts = validate_required_row(
             gate.name,
             kind_name,
+            required_kind_schemas.get(kind_name),
             required.get(kind_name),
             options,
             errors,
@@ -2292,6 +3110,7 @@ def validate_gate_summary(
     (
         recognized_times,
         recognized_contexts,
+        recognized_artifact_object_count,
         recognized_artifact_path_count,
     ) = validate_recognized_artifacts(
         gate,
@@ -2336,6 +3155,11 @@ def validate_gate_summary(
             errors.append(f"{gate.name} deployment_id must match --deployment-id")
         if options.environment is not None and environment != options.environment:
             errors.append(f"{gate.name} environment must match --environment")
+    summary_recognized_artifact_count = (
+        recognized_artifact_object_count
+        if recognized_artifact_object_count is not None
+        else recognized_artifact_count
+    )
 
     summary = {
         "schema": gate.schema,
@@ -2344,7 +3168,7 @@ def validate_gate_summary(
         "required_kind_count": len(required_kinds),
         "expected_required_kind_count": len(gate.required_kinds),
         "evidence_file_count": evidence_file_count,
-        "recognized_artifact_count": recognized_artifact_count,
+        "recognized_artifact_count": summary_recognized_artifact_count,
         "artifact_count": artifact_total,
         "thresholds": thresholds,
         "oldest_generated_at_unix": min(generated_times) if generated_times else None,
@@ -2495,6 +3319,11 @@ def build_summary(
         elif row.get("valid") is not True:
             errors.append(f"{name} production readiness summary is invalid")
 
+    if options.deployment_id is None or options.environment is None:
+        errors.append(
+            "aggregate production readiness requires --deployment-id and --environment"
+        )
+
     validate_duplicate_summary_diagnostics(
         required,
         duplicate_summary_gates,
@@ -2517,7 +3346,7 @@ def build_summary(
             errors.append("aggregate deployment_id must match --deployment-id")
         if options.environment is not None and environment != options.environment:
             errors.append("aggregate environment must match --environment")
-        require_reviewed_deployment_id_value(
+        require_production_deployment_id_value(
             deployment_id,
             errors,
             "aggregate deployment_id",
@@ -2583,11 +3412,17 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--deployment-id",
-        help="Optional expected deployment id shared by every lane summary artifact.",
+        help=(
+            "Required final deployment id shared by every lane summary artifact "
+            "before production readiness can pass."
+        ),
     )
     parser.add_argument(
         "--environment",
-        help="Optional expected environment shared by every lane summary artifact.",
+        help=(
+            "Required final prod/production environment shared by every lane "
+            "summary artifact before production readiness can pass."
+        ),
     )
     raw_args = sys.argv[1:] if argv is None else argv
     try:
@@ -2618,7 +3453,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.deployment_id is not None:
         deployment_id_errors: list[str] = []
-        require_reviewed_deployment_id_value(
+        require_production_deployment_id_value(
             args.deployment_id,
             deployment_id_errors,
             "--deployment-id",

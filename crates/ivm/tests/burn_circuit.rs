@@ -4,7 +4,7 @@ use ivm::{
         BurnCircuit, BurnPublic, BurnWitness, ECPoint, compute_nullifier, derive_public_key,
         verify_merkle_path,
     },
-    pedersen_commit_truncated, poseidon,
+    pedersen_commit_truncated, poseidon6,
 };
 
 fn poseidon_hash(inputs: &[u64]) -> u64 {
@@ -23,7 +23,7 @@ fn poseidon_hash(inputs: &[u64]) -> u64 {
             if take < 6 {
                 state[take] = inputs.len() as u64;
             }
-            acc = poseidon::poseidon6(state);
+            acc = poseidon6(state);
             idx += take;
             first = false;
         } else {
@@ -36,7 +36,7 @@ fn poseidon_hash(inputs: &[u64]) -> u64 {
             if take < 5 {
                 state[take + 1] = (inputs.len() - idx) as u64;
             }
-            acc = poseidon::poseidon6(state);
+            acc = poseidon6(state);
             idx += take;
         }
     }

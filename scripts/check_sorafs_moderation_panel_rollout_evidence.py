@@ -69,6 +69,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     require_zero_count,
     validate_bound_evidence_digest_references,
     validate_bound_evidence_tuple_references,
@@ -469,6 +470,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "case_digest_hex",
         "roster_hash_hex",
         "tally_digest_hex",
+        "policy_digest_hex",
         "peer_count",
         "validator_count",
         "case_count",
@@ -535,6 +537,13 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "case_digest_hex",
     "roster_hash_hex",
     "tally_digest_hex",
+    "policy_digest_hex",
+    "session_manifest_digest_hex",
+    "watermark_metadata_digest_hex",
+    "access_log_digest_hex",
+    "legal_hold_receipt_digest_hex",
+    "transparency_report_digest_hex",
+    "audit_digest_hex",
     "generated_at_unix",
     "peer_count",
     "validator_count",
@@ -550,6 +559,16 @@ E2E_RUN_DETAIL_FIELDS: tuple[str, ...] = (
     "peer_count",
     "validator_count",
     "case_count",
+)
+EVIDENCE_VIEWER_DIGEST_SET_FIELDS: tuple[str, ...] = (
+    "case_digest_hex",
+    "roster_hash_hex",
+    "session_manifest_digest_hex",
+    "watermark_metadata_digest_hex",
+    "access_log_digest_hex",
+    "legal_hold_receipt_digest_hex",
+    "transparency_report_digest_hex",
+    "audit_digest_hex",
 )
 
 
@@ -584,6 +603,23 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             )
 
 
+def validate_route_inventory(
+    payload: dict[str, Any],
+    required_routes: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    require_count_equal(payload, "route_count", "passed_route_count", errors)
+    require_string_coverage(payload, "routes", "name", required_routes, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+
+
 def validate_fresh(payload: dict[str, Any], errors: list[str], options: ValidationOptions) -> None:
     require_recent_timestamp(
         payload,
@@ -601,8 +637,7 @@ def validate_appeal_intake(
 ) -> None:
     validate_fresh(payload, errors, options)
     require_hex(payload, "case_digest_hex", HEX64_LEN, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_INTAKE_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_INTAKE_ROUTES, errors)
     require_count_equal(payload, "case_count", "accepted_case_count", errors)
     require_bool_true(payload, "appellant_auth_enforced", errors)
     require_bool_true(payload, "proof_token_verified", errors)
@@ -733,8 +768,7 @@ def validate_operator_workflow(
     validate_fresh(payload, errors, options)
     require_hex(payload, "case_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "roster_hash_hex", HEX64_LEN, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_OPERATOR_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_OPERATOR_ROUTES, errors)
     require_bool_true(payload, "operator_role_enforced", errors)
     require_bool_true(payload, "bridge_plan_generated", errors)
     require_bool_true(payload, "juror_plan_generated", errors)
@@ -770,8 +804,7 @@ def validate_commit_reveal(
     validate_fresh(payload, errors, options)
     require_hex(payload, "case_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "roster_hash_hex", HEX64_LEN, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_BALLOT_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_BALLOT_ROUTES, errors)
     panel_size = require_minimum_int(
         payload,
         "panel_size",
@@ -824,8 +857,7 @@ def validate_decision_publication(
     require_hex(payload, "case_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "roster_hash_hex", HEX64_LEN, errors)
     require_hex(payload, "tally_digest_hex", HEX64_LEN, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_DECISION_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_DECISION_ROUTES, errors)
     require_string_coverage(payload, "outcomes", "", REQUIRED_OUTCOMES, errors)
     require_bool_true(payload, "decision_signature_verified", errors)
     require_bool_true(payload, "governance_dag_event_published", errors)
@@ -887,6 +919,7 @@ def validate_e2e_panel(
     require_hex(payload, "case_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "roster_hash_hex", HEX64_LEN, errors)
     require_hex(payload, "tally_digest_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
     require_minimum_int(payload, "peer_count", options.min_peers, errors)
     require_minimum_int(payload, "validator_count", options.min_peers, errors)
     require_positive_int(payload, "case_count", errors)
@@ -997,7 +1030,10 @@ def build_summary(
     valid_tally_bindings: set[tuple[str, str, str]] = set()
     tally_candidate_artifacts: list[dict[str, Any]] = []
     tally_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_policy_digests: set[str] = set()
+    policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     e2e_candidate_artifacts: list[dict[str, Any]] = []
+    evidence_viewer_candidate_artifacts: list[dict[str, Any]] = []
     deployment_context: dict[str, str] = {}
     files = discover_evidence_files(
         evidence_dirs,
@@ -1069,6 +1105,10 @@ def build_summary(
                 tally_bound_artifacts.append((kind_name, artifact))
             if kind_name == "e2e_panel":
                 e2e_candidate_artifacts.append(artifact)
+            elif kind_name == "evidence_viewer":
+                evidence_viewer_candidate_artifacts.append(artifact)
+            elif kind_name == "governance_approval":
+                policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
@@ -1147,6 +1187,31 @@ def build_summary(
         ),
     )
 
+    for artifact in e2e_candidate_artifacts:
+        if evidence_artifact_is_valid(artifact):
+            policy_digest = evidence_artifact_fingerprint(artifact).get(
+                "policy_digest_hex"
+            )
+            if isinstance(policy_digest, str):
+                valid_policy_digests.add(policy_digest.lower())
+
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("e2e_panel", "governance_approval"),
+        bound_artifacts=policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must match a valid "
+            "e2e_panel policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex must match a valid "
+            "e2e_panel policy_digest_hex"
+        ),
+    )
+
     valid_e2e_runs = [
         {
             field: fingerprint[field]
@@ -1154,6 +1219,16 @@ def build_summary(
             if field in fingerprint
         }
         for artifact in e2e_candidate_artifacts
+        for fingerprint in [evidence_artifact_fingerprint(artifact)]
+        if evidence_artifact_is_valid(artifact)
+    ]
+    valid_evidence_viewer_digest_sets = [
+        {
+            field: fingerprint[field]
+            for field in EVIDENCE_VIEWER_DIGEST_SET_FIELDS
+            if field in fingerprint
+        }
+        for artifact in evidence_viewer_candidate_artifacts
         for fingerprint in [evidence_artifact_fingerprint(artifact)]
         if evidence_artifact_is_valid(artifact)
     ]
@@ -1197,7 +1272,9 @@ def build_summary(
             }
             for case_digest, roster_hash, tally_digest in sorted(valid_tally_bindings)
         ],
+        "valid_policy_digests": sorted(valid_policy_digests),
         "valid_e2e_runs": valid_e2e_runs,
+        "valid_evidence_viewer_digest_sets": valid_evidence_viewer_digest_sets,
         "required": required,
         "errors": errors,
     }

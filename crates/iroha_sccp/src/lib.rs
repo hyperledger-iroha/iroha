@@ -21042,7 +21042,7 @@ fn verify_sccp_evm_attestation_signatures(
         }
         let mut compact = [0u8; 65];
         compact.copy_from_slice(&signature.signature_bytes);
-        if !secp256k1_recoverable_signature_has_low_s(&compact) {
+        if !evm_recoverable_signature_is_canonical(&compact) {
             return false;
         }
         let Ok(public_key) =
@@ -22303,8 +22303,10 @@ fn secp256k1_recoverable_signature_r_is_valid(signature: &[u8; 65]) -> bool {
     h256_is_nonzero(&r) && r < SECP256K1_SCALAR_ORDER_BE
 }
 
-fn secp256k1_recoverable_signature_has_low_s(signature: &[u8; 65]) -> bool {
-    matches!(signature[64], 27 | 28) && secp256k1_recoverable_signature_s_is_low(signature)
+fn evm_recoverable_signature_is_canonical(signature: &[u8; 65]) -> bool {
+    matches!(signature[64], 27 | 28)
+        && secp256k1_recoverable_signature_r_is_valid(signature)
+        && secp256k1_recoverable_signature_s_is_low(signature)
 }
 
 fn tron_recoverable_signature_is_canonical(signature: &[u8; 65]) -> bool {
@@ -27333,7 +27335,7 @@ pub fn canonical_sccp_bsc_validator_set_transition_seal_bytes(
     if proof.seal_proof.signatures.iter().any(|signature| {
         <[u8; 65]>::try_from(signature.as_slice())
             .ok()
-            .is_none_or(|signature| !secp256k1_recoverable_signature_has_low_s(&signature))
+            .is_none_or(|signature| !evm_recoverable_signature_is_canonical(&signature))
     }) {
         return None;
     }
@@ -33592,6 +33594,7 @@ pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityP
         || qc.validator_public_keys.is_empty()
         || qc.validator_set_pops.len() != qc.validator_public_keys.len()
         || qc.bls_aggregate_signature.is_empty()
+        || qc.bls_aggregate_signature.iter().all(|byte| *byte == 0)
     {
         return false;
     }
@@ -34366,7 +34369,7 @@ fn verify_sccp_bsc_validator_set_seal_signatures(
         let Ok(signature) = <[u8; 65]>::try_from(signature.as_slice()) else {
             return false;
         };
-        if !secp256k1_recoverable_signature_has_low_s(&signature) {
+        if !evm_recoverable_signature_is_canonical(&signature) {
             return false;
         }
         let Ok(public_key) = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(
@@ -38406,7 +38409,7 @@ mod tests {
             28 => 27,
             recovery => recovery,
         };
-        assert!(!secp256k1_recoverable_signature_has_low_s(&out));
+        assert!(!evm_recoverable_signature_is_canonical(&out));
         out.to_vec()
     }
 
@@ -43295,6 +43298,12 @@ mod tests {
             source_material,
             source_deployment,
         )
+    }
+
+    /// Build a structural Ethereum mainnet -> SORA transfer bundle for endpoint tests.
+    #[cfg(feature = "test-fixtures")]
+    pub fn sample_eth_to_sora_transfer_bundle(nonce: u64) -> NexusSccpMessageProofV1 {
+        sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, nonce)
     }
 
     /// Build a deployment-bound Ethereum mainnet -> SORA transfer bundle for executor tests.
@@ -72957,10 +72966,10 @@ mod tests {
         let mut wrong_root = valid.clone();
         wrong_root.block_header_bytes =
             to_bytes(&wrong_root_header).expect("encode wrong-root header");
-        assert_eq!(
+        assert_ne!(
             hash_block_header_for_sccp_finality(&wrong_root_header),
             valid.block_hash,
-            "SCCP root is intentionally excluded from the consensus hash"
+            "SCCP root must be authenticated by the consensus hash"
         );
         assert!(!verify_nexus_bridge_finality_proof_structure(&wrong_root));
 
@@ -72969,10 +72978,10 @@ mod tests {
         let mut missing_root = valid.clone();
         missing_root.block_header_bytes =
             to_bytes(&missing_root_header).expect("encode missing-root header");
-        assert_eq!(
+        assert_ne!(
             hash_block_header_for_sccp_finality(&missing_root_header),
             valid.block_hash,
-            "removing the SCCP root also leaves the consensus hash unchanged"
+            "removing the SCCP root must change the consensus hash"
         );
         assert!(!verify_nexus_bridge_finality_proof_structure(&missing_root));
 
@@ -73061,6 +73070,10 @@ mod tests {
         let mut non_bls_validator = proof;
         let ed25519 = checked_sccp_fixture_keypair(vec![9; 32], Algorithm::Ed25519);
         non_bls_validator.commit_qc.validator_public_keys[0] = ed25519.public_key().to_string();
+        non_bls_validator.commit_qc.validator_set_hash = nexus_validator_set_hash_from_public_keys(
+            &non_bls_validator.commit_qc.validator_public_keys,
+        )
+        .expect("sample validator public keys should parse");
         assert!(verify_nexus_bridge_finality_proof_structure(
             &non_bls_validator
         ));
@@ -73160,6 +73173,11 @@ mod tests {
 
         let mut proof = valid;
         proof.commit_qc.bls_aggregate_signature.clear();
+        assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
+
+        let mut proof = decode_nexus_bridge_finality_proof(&sample_finality_proof(commitment_root))
+            .expect("decode proof");
+        proof.commit_qc.bls_aggregate_signature = vec![0; 96];
         assert!(!verify_nexus_bridge_finality_proof_structure(&proof));
     }
 
@@ -77812,6 +77830,35 @@ mod tests {
             &high_s_signature
         ));
 
+        let mut all_zero_signature = proof.clone();
+        let mut payload = valid_payload.clone();
+        let all_zero_compact = [0u8; 65];
+        assert!(!evm_recoverable_signature_is_canonical(&all_zero_compact));
+        payload.attestation.signatures[0].signature_bytes = all_zero_compact.to_vec();
+        payload.proof_bytes =
+            encode_sccp_evm_attestation_envelope(&payload.attestation).expect("encode envelope");
+        replace_evm_payload(&mut all_zero_signature, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &all_zero_signature
+        ));
+
+        let mut zero_r_signature = proof.clone();
+        let mut payload = valid_payload.clone();
+        let mut zero_r_compact =
+            <[u8; 65]>::try_from(payload.attestation.signatures[0].signature_bytes.as_slice())
+                .expect("sample recoverable signature");
+        zero_r_compact[..32].fill(0);
+        assert!(!evm_recoverable_signature_is_canonical(&zero_r_compact));
+        payload.attestation.signatures[0].signature_bytes = zero_r_compact.to_vec();
+        payload.proof_bytes =
+            encode_sccp_evm_attestation_envelope(&payload.attestation).expect("encode envelope");
+        replace_evm_payload(&mut zero_r_signature, &manifest, payload);
+        assert!(!verify_sccp_evm_submission_package(
+            &manifest,
+            &zero_r_signature
+        ));
+
         let mut signer_address_mismatch = proof;
         let mut payload = valid_payload;
         payload.attestation.signatures[0].signer_address[0] ^= 0x01;
@@ -78249,5 +78296,6 @@ pub mod test_fixtures {
         sample_eth_mainnet_sync_committee_root,
         sample_eth_mainnet_to_sora_local_admission_transparent_proof_with_material_and_deployment,
         sample_eth_mainnet_to_sora_transfer_bundle_with_material_and_deployment,
+        sample_eth_to_sora_transfer_bundle,
     };
 }

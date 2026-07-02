@@ -160,7 +160,9 @@ __all__ = [
     "buildConfidentialAssetHiddenTransferProofV1",
     "zk_ace_verifying_key_registration_payload_v1",
     "build_zk_ace_authorization_proof_v1",
+    "zk_ace_authorized_transfer_digest_check",
     "zk_ace_build_transfer_authorization_v1",
+    "zk_ace_verifying_key_registration_payload_v1",
     "privacy_bridge_abi_version",
     "is_privacy_native_available",
     "privacy_proof_request_v1",
@@ -1214,6 +1216,31 @@ def zk_ace_build_transfer_authorization_v1(
     parsed = json.loads(result)
     if not isinstance(parsed, dict):
         raise RuntimeError("ZK-ACE prover returned a non-object payload")
+    return parsed
+
+
+def zk_ace_authorized_transfer_digest_check(
+    instruction_archive_hex: str,
+) -> Dict[str, Any]:
+    """Decode a ZK-ACE transfer archive and compare its digest bindings."""
+
+    if not hasattr(_crypto, "zk_ace_authorized_transfer_digest_check"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing ZK-ACE digest inspection support; rebuild the extension"
+        )
+    return dict(_crypto.zk_ace_authorized_transfer_digest_check(str(instruction_archive_hex)))
+
+
+def zk_ace_verifying_key_registration_payload_v1() -> Dict[str, Any]:
+    """Return the canonical ZK-ACE v0 verifier-key registration payload."""
+
+    if not hasattr(_crypto, "zk_ace_verifying_key_registration_payload_v1"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing ZK-ACE verifier-key export support; rebuild the extension"
+        )
+    parsed = json.loads(_crypto.zk_ace_verifying_key_registration_payload_v1())
+    if not isinstance(parsed, dict):
+        raise RuntimeError("ZK-ACE verifier-key export returned a non-object payload")
     return parsed
 
 

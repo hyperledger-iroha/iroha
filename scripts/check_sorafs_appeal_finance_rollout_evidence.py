@@ -67,6 +67,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     require_zero_count,
 )
 from sorafs_required_kinds import (  # noqa: E402
@@ -145,6 +146,7 @@ CONFIG_BOUND_KINDS = (
     "multi_peer_reconciliation",
     "governance_approval",
 )
+POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "account_private_key",
@@ -229,6 +231,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     + (
         "config_version",
         "config_source",
+        "policy_digest_hex",
         "class_count",
         "pricing_config_present",
         "settlement_config_present",
@@ -407,7 +410,11 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_id",
     "environment",
     "deployment_context_reviewed",
+    "peer_count",
+    "validator_count",
+    "case_count",
     "config_digest_hex",
+    "policy_digest_hex",
 )
 RECONCILIATION_RUN_FIELDS: tuple[str, ...] = (
     "deployment_id",
@@ -460,6 +467,23 @@ def validate_route_records(
             )
 
 
+def validate_route_inventory(
+    payload: dict[str, Any],
+    required_routes: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    require_count_equal(payload, "route_count", "passed_route_count", errors)
+    require_string_coverage(payload, "routes", "name", required_routes, errors)
+    require_string_inventory_count_match(
+        payload,
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+
+
 def validate_pricing_config(
     payload: dict[str, Any],
     errors: list[str],
@@ -473,6 +497,7 @@ def validate_pricing_config(
         max_age_secs=options.max_canary_age_secs,
     )
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
     require_string(payload, "config_version", errors)
     require_iroha_config_binding(payload, errors, bound_field=None)
     require_minimum_int(
@@ -504,8 +529,7 @@ def validate_quote_api(
         max_age_secs=options.max_canary_age_secs,
     )
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_QUOTE_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_QUOTE_ROUTES, errors)
     require_count_equal(payload, "quote_count", "passed_quote_count", errors)
     require_string_coverage(payload, "classes", "", REQUIRED_APPEAL_CLASSES, errors)
     require_string_coverage(payload, "urgencies", "", REQUIRED_URGENCIES, errors)
@@ -541,8 +565,7 @@ def validate_deposit_lifecycle(
         max_age_secs=options.max_canary_age_secs,
     )
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_DEPOSIT_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_DEPOSIT_ROUTES, errors)
     require_positive_int(payload, "deposit_probe_count", errors)
     require_positive_int(payload, "confirmed_deposit_count", errors)
     require_bool_true(payload, "payer_auth_enforced", errors)
@@ -583,8 +606,7 @@ def validate_settlement_execution(
         max_age_secs=options.max_canary_age_secs,
     )
     require_hex(payload, "config_digest_hex", HEX64_LEN, errors)
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
-    require_string_coverage(payload, "routes", "name", REQUIRED_SETTLEMENT_ROUTES, errors)
+    validate_route_inventory(payload, REQUIRED_SETTLEMENT_ROUTES, errors)
     require_positive_int(payload, "settlement_probe_count", errors)
     require_positive_int(payload, "instruction_step_count", errors)
     require_string_coverage(payload, "outcomes", "", REQUIRED_OUTCOMES, errors)
@@ -834,7 +856,9 @@ def build_summary(
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
     valid_multi_peer_runs: list[dict[str, Any]] = []
     valid_config_digests: set[str] = set()
+    valid_policy_digests: set[str] = set()
     valid_config_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -873,6 +897,13 @@ def build_summary(
                 valid_config_digests.add(digest.lower())
             elif kind_name in CONFIG_BOUND_KINDS:
                 valid_config_bound_artifacts.append((kind_name, artifact))
+            policy_digest = evidence_artifact_fingerprint(artifact).get(
+                "policy_digest_hex"
+            )
+            if kind_name == "pricing_config" and isinstance(policy_digest, str):
+                valid_policy_digests.add(policy_digest.lower())
+            elif kind_name in POLICY_BOUND_KINDS:
+                valid_policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
@@ -890,6 +921,22 @@ def build_summary(
         missing_anchor_error_template=(
             "{kind_name} config_digest_hex requires a valid pricing_config "
             "config_digest_hex"
+        ),
+    )
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("pricing_config",) + POLICY_BOUND_KINDS,
+        bound_artifacts=valid_policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must reference a valid "
+            "pricing_config policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex requires a valid pricing_config "
+            "policy_digest_hex"
         ),
     )
 
@@ -917,6 +964,7 @@ def build_summary(
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_multi_peer_runs": valid_multi_peer_runs,
         "valid_config_digests": sorted(valid_config_digests),
+        "valid_policy_digests": sorted(valid_policy_digests),
         "required": required,
         "errors": errors,
     }

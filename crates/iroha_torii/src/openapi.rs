@@ -5521,6 +5521,16 @@ fn sorafs_paths() -> Map {
 fn soracloud_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
+        "/v1/soracloud/status".to_owned(),
+        Value::Object(json_get_operation(
+            "Soracloud",
+            "Fetch Soracloud status.",
+            "Fetch Soracloud service health, resource pressure, runtime manager, control-plane, and routing status. The routing section reports `configured_lane_count`/legacy `lane_count`, `declared_lane_count`, active lane ids/count, and autoscale-capacity lane ids/count separately.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/soracloud/model/upload/private/execute".to_owned(),
         Value::Object(json_post_operation(
             "Soracloud",
@@ -5925,14 +5935,7 @@ fn nexus_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
         "/v1/nexus/lifecycle".to_owned(),
-        Value::Object(json_post_operation(
-            "Nexus",
-            "Apply a lane lifecycle plan.",
-            "Apply a Nexus lane lifecycle plan.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object(nexus_lane_lifecycle_operation()),
     );
     paths.insert(
         "/v1/nexus/public_lanes/{lane_id}/validators".to_owned(),
@@ -5951,6 +5954,66 @@ fn nexus_paths() -> Map {
         Value::Object(nexus_dataspaces_account_summary_operation()),
     );
     paths
+}
+
+fn nexus_lane_lifecycle_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Nexus".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Apply a lane lifecycle plan.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Apply a Nexus lane lifecycle plan. Accepted responses report configured lane namespace size, active lane ids/count, and live autoscale-capacity lane ids/count separately."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("nexusLaneLifecycle".to_owned()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body("#/components/schemas/JsonValue")),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "202".to_owned(),
+        json_response(
+            "Lane lifecycle plan accepted.",
+            schema_ref("NexusLaneLifecycleResponse"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "Lane lifecycle plan failed validation.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "401".to_owned(),
+        json_response(
+            "Operator authentication is required or invalid.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Operator is not authorized to apply lane lifecycle plans.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
 }
 
 fn sumeragi_paths() -> Map {
@@ -7757,6 +7820,7 @@ fn is_operator_operation(method: &str, path: &str) -> bool {
             path,
             uri::CONFIGURATION
                 | "/v1/internal/torii/proxy"
+                | "/v1/nexus/lifecycle"
                 | "/v1/nexus/lane-lifecycle"
                 | "/v1/sumeragi/evidence"
                 | "/v1/sumeragi/vrf/commit"
@@ -9137,6 +9201,64 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "array",
             "items": { "$ref": "#/components/schemas/JsonValue" }
+        }),
+    );
+    schemas.insert(
+        "NexusLaneLifecycleResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "ok",
+                "configured_lane_count",
+                "lane_count",
+                "active_lane_count",
+                "active_lane_ids",
+                "autoscale_capacity_lane_count",
+                "autoscale_capacity_lane_ids"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "ok": {
+                    "type": "boolean",
+                    "enum": [true],
+                    "description": "True when the signed lane lifecycle plan was accepted and applied."
+                },
+                "configured_lane_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Configured lane namespace size after the lifecycle plan."
+                },
+                "lane_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "deprecated": true,
+                    "description": "Legacy alias for `configured_lane_count`."
+                },
+                "active_lane_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Number of lanes active at the committed lane-authority height."
+                },
+                "active_lane_ids": {
+                    "type": "array",
+                    "items": { "type": "integer", "format": "uint64", "minimum": 0 },
+                    "description": "Lane ids active at the committed lane-authority height."
+                },
+                "autoscale_capacity_lane_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Number of active autoscale-managed elastic lanes that currently count as horizontal capacity."
+                },
+                "autoscale_capacity_lane_ids": {
+                    "type": "array",
+                    "items": { "type": "integer", "format": "uint64", "minimum": 0 },
+                    "description": "Active autoscale-managed elastic lane ids that currently count as horizontal capacity."
+                }
+            }
         }),
     );
     schemas.insert(
@@ -13794,6 +13916,19 @@ mod tests {
                 .and_then(Value::as_str),
             Some("operator")
         );
+
+        let nexus_lifecycle = paths
+            .get("/v1/nexus/lifecycle")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("Nexus lifecycle post operation");
+        assert_eq!(
+            nexus_lifecycle
+                .get(TOOL_EFFECT_EXTENSION)
+                .and_then(Value::as_str),
+            Some("operator")
+        );
     }
 
     #[test]
@@ -14805,7 +14940,7 @@ mod tests {
             PathCase {
                 label: "soracloud",
                 builder: soracloud_paths,
-                expected: "/v1/soracloud/model/upload/private/execute",
+                expected: "/v1/soracloud/status",
             },
             PathCase {
                 label: "soradns",
@@ -14876,6 +15011,7 @@ mod tests {
         for key in [
             "JsonValue",
             "JsonList",
+            "NexusLaneLifecycleResponse",
             "AppPageMetadata",
             "AccountQueryResponse",
             "DomainQueryResponse",
@@ -14900,6 +15036,100 @@ mod tests {
         ] {
             assert!(schemas.contains_key(key), "schema missing {key}");
         }
+    }
+
+    #[test]
+    fn generated_spec_documents_nexus_lifecycle_response_contract() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let responses = paths
+            .get("/v1/nexus/lifecycle")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .and_then(|post| post.get("responses"))
+            .and_then(Value::as_object)
+            .expect("Nexus lifecycle responses");
+        assert!(
+            !responses.contains_key("200"),
+            "lifecycle accepts plans with 202, not 200"
+        );
+        let accepted_schema_ref = responses
+            .get("202")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            accepted_schema_ref,
+            Some("#/components/schemas/NexusLaneLifecycleResponse")
+        );
+
+        let schema = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .and_then(|schemas| schemas.get("NexusLaneLifecycleResponse"))
+            .and_then(Value::as_object)
+            .expect("NexusLaneLifecycleResponse schema");
+        assert_eq!(
+            schema.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        let required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("required lifecycle response fields");
+        for field in [
+            "ok",
+            "configured_lane_count",
+            "lane_count",
+            "active_lane_count",
+            "active_lane_ids",
+            "autoscale_capacity_lane_count",
+            "autoscale_capacity_lane_ids",
+        ] {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(field)),
+                "Nexus lifecycle response should require {field}"
+            );
+        }
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("lifecycle response properties");
+        assert_eq!(
+            properties
+                .get("active_lane_ids")
+                .and_then(Value::as_object)
+                .and_then(|property| property.get("type"))
+                .and_then(Value::as_str),
+            Some("array")
+        );
+        assert_eq!(
+            properties
+                .get("autoscale_capacity_lane_ids")
+                .and_then(Value::as_object)
+                .and_then(|property| property.get("type"))
+                .and_then(Value::as_str),
+            Some("array")
+        );
+        assert_eq!(
+            properties
+                .get("lane_count")
+                .and_then(Value::as_object)
+                .and_then(|property| property.get("deprecated")),
+            Some(&Value::Bool(true))
+        );
     }
 
     #[test]
@@ -15061,8 +15291,21 @@ mod tests {
             .get("paths")
             .and_then(Value::as_object)
             .expect("paths section");
+        assert!(paths.contains_key("/v1/soracloud/status"));
         assert!(paths.contains_key("/v1/soracloud/model/upload/private/execute"));
         assert!(paths.contains_key("/v1/soracloud/model/upload/private/receipts"));
+        let status_description = paths
+            .get("/v1/soracloud/status")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|get| get.get("description"))
+            .and_then(Value::as_str)
+            .expect("Soracloud status description");
+        assert!(status_description.contains("configured_lane_count"));
+        assert!(status_description.contains("declared_lane_count"));
+        assert!(status_description.contains("active lane ids/count"));
+        assert!(status_description.contains("autoscale-capacity lane ids/count"));
 
         let schemas = doc
             .get("components")

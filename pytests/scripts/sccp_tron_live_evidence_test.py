@@ -2122,6 +2122,49 @@ def test_live_tron_address_payload_parser_rejects_all_zero_base58check():
         raise AssertionError("zero TRON payload was encoded")
 
 
+def test_tron_live_cli_parsers_reject_non_string_values_without_stringification():
+    module = load_live_module()
+
+    class HostileTronLiveParserValue:
+        def __str__(self):
+            raise AssertionError("secret-token-tron-live-parser-value stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token-tron-live-parser-value repr leaked")
+
+        def strip(self):
+            raise AssertionError("secret-token-tron-live-parser-value strip called")
+
+        def startswith(self, _prefix):
+            raise AssertionError("secret-token-tron-live-parser-value startswith called")
+
+        def lower(self):
+            raise AssertionError("secret-token-tron-live-parser-value lower called")
+
+    hostile = HostileTronLiveParserValue()
+    cases = (
+        (
+            lambda value: module.parse_tron_address_payload(
+                value,
+                label="destination verifier address",
+            ),
+            "destination verifier address must be a TRON address",
+        ),
+        (
+            lambda value: module._parse_hex32(value, label="route allowlist hash"),
+            "route allowlist hash must be canonical lowercase 0x hex",
+        ),
+    )
+
+    for parser, expected_message in cases:
+        try:
+            parser(hostile)
+        except module.argparse.ArgumentTypeError as exc:
+            assert str(exc) == expected_message
+        else:
+            raise AssertionError("non-string TRON live parser value was accepted")
+
+
 def test_live_tron_collectors_reject_malformed_contract_metadata_gate_before_rpc():
     module = load_live_module()
     fake = fake_opener_for(module)

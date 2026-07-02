@@ -327,11 +327,12 @@ mod tests {
             .expect("signature header")
             .value
             .clone();
-        let signature = Signature::from_bytes(
+        let signature = Signature::try_from_bytes(
             &BASE64_STANDARD
                 .decode(signature_b64)
                 .expect("base64 signature"),
-        );
+        )
+        .expect("settlement request signature is non-empty and nonzero");
         let message = canonical_request_signature_message(
             "POST",
             DEFAULT_PATH,

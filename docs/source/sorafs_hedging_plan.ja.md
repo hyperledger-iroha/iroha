@@ -4,9 +4,11 @@ direction: ltr
 source: docs/source/sorafs_hedging_plan.md
 status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: ac1ae1f75397efbc3f905bd346e8a519bc9fabf4d3060547cb16aaea21f2530c
-source_last_modified: "2026-06-26T00:58:45+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: b5438f9d20918e05ba0c9e75e9d87b81b5d99607295735e3246fa00b09c24bda
+source_last_modified: "2026-07-01T21:34:37.224063+00:00"
+translation_last_reviewed: 2026-07-02
+title: SoraFS XOR Hedging & Billing
+summary: SFM-5 target architecture and current gap status for XOR price feeds, hedging, billing statements, risk controls, and rollout.
 ---
 
 # SoraFS XOR Hedging & Billing
@@ -38,14 +40,24 @@ before reporting `ready`. Billing-cycle evidence must bind each cycle to a
 valid reference-price decision id from the same rollout bundle and carry only
 payload-free line-item roots, statement-bundle digests,
 reconciliation digests, and per-statement digest arrays whose length matches
-the signed statement count. Statement-publication, reconciliation,
+the signed statement count, plus `policy_digest_hex` for the billing policy
+that priced the staged cycle. Statement-publication, reconciliation,
 metrics/alert, and governance-approval evidence must also carry the same
 `statement_bundle_digest_hex`/`reconciliation_digest_hex` tuple as a valid
-staged billing cycle in the same rollout bundle, preventing promotion packets
-from mixing statement publication, reconciliation, dashboard, or approval
-artifacts from different billing runs. Reference-price and cycle-tuple binding
-failures are recorded on the offending artifact before required-kind validity
-is computed, so the JSON summary matches the fail-closed rollout decision. The
+staged billing cycle in the same rollout bundle, and governance approval
+`policy_digest_hex` must match a valid billing-cycle policy digest.
+Statement-publication artifacts also bind `route_count` to the unique canonical
+`routes[].name` inventory and reject duplicate route entries before promotion
+can report ready. Reconciliation artifacts also bind `source_count` to the
+unique canonical `sources[].name` inventory and reject duplicate source entries
+before promotion can report ready. Native-bridge release artifacts also bind
+`artifact_count` to the unique canonical `artifacts[].id` inventory and reject
+duplicate artifact entries before promotion can report ready. This
+prevents promotion packets from mixing statement publication, reconciliation,
+dashboard, approval, or policy artifacts from different billing runs.
+Reference-price, cycle-tuple, and policy-digest binding failures are recorded
+on the offending artifact before required-kind validity is computed, so the
+JSON summary matches the fail-closed rollout decision. The
 checker supports shell-style
 `@ARGFILE` inputs
 so reviewed operator evidence paths can be replayed without embedding secrets
@@ -61,18 +73,34 @@ printing dry-run plans, and invokes the checker with a reproducible summary
 path. The planner does not replace the missing live collector, hedging, billing,
 publication, or governance services; operators must still capture those service
 canary artifacts before promotion can pass.
+`scripts/build_sorafs_hedging_canary.py` is a payload-free SFM-5 hedging/billing canary builder
+for feed collector, reference price, billing cycle, statement publication,
+reconciliation, metrics/alerts, native-bridge release, and governance approval
+evidence. It takes reviewed deployment facts, requires every positive proof
+claim and required route/source/metric coverage explicitly, forces raw feed,
+statement, financial-record, response-body, and debug-artifact inclusion flags
+to `false`, rejects duplicate `--artifact` ids for native-bridge release
+canaries, rejects ungoverned hedge-execution enablement, validates each
+generated artifact through the hedging/billing rollout gate, and writes
+atomically without following output symlinks. Billing-cycle and
+governance-approval canaries require reviewed `--policy-digest-hex` input so
+locally generated evidence exercises the same policy-bound promotion path. The
+builder is an evidence
+packaging aid; it does not replace the missing collector service, daemonized
+pricing/exposure engine, billing aggregator, statement publisher, runtime API,
+or native bridge release process.
 
 This is not yet a production hedging and billing stack. There is still no
 shipped `hedgingd`, price-feed collector service, `billingd`, statement
 publisher, SoraFS hedging/billing REST API, service-management CLI, released
-native bridge artifacts, runtime service wiring
-that populates the hedging/billing metric families, or captured staged rollout
-evidence that passes the SFM-5 gate. The checked-in fixture generator, fixture
-manifest, README, and generated `.to`/`.json` byte suite now define the
-canonical SFM-5 feed, reference-price, line-item, statement, and negative
-fixture set. A checked-in Grafana dashboard plus Prometheus alert/test
-fixtures and telemetry helper methods now define the hedging/billing
-observability contract that deployed services must satisfy.
+native bridge artifacts, runtime service wiring that populates the
+hedging/billing metric families, or captured staged rollout evidence that
+passes the SFM-5 gate. The checked-in fixture generator, fixture manifest,
+README, and generated `.to`/`.json` byte suite now define the canonical SFM-5
+feed, reference-price, line-item, statement, and negative fixture set. A
+checked-in Grafana dashboard plus Prometheus alert/test fixtures and telemetry
+helper methods now define the hedging/billing observability contract that
+deployed services must satisfy.
 
 Implemented adjacent foundations include SoraFS reserve quote/ledger tooling,
 DA rent/bonus telemetry, reserve ledger digest dashboards, generic subscription
@@ -185,7 +213,7 @@ Required before rollout:
 - Integration tests with stale/divergent feed simulations and synthetic settlement/rent inputs.
 - End-to-end tests from usage events through statement finalization and acknowledgement.
 - Serialization and fixture tests for all statement, feed, decision, and adjustment payloads.
-- Implemented locally as a generator scaffold:
+- Implemented locally as a generated fixture suite:
   `cargo run -p sorafs_manifest --bin generate_hedging_fixtures` emits the
   target positive and negative SFM-5 `.to`/`.json` fixture set documented in
   `fixtures/sorafs_manifest/hedging/README.md`. The target file inventory and
@@ -203,8 +231,10 @@ Required before rollout:
   positive prices, timestamps, canonical unsigned `u128` billing
   amount/quantity strings, and bounded basis-point fields, and rejects extra
   generated `.to` or `.json` files that are not pinned by the manifest. The
-  generated bytes still need to be produced, reviewed, checked in, and
-  validated with that checker.
+  generated positive and negative fixture byte suite is checked in under
+  `fixtures/sorafs_manifest/hedging/`, and the rollout contract pins those
+  files to the manifest inventory so future deletions or unmanifested fixture
+  drift fail closed.
 - Reconciliation tests comparing generated statements with underlying ledger and settlement sources.
 - Rollout evidence collection with
   `scripts/run_sorafs_hedging_rollout_evidence.py
@@ -214,7 +244,19 @@ Required before rollout:
   @scripts/examples/sorafs_hedging_rollout_evidence.args.example`. Production
   promotion remains blocked unless the summary status is `ready`, including at
   least two distinct staged billing cycles whose reference-decision ids match a
-  valid reference-price artifact in the same evidence bundle.
+  valid reference-price artifact in the same evidence bundle. The same
+  promotion contract now requires staged billing-cycle `policy_digest_hex`
+  values to anchor governance approval. The collection
+  planner's dry-run JSON includes the checker-backed `evidence_contract` map so operators can
+  inspect the exact required fields for each requested evidence kind before
+  collecting or submitting live billing artifacts. For reviewed local canary
+  packaging, generate payload-free artifacts with
+  `scripts/build_sorafs_hedging_canary.py
+  @scripts/examples/sorafs_hedging_reference_price_canary.args.example` and
+  `scripts/build_sorafs_hedging_canary.py
+  @scripts/examples/sorafs_billing_cycle_canary.args.example` before passing the
+  generated evidence files to the rollout gate; production promotion still
+  requires at least two distinct billing-cycle artifacts.
 
 ## Rollout Status
 - Done: target requirements are documented; adjacent reserve, DA rent telemetry,
@@ -223,24 +265,31 @@ Required before rollout:
   plus deterministic math/tests and reference-validator/CLI coverage are
   shipped; source-level Rust C FFI, Connect C/JNI, Kotlin/JVM, Java Android,
   and Swift bridge wrappers are shipped; the SFM-5 rollout evidence gate and
-  collection planner plus operator argument-file examples are shipped; the
+  collection planner with dry-run evidence-contract export plus operator
+  argument-file examples are shipped; payload-free canary builder support for
+  all SFM-5 evidence kinds is shipped; the
   deterministic hedging/billing fixture generator, fixture manifest, and
   fixture README are shipped; the fixture manifest checker and focused tests are
   shipped, including accepted/rejected validator outcome enforcement for full
   generated-byte checks, nested JSON sidecar shape/value validation, and exact
-  generated-file inventory rejection; the generated fixture byte files still
-  need to be checked in; the
+  generated-file inventory rejection; the generated fixture byte files are
+  checked in and pinned by the rollout contract; the
   checked-in Grafana dashboard and Prometheus alert/test fixtures define the
   runtime observability contract, and
   `iroha_telemetry::Metrics` exposes helper methods for those metric families.
   The gate
   rejects staged billing cycles that omit digest roots, carry a statement
   digest count that does not match the signed statement count, or reference a
-  missing/invalid reference-price decision.
+  missing/invalid reference-price decision; it also publishes valid
+  billing-cycle policy digests as `valid_policy_digests` and rejects governance
+  approval artifacts whose `policy_digest_hex` is not anchored to one of them.
 - Remaining: implement collector service, daemonized pricing/exposure engine,
   billing aggregator, statement publisher, signed APIs, runtime CLI helpers,
   runtime service emission of the checked-in metric families, released native
-  bridge artifacts, generated canonical fixture bytes, fixture validation,
-  using generated bytes, reconciliation tests, governance approval flow, and at
-  least two successful staged billing cycles whose evidence passes the SFM-5
-  gate.
+  bridge artifacts, reconciliation tests, governance approval flow, and at least
+  two successful staged billing cycles whose evidence passes the SFM-5 gate.
+
+The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
+The shared runner plan guard also rejects non-canonical nested required-kind,
+threshold, external-evidence, evidence-contract, and command-step shapes before
+dry-run output or verifier execution.

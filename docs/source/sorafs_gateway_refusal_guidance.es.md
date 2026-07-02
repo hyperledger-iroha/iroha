@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_refusal_guidance.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9ac09d0d75d38ac86591c4773a3a7f1980ed94f3d297b17b2a3190512ce874c1
+source_hash: 59e9d6650f54bd355517236a6f731abfff9568580f4bd94c9858f012e8e83c9d
 source_last_modified: "2025-11-02T04:40:39.847639+00:00"
 translation_last_reviewed: "2026-01-30"
 ---

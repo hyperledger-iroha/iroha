@@ -1760,7 +1760,8 @@ mod tests {
                 },
                 queued_at_unix: 1700000000,
                 rent_quote: Default::default(),
-                operator_signature: Signature::from_bytes(&[0xCC; 64]),
+                operator_signature: Signature::try_from_bytes(&[0xCC; 64])
+                    .expect("DA receipt fixture operator signature is non-empty and nonzero"),
             },
             source: String::from("receipt.norito"),
         }
@@ -1784,7 +1785,8 @@ mod tests {
                 Some(CryptoHash::new([0x11, 0x22])),
                 RetentionPolicy::default(),
                 StorageTicketId::new(ticket),
-                Signature::from_bytes(&[0xDD; 64]),
+                Signature::try_from_bytes(&[0xDD; 64])
+                    .expect("DA commitment fixture signature is non-empty and nonzero"),
             ),
             source: String::from("block.block"),
         }

@@ -61,6 +61,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
 )
 from sorafs_required_kinds import (  # noqa: E402
     parse_required_kinds as parse_required_evidence_kinds,
@@ -101,6 +102,7 @@ RELEASE_MANIFEST_BOUND_KINDS = (
     "ffi_header_contract",
     "governance_approval",
 )
+POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -189,6 +191,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "private_key_absent",
         "signature_algorithm",
         "manifest_digest_hex",
+        "policy_digest_hex",
         "public_key_fingerprint_hex",
         "raw_manifest_included",
     ),
@@ -262,8 +265,15 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_id",
     "environment",
     "deployment_context_reviewed",
+    "archive_index_digest_hex",
+    "ffi_contract_digest_hex",
+    "header_digest_hex",
     "manifest_digest_hex",
+    "package_index_digest_hex",
     "release_manifest_digest_hex",
+    "public_key_fingerprint_hex",
+    "smoke_output_digest_hex",
+    "policy_digest_hex",
 )
 
 
@@ -279,6 +289,7 @@ def validate_release_archive(
     require_bool_true(payload, "dist_gitkeep_only_tracked", errors)
     require_minimum_int(payload, "target_count", options.min_release_targets, errors)
     require_string_coverage(payload, "targets", "", REQUIRED_RELEASE_TARGETS, errors)
+    require_string_inventory_count_match(payload, "targets", "target_count", errors)
     require_hex(payload, "archive_index_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "release_manifest_digest_hex", HEX64_LEN, errors)
     require_false(payload, "raw_archives_included", errors)
@@ -293,6 +304,7 @@ def validate_signed_manifest(payload: dict[str, Any], errors: list[str]) -> None
     require_bool_true(payload, "private_key_absent", errors)
     require_string(payload, "signature_algorithm", errors)
     require_hex(payload, "manifest_digest_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
     require_hex(payload, "public_key_fingerprint_hex", HEX64_LEN, errors)
     require_false(payload, "raw_manifest_included", errors)
 
@@ -303,6 +315,7 @@ def validate_downstream_bindings(
     options: ValidationOptions,
 ) -> None:
     require_string_coverage(payload, "packages", "", REQUIRED_DOWNSTREAM_PACKAGES, errors)
+    require_string_inventory_count_match(payload, "packages", "package_count", errors)
     require_minimum_int(
         payload,
         "package_count",
@@ -422,7 +435,16 @@ def build_summary(
 
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
     valid_release_manifest_digests: set[str] = set()
+    valid_release_manifest_reference_digests: set[str] = set()
+    valid_policy_digests: set[str] = set()
+    valid_archive_index_digests: set[str] = set()
+    valid_ffi_contract_digests: set[str] = set()
+    valid_header_digests: set[str] = set()
+    valid_package_index_digests: set[str] = set()
+    valid_release_key_fingerprints: set[str] = set()
+    valid_smoke_output_digests: set[str] = set()
     valid_release_manifest_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -453,12 +475,41 @@ def build_summary(
         )
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
-            if kind_name == "signed_manifest":
+            if kind_name == "release_archive":
+                archive_index_digest = fingerprint.get("archive_index_digest_hex")
+                if isinstance(archive_index_digest, str):
+                    valid_archive_index_digests.add(archive_index_digest.lower())
+            elif kind_name == "signed_manifest":
                 digest = fingerprint.get("manifest_digest_hex")
                 if isinstance(digest, str):
                     valid_release_manifest_digests.add(digest.lower())
-            elif kind_name in RELEASE_MANIFEST_BOUND_KINDS:
+                policy_digest = fingerprint.get("policy_digest_hex")
+                if isinstance(policy_digest, str):
+                    valid_policy_digests.add(policy_digest.lower())
+                release_key_fingerprint = fingerprint.get("public_key_fingerprint_hex")
+                if isinstance(release_key_fingerprint, str):
+                    valid_release_key_fingerprints.add(
+                        release_key_fingerprint.lower()
+                    )
+            elif kind_name == "downstream_bindings":
+                package_index_digest = fingerprint.get("package_index_digest_hex")
+                if isinstance(package_index_digest, str):
+                    valid_package_index_digests.add(package_index_digest.lower())
+            elif kind_name == "cookbook_smoke":
+                smoke_output_digest = fingerprint.get("smoke_output_digest_hex")
+                if isinstance(smoke_output_digest, str):
+                    valid_smoke_output_digests.add(smoke_output_digest.lower())
+            elif kind_name == "ffi_header_contract":
+                ffi_contract_digest = fingerprint.get("ffi_contract_digest_hex")
+                if isinstance(ffi_contract_digest, str):
+                    valid_ffi_contract_digests.add(ffi_contract_digest.lower())
+                header_digest = fingerprint.get("header_digest_hex")
+                if isinstance(header_digest, str):
+                    valid_header_digests.add(header_digest.lower())
+            if kind_name in RELEASE_MANIFEST_BOUND_KINDS:
                 valid_release_manifest_bound_artifacts.append((kind_name, artifact))
+            if kind_name in POLICY_BOUND_KINDS:
+                valid_policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
@@ -478,6 +529,31 @@ def build_summary(
             "signed_manifest manifest_digest_hex"
         ),
     )
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("signed_manifest",),
+        bound_artifacts=valid_policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must reference a valid "
+            "signed_manifest policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex requires a valid "
+            "signed_manifest policy_digest_hex"
+        ),
+    )
+
+    for kind_name in RELEASE_MANIFEST_BOUND_KINDS:
+        for artifact in artifacts_by_kind.get(kind_name, []):
+            if not evidence_artifact_is_valid(artifact):
+                continue
+            fingerprint = evidence_artifact_fingerprint(artifact)
+            digest = fingerprint.get("release_manifest_digest_hex")
+            if isinstance(digest, str):
+                valid_release_manifest_reference_digests.add(digest.lower())
 
     required = build_required_evidence_summary(
         required_kinds,
@@ -500,7 +576,17 @@ def build_summary(
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
+        "valid_archive_index_digests": sorted(valid_archive_index_digests),
+        "valid_ffi_contract_digests": sorted(valid_ffi_contract_digests),
+        "valid_header_digests": sorted(valid_header_digests),
+        "valid_package_index_digests": sorted(valid_package_index_digests),
         "valid_release_manifest_digests": sorted(valid_release_manifest_digests),
+        "valid_release_manifest_reference_digests": sorted(
+            valid_release_manifest_reference_digests
+        ),
+        "valid_release_key_fingerprints": sorted(valid_release_key_fingerprints),
+        "valid_smoke_output_digests": sorted(valid_smoke_output_digests),
+        "valid_policy_digests": sorted(valid_policy_digests),
         "required": required,
         "errors": errors,
     }

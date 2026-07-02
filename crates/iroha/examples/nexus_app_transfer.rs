@@ -171,7 +171,8 @@ mod tests {
         assert_eq!(wallet_signature.algorithm, signable.signature_algorithm);
         let payload_hash =
             hex::decode(&signable.payload_hash_hex).expect("payload hash hex should decode");
-        Signature::from_bytes(&wallet_signature.signature)
+        Signature::try_from_bytes(&wallet_signature.signature)
+            .expect("demo wallet signature is non-empty and nonzero")
             .verify(key_pair.public_key(), &payload_hash)
             .expect("checked demo wallet signature should verify");
     }

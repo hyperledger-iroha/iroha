@@ -1195,6 +1195,11 @@ def _hex_bytes(value: Any, *, byte_length: int) -> bytes | None:
         return None
 
 
+def _is_canonical_tron_address_text(value: Any) -> bool:
+    raw = _hex_bytes(value, byte_length=21)
+    return raw is not None and raw[0] == 0x41 and any(raw[1:])
+
+
 def _required_hex_bytes(record: dict[str, Any], field: str, *, byte_length: int) -> bytes:
     raw = _hex_bytes(record.get(field), byte_length=byte_length)
     if raw is None:
@@ -2037,6 +2042,19 @@ def _is_canonical_decimal_text(value: object, *, positive: bool) -> bool:
     if len(value) > 1 and value.startswith("0"):
         return False
     return not positive or int(value, 10) > 0
+
+
+def _is_canonical_solana_pubkey_text(value: Any) -> bool:
+    """Return whether value is a non-zero canonical 32-byte Solana pubkey."""
+
+    if not isinstance(value, str):
+        return False
+    try:
+        module = _load_sibling_module("sccp_solana_destination_evidence.py")
+        raw = module.decode_solana_base58(value, label="Solana route canary pubkey")
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
+        return False
+    return len(raw) == 32 and any(raw)
 
 
 def _load_toml_minimal(text: str, *, label: str) -> dict[str, Any]:
@@ -7359,7 +7377,7 @@ def _release_checklist_route_canary_proof_context_blockers(
 
     # Source-inventory marker: route canary target_domain must match lane domain
     # Source-inventory marker: route canary proof_source_domain must be SORA domain
-    # Source-inventory marker: route canary transaction_owner_address must be a non-zero TRON address
+    # Source-inventory marker: route canary transaction_owner_address must be a non-zero canonical 0x41-prefixed 21-byte hex string
     # Source-inventory marker: route canary solana_programdata_slot must be a canonical positive decimal string
     if domain not in LANE_PROFILES:
         return []
@@ -7408,6 +7426,13 @@ def _release_checklist_route_canary_proof_context_blockers(
                 f"{lane_label}: route canary {field} must be a non-empty canonical string"
             )
 
+    def require_solana_pubkey(field: str) -> None:
+        if not _is_canonical_solana_pubkey_text(canary.get(field)):
+            blockers.append(
+                f"{lane_label}: route canary {field} must be a non-zero "
+                "canonical base58 Solana address"
+            )
+
     def require_positive_decimal_string(field: str) -> None:
         if not _is_canonical_decimal_text(canary.get(field), positive=True):
             blockers.append(
@@ -7415,12 +7440,14 @@ def _release_checklist_route_canary_proof_context_blockers(
             )
 
     def tron_address(field: str) -> bytes | None:
-        raw = _hex_bytes(canary.get(field), byte_length=21)
-        if raw is None or raw[0] != 0x41 or not any(raw[1:]):
+        if not _is_canonical_tron_address_text(canary.get(field)):
             blockers.append(
-                f"{lane_label}: route canary {field} must be a non-zero TRON address"
+                f"{lane_label}: route canary {field} must be a non-zero "
+                "canonical 0x41-prefixed 21-byte hex string"
             )
             return None
+        raw = _hex_bytes(canary.get(field), byte_length=21)
+        assert raw is not None
         return raw
 
     if domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
@@ -7443,7 +7470,8 @@ def _release_checklist_route_canary_proof_context_blockers(
                 f"{lane_label}: route canary signature_recovered_address must match transaction_owner_address"
             )
     elif domain == SCCP_DOMAIN_SOL:
-        require_canonical_string("solana_programdata_address")
+        # Source-inventory marker: route canary solana_programdata_address must be a non-zero canonical base58 Solana address
+        require_solana_pubkey("solana_programdata_address")
         require_positive_decimal_string("solana_programdata_slot")
     elif domain == SCCP_DOMAIN_TON:
         require_positive_decimal_string("ton_last_transaction_lt")
@@ -7529,6 +7557,37 @@ def _release_checklist_route_canary_template_hash_blockers(
         f"{lane_label}: route canary",
         domain,
     )
+
+
+def _release_checklist_template_hash_blockers(
+    lane_label: str,
+    domain: Any,
+    *,
+    label: str,
+    hashes: tuple[tuple[str, Any, str], ...],
+) -> list[str]:
+    """Return blockers for release-checklist hashes replaying template material."""
+
+    if type(domain) is not int:
+        return []
+    profile = LANE_PROFILES.get(domain)
+    if profile is None:
+        return []
+    template_hashes, template_errors = _source_material_template_hash_values_or_errors(
+        f"{lane_label}: {label}",
+        profile,
+    )
+    if template_errors:
+        return template_errors
+    blockers: list[str] = []
+    for field_label, value, evidence_label in hashes:
+        raw = _hex_bytes(value, byte_length=32)
+        if raw is not None and raw in template_hashes:
+            blockers.append(
+                f"{lane_label}: {field_label} must be {evidence_label}, "
+                "not built-in template material"
+            )
+    return blockers
 
 
 def _release_checklist(
@@ -7831,6 +7890,28 @@ def _release_checklist(
                     deployment_blockers.append(
                         f"{lane_label}: destination binding hash must not reuse {source_label}"
                     )
+            deployment_blockers.extend(
+                _release_checklist_template_hash_blockers(
+                    lane_label,
+                    lane.get("domain"),
+                    label="destination binding",
+                    hashes=(
+                        # Source-inventory marker: destination binding hashes must be destination binding evidence, not built-in template material
+                        (
+                            "destination binding hash",
+                            destination_binding.get("destination_binding_hash"),
+                            "destination binding evidence",
+                        ),
+                        (
+                            "expected destination binding hash",
+                            destination_binding.get(
+                                "expected_destination_binding_hash"
+                            ),
+                            "destination binding evidence",
+                        ),
+                    ),
+                )
+            )
 
         route_summary = lane.get("route_allowlist", {})
         if not isinstance(route_summary, dict):
@@ -7894,6 +7975,26 @@ def _release_checklist(
                     route_blockers.append(
                         f"{lane_label}: route allowlist hash must not reuse {role_label}"
                     )
+            route_blockers.extend(
+                _release_checklist_template_hash_blockers(
+                    lane_label,
+                    lane.get("domain"),
+                    label="route allowlist",
+                    hashes=(
+                        # Source-inventory marker: route allowlist hashes must be route binding evidence, not built-in template material
+                        (
+                            "route allowlist hash",
+                            route_summary.get("route_allowlist_hash"),
+                            "route binding evidence",
+                        ),
+                        (
+                            "expected route allowlist hash",
+                            route_summary.get("expected_route_allowlist_hash"),
+                            "route binding evidence",
+                        ),
+                    ),
+                )
+            )
             route_blockers.extend(
                 _public_lane_route_allowlist_recompute_errors(
                     lane,
@@ -8783,6 +8884,38 @@ def _public_lane_source_record_template_hash_errors(
     return errors
 
 
+def _public_lane_template_hash_errors(
+    value: Any,
+    label: str,
+    domain: Any,
+    *,
+    fields: tuple[str, ...],
+    evidence_label: str,
+) -> list[str]:
+    """Return errors for copied lane hashes replaying source templates."""
+
+    if not isinstance(value, dict) or type(domain) is not int:
+        return []
+    profile = LANE_PROFILES.get(domain)
+    if profile is None:
+        return []
+    template_hashes, template_errors = _source_material_template_hash_values_or_errors(
+        label,
+        profile,
+    )
+    if template_errors:
+        return template_errors
+    errors: list[str] = []
+    for field in fields:
+        raw = _hex_bytes(value.get(field), byte_length=32)
+        if raw is not None and raw in template_hashes:
+            errors.append(
+                f"{label}.{field} must be {evidence_label}, "
+                "not built-in template material"
+            )
+    return errors
+
+
 def _public_lane_route_canary_template_hash_errors(
     value: Any,
     label: str,
@@ -9475,6 +9608,26 @@ def _public_lane_optional_canonical_string_errors(
     return errors
 
 
+def _public_lane_optional_solana_pubkey_errors(
+    value: Any,
+    label: str,
+    fields: tuple[str, ...],
+) -> list[str]:
+    """Return errors for copied optional Solana pubkeys when present."""
+
+    if not isinstance(value, dict):
+        return []
+    errors: list[str] = []
+    for field in fields:
+        if field not in value or value.get(field) is None:
+            continue
+        if not _is_canonical_solana_pubkey_text(value.get(field)):
+            errors.append(
+                f"{label}.{field} must be a non-zero canonical base58 Solana address"
+            )
+    return errors
+
+
 def _public_lane_optional_positive_int_errors(
     value: Any,
     label: str,
@@ -9583,9 +9736,11 @@ def _public_lane_optional_tron_address_errors(
     for field in fields:
         if field not in value or value.get(field) in (None, ""):
             continue
-        raw = _hex_bytes(value.get(field), byte_length=21)
-        if raw is None or raw[0] != 0x41 or not any(raw[1:]):
-            errors.append(f"{label}.{field} must be a non-zero TRON address")
+        if not _is_canonical_tron_address_text(value.get(field)):
+            errors.append(
+                f"{label}.{field} must be a non-zero canonical "
+                "0x41-prefixed 21-byte hex string"
+            )
     return errors
 
 
@@ -9891,9 +10046,11 @@ def _public_lane_required_tron_address_errors(
         return []
     errors: list[str] = []
     for field in fields:
-        raw = _hex_bytes(value.get(field), byte_length=21)
-        if raw is None or raw[0] != 0x41 or not any(raw[1:]):
-            errors.append(f"{label}.{field} must be a non-zero TRON address")
+        if not _is_canonical_tron_address_text(value.get(field)):
+            errors.append(
+                f"{label}.{field} must be a non-zero canonical "
+                "0x41-prefixed 21-byte hex string"
+            )
     return errors
 
 
@@ -10403,6 +10560,18 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 lane.get("destination_binding"),
             )
         )
+        errors.extend(
+            _public_lane_template_hash_errors(
+                lane.get("destination_binding"),
+                f"{lane_label}.destination_binding",
+                domain,
+                fields=(
+                    "destination_binding_hash",
+                    "expected_destination_binding_hash",
+                ),
+                evidence_label="destination binding evidence",
+            )
+        )
         if lane_require_ready:
             errors.extend(
                 _public_lane_required_true_errors(
@@ -10481,6 +10650,18 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 lane,
                 f"{lane_label}.route_allowlist",
                 route_allowlist,
+            )
+        )
+        errors.extend(
+            _public_lane_template_hash_errors(
+                route_allowlist,
+                f"{lane_label}.route_allowlist",
+                domain,
+                fields=(
+                    "route_allowlist_hash",
+                    "expected_route_allowlist_hash",
+                ),
+                evidence_label="route binding evidence",
             )
         )
         if route_allowlist_require_ready:
@@ -10562,7 +10743,14 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 _public_lane_optional_canonical_string_errors(
                     route_canary,
                     canary_label,
-                    ("status", "evidence_source", "solana_programdata_address"),
+                    ("status", "evidence_source"),
+                )
+            )
+            errors.extend(
+                _public_lane_optional_solana_pubkey_errors(
+                    route_canary,
+                    canary_label,
+                    ("solana_programdata_address",),
                 )
             )
             errors.extend(

@@ -24,6 +24,7 @@ const SIGNING_DOMAIN: &[u8] = b"sorafs.proof_token.sign.v1";
 const MAX_ENTRY_IDS: usize = 32;
 const MAX_ENTRY_LEN: usize = 255;
 const FLAG_HAS_EXPIRY: u8 = 0x01;
+const PROOF_TOKEN_SIGNATURE_PLACEHOLDER: [u8; SIGNATURE_LENGTH] = [0xA6; SIGNATURE_LENGTH];
 
 /// Secret used to derive the blinded digest portion of a token body.
 #[derive(Clone)]
@@ -200,7 +201,7 @@ impl ProofToken {
             expires_at,
             entry_ids,
             blinded_digest,
-            signature: Signature::from_bytes(&[0; SIGNATURE_LENGTH]),
+            signature: proof_token_signature_placeholder(),
         };
         let body = token
             .body_without_signature()
@@ -342,7 +343,8 @@ impl ProofToken {
         if signature_bytes_are_all_zero(&sig_bytes) {
             return Err(DecodeError::InertSignature);
         }
-        let signature = Signature::from_bytes(&sig_bytes);
+        let signature = crate::signature::ed25519::Ed25519Sha512::parse_signature(&sig_bytes)
+            .map_err(|_| DecodeError::InvalidSignature)?;
 
         Ok(Self {
             token_id,
@@ -443,13 +445,14 @@ impl ProofToken {
     /// # Errors
     ///
     /// Returns [`VerificationError::InvalidSignature`] when the verifying key
-    /// bytes are malformed, weak, or do not verify the token body.
+    /// bytes are inert, malformed, weak, non-canonical, or do not verify the token body.
     pub fn verify_signature_bytes(
         &self,
         verifying_key: &[u8; 32],
     ) -> Result<(), VerificationError> {
-        let verifying_key = VerifyingKey::from_bytes(verifying_key)
-            .map_err(|_| VerificationError::InvalidSignature)?;
+        let verifying_key =
+            crate::signature::ed25519::Ed25519Sha512::parse_public_key(verifying_key)
+                .map_err(|_| VerificationError::InvalidSignature)?;
         self.verify_signature(&verifying_key)
     }
 
@@ -635,6 +638,9 @@ pub enum DecodeError {
     /// Signature bytes were an inert all-zero placeholder.
     #[error("proof token signature material must not be all zero")]
     InertSignature,
+    /// Signature bytes were malformed or noncanonical Ed25519 material.
+    #[error("invalid proof token signature material")]
+    InvalidSignature,
     /// Base64 payload was malformed.
     #[error("invalid base64 payload")]
     Base64,
@@ -734,6 +740,11 @@ fn signature_bytes_are_all_zero(signature: &[u8; SIGNATURE_LENGTH]) -> bool {
     signature.iter().all(|&byte| byte == 0)
 }
 
+fn proof_token_signature_placeholder() -> Signature {
+    crate::signature::ed25519::Ed25519Sha512::parse_signature(&PROOF_TOKEN_SIGNATURE_PLACEHOLDER)
+        .expect("proof-token placeholder signature has canonical Ed25519 R material")
+}
+
 #[cfg(test)]
 mod tests {
     use curve25519_dalek::{
@@ -748,6 +759,17 @@ mod tests {
     use sha2::{Digest, Sha512};
 
     use super::*;
+
+    const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const ED25519_NONCANONICAL_IDENTITY: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
 
     fn test_signing_key() -> SigningKey {
         SigningKey::from_bytes(&[7u8; 32])
@@ -804,6 +826,15 @@ mod tests {
     }
 
     impl TryCryptoRng for FixedTryRng {}
+
+    #[test]
+    fn proof_token_signature_placeholder_is_nonzero() {
+        let placeholder = proof_token_signature_placeholder();
+        let payload = placeholder.to_bytes();
+
+        assert_eq!(payload, PROOF_TOKEN_SIGNATURE_PLACEHOLDER);
+        assert!(!payload.iter().all(|byte| *byte == 0));
+    }
 
     #[test]
     fn mint_roundtrip() {
@@ -1083,6 +1114,33 @@ mod tests {
     }
 
     #[test]
+    fn decode_rejects_invalid_signature_r_material() {
+        for invalid_r in [ED25519_SMALL_ORDER_POINT, ED25519_NONCANONICAL_IDENTITY] {
+            let mut rng = ChaCha20Rng::seed_from_u64(29);
+            let digest_key = ProofTokenDigestKey::new([0x29; 32]);
+            let signing = test_signing_key();
+            let evidence = [0x92; 32];
+            let params = ProofTokenParams {
+                moderation: ModerationAction::Block,
+                entry_ids: &["denylist/invalid-r"],
+                evidence_digest: &evidence,
+                issued_at: UNIX_EPOCH + Duration::from_secs(1_714_000_029),
+                expires_at: None,
+            };
+            let mut token =
+                ProofToken::mint(&mut rng, &digest_key, &signing, &params).expect("mint token");
+            let mut signature = token.signature.to_bytes();
+            signature[..32].copy_from_slice(&invalid_r);
+            token.signature = Signature::from_bytes(&signature);
+
+            let err = ProofToken::decode(&token.encode())
+                .expect_err("invalid Ed25519 signature R must fail decoding");
+
+            assert!(matches!(err, DecodeError::InvalidSignature));
+        }
+    }
+
+    #[test]
     fn verify_signature_rejects_all_zero_signature_material() {
         let token = ProofToken {
             token_id: [0x24; 16],
@@ -1105,6 +1163,34 @@ mod tests {
             .expect_err("all-zero proof-token signature must fail byte verification");
 
         assert!(matches!(err, VerificationError::InertSignature));
+    }
+
+    #[test]
+    fn verify_signature_bytes_rejects_inert_or_malformed_public_key_material() {
+        let mut rng = ChaCha20Rng::seed_from_u64(37);
+        let digest_key = ProofTokenDigestKey::new([0x37; 32]);
+        let signing = test_signing_key();
+        let evidence = [0x73; 32];
+        let params = ProofTokenParams {
+            moderation: ModerationAction::Block,
+            entry_ids: &["denylist/public-key"],
+            evidence_digest: &evidence,
+            issued_at: UNIX_EPOCH + Duration::from_secs(1_714_000_037),
+            expires_at: None,
+        };
+        let token = ProofToken::mint(&mut rng, &digest_key, &signing, &params).expect("mint token");
+
+        for invalid_public_key in [
+            [0u8; 32],
+            ED25519_SMALL_ORDER_POINT,
+            ED25519_NONCANONICAL_IDENTITY,
+        ] {
+            let err = token
+                .verify_signature_bytes(&invalid_public_key)
+                .expect_err("invalid Ed25519 public-key material must fail verification");
+
+            assert!(matches!(err, VerificationError::InvalidSignature));
+        }
     }
 
     #[test]
@@ -1202,11 +1288,6 @@ mod tests {
 
     #[test]
     fn verify_signature_rejects_low_order_public_key_signatures() {
-        const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0,
-        ];
-
         fn hash_mod_order(
             r: &EdwardsPoint,
             pk_bytes: &[u8; 32],

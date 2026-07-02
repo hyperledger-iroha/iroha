@@ -530,6 +530,47 @@ fn syscall_sm2_verify_returns_zero_for_truncated_signature() {
 }
 
 #[test]
+fn syscall_sm2_verify_returns_zero_for_all_zero_signature() {
+    use ivm::IVM;
+
+    let secret = [0x45u8; 32];
+    let private = Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, secret).expect("construct key");
+    let public = private.public_key();
+    let message = b"ivm-sm2-zero-sig";
+    let sig = [0u8; Sm2Signature::LENGTH];
+
+    let mut vm = IVM::new(10_000);
+    vm.set_host(ivm::host::DefaultHost::new().with_sm_enabled(true));
+    let mut offset = 0u64;
+    let p_msg = preload_blob(&mut vm, &mut offset, message);
+    let p_sig = preload_blob(&mut vm, &mut offset, &sig);
+    let p_pk = preload_blob(&mut vm, &mut offset, &public.to_sec1_bytes(false));
+
+    vm.set_register(10, p_msg);
+    vm.set_register(11, p_sig);
+    vm.set_register(12, p_pk);
+    vm.set_register(13, 0);
+
+    let syscall = encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        ivm::syscalls::SYSCALL_SM2_VERIFY as u8,
+    );
+    let halt = encoding::wide::encode_halt();
+    let mut program = Vec::new();
+    program.extend_from_slice(&syscall.to_le_bytes());
+    program.extend_from_slice(&halt.to_le_bytes());
+    let program = assemble(&program);
+    vm.load_program(&program).expect("load program");
+    vm.run().expect("vm run");
+
+    assert_eq!(
+        vm.register(10),
+        0,
+        "SM2 verification should reject all-zero signatures"
+    );
+}
+
+#[test]
 fn syscall_sm2_verify_returns_zero_for_invalid_public_key() {
     use ivm::IVM;
 

@@ -77,6 +77,12 @@ pub enum GatewayAuthorizationError {
     /// Signature bytes were structurally invalid before backend verification.
     #[error("invalid signature material")]
     InvalidSignatureMaterial(#[source] iroha_crypto::error::ParseError),
+    /// Ed25519 signature material failed the strict preflight before backend verification.
+    #[error("invalid Ed25519 signature material: {reason}")]
+    InvalidEd25519SignatureMaterial {
+        /// Strict Ed25519 preflight failure reason.
+        reason: String,
+    },
     /// Signature verification failed.
     #[error("signature verification failed")]
     Signature(#[source] iroha_crypto::error::Error),
@@ -406,6 +412,15 @@ impl GatewayAuthorizationVerifier {
                 found: signature_bytes.len(),
             });
         }
+        let signature_array: [u8; ed25519_dalek::SIGNATURE_LENGTH] =
+            signature_bytes.as_slice().try_into().map_err(|err| {
+                GatewayAuthorizationError::InvalidEd25519SignatureMaterial {
+                    reason: format!("invalid signature material: {err}"),
+                }
+            })?;
+        crate::checked_ed25519_signature_from_bytes(&signature_array).map_err(|reason| {
+            GatewayAuthorizationError::InvalidEd25519SignatureMaterial { reason }
+        })?;
 
         let signing_input = format!("{header_segment}.{payload_segment}");
         let signature = Signature::try_from_bytes(&signature_bytes)
@@ -931,6 +946,16 @@ mod tests {
 
     use super::*;
 
+    const SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn build_test_verifier() -> (GatewayAuthorizationVerifier, SigningKey) {
         let signing_key = SigningKey::from_bytes(&[0x11; 32]);
         let verifying_key = signing_key.verifying_key();
@@ -1077,8 +1102,40 @@ mod tests {
             .expect_err("all-zero signature material must fail closed");
         assert!(matches!(
             err,
-            GatewayAuthorizationError::InvalidSignatureMaterial(_)
+            GatewayAuthorizationError::InvalidEd25519SignatureMaterial { .. }
         ));
+    }
+
+    #[test]
+    fn verify_rejects_malformed_signature_r() {
+        let (verifier, signing_key) = build_test_verifier();
+        let payload = base_payload();
+        let jws = build_jws(&signing_key, &payload);
+
+        for (label, replacement_r, expected_reason) in [
+            ("small-order", SMALL_ORDER_R, "small-order"),
+            ("noncanonical", NONCANONICAL_R, "not a canonical"),
+        ] {
+            let mut segments = jws.split('.').map(ToOwned::to_owned).collect::<Vec<_>>();
+            let mut signature = URL_SAFE_NO_PAD
+                .decode(&segments[2])
+                .expect("fixture signature segment decodes");
+            signature[..32].copy_from_slice(&replacement_r);
+            segments[2] = URL_SAFE_NO_PAD.encode(signature);
+            let malformed_jws = segments.join(".");
+
+            let err = verifier
+                .verify(&malformed_jws)
+                .expect_err("malformed signature R must fail closed");
+            assert!(
+                matches!(
+                    &err,
+                    GatewayAuthorizationError::InvalidEd25519SignatureMaterial { reason }
+                        if reason.contains(expected_reason)
+                ),
+                "{label} signature R produced unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

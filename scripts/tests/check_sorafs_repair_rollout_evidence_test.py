@@ -168,7 +168,7 @@ def event_streams(*, event_lag_seconds: int = 30) -> dict:
     return payload
 
 
-def governance_handoff() -> dict:
+def governance_handoff(*, handoff_digest: str = DIGEST) -> dict:
     payload = base("sorafs.repair.governance_handoff_canary.v1")
     payload.update(
         {
@@ -188,7 +188,8 @@ def governance_handoff() -> dict:
                 "transparency_ledger",
                 "reputation",
             ],
-            "handoff_digest_hex": DIGEST,
+            "handoff_digest_hex": handoff_digest,
+            "policy_digest_hex": DIGEST,
             "raw_ledger_included": False,
         }
     )
@@ -217,7 +218,7 @@ def observability(*, critical: bool = False) -> dict:
     return payload
 
 
-def governance_approval() -> dict:
+def governance_approval(*, handoff_digest: str = DIGEST) -> dict:
     payload = base("sorafs.repair.governance_approval.v1")
     payload.update(
         {
@@ -228,6 +229,7 @@ def governance_approval() -> dict:
             "auditor_roster_bound": True,
             "roster_digest_hex": DIGEST,
             "slash_policy_bound": True,
+            "handoff_digest_hex": handoff_digest,
             "config_source": "iroha_config",
             "policy_digest_hex": DIGEST,
         }
@@ -260,6 +262,8 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["schema"] == "sorafs.repair.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
     assert payload["required"]["failure_capture"]["valid"] is True
+    assert payload["valid_handoff_digests"] == [DIGEST]
+    assert payload["valid_policy_digests"] == [DIGEST]
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -332,6 +336,56 @@ def test_auditor_api_requires_roster_digest_binding(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_route_count_must_match_unique_routes_for_route_artifacts(
+    tmp_path: Path,
+) -> None:
+    route_artifacts = (
+        ("auditor_api", "auditor-api.json", auditor_api),
+        ("worker_lifecycle", "worker-lifecycle.json", worker_lifecycle),
+        ("event_streams", "event-streams.json", event_streams),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["route_count"] += 1
+        payload["passed_route_count"] = payload["route_count"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_routes_must_not_duplicate_for_route_artifacts(tmp_path: Path) -> None:
+    route_artifacts = (
+        ("auditor_api", "auditor-api.json", auditor_api),
+        ("worker_lifecycle", "worker-lifecycle.json", worker_lifecycle),
+        ("event_streams", "event-streams.json", event_streams),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["routes"].append(dict(payload["routes"][0]))
+        payload["route_count"] = len(payload["routes"])
+        payload["passed_route_count"] = len(payload["routes"])
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "routes must not contain duplicate values" in artifact["errors"]
+        assert "route_count must match unique routes count" in artifact["errors"]
+
+
 def test_worker_lifecycle_roster_digest_must_match_roster(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = worker_lifecycle()
@@ -368,6 +422,95 @@ def test_governance_handoff_failure_digest_must_match_capture(tmp_path: Path) ->
     assert artifact["errors"] == [
         "governance_handoff evidence_bundle_digest_hex must reference a valid "
         "failure_capture evidence_bundle_digest_hex"
+    ]
+
+
+def test_governance_approval_handoff_digest_must_match_handoff(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(
+        tmp_path / "governance-approval.json",
+        governance_approval(handoff_digest=DIGEST_2),
+    )
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert payload["valid_handoff_digests"] == [DIGEST]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval handoff_digest_hex must reference a valid "
+        "governance_handoff handoff_digest_hex"
+    ]
+
+
+def test_governance_handoff_requires_policy_digest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = governance_handoff()
+    del payload["policy_digest_hex"]
+    write_json(tmp_path / "governance-handoff.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_handoff"]["artifacts"][0]
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+    assert result["valid_policy_digests"] == []
+
+
+def test_governance_approval_policy_digest_must_match_handoff(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = governance_approval()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    required = result["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert result["valid_policy_digests"] == [DIGEST]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval policy_digest_hex must reference a valid "
+        "governance_handoff policy_digest_hex"
+    ]
+
+
+def test_policy_bound_subset_requires_governance_handoff_anchor(tmp_path: Path) -> None:
+    write_json(tmp_path / "governance-approval.json", governance_approval())
+    summary = tmp_path / "summary.json"
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-kind",
+            "governance_approval",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert result["valid_policy_digests"] == []
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval roster_digest_hex requires a valid auditor_roster "
+        "roster_digest_hex",
+        "governance_approval policy_digest_hex requires a valid governance_handoff "
+        "policy_digest_hex",
+        "governance_approval handoff_digest_hex requires a valid governance_handoff "
+        "handoff_digest_hex",
     ]
 
 

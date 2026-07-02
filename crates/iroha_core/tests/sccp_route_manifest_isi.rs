@@ -85,6 +85,7 @@ fn production_bsc_route_manifest() -> SccpRouteManifest {
         taira_xor_bridge_address: "0x2222222222222222222222222222222222222222".to_owned(),
         sccp_tron_source_bridge_address: "0x3333333333333333333333333333333333333333".to_owned(),
         tron_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
+        ton_finalize_message_value_nano: None,
         verifier_code_hash: hex32(0x45),
         verifier_key_hash: hex32(0x46),
         proof_artifact_hash: Some(proof_artifact_hash.clone()),
@@ -179,6 +180,7 @@ fn production_ton_route_manifest() -> SccpRouteManifest {
         taira_xor_bridge_address: ton_raw(0x22),
         sccp_tron_source_bridge_address: ton_raw(0x33),
         tron_verifier_address: ton_raw(0x44),
+        ton_finalize_message_value_nano: Some("100000000".to_owned()),
         verifier_code_hash: hex32(0xca),
         verifier_key_hash: hex32(0xcb),
         proof_artifact_hash: Some(proof_artifact_hash.clone()),
@@ -252,6 +254,7 @@ fn production_tron_route_manifest() -> SccpRouteManifest {
         taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
         sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
         tron_verifier_address: verifier_address.to_owned(),
+        ton_finalize_message_value_nano: None,
         verifier_code_hash,
         verifier_key_hash,
         proof_artifact_hash: None,
@@ -439,6 +442,12 @@ fn production_ton_route_manifest_isi_accepts_and_rejects_foreign_payloads() {
     assert_eq!(
         stx.zk.sccp_route_manifests[0].chain_id_hex,
         "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd"
+    );
+    assert_eq!(
+        stx.zk.sccp_route_manifests[0]
+            .ton_finalize_message_value_nano
+            .as_deref(),
+        Some("100000000")
     );
 
     let mut wrong_route = manifest.clone();

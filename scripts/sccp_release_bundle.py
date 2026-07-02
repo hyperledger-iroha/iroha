@@ -1357,6 +1357,38 @@ def _all_lanes_route_canary_template_hash_errors(
     return errors
 
 
+def _all_lanes_template_hash_errors(
+    label: str,
+    domain: Any,
+    row: Any,
+    *,
+    fields: tuple[str, ...],
+    evidence_label: str,
+) -> list[str]:
+    """Return errors for copied all-lanes hashes replaying source templates."""
+
+    if type(domain) is not int or not isinstance(row, dict):
+        return []
+    template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
+        label,
+        domain,
+    )
+    if template_errors:
+        return template_errors
+    errors: list[str] = []
+    for field in fields:
+        value = row.get(field)
+        if not _is_canonical_bytes32_hex_text(value):
+            continue
+        assert isinstance(value, str)
+        if bytes.fromhex(value[2:]) in template_hashes:
+            errors.append(
+                f"{label} {field} must be {evidence_label}, "
+                "not built-in template material"
+            )
+    return errors
+
+
 def _source_adapter_gate_hash_role_fields(
     label: str,
     lane: dict[str, Any],
@@ -2057,6 +2089,268 @@ def _route_canary_common_semantic_errors(
             ),
         )
     )
+    return errors
+
+
+def _route_canary_common_present_semantic_errors(
+    label: str,
+    lane: dict[str, Any],
+    route_canary: dict[str, Any],
+) -> list[str]:
+    """Return bounded common route-canary semantic errors for copied evidence."""
+
+    errors: list[str] = []
+    canary_label = f"{label}.route_allowlist.route_canary"
+    status = route_canary.get("status")
+    if isinstance(status, str) and status != "passed":
+        errors.append(f"{canary_label} status must be passed")
+
+    raw_domain = lane.get("domain")
+    domain = raw_domain if type(raw_domain) is int else None
+    expected_source = (
+        _route_canary_source_by_domain().get(domain)
+        if type(domain) is int
+        else None
+    )
+    evidence_source = route_canary.get("evidence_source")
+    if (
+        expected_source is not None
+        and isinstance(evidence_source, str)
+        and evidence_source != expected_source
+    ):
+        errors.append(f"{canary_label} evidence_source must be {expected_source}")
+
+    evidence_bound = route_canary.get("evidence_bound")
+    if "evidence_bound" in route_canary and type(evidence_bound) is bool:
+        if evidence_bound is not True:
+            errors.append(f"{canary_label} evidence_bound must be true")
+    return errors
+
+
+def _route_canary_required_truth_present_semantic_errors(
+    label: str,
+    lane: dict[str, Any],
+    route_canary: dict[str, Any],
+) -> list[str]:
+    """Return bounded required truth-flag errors for copied canary evidence."""
+
+    raw_domain = lane.get("domain")
+    domain = raw_domain if type(raw_domain) is int else None
+    if domain in (_sccp_domain_eth(), _sccp_domain_bsc()):
+        fields = ("message_proof_used", "receipt_block_finalized")
+    elif domain == _sccp_domain_tron():
+        fields = (
+            "message_proof_used",
+            "raw_data_owner_matches_transaction",
+            "signature_recovers_to_owner",
+        )
+    else:
+        fields = ()
+
+    errors: list[str] = []
+    canary_label = f"{label}.route_allowlist.route_canary"
+    for field in fields:
+        value = route_canary.get(field)
+        if field in route_canary and type(value) is bool and value is not True:
+            errors.append(f"{canary_label} {field} must be true")
+    return errors
+
+
+def _route_canary_not_ready_proof_context_semantic_errors(
+    label: str,
+    lane: dict[str, Any],
+    route_canary: dict[str, Any],
+) -> list[str]:
+    """Return bounded proof-context errors for copied not-ready canaries."""
+
+    raw_domain = lane.get("domain")
+    domain = raw_domain if type(raw_domain) is int else None
+    canary_label = f"{label}.route_allowlist.route_canary"
+    errors: list[str] = []
+
+    def require_u32(field: str) -> None:
+        value = route_canary.get(field)
+        if field in route_canary and type(value) is int:
+            if value < 0 or value > 0xFFFF_FFFF:
+                errors.append(f"{canary_label} {field} must be a u32 integer")
+
+    def require_positive_int(field: str) -> None:
+        value = route_canary.get(field)
+        if field in route_canary and type(value) is int and value <= 0:
+            errors.append(f"{canary_label} {field} must be a positive integer")
+
+    def require_nonnegative_int(field: str) -> None:
+        value = route_canary.get(field)
+        if field in route_canary and type(value) is int and value < 0:
+            errors.append(f"{canary_label} {field} must be a non-negative integer")
+
+    def require_int_constant(field: str, expected: int, expected_label: str) -> None:
+        value = route_canary.get(field)
+        if field in route_canary and type(value) is int and value != expected:
+            errors.append(f"{canary_label} {field} must be {expected_label}")
+
+    def require_positive_decimal_string(field: str) -> None:
+        value = route_canary.get(field)
+        if field in route_canary and isinstance(value, str):
+            if not _is_canonical_decimal_text(value, positive=True):
+                errors.append(
+                    f"{canary_label} {field} must be a canonical positive "
+                    "decimal string"
+                )
+
+    if domain in _all_lanes_evm_destination_domains():
+        require_positive_int("receipt_block_number")
+        require_u32("log_index")
+        require_int_constant("target_domain", domain, "the lane domain")
+        require_int_constant("proof_version", 1, "1")
+        require_int_constant("proof_source_domain", _sccp_domain_sora(), "SORA")
+    elif domain == _sccp_domain_tron():
+        require_positive_int("block_number")
+        require_nonnegative_int("block_timestamp")
+        require_u32("log_index")
+        require_int_constant("target_domain", _sccp_domain_tron(), "TRON")
+        require_int_constant("proof_version", 1, "1")
+        require_int_constant("proof_source_domain", _sccp_domain_sora(), "SORA")
+        owner = route_canary.get("transaction_owner_address")
+        recovered = route_canary.get("signature_recovered_address")
+        owner_canonical = _is_canonical_tron_address_text(owner)
+        recovered_canonical = _is_canonical_tron_address_text(recovered)
+        if "transaction_owner_address" in route_canary and not owner_canonical:
+            errors.append(
+                f"{canary_label} transaction_owner_address must be a non-zero "
+                "canonical 0x41-prefixed 21-byte hex string"
+            )
+        if "signature_recovered_address" in route_canary and not recovered_canonical:
+            errors.append(
+                f"{canary_label} signature_recovered_address must be a non-zero "
+                "canonical 0x41-prefixed 21-byte hex string"
+            )
+        if owner_canonical and recovered_canonical and owner != recovered:
+            errors.append(
+                f"{canary_label} signature_recovered_address must match "
+                "transaction_owner_address"
+            )
+    elif domain == _sccp_domain_sol():
+        value = route_canary.get("solana_programdata_address")
+        if "solana_programdata_address" in route_canary and not (
+            _is_canonical_solana_pubkey_text(value)
+        ):
+            errors.append(
+                f"{canary_label} solana_programdata_address must be a non-zero "
+                "canonical base58 Solana address"
+            )
+        require_positive_decimal_string("solana_programdata_slot")
+    elif domain == _sccp_domain_ton():
+        require_positive_decimal_string("ton_last_transaction_lt")
+
+    return errors
+
+
+def _route_canary_not_ready_hash_role_errors(
+    label: str,
+    lane: dict[str, Any],
+    route_allowlist: dict[str, Any],
+    destination_binding: dict[str, Any],
+    route_canary: dict[str, Any],
+) -> list[str]:
+    """Return hash-role reuse errors for copied not-ready route canaries."""
+
+    raw_domain = lane.get("domain")
+    domain = raw_domain if type(raw_domain) is int else None
+    canary_label = f"{label}.route_allowlist.route_canary"
+    role_fields: list[tuple[str, Any]] = []
+
+    source_hashes = lane.get("source_record_hashes")
+    if isinstance(source_hashes, dict):
+        role_fields.extend(
+            (
+                (field, source_hashes.get(field))
+                for field in (
+                    "source_verifier_material_hash",
+                    "source_adapter_engine_deployment_hash",
+                )
+            )
+        )
+    role_fields.extend(_source_adapter_gate_hash_role_fields(label, lane))
+    role_fields.append(
+        ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+    )
+    role_fields.append(
+        (
+            "destination_binding_hash",
+            destination_binding.get("destination_binding_hash"),
+        )
+    )
+    canary_hash_fields = _all_lanes_route_canary_fields(domain).intersection(
+        ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
+    )
+    role_fields.extend(
+        (field, route_canary.get(field)) for field in sorted(canary_hash_fields)
+    )
+    return _distinct_nonzero_bytes32_field_errors(
+        f"{canary_label} hash role",
+        tuple(role_fields),
+    )
+
+
+def _destination_binding_not_ready_domain_semantic_errors(
+    label: str,
+    lane: dict[str, Any],
+    destination_binding: dict[str, Any],
+) -> list[str]:
+    """Return domain-specific destination errors for copied not-ready evidence."""
+
+    raw_domain = lane.get("domain")
+    domain = raw_domain if type(raw_domain) is int else None
+    binding_label = f"{label}.destination_binding"
+    errors: list[str] = []
+
+    if domain in _all_lanes_evm_destination_domains():
+        errors.extend(
+            _nonzero_fixed_hex_field_errors(
+                binding_label,
+                destination_binding,
+                "destination_network_id",
+                byte_length=32,
+                type_label="bytes32",
+            )
+        )
+        errors.extend(
+            _nonzero_fixed_hex_field_errors(
+                binding_label,
+                destination_binding,
+                "destination_bridge_address",
+                byte_length=20,
+                type_label="20-byte",
+            )
+        )
+    elif domain == _sccp_domain_tron():
+        errors.extend(
+            _nonzero_fixed_hex_field_errors(
+                binding_label,
+                destination_binding,
+                "destination_network_id",
+                byte_length=32,
+                type_label="bytes32",
+            )
+        )
+        if "destination_bridge_address" in destination_binding:
+            errors.append(
+                f"{binding_label} destination_bridge_address is only valid "
+                "for EVM-family lanes"
+            )
+    elif domain in (_sccp_domain_sol(), _sccp_domain_ton()):
+        if "destination_network_id" in destination_binding:
+            errors.append(
+                f"{binding_label} destination_network_id is only valid for "
+                "EVM-family or TRON lanes"
+            )
+        if "destination_bridge_address" in destination_binding:
+            errors.append(
+                f"{binding_label} destination_bridge_address is only valid "
+                "for EVM-family lanes"
+            )
+
     return errors
 
 
@@ -3860,6 +4154,46 @@ def _nonzero_bytes32_field_errors(
     if not _is_nonzero_bytes32_hex_text(payload.get(field)):
         return [
             f"{label} {field} must be a non-zero canonical bytes32 hex string"
+        ]
+    return []
+
+
+def _matching_nonzero_bytes32_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+    expected: Any,
+    expected_field: str,
+) -> list[str]:
+    if not _is_nonzero_bytes32_hex_text(payload.get(field)):
+        return []
+    if not _is_nonzero_bytes32_hex_text(expected):
+        return []
+    if payload.get(field) != expected:
+        return [f"{label} {field} must match {expected_field}"]
+    return []
+
+
+def _matching_nonzero_bytes32_flag_errors(
+    label: str,
+    payload: dict[str, Any],
+    flag_field: str,
+    hash_field: str,
+    expected_hash_field: str,
+) -> list[str]:
+    if flag_field not in payload or type(payload.get(flag_field)) is not bool:
+        return []
+    hash_value = payload.get(hash_field)
+    expected_hash_value = payload.get(expected_hash_field)
+    if (
+        _is_nonzero_bytes32_hex_text(hash_value)
+        and _is_nonzero_bytes32_hex_text(expected_hash_value)
+        and hash_value == expected_hash_value
+        and payload.get(flag_field) is not True
+    ):
+        return [
+            f"{label} {flag_field} must be true when "
+            f"{expected_hash_field} matches {hash_field}"
         ]
     return []
 
@@ -6284,9 +6618,10 @@ def _all_lanes_nested_bundle_errors(
         domain == _active_launch_domain()
         or lane.get("production_ready") is True
     )
-    governed_required_fields: frozenset[str] = (
-        frozenset(field_sets["source_record_hashes"])
+    source_record_required_fields: frozenset[str] = (
+        field_sets["source_record_hashes"]
         if enforce_governed_hash_semantics
+        or isinstance(lane.get("source_record_hashes"), dict)
         else frozenset()
     )
 
@@ -6294,7 +6629,7 @@ def _all_lanes_nested_bundle_errors(
         lane.get("source_record_hashes"),
         f"{label}.source_record_hashes",
         field_sets["source_record_hashes"],
-        governed_required_fields,
+        source_record_required_fields,
         errors,
     )
     for field in field_sets["source_record_hashes"]:
@@ -6309,20 +6644,24 @@ def _all_lanes_nested_bundle_errors(
                     field,
                 )
             )
-    if enforce_governed_hash_semantics:
-        errors.extend(
-                _source_record_template_hash_errors(
-                    f"{label}.source_record_hashes",
-                    domain,
-                    source_hashes,
-                )
-            )
+    errors.extend(
+        _source_record_template_hash_errors(
+            f"{label}.source_record_hashes",
+            domain,
+            source_hashes,
+        )
+    )
 
     source_gate = _all_lanes_object(
         lane.get("source_adapter_gate"),
         f"{label}.source_adapter_gate",
         field_sets["source_adapter_gate"],
-        field_sets["source_adapter_gate"] if enforce_governed_hash_semantics else frozenset(),
+        (
+            field_sets["source_adapter_gate"]
+            if enforce_governed_hash_semantics
+            or isinstance(lane.get("source_adapter_gate"), dict)
+            else frozenset()
+        ),
         errors,
     )
     for field in ("required", "ready"):
@@ -6374,6 +6713,37 @@ def _all_lanes_nested_bundle_errors(
                     audit_label,
                 )
             )
+            (
+                expected_audit_keys,
+                audit_requirement_errors,
+            ) = _source_adapter_gate_audit_keys_for_domain_chain_or_errors(
+                f"{label}.source_adapter_gate",
+                domain,
+                lane.get("chain"),
+            )
+            errors.extend(audit_requirement_errors)
+            if expected_audit_keys is not None:
+                for field in sorted(
+                    expected_audit_keys - set(audit_hashes),
+                    key=_safe_public_key_sort_key,
+                ):
+                    errors.append(f"{audit_label} missing field: {field}")
+    if not enforce_governed_hash_semantics:
+        errors.extend(
+            _source_adapter_gate_template_hash_errors(
+                f"{label}.source_adapter_gate gate_hash",
+                domain,
+                source_gate.get("gate_hash"),
+            )
+        )
+        if isinstance(audit_hashes, dict):
+            errors.extend(
+                _source_adapter_gate_template_audit_errors(
+                    f"{label}.source_adapter_gate audit_hashes",
+                    domain,
+                    audit_hashes,
+                )
+            )
     if (
         enforce_governed_hash_semantics
         and source_gate.get("ready") is True
@@ -6395,7 +6765,12 @@ def _all_lanes_nested_bundle_errors(
         lane.get("evm_live_metadata"),
         f"{label}.evm_live_metadata",
         field_sets["evm_live_metadata"],
-        field_sets["evm_live_metadata"] if enforce_governed_hash_semantics else frozenset(),
+        (
+            field_sets["evm_live_metadata"]
+            if enforce_governed_hash_semantics
+            or isinstance(lane.get("evm_live_metadata"), dict)
+            else frozenset()
+        ),
         errors,
     )
     for field in ("required", "ready"):
@@ -6476,13 +6851,21 @@ def _all_lanes_nested_bundle_errors(
                     "for non-EVM lanes"
                 )
 
+    destination_required_fields = set(field_sets["destination_binding_required"])
+    if domain in _all_lanes_evm_destination_domains():
+        destination_required_fields.update(
+            ("destination_network_id", "destination_bridge_address")
+        )
+    elif domain == _sccp_domain_tron():
+        destination_required_fields.add("destination_network_id")
     destination_binding = _all_lanes_object(
         lane.get("destination_binding"),
         f"{label}.destination_binding",
         field_sets["destination_binding"],
         (
-            field_sets["destination_binding_required"]
+            frozenset(destination_required_fields)
             if enforce_governed_hash_semantics
+            or isinstance(lane.get("destination_binding"), dict)
             else frozenset()
         ),
         errors,
@@ -6581,6 +6964,14 @@ def _all_lanes_nested_bundle_errors(
                 errors.append(
                     f"{binding_label} destination_bridge_address is only valid for EVM-family lanes"
                 )
+    else:
+        errors.extend(
+            _destination_binding_not_ready_domain_semantic_errors(
+                label,
+                lane,
+                destination_binding,
+            )
+        )
     for field in ("expected_destination_binding_hash_matches", "recomputed"):
         if (
             field in destination_binding
@@ -6599,15 +6990,34 @@ def _all_lanes_nested_bundle_errors(
     expected_destination_hash = destination_binding.get(
         "expected_destination_binding_hash"
     )
-    if (
-        enforce_governed_hash_semantics
-        and _is_nonzero_bytes32_hex_text(destination_hash)
-        and _is_nonzero_bytes32_hex_text(expected_destination_hash)
-        and expected_destination_hash != destination_hash
-    ):
-        errors.append(
-            f"{label}.destination_binding expected_destination_binding_hash must match destination_binding_hash"
+    # Source-inventory marker: expected_destination_binding_hash must match destination_binding_hash
+    errors.extend(
+        _matching_nonzero_bytes32_field_errors(
+            f"{label}.destination_binding",
+            destination_binding,
+            "expected_destination_binding_hash",
+            destination_hash,
+            "destination_binding_hash",
         )
+    )
+    errors.extend(
+        _matching_nonzero_bytes32_flag_errors(
+            f"{label}.destination_binding",
+            destination_binding,
+            "expected_destination_binding_hash_matches",
+            "destination_binding_hash",
+            "expected_destination_binding_hash",
+        )
+    )
+    errors.extend(
+        _matching_nonzero_bytes32_flag_errors(
+            f"{label}.destination_binding",
+            destination_binding,
+            "recomputed",
+            "destination_binding_hash",
+            "expected_destination_binding_hash",
+        )
+    )
     if enforce_governed_hash_semantics:
         errors.extend(
             _destination_binding_recompute_bundle_errors(
@@ -6616,12 +7026,29 @@ def _all_lanes_nested_bundle_errors(
                 destination_binding,
             )
         )
+    errors.extend(
+        _all_lanes_template_hash_errors(
+            f"{label}.destination_binding",
+            domain,
+            destination_binding,
+            fields=(
+                "destination_binding_hash",
+                "expected_destination_binding_hash",
+            ),
+            evidence_label="destination binding evidence",
+        )
+    )
 
     route_allowlist = _all_lanes_object(
         lane.get("route_allowlist"),
         f"{label}.route_allowlist",
         field_sets["route_allowlist"],
-        field_sets["route_allowlist"] if enforce_governed_hash_semantics else frozenset(),
+        (
+            field_sets["route_allowlist"]
+            if enforce_governed_hash_semantics
+            or isinstance(lane.get("route_allowlist"), dict)
+            else frozenset()
+        ),
         errors,
     )
     for field in ("route_allowlist_hash", "expected_route_allowlist_hash"):
@@ -6653,18 +7080,28 @@ def _all_lanes_nested_bundle_errors(
         errors.append(
             f"{label}.route_allowlist expected_route_allowlist_hash_matches "
             "must be true"
-        )
+    )
     route_hash = route_allowlist.get("route_allowlist_hash")
     expected_route_hash = route_allowlist.get("expected_route_allowlist_hash")
-    if (
-        enforce_governed_hash_semantics
-        and _is_nonzero_bytes32_hex_text(route_hash)
-        and _is_nonzero_bytes32_hex_text(expected_route_hash)
-        and expected_route_hash != route_hash
-    ):
-        errors.append(
-            f"{label}.route_allowlist expected_route_allowlist_hash must match route_allowlist_hash"
+    # Source-inventory marker: expected_route_allowlist_hash must match route_allowlist_hash
+    errors.extend(
+        _matching_nonzero_bytes32_field_errors(
+            f"{label}.route_allowlist",
+            route_allowlist,
+            "expected_route_allowlist_hash",
+            route_hash,
+            "route_allowlist_hash",
         )
+    )
+    errors.extend(
+        _matching_nonzero_bytes32_flag_errors(
+            f"{label}.route_allowlist",
+            route_allowlist,
+            "expected_route_allowlist_hash_matches",
+            "route_allowlist_hash",
+            "expected_route_allowlist_hash",
+        )
+    )
     if enforce_governed_hash_semantics:
         errors.extend(
             _route_allowlist_recompute_bundle_errors(
@@ -6673,6 +7110,18 @@ def _all_lanes_nested_bundle_errors(
                 route_allowlist,
             )
         )
+    errors.extend(
+        _all_lanes_template_hash_errors(
+            f"{label}.route_allowlist",
+            domain,
+            route_allowlist,
+            fields=(
+                "route_allowlist_hash",
+                "expected_route_allowlist_hash",
+            ),
+            evidence_label="route binding evidence",
+        )
+    )
     route_canary_value = route_allowlist.get("route_canary")
     if enforce_governed_hash_semantics or route_canary_value is not None:
         route_canary = _all_lanes_object(
@@ -6682,6 +7131,7 @@ def _all_lanes_nested_bundle_errors(
             (
                 _all_lanes_route_canary_fields(domain)
                 if enforce_governed_hash_semantics
+                or isinstance(route_canary_value, dict)
                 else frozenset()
             ),
             errors,
@@ -6769,6 +7219,55 @@ def _all_lanes_nested_bundle_errors(
                 route_canary,
                 field,
                 allow_empty=False,
+            )
+        )
+    errors.extend(
+        _matching_nonzero_bytes32_field_errors(
+            f"{label}.route_allowlist.route_canary",
+            route_canary,
+            "route_allowlist_hash",
+            route_hash,
+            "lane route_allowlist_hash",
+        )
+    )
+    errors.extend(
+        _matching_nonzero_bytes32_field_errors(
+            f"{label}.route_allowlist.route_canary",
+            route_canary,
+            "destination_binding_hash",
+            destination_hash,
+            "lane destination_binding_hash",
+        )
+    )
+    errors.extend(
+        _route_canary_common_present_semantic_errors(
+            label,
+            lane,
+            route_canary,
+        )
+    )
+    if not enforce_governed_hash_semantics:
+        errors.extend(
+            _route_canary_required_truth_present_semantic_errors(
+                label,
+                lane,
+                route_canary,
+            )
+        )
+        errors.extend(
+            _route_canary_not_ready_proof_context_semantic_errors(
+                label,
+                lane,
+                route_canary,
+            )
+        )
+        errors.extend(
+            _route_canary_not_ready_hash_role_errors(
+                label,
+                lane,
+                route_allowlist,
+                destination_binding,
+                route_canary,
             )
         )
     if enforce_governed_hash_semantics:

@@ -147,9 +147,8 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
     }
 
     private static let supportedFirstReleasePlatforms: Set<String> = [
-        "ios",
-        "android",
-        "android-keymint",
+        OfflineNoteV2Constants.iosAppAttestPlatform,
+        OfflineNoteV2Constants.androidKeyMintPlatform,
     ]
 
     private static func requireOptionalExactNonEmptyText(_ value: String?, field: String) throws {
@@ -251,9 +250,8 @@ public struct ToriiOfflineDeviceProof: Codable, Sendable, Equatable {
     }
 
     private static let supportedFirstReleasePlatforms: Set<String> = [
-        "ios",
-        "android",
-        "android-keymint",
+        OfflineNoteV2Constants.iosAppAttestPlatform,
+        OfflineNoteV2Constants.androidKeyMintPlatform,
     ]
 
     private static func isExactNonEmptyText(_ value: String) -> Bool {

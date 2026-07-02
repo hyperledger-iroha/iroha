@@ -53,6 +53,7 @@ def contract_surface(*, raw_contract_state: bool = False) -> dict:
             "capability_policy_configured": True,
             "contract_state_source": "on-chain",
             "contract_digest_hex": DIGEST,
+            "policy_digest_hex": DIGEST,
             "raw_contract_state_included": raw_contract_state,
         }
     )
@@ -237,7 +238,7 @@ def reconciliation(*, peer_count: int = 4, mismatch_count: int = 0) -> dict:
     return payload
 
 
-def governance_approval() -> dict:
+def governance_approval(*, contract_digest: str = DIGEST) -> dict:
     payload = base("sorafs.orderbook.governance_approval.v1")
     payload.update(
         {
@@ -248,6 +249,7 @@ def governance_approval() -> dict:
             "emergency_pause_tested": True,
             "capability_policy_bound": True,
             "treasury_policy_bound": True,
+            "contract_digest_hex": contract_digest,
             "config_source": "iroha_config",
             "policy_digest_hex": DIGEST,
         }
@@ -281,6 +283,8 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["schema"] == "sorafs.orderbook.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
     assert payload["required"]["contract_surface"]["valid"] is True
+    assert payload["valid_contract_digests"] == [DIGEST]
+    assert payload["valid_policy_digests"] == [DIGEST]
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -362,6 +366,21 @@ def test_matcher_requires_contract_digest_binding(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_contract_surface_requires_policy_digest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = contract_surface()
+    del payload["policy_digest_hex"]
+    write_json(tmp_path / "contract-surface.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["contract_surface"]["artifacts"][0]
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+    assert result["valid_policy_digests"] == []
+
+
 def test_contract_bound_artifact_must_match_contract_surface_digest(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = api_gateway()
@@ -378,6 +397,141 @@ def test_contract_bound_artifact_must_match_contract_surface_digest(tmp_path: Pa
     assert artifact["valid"] is False
     assert artifact["errors"] == [
         "api_gateway contract_digest_hex must reference a valid contract_surface contract_digest_hex"
+    ]
+
+
+def test_api_gateway_route_count_must_match_unique_routes(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = api_gateway()
+    payload["route_count"] += 1
+    payload["passed_route_count"] = payload["route_count"]
+    write_json(tmp_path / "api-gateway.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["api_gateway"]["artifacts"][0]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_api_gateway_routes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = api_gateway()
+    payload["routes"].append(dict(payload["routes"][0]))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "api-gateway.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["api_gateway"]["artifacts"][0]
+    assert "routes must not contain duplicate values" in artifact["errors"]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_governance_approval_must_match_contract_surface_digest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(
+        tmp_path / "governance-approval.json",
+        governance_approval(contract_digest=DIGEST_2),
+    )
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval contract_digest_hex must reference a valid "
+        "contract_surface contract_digest_hex"
+    ]
+
+
+def test_governance_approval_must_match_contract_surface_policy_digest(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    required = result["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert result["valid_policy_digests"] == [DIGEST]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval policy_digest_hex must reference a valid "
+        "contract_surface policy_digest_hex"
+    ]
+
+
+def test_reconciliation_source_count_must_match_unique_sources(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["source_count"] += 1
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reconciliation"]["artifacts"][0]
+    assert "source_count must match unique sources count" in artifact["errors"]
+
+
+def test_reconciliation_sources_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["sources"].append(dict(payload["sources"][0]))
+    payload["source_count"] = len(payload["sources"])
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reconciliation"]["artifacts"][0]
+    assert "sources must not contain duplicate values" in artifact["errors"]
+    assert "source_count must match unique sources count" in artifact["errors"]
+
+
+def test_policy_bound_subset_requires_contract_surface_anchor(tmp_path: Path) -> None:
+    write_json(tmp_path / "governance-approval.json", governance_approval())
+    summary = tmp_path / "summary.json"
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-kind",
+            "governance_approval",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert result["valid_policy_digests"] == []
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval contract_digest_hex requires a valid "
+        "contract_surface contract_digest_hex",
+        "governance_approval policy_digest_hex requires a valid contract_surface "
+        "policy_digest_hex",
     ]
 
 

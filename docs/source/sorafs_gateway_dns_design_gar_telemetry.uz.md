@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_dns_design_gar_telemetry.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ede73438cc4f9013ee34e9047353195be2e4273c7df94b5497fc21d2da2dcc70
+source_hash: cfad7d3d4e7f9a4e5fbc37a38a4bdba647ec4d60c1dd700328d1f30f43b1e6f7
 source_last_modified: "2025-12-29T18:16:36.143343+00:00"
 translation_last_reviewed: 2026-02-07
 title: GAR Telemetry Snapshot — 2025-02-21

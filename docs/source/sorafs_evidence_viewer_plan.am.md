@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_evidence_viewer_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b42ba81039228f2ff2ca3b03f68ea368a06640b884cb0ccaf7686990a23d5ddd
-source_last_modified: "2026-06-25T16:58:37+00:00"
+source_hash: a64e12cc7e64ce3257796351fe53af34c011e2a41284a1a2d06ecacc82dc8fa1
+source_last_modified: "2026-07-01T18:06:27+00:00"
 translation_last_reviewed: 2026-06-25
 ---
 
@@ -28,6 +28,10 @@ session manifest, watermark metadata, access log, legal-hold receipt, and
 transparency report. It also rejects raw evidence, signed URLs, session tokens,
 response bodies, raw access logs, legal-hold receipt payloads, transparency
 report payloads, or watermark secrets.
+The moderation-panel rollout summary publishes the payload-free
+`valid_evidence_viewer_digest_sets` metadata set for SFM-4b3, and the final
+SoraFS aggregate production-readiness gate requires that set to match recognized
+`evidence_viewer` artifact fingerprints before reporting ready.
 That gate is a promotion blocker for deployed evidence; it does not replace the
 missing viewer service.
 
@@ -47,6 +51,14 @@ missing viewer service.
   SFM-4b evidence-viewer canary as a payload-free deployment gate and rejects
   missing access event coverage, long-lived segment URLs, private viewer
   material, and incomplete watermark/access-log controls.
+- `scripts/build_sorafs_evidence_viewer_canary.py` builds the payload-free
+  `evidence_viewer` canary from reviewed deployment facts, requires every
+  positive control claim explicitly, forces raw evidence/session-token/signed
+  URL/watermark-secret/body flags to `false`, validates the generated JSON with
+  the same SFM-4b checker contract before writing, and writes atomically. It
+  helps operators prepare reviewable canary evidence, but it still does not
+  replace the browser viewer, streaming backend, watermark engine, WebAuthn
+  session flow, or access-log service.
 
 ## Target Runtime Shape
 
@@ -80,6 +92,8 @@ payload-free SFM-4b canary artifact rather than captured payloads or response
 bodies:
 
 ```sh
+python3 scripts/build_sorafs_evidence_viewer_canary.py \
+  @scripts/examples/sorafs_evidence_viewer_canary.args.example
 python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
   @scripts/examples/sorafs_moderation_panel_rollout_evidence.args.example \
   --require-kind evidence_viewer
@@ -100,6 +114,10 @@ python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
   watermark metadata, access logs, legal-hold receipts, and transparency
   reports; raw access logs, legal-hold receipt bodies, and transparency report
   payloads must never enter rollout archives.
+- Use the payload-free `evidence_viewer` canary builder for staged review
+  packets so every required role, viewer control, access-event kind, export
+  target, digest field, and positive control claim is explicit before the SFM-4b
+  rollout gate runs.
 - Add end-to-end security tests for unauthorized access, replay, stale URLs,
   audit-log tampering, and watermark metadata mismatch.
 - Collect a passing payload-free `evidence_viewer` canary through the SFM-4b
@@ -112,6 +130,8 @@ the SFM-4b rollout gate for payload-free evidence-viewer promotion checks and
 the Taikai harness only for media envelope and telemetry validation:
 
 ```sh
+python3 scripts/build_sorafs_evidence_viewer_canary.py \
+  @scripts/examples/sorafs_evidence_viewer_canary.args.example
 python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
   @scripts/examples/sorafs_moderation_panel_rollout_evidence.args.example \
   --require-kind evidence_viewer

@@ -34,6 +34,7 @@ pub const OFFLINE_ASSET_ENABLED_METADATA_KEY: &str = "offline.enabled";
 pub const OFFLINE_ESCROW_SEED_LABEL: &str = "iroha.offline.escrow";
 /// Canonical Offline key-certificate format marker for the first release.
 pub const OFFLINE_NOTE_KEY_CERTIFICATE_VERSION: u16 = 1;
+const OFFLINE_NOTE_KEY_CERTIFICATE_PLACEHOLDER_SIGNATURE: [u8; 64] = [0xA6; 64];
 /// Domain-separation tag for wallet-derived Offline Note note commitments.
 pub const OFFLINE_NOTE_NOTE_COMMITMENT_DOMAIN: &str = "iroha:offline-note:note-commitment";
 /// Domain-separation tag for wallet-derived Offline Note input nullifiers.
@@ -43,6 +44,12 @@ pub const OFFLINE_NOTE_PAYMENT_TOKEN_ID_DOMAIN: &str = "iroha:offline-note:payme
 /// Domain-separation tag for on-chain Offline device-attestation challenges.
 pub const OFFLINE_DEVICE_ATTESTATION_CHALLENGE_DOMAIN: &str =
     "iroha:offline-note:device-attestation-challenge:v1";
+
+fn offline_note_key_certificate_placeholder_signature() -> Signature {
+    Signature::try_from_bytes(&OFFLINE_NOTE_KEY_CERTIFICATE_PLACEHOLDER_SIGNATURE)
+        .expect("Offline Notes key-certificate placeholder signature is non-empty and nonzero")
+}
+
 /// Domain-separation tag for compact Kagemusha folded-proof public inputs.
 pub const KAGEMUSHA_FOLDED_PUBLIC_INPUTS_DOMAIN: &str = "iroha:kagemusha:v1:folded-public-inputs";
 /// Domain-separation tag for reserved Kagemusha recursive aggregation evidence.
@@ -3296,7 +3303,7 @@ impl OfflineDeviceAttestationRegistration {
             assertion_public_key: self.assertion_public_key.clone(),
             assertion_usage_count_limit: self.assertion_usage_count_limit,
             one_use: self.one_use,
-            issuer_signature: Signature::from_bytes(&[0_u8; 64]),
+            issuer_signature: offline_note_key_certificate_placeholder_signature(),
         }
     }
 
@@ -11590,6 +11597,16 @@ mod offline_note_tests {
                 .expect("evidence-independent challenge"),
             challenge
         );
+    }
+
+    #[test]
+    fn attestation_registration_key_certificate_uses_checked_nonzero_placeholder_signature() {
+        let registration = sample_attestation_registration();
+        let certificate = registration.key_certificate();
+        let payload = certificate.issuer_signature.payload();
+
+        assert_eq!(payload, OFFLINE_NOTE_KEY_CERTIFICATE_PLACEHOLDER_SIGNATURE);
+        assert!(!payload.iter().all(|byte| *byte == 0));
     }
 
     #[test]

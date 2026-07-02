@@ -52,6 +52,7 @@ def randomness(*, provider_count: int = 3, challenge_count: int = 3) -> dict:
             "provider_count": provider_count,
             "challenge_count": challenge_count,
             "seed_replay_digest_hex": DIGEST,
+            "policy_digest_hex": DIGEST,
             "raw_randomness_included": False,
             "raw_vrf_included": False,
         }
@@ -123,7 +124,12 @@ def validator_replay(*, merkle_replay: bool = True) -> dict:
     return payload
 
 
-def reporting_archive(*, route_state: str = "wired", latency_ms: int = 300) -> dict:
+def reporting_archive(
+    *,
+    route_state: str = "retired",
+    latency_ms: int = 300,
+    archive_backend: str = "parquet",
+) -> dict:
     routes = [route(name) for name in ("por_status", "por_export", "por_report")]
     payload = base("sorafs.por.reporting_archive_canary.v1")
     payload.update(
@@ -135,6 +141,7 @@ def reporting_archive(*, route_state: str = "wired", latency_ms: int = 300) -> d
             "governance_archive_handoff_verified": True,
             "archive_retention_bound": True,
             "operator_archive_decision_recorded": True,
+            "archive_backend": archive_backend,
             "manual_trigger_route_decided": True,
             "manual_trigger_route_state": route_state,
             "report_latency_ms": latency_ms,
@@ -217,6 +224,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["schema"] == "sorafs.por.rollout_evidence_gate.v1"
     assert payload["status"] == "ready"
     assert payload["required"]["randomness"]["valid"] is True
+    assert payload["valid_policy_digests"] == [DIGEST]
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -267,6 +275,22 @@ def test_raw_randomness_leakage_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_randomness_requires_policy_digest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = randomness()
+    del payload["policy_digest_hex"]
+    write_json(tmp_path / "randomness.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["randomness"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+    assert result["valid_policy_digests"] == []
+
+
 def test_randomness_requires_minimum_provider_count(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "randomness.json", randomness(provider_count=2))
@@ -293,6 +317,40 @@ def test_scheduler_route_without_authz_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "scheduler-runtime.json", scheduler_runtime(authz=False))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_scheduler_runtime_route_count_must_match_unique_routes(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = scheduler_runtime()
+    payload["route_count"] += 1
+    payload["passed_route_count"] = payload["route_count"]
+    write_json(tmp_path / "scheduler-runtime.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["scheduler_runtime"]["artifacts"][0]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_scheduler_runtime_routes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = scheduler_runtime()
+    payload["routes"].append(dict(payload["routes"][0]))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "scheduler-runtime.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["scheduler_runtime"]["artifacts"][0]
+    assert "routes must not contain duplicate values" in artifact["errors"]
+    assert "route_count must match unique routes count" in artifact["errors"]
 
 
 def test_scheduler_runtime_requires_seed_replay_binding(tmp_path: Path) -> None:
@@ -331,6 +389,86 @@ def test_reporting_archive_seed_replay_digest_must_match(tmp_path: Path) -> None
     ]
 
 
+def test_reporting_archive_route_count_must_match_unique_routes(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reporting_archive()
+    payload["route_count"] += 1
+    payload["passed_route_count"] = payload["route_count"]
+    write_json(tmp_path / "reporting-archive.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reporting_archive"]["artifacts"][0]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_reporting_archive_routes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reporting_archive()
+    payload["routes"].append(dict(payload["routes"][0]))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "reporting-archive.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reporting_archive"]["artifacts"][0]
+    assert "routes must not contain duplicate values" in artifact["errors"]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_governance_approval_policy_digest_must_match_randomness(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    required = result["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert result["valid_policy_digests"] == [DIGEST]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval policy_digest_hex must reference a valid "
+        "randomness policy_digest_hex"
+    ]
+
+
+def test_stale_randomness_does_not_anchor_policy_bound_evidence(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = randomness()
+    payload["generated_at_unix"] = NOW_UNIX - MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS - 1
+    write_json(tmp_path / "randomness.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    required = result["required"]["governance_approval"]
+    artifact = required["artifacts"][0]
+    assert result["valid_policy_digests"] == []
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert (
+        "governance_approval policy_digest_hex requires a valid randomness "
+        "policy_digest_hex"
+    ) in artifact["errors"]
+
+
 def test_reporting_archive_rejects_missing_manual_trigger_decision(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "reporting-archive.json", reporting_archive(route_state="missing"))
@@ -340,10 +478,34 @@ def test_reporting_archive_rejects_missing_manual_trigger_decision(tmp_path: Pat
 
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["reporting_archive"]["artifacts"][0]
-    assert (
-        "manual_trigger_route_state must be `wired` or `retired`"
-        in artifact["errors"]
+    assert "manual_trigger_route_state must be `retired`" in artifact["errors"]
+
+
+def test_reporting_archive_rejects_wired_manual_trigger_state(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(tmp_path / "reporting-archive.json", reporting_archive(route_state="wired"))
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["reporting_archive"]["artifacts"][0]
+    assert "manual_trigger_route_state must be `retired`" in artifact["errors"]
+
+
+def test_reporting_archive_rejects_unreviewed_archive_backend(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(
+        tmp_path / "reporting-archive.json",
+        reporting_archive(archive_backend="object-store"),
     )
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["reporting_archive"]["artifacts"][0]
+    assert "archive_backend must be `sql` or `parquet`" in artifact["errors"]
 
 
 def test_report_latency_above_threshold_fails(tmp_path: Path) -> None:

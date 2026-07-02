@@ -1716,6 +1716,24 @@ mod tests {
             Err(EvidenceValidationError::SignatureTruncated),
         );
 
+        let mut all_zero_sig = Evidence {
+            kind: EvidenceKind::DoublePrepare,
+            payload: EvidencePayload::DoubleVote {
+                v1: double_left.clone(),
+                v2: double_right.clone(),
+            },
+        };
+        if let EvidencePayload::DoubleVote { v1, v2 } = &mut all_zero_sig.payload {
+            v1.bls_sig = vec![0_u8; super::MIN_BLS_SIGNATURE_LEN];
+            v2.bls_sig = vec![0_u8; super::MIN_BLS_SIGNATURE_LEN];
+        }
+        assert_validation_case(
+            &context,
+            "double_all_zero_signature_material",
+            all_zero_sig,
+            Err(EvidenceValidationError::SignatureInvalid),
+        );
+
         let mut bad_phase_right = double_right.clone();
         bad_phase_right.phase = Phase::NewView;
         assert_validation_case(

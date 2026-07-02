@@ -694,6 +694,73 @@ def test_evm_source_live_numeric_parsers_require_canonical_decimal():
     assert module._source_bridge_deployment_receipt_is_verified(source_bridge) is False
 
 
+def test_evm_source_live_cli_parsers_reject_non_string_values_without_stringification():
+    module = load_live_module()
+
+    class HostileSourceLiveParserValue:
+        def __str__(self):
+            raise AssertionError(
+                "secret-token-evm-source-live-parser-value was stringified"
+            )
+
+        def __repr__(self):
+            raise AssertionError(
+                "secret-token-evm-source-live-parser-value was repr'd"
+            )
+
+        def strip(self):
+            raise AssertionError("secret-token-evm-source-live-parser-value strip ran")
+
+        def startswith(self, _prefix):
+            raise AssertionError(
+                "secret-token-evm-source-live-parser-value startswith ran"
+            )
+
+        def lower(self):
+            raise AssertionError("secret-token-evm-source-live-parser-value lower ran")
+
+        def isascii(self):
+            raise AssertionError(
+                "secret-token-evm-source-live-parser-value isascii ran"
+            )
+
+        def isdecimal(self):
+            raise AssertionError(
+                "secret-token-evm-source-live-parser-value isdecimal ran"
+            )
+
+    cases = (
+        (
+            module.parse_domain,
+            "domain must be eth, bsc, 1, or 2",
+        ),
+        (
+            lambda value: module._parse_hex32(value, label="component hash"),
+            "component hash must be canonical lowercase 0x hex",
+        ),
+        (
+            module._parse_rpc_chain_id,
+            "--expected-rpc-chain-id must be a canonical decimal integer",
+        ),
+        (
+            module.parse_block_tag,
+            "--block-tag must be latest, safe, finalized, or a positive "
+            "canonical lowercase 0x block number",
+        ),
+    )
+
+    for parser, expected_message in cases:
+        try:
+            parser(HostileSourceLiveParserValue())
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert "HostileSourceLiveParserValue" not in rendered
+        else:
+            raise AssertionError("hostile EVM source-live parser value was accepted")
+
+
 def test_evm_source_live_receipt_ready_predicate_redacts_imported_address_parser_failures(
     monkeypatch,
 ):

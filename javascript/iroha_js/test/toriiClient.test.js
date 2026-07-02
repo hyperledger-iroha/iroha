@@ -13072,7 +13072,7 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
           platform_payload: {
             TonInternalMessage: {
               message_body_boc: "b5ee9c72",
-              query_id: "7",
+              query_id: "18446744073709551615",
               destination_binding: {
                 version: 1,
                 key: "sccp:ton:governed-recursive-zk:v1",
@@ -13178,7 +13178,7 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
         kind: "ton_internal_message",
         value: {
           messageBodyBoc: "b5ee9c72",
-          queryId: 7,
+          queryId: "18446744073709551615",
           destinationBinding: {
             version: 1,
             key: "sccp:ton:governed-recursive-zk:v1",
@@ -13220,6 +13220,93 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
       finalityProof: "bb66",
     },
   });
+});
+
+test("getSccpMessageProofArtifact rejects TON query_id above uint64", async () => {
+  const messageId = "11".repeat(32);
+  const payloadHash = "22".repeat(32);
+  const commitmentRoot = "33".repeat(32);
+  const finalityBlockHash = "44".repeat(32);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        local_domain: 0,
+        counterparty_domain: 4,
+        security_model: "RecursiveZk",
+        anchor_governance: "CryptographicProof",
+        destination_binding: {
+          version: 1,
+          key: "sccp:ton:governed-recursive-zk:v1",
+          binding_hash: "56".repeat(32),
+        },
+        proof_family: "stark-fri-v1",
+        verifier_backend: { version: 1, key: "ton-contract-v1" },
+        message_backend: "sccp/stark-fri-v1/ton",
+        registry_backend: "bridge/sccp/stark-fri-v1/ton",
+        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+        finality_model: "TonMasterchain",
+        verifier_target: "TonContract",
+        public_inputs: {
+          version: 1,
+          message_id: messageId,
+          payload_hash: payloadHash,
+          target_domain: 4,
+          commitment_root: commitmentRoot,
+          finality_height: "19",
+          finality_block_hash: finalityBlockHash,
+        },
+        proof_bytes: "aa55",
+        submission_package: {
+          version: 1,
+          proof_family: "stark-fri-v1",
+          verifier_backend: { version: 1, key: "ton-contract-v1" },
+          envelope_encoding: "ton_message_body_boc_v1",
+          submission_kind: "internal_message",
+          verifier_entrypoint: "op::submit_sccp_message_proof",
+          platform_payload: {
+            TonInternalMessage: {
+              message_body_boc: "b5ee9c72",
+              query_id: "18446744073709551616",
+              destination_binding: {
+                version: 1,
+                key: "sccp:ton:governed-recursive-zk:v1",
+                binding_hash: "56".repeat(32),
+              },
+              destination_binding_hash: "56".repeat(32),
+              proof_bytes: "aa55",
+              public_inputs_bytes: "cc77",
+              bundle_bytes: "dd88",
+              statement_hash: "99".repeat(32),
+            },
+          },
+          arguments: [{ key: "message_body_boc", encoding: "ton_boc", bytes: "b5ee9c72" }],
+          envelope_bytes: "b5ee9c72",
+        },
+        bundle: {
+          version: 1,
+          commitment_root: commitmentRoot,
+          commitment: {
+            version: 1,
+            kind: "Transfer",
+            target_domain: 4,
+            message_id: messageId,
+            payload_hash: payloadHash,
+          },
+          merkle_proof: { steps: [] },
+          payload: { Transfer: { version: 1 } },
+          finality_proof: "bb66",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  await assert.rejects(
+    () => client.getSccpMessageProofArtifact(`0x${messageId}`),
+    /payload\.query_id must be at most 18446744073709551615/u,
+  );
 });
 
 test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async () => {
@@ -13630,7 +13717,7 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
         kind: "ton_internal_message",
         value: {
           messageBodyBoc: "b5ee9c72",
-          queryId: 7,
+          queryId: "7",
           destinationBinding: {
             version: 1,
             key: "sccp:ton:governed-recursive-zk:v1",

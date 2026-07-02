@@ -1,0 +1,21 @@
+# Reviewed controller-runtime canary inputs for the SFM-4 gateway compliance gate.
+--kind controller_runtime
+--out artifacts/sorafs_gateway/controller-runtime-canary.json
+--deployment-id sorafs-gateway-prod-20260701
+--environment production
+--generated-at-unix 1800100000
+--now-unix 1800100000
+--bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--controller-instance-id compliance-controller-prod-a
+--feed-count 7
+--verified-claim iroha_config_bound
+--verified-claim controller_service_enabled
+--verified-claim scheduler_config_bound
+--verified-claim external_feeds_fetched
+--verified-claim feed_signature_verified
+--verified-claim normalization_deterministic
+--verified-claim bundle_pack_verified
+--verified-claim update_history_persisted
+--verified-claim gateway_reload_requested
+--verified-claim failure_backoff_configured
+--verified-claim rollback_plan_verified

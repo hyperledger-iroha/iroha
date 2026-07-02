@@ -835,10 +835,12 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "lane CLI homoglyph-secret redaction markers",
     "SCCP BSC route-config canonical-manifest source inventory",
     "SCCP TRON route-config canonical-manifest source inventory",
+    "SCCP TON route-manifest CLI source inventory",
     "SCCP TRON runtime route-manifest source inventory",
     "TRON runtime route-manifest parser",
     "SCCP all-lanes route-canary scalar source inventory",
     "SCCP all-lanes evidence-root schema source inventory",
+    "not-ready nested schema, hash/flag-coherence, and route-canary proof-context/hash-role/common/truth-semantic blockers",
     "SCCP all-lanes governed blocker schema source inventory",
     "SCCP all-lanes release-checklist exact-boolean source inventory",
     "source-adapter gate hash/audit replay rejection",
@@ -1234,6 +1236,7 @@ SOURCE_INVENTORY_REQUIRED_GATES = {
     "tron_inbound_adversarial_gate",
     "bsc_route_config_canonical_manifest_gate",
     "tron_route_config_canonical_manifest_gate",
+    "ton_route_manifest_cli_gate",
     "tron_runtime_route_manifest_gate",
     "all_lanes_route_canary_scalar_gate",
     "all_lanes_evidence_root_schema_gate",
@@ -1651,6 +1654,9 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             'Assert.Contains("digest must not be zero", zeroDigest.Message)',
             "duplicateReceipt",
             'Assert.Contains("removed logs", removedSourceEventLog.Message)',
+            'Assert.Contains("receipt.logs[0].removed must be a boolean", malformedRemovedError.Message)',
+            'Assert.DoesNotContain("secret-token", malformedRemovedError.Message)',
+            "secret-token-removed",
             'foreach (var missingField in new[] { "transactionHash", "blockHash", "blockNumber" })',
             "Assert.Null(receiptProofHashOnlyEvidence.ReceiptProof)",
             "ReceiptProofHash must not be zero",
@@ -1698,6 +1704,15 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
             "Assert.Throws<ArgumentException>(() => BuildBytes(sourceDomain: 2));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(nodes: Array.Empty<byte[]>()));",
             "Assert.Throws<ArgumentException>(() => BuildBytes(inclusionBranch: Array.Empty<byte[]>()));",
+        ),
+    ),
+    (
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs",
+        (
+            'Assert.Contains("removed logs", removedBscSourceError.Message)',
+            "receipt.logs[0].removed must be a boolean",
+            'Assert.DoesNotContain("secret-token", malformedRemovedBscSourceError.Message)',
+            "secret-token-removed",
         ),
     ),
     (
@@ -3103,10 +3118,14 @@ ETHEREUM_NONCANONICAL_CHAIN_ID_TEST_MARKERS = (
         (
             "test_collect_receipt_proof_rejects_noncanonical_chain_id_quantity",
             "test_collect_receipt_proof_rejects_boolean_domain_and_expected_chain_id_before_rpc",
+            "test_receipt_cli_parsers_reject_non_string_values_without_stringification",
             'for chain_id_result in ("0x01", "0X1", " 0x1", "0x1 ", 1):',
             "rpc_response(chain_id_result)",
             "boolean receipt proof metadata reached RPC",
             "expected RPC chain id must be an exact integer",
+            "HostileParserValue",
+            "secret-token-receipt-parser-value",
+            "transaction hash must be canonical lowercase 0x hex",
         ),
     ),
     (
@@ -4067,9 +4086,17 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "source adapter gate hash",
             "source adapter gate audit hashes",
             "not built-in template material",
+            "def _public_lane_template_hash_errors(",
+            "_public_lane_template_hash_errors(",
+            "evidence_label=\"destination binding evidence\"",
+            "evidence_label=\"route binding evidence\"",
             "def _release_checklist_route_canary_template_hash_blockers(",
             "direct release checklist route canary template hashes must be live evidence",
             "_release_checklist_route_canary_template_hash_blockers(",
+            "def _release_checklist_template_hash_blockers(",
+            "destination binding hashes must be destination binding evidence, not built-in template material",
+            "route allowlist hashes must be route binding evidence, not built-in template material",
+            "_release_checklist_template_hash_blockers(",
             "source_adapter_gate.get(\"blockers\", [])",
             "if not gate_schema_errors and not gate_errors:",
         ),
@@ -4087,9 +4114,11 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "test_all_lanes_release_checklist_rejects_route_canary_template_hash_replays",
             "test_all_lanes_release_checklist_bounds_route_canary_template_loader_failures",
             "test_all_lanes_cli_rejects_copied_ready_source_record_template_replay",
+            "test_all_lanes_cli_rejects_copied_destination_and_route_template_replay",
             "test_all_lanes_cli_rejects_copied_not_ready_source_record_template_replay",
             "test_all_lanes_cli_rejects_template_loader_failure_without_leaking",
             "test_all_lanes_cli_rejects_source_gate_requirement_failure_without_leaking",
+            "test_all_lanes_release_checklist_rejects_destination_and_route_template_replays",
             "module.argparse.ArgumentTypeError",
             "test_all_lanes_cli_rejects_active_copied_source_record_template_replay_when_lane_not_ready",
             "test_all_lanes_cli_rejects_active_copied_source_gate_template_replay_when_required_false",
@@ -4148,6 +4177,10 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS",
             "def _route_canary_template_hash_errors(",
             "def _all_lanes_route_canary_template_hash_errors(",
+            "def _all_lanes_template_hash_errors(",
+            "_all_lanes_template_hash_errors(",
+            "evidence_label=\"destination binding evidence\"",
+            "evidence_label=\"route binding evidence\"",
             "public crypto route-canary hashes must reject built-in template material",
             "f\"{label} {field} must be live evidence, \"",
             "public crypto source-record hashes must reject built-in template material",
@@ -4185,6 +4218,12 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "_route_canary_template_hash_errors(",
             "def _all_lanes_route_canary_template_hash_errors(",
             "_all_lanes_route_canary_template_hash_errors(",
+            "def _all_lanes_template_hash_errors(",
+            "_all_lanes_template_hash_errors(",
+            "def _all_lanes_not_ready_template_hash_errors(",
+            "_all_lanes_not_ready_template_hash_errors(",
+            "evidence_label=\"destination binding evidence\"",
+            "evidence_label=\"route binding evidence\"",
             "public crypto route-canary hashes must reject built-in template material",
             "public crypto source-record hashes must reject built-in template material",
         ),
@@ -4222,6 +4261,9 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "test_release_bundle_rejects_active_copied_source_gate_template_replay_when_required_false",
             "test_release_bundle_rejects_active_copied_source_gate_template_replay_when_required_malformed",
             "test_release_bundle_rejects_active_copied_source_gate_template_replay_when_ready_malformed",
+            "test_release_bundle_rejects_public_destination_and_route_template_hash_replays",
+            "test_release_bundle_rejects_not_ready_public_template_hash_replays",
+            "test_release_bundle_verifier_rejects_all_lanes_destination_route_template_replay",
             "all_lanes.SCCP_DOMAIN_ETH,",
             "all_lanes.SCCP_DOMAIN_BSC,",
             "all_lanes.SCCP_DOMAIN_SOL,",
@@ -4478,6 +4520,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "TON destination fixed hex nonzero must be a boolean",
             "TON destination fixed bytes nonzero must be a boolean",
+            "type(value) is not str",
             'f"{label} must be base64 or base64url"',
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
             "def _reject_code_boc_file_symlink_path(",
@@ -4495,6 +4538,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
         "pytests/scripts/sccp_ton_destination_evidence_test.py",
         (
             "def test_ton_destination_direct_parsers_redact_parser_causes",
+            "def test_ton_destination_cli_parsers_reject_non_string_values_without_stringification",
+            "HostileTonDestinationParserValue",
+            "secret-token-ton-destination-parser-value",
             "def test_ton_destination_direct_parsers_redact_helper_exit_parser_causes",
             "def test_ton_destination_code_boc_base64_redacts_helper_exit_decoder_causes",
             "def test_ton_destination_account_metadata_redacts_parser_causes",
@@ -4627,6 +4673,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             'f"--witness-schedule-transition-json {index} must be JSON"',
             'f"TRON constant call {function_selector} failed"',
             'raise RuntimeError(f"{label} is not a valid TRON address") from None',
+            "def parse_tron_address_payload(",
+            "type(value) is not str",
             "def _runtime_bool_arg(",
             "_runtime_bool_arg(args, \"no_getcontract\")",
             "_runtime_bool_arg(args, \"full_toml\")",
@@ -5352,6 +5400,8 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "source bridge runtime bytecode hash must match bridge_code_hash",
             "deployment receipt block receiptsRoot metadata must be verified",
             "Ethereum source deployment receipt block finality metadata must be verified",
+            "type(value) is not str",
+            'f"{label} must be canonical lowercase 0x hex"',
             "type(source_expected_rpc_chain_id) is not int",
             "is_eth_source = type(source_domain) is int",
             'SCCP_DOMAIN_ETH: "sccp_eth_source_bridge_evidence.py",',
@@ -5397,6 +5447,10 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             'assert eth_summary["block_tag"] == "finalized"',
             'assert bsc_summary["block_tag"] == "latest"',
             "test_evm_source_live_block_tag_parser_rejects_unstable_or_noncanonical_tags",
+            "test_evm_source_live_cli_parsers_reject_non_string_values_without_stringification",
+            "HostileSourceLiveParserValue",
+            "secret-token-evm-source-live-parser-value",
+            "component hash must be canonical lowercase 0x hex",
             "test_evm_source_live_direct_collector_rejects_unstable_block_tag_before_rpc",
             "test_evm_source_live_receipt_ready_predicate_redacts_imported_address_parser_failures",
             "test_evm_source_live_receipt_ready_predicate_uses_guarded_receipt_hash_parse",
@@ -5510,6 +5564,7 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "verifier key hash metadata must match verifyingKeyHash",
             "destination binding hash metadata must match canonical live inputs",
             "destination binding key metadata must match canonical inputs",
+            "type(value) is not str",
             "type(destination_expected_rpc_chain_id) is not int",
             "type(destination_source_domain) is not int",
             "type(destination_target_domain) is not int",
@@ -5559,6 +5614,9 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "test_live_evm_rejects_non_string_copied_route_metadata_without_stringifying",
             "test_live_evm_rejects_non_string_copied_destination_hash_without_stringifying",
             "test_live_evm_torii_query_rejects_non_string_copied_destination_metadata",
+            "test_evm_live_cli_parsers_reject_non_string_values_without_stringification",
+            "HostileEvmLiveParserValue",
+            "secret-token-evm-live-parser-value",
             '("expected_rpc_chain_id", True, "expected RPC chain id")',
             '("source_domain", False, "source domain")',
             '("target_domain", True, "target domain")',
@@ -6610,6 +6668,7 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             "def test_retired_network_patterns_catch_html_entity_obfuscation_examples",
             "def test_retired_network_patterns_catch_url_percent_obfuscation_examples",
             "def test_retired_network_patterns_catch_unicode_confusable_obfuscation_examples",
+            "def test_retired_network_patterns_catch_unicode_normalization_obfuscation_examples",
             "def test_retired_network_surface_scan_covers_expected_files",
             "def test_retired_network_surface_scan_covers_pipeline_translations",
             "def test_generic_no_support_note_stays_in_launch_scope_files",
@@ -6635,10 +6694,18 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             "def _decoded_note_pattern(",
             "def _decode_retired_network_surface_text",
             "def _normalize_retired_network_confusables",
+            "def _strip_retired_network_ignored_unicode",
+            "def _normalize_retired_network_surface_text",
             "def _decoded_retired_network_surface_violations",
             "html_unescape",
             "for _html_pass in range(3)",
             "url_unquote",
+            "import unicodedata",
+            'unicodedata.normalize("NFKC", text)',
+            'unicodedata.normalize("NFD", compatibility_normalized)',
+            "unicodedata.category(character)",
+            'category == "Cf"',
+            'category.startswith("M")',
             "_DECODED_SUBSTRATE",
             "_DECODED_POLKADOT",
             '("sub", chr(0x200B), "strate")',
@@ -7231,6 +7298,136 @@ TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
         ),
     ),
 )
+TON_ROUTE_MANIFEST_CLI_MARKERS = (
+    (
+        "scripts/sccp_ton_taira_xor_deploy.mjs",
+        (
+            "const setOption = (key, value) => {",
+            "Object.hasOwn(options, key)",
+            "Option must be specified at most once.",
+            'throw new Error("Option requires a value.");',
+            'throw new Error("Help option must not have a value.");',
+            'throw new Error("Unexpected positional argument.");',
+            "function normalizeCliPathOption(value, label, fallback)",
+            "must be a non-empty path.",
+            "const COMMAND_OPTION_ALLOWLISTS = Object.freeze({",
+            "function assertKnownCommand(command)",
+            'throw new Error("Unknown command.");',
+            "function assertKnownOptions(command, options)",
+            "Unknown option for ${command}.",
+            "assertKnownCommand(command);",
+            "assertKnownOptions(command, options);",
+            "if (!Object.hasOwn(options, key)) {",
+            'if (value === "true") return true;',
+            'if (value === "false") return false;',
+            'import { normalizeAccountId } from "../javascript/iroha_js/src/normalizers.js";',
+            "function assertDistinctResolvedPaths(outputPath, outputLabel, inputPaths)",
+            "`${outputLabel} must not be the same path as ${inputLabel}.`",
+            'assertDistinctResolvedPaths(outPath, "--out", [',
+            'assertDistinctResolvedPaths(outPath, "--out", [[manifestPath, "--manifest"]]);',
+            'const submit = optionEnabled(options, "submit", false);',
+            "const SUBMIT_ONLY_OPTIONS = Object.freeze([",
+            "function assertSubmitOnlyOptionsAbsentWhenNotSubmitting(options)",
+            "--${key} requires --submit true.",
+            "const waitForCommit = submit",
+            "const gasAssetId =",
+            "function normalizePrivateKeyEnvName(",
+            "/^[A-Z_][A-Z0-9_]{0,127}$/u",
+            "--private-key-env must be an uppercase environment variable name",
+            "function normalizeAuthority(value)",
+            "--authority must be a canonical I105 account id.",
+            "function normalizeToriiUrl(value)",
+            "--torii-url must use HTTPS unless it is loopback HTTP.",
+            "--torii-url must not include credentials, query, or fragment.",
+            "const privateKeyHex = process.env[privateKeyEnv];",
+            "const { buildUpsertSccpRouteManifestTransaction } = await import(",
+            "function normalizePositiveDecimalString(value, label, fallback = null)",
+            'typeof candidate !== "string"',
+            "TON finalize message value in nanoTON",
+        ),
+    ),
+    (
+        "scripts/sccp_ton_taira_xor_deploy.test.mjs",
+        (
+            "TON route manifest rejects duplicate CLI options before writing",
+            "TON route manifest redacts duplicate unknown option names",
+            "secret-token-ton-route-duplicate-option",
+            "TON route manifest rejects missing option values before writing",
+            "TON publish-route-manifest rejects missing option values before manifest read",
+            "/Option requires a value/u",
+            "TON route manifest rejects empty output paths before writing",
+            "TON publish-route-manifest rejects empty path options before manifest read",
+            "/--manifest must be a non-empty path/u",
+            "TON route manifest redacts unexpected positional arguments",
+            "secret-token-ton-route-cli-private-key",
+            "TON route manifest rejects unknown options without echoing names",
+            "secret-token-ton-route-unknown-option",
+            "TON CLI rejects unknown commands without echoing names",
+            "secret-token-ton-route-unknown-command",
+            "TON route manifest rejects unknown options even with help",
+            "secret-token-ton-route-help-option",
+            "TON CLI rejects valued help options without echoing values",
+            "secret-token-ton-help-value",
+            "TON publish-route-manifest rejects unknown options before manifest read",
+            "secret-token-ton-publish-unknown-option",
+            "TON route manifest rejects output path collisions with inputs",
+            "TON publish-route-manifest rejects output path collisions with manifest",
+            "/--out must not be the same path as --deployment-evidence/u",
+            "/--out must not be the same path as --manifest/u",
+            "malformedBooleanOptionValues",
+            "TON publish-route-manifest rejects malformed submit booleans before writing",
+            "TON publish-route-manifest rejects malformed wait booleans before writing",
+            "/--submit must be true or false/u",
+            "/--wait-for-commit must be true or false/u",
+            "TON publish-route-manifest rejects submit-only options without submit",
+            "/--authority requires --submit true/u",
+            "/--wait-for-commit requires --submit true/u",
+            "TON publish-route-manifest rejects gas metadata before manifest read",
+            "missing-route.manifest.json",
+            "/--gas-asset-id must be canonical text/u",
+            "TON publish-route-manifest rejects unsafe private-key env names before writing",
+            "secret-token-ton-route",
+            "/--private-key-env must be an uppercase environment variable name/u",
+            "TON publish-route-manifest rejects unsafe Torii URLs before writing",
+            "secret-token-ton-torii-url",
+            "/--torii-url must use HTTPS unless it is loopback HTTP/u",
+            "/--torii-url must not include credentials, query, or fragment/u",
+            "TON publish-route-manifest rejects unsafe authorities before secret lookup",
+            "route-manifest-manager@taira",
+            "secret-token-ton-authority",
+            "/--authority must be a canonical I105 account id/u",
+            "TON publish-route-manifest rejects submit metadata before private key lookup",
+            "SCCP_TON_TEST_MISSING_PRIVATE_KEY",
+            "/--chain-id must be 809574f5-fee7-5e69-bfcf-52451e42d50f for TAIRA/u",
+            "/--commit-timeout-ms must be a positive integer/u",
+            "TON publish-route-manifest rejects numeric nanoTON manifest scalars",
+            "/Option must be specified at most once/u",
+            "DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ton_route_manifest_cli_gate_inventory_errors(",
+            '"ton_route_manifest_cli_gate"',
+            "SCCP TON route-manifest CLI source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ton_route_manifest_cli_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ton_route_manifest_cli_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ton_route_manifest_cli_inventory_gate",
+            "def test_release_bundle_verifier_guards_ton_route_manifest_cli_inventory",
+        ),
+    ),
+)
 TRON_RUNTIME_ROUTE_MANIFEST_MARKERS = (
     (
         "crates/iroha_config/src/parameters/user.rs",
@@ -7300,7 +7497,8 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
             "def _release_checklist_route_canary_proof_context_blockers(",
             "route canary target_domain must match lane domain",
             "route canary proof_source_domain must be SORA domain",
-            "route canary transaction_owner_address must be a non-zero TRON address",
+            "def _is_canonical_tron_address_text(",
+            "route canary transaction_owner_address must be a non-zero canonical 0x41-prefixed 21-byte hex string",
             "route canary solana_programdata_slot must be a canonical positive decimal string",
             "def _release_checklist_route_canary_transcript_hash_blockers(",
             "route canary transaction_hash must be a canonical non-zero bytes32",
@@ -7480,6 +7678,9 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "unexpected field with sensitive name",
             "unexpected field with malformed name",
             "unexpected non-string field name",
+            "def _is_canonical_solana_pubkey_text(",
+            "def _public_lane_optional_solana_pubkey_errors(",
+            "route canary solana_programdata_address must be a non-zero canonical base58 Solana address",
         ),
     ),
     (
@@ -7501,6 +7702,9 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "evidence bundle root must be an object",
             "assert \"evidence section name must be a string\" in summary[\"blockers\"]",
             "assert \"evidence section name must be a string: 1\" not in summary[\"blockers\"]",
+            "def test_all_lanes_cli_rejects_copied_not_ready_route_canary_proof_context_drift",
+            "not-ready route_canary proof context proof_source_domain must stay SORA domain",
+            "not-ready route_canary proof context owner recovery must stay bound",
         ),
     ),
     (
@@ -7515,6 +7719,17 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def _source_adapter_gate_hash_role_fields(",
             "source_adapter_gate.audit_hashes",
             "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id",
+            "def _all_lanes_unknown_key_errors(",
+            "def _all_lanes_missing_key_errors(",
+            "def _all_lanes_not_ready_nested_schema_errors(",
+            "_all_lanes_not_ready_nested_schema_errors(",
+            "def _matching_nonzero_fixed_hex_field_errors(",
+            "def _matching_nonzero_fixed_hex_flag_errors(",
+            "def _all_lanes_route_canary_common_present_semantic_errors(",
+            "def _all_lanes_route_canary_required_truth_present_semantic_errors(",
+            "def _all_lanes_route_canary_not_ready_proof_context_semantic_errors(",
+            "def _all_lanes_route_canary_not_ready_hash_role_errors(",
+            "def _all_lanes_destination_binding_not_ready_domain_semantic_errors(",
         ),
     ),
     (
@@ -7554,6 +7769,7 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def _unknown_public_field_error(",
             "contains unknown field name with sensitive name",
             "def _nonzero_bytes32_field_errors(",
+            "def _matching_nonzero_bytes32_flag_errors(",
             "def _nonzero_fixed_hex_field_errors(",
             "def _destination_binding_recompute_bundle_errors(",
             "def _route_allowlist_recompute_bundle_errors(",
@@ -7578,6 +7794,11 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "source_adapter_gate.audit_hashes",
             "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id",
             "def _route_canary_common_semantic_errors(",
+            "def _route_canary_common_present_semantic_errors(",
+            "def _route_canary_required_truth_present_semantic_errors(",
+            "def _route_canary_not_ready_proof_context_semantic_errors(",
+            "def _route_canary_not_ready_hash_role_errors(",
+            "def _destination_binding_not_ready_domain_semantic_errors(",
             "status must be passed",
             "evidence_source must be {expected_source}",
             "evidence_bound must be true",
@@ -7677,6 +7898,7 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def test_release_bundle_rejects_active_copied_source_gate_template_replay_when_required_malformed",
             "def test_release_bundle_rejects_active_copied_source_gate_template_replay_when_ready_malformed",
             "def test_release_bundle_rejects_active_copied_source_record_missing_fields_when_lane_not_ready",
+            "def test_release_bundle_rejects_not_ready_public_nested_missing_fields_before_render",
             "def test_release_bundle_rejects_copied_evidence_evm_live_metadata_drift_before_render",
             "def test_release_bundle_rejects_active_copied_evm_metadata_missing_fields_when_lane_not_ready",
             "def test_release_bundle_rejects_copied_evidence_source_gate_drift_before_render",
@@ -7699,6 +7921,14 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_rejects_all_lanes_required_domain_drift",
             "def test_release_bundle_verifier_rejects_all_lanes_unknown_domain_and_chain_drift",
             "def test_release_bundle_verifier_rejects_all_lanes_nested_crypto_field_drift",
+            "def test_release_bundle_verifier_rejects_not_ready_public_nested_schema_drift",
+            "def test_release_bundle_verifier_rejects_not_ready_public_nested_missing_fields",
+            "def test_release_bundle_verifier_rejects_not_ready_public_nested_hash_mismatch",
+            "def test_release_bundle_rejects_not_ready_public_nested_hash_mismatch_before_render",
+            "def test_release_bundle_verifier_rejects_not_ready_public_nested_false_match_flags",
+            "def test_release_bundle_rejects_not_ready_public_nested_false_match_flags_before_render",
+            "def test_release_bundle_verifier_rejects_not_ready_public_route_canary_common_semantic_drift",
+            "def test_release_bundle_rejects_not_ready_public_route_canary_common_semantic_drift_before_render",
             "def test_release_bundle_verifier_rejects_cross_lane_route_canary_evidence_replay",
             "def test_release_bundle_verifier_rejects_cross_lane_route_canary_transcript_replay",
             "route_canary.message_id from readiness report embedded evidence lane domain 1",
@@ -8859,12 +9089,17 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active source-record hash summary is malformed",
             "source verifier material hash must not reuse source adapter engine deployment hash",
             "_active_launch_hash_role_reuse_blockers(",
+            "def _active_launch_source_record_template_hash_blockers(",
+            "governed deployment source verifier material hash must be deployed evidence, not built-in template material",
+            "governed deployment source adapter engine deployment hash must be deployed evidence, not built-in template material",
             "def _active_launch_destination_binding_blocker_container_errors(",
             'destination_blockers = destination_binding.get("blockers", [])',
             "active destination binding summary is malformed",
             "destination rollout blockers must be a list of non-empty canonical strings",
             "destination rollout blockers must not contain duplicate strings",
             "destination rollout blockers must be empty",
+            "def _active_launch_destination_binding_template_hash_blockers(",
+            "destination binding hashes must be destination binding evidence, not built-in template material",
             "def _active_launch_source_adapter_gate_blocker_container_errors(",
             'gate_blockers = source_gate.get("blockers", [])',
             "active source adapter gate summary is malformed",
@@ -8875,6 +9110,9 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be a canonical non-zero bytes32 hex string",
             "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes must contain only evm_source_gate_hash",
             "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must match audit hash evm_source_gate_hash",
+            "def _active_launch_source_adapter_gate_template_hash_blockers(",
+            "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be deployed gate evidence, not built-in template material",
+            "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes evm_source_gate_hash must be deployed audit evidence, not built-in template material",
             "_active_launch_route_allowlist_binding_blockers(lane_label, lane)",
             "def _active_launch_route_allowlist_blocker_container_errors(",
             'route_blockers = route_summary.get("blockers", [])',
@@ -8882,19 +9120,38 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "route allowlist blockers must be a list of non-empty canonical strings",
             "route allowlist blockers must not contain duplicate strings",
             "route allowlist blockers must be empty",
+            "def _active_launch_route_allowlist_template_hash_blockers(",
+            "route allowlist hashes must be route binding evidence, not built-in template material",
             "route allowlist hash must match the expected canonical source, deployment, and destination binding hash",
             "route allowlist expected hash match flag must be true",
             "_active_launch_route_canary_metadata_blockers(",
+            "def _active_launch_route_canary_binding_hash_blockers(",
+            "route canary route allowlist hash must be a canonical",
+            "route canary route allowlist hash must match",
+            "route canary destination binding hash must be a canonical",
+            "route canary destination binding hash must match",
             "def _active_launch_route_canary_blocker_container_errors(",
             'canary_blockers = canary.get("blockers", [])',
             "route canary blockers must be a list of non-empty canonical strings",
             "route canary blockers must not contain duplicate strings",
             "route canary blockers must be empty",
+            "def _active_launch_route_canary_template_hash_blockers(",
+            "route canary hashes must be live evidence, not built-in template material",
+            '("call_data_sha256", "call data SHA-256"),',
+            '("payload_hash", "payload hash"),',
+            '("statement_hash", "statement hash"),',
+            '("commitment_root", "commitment root"),',
+            '("finality_height", "finality height"),',
+            '("finality_block_hash", "finality block hash"),',
             '("transaction_hash", "transaction hash"),',
             '("block_receipts_root", "block receipts root"),',
             '("message_id", "message id"),',
             "route canary {label} must be a canonical non-zero bytes32 hex string",
             "route canary receipt block number must be a positive integer",
+            "route canary log_index must be a u32 integer",
+            "route canary target_domain must be active launch domain",
+            "route canary proof_version must be 1",
+            "route canary proof_source_domain must be SORA domain",
             "route canary evidence_bound must be boolean",
             "route canary message_proof_used must be boolean",
             "route canary message proof must be used",
@@ -8949,12 +9206,17 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "destination live eth_chainId must be",
             "source verifier material hash must not reuse source adapter engine deployment hash",
             "_active_launch_hash_role_reuse_blockers(",
+            "def _active_launch_source_record_template_hash_blockers(",
+            "governed deployment source verifier material hash must be deployed evidence, not built-in template material",
+            "governed deployment source adapter engine deployment hash must be deployed evidence, not built-in template material",
             "def _active_launch_destination_binding_blocker_container_errors(",
             'destination_blockers = destination_binding.get("blockers", [])',
             "active destination binding summary is malformed",
             "destination rollout blockers must be a list of non-empty canonical strings",
             "destination rollout blockers must not contain duplicate strings",
             "destination rollout blockers must be empty",
+            "def _active_launch_destination_binding_template_hash_blockers(",
+            "destination binding hashes must be destination binding evidence, not built-in template material",
             "def _active_launch_source_adapter_gate_blocker_container_errors(",
             'gate_blockers = source_gate.get("blockers", [])',
             "active source adapter gate summary is malformed",
@@ -8965,25 +9227,47 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be a canonical non-zero bytes32 hex string",
             "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes must contain only evm_source_gate_hash",
             "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must match audit hash evm_source_gate_hash",
+            "def _active_launch_source_adapter_gate_template_hash_blockers(",
+            "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be deployed gate evidence, not built-in template material",
+            "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes evm_source_gate_hash must be deployed audit evidence, not built-in template material",
             "def _active_launch_route_allowlist_blocker_container_errors(",
             'route_blockers = route_summary.get("blockers", [])',
             "active route allowlist summary is malformed",
             "route allowlist blockers must be a list of non-empty canonical strings",
             "route allowlist blockers must not contain duplicate strings",
             "route allowlist blockers must be empty",
+            "def _active_launch_route_allowlist_template_hash_blockers(",
+            "route allowlist hashes must be route binding evidence, not built-in template material",
             "route allowlist hash must match the expected canonical ",
             "route allowlist expected hash match flag must be true",
             "def _active_launch_blocker_list_duplicate_error(",
+            "def _active_launch_route_canary_binding_hash_blockers(",
+            "route canary route allowlist hash must be a canonical",
+            "route canary route allowlist hash must match",
+            "route canary destination binding hash must be a canonical",
+            "route canary destination binding hash must match",
             "def _active_launch_route_canary_blocker_container_errors(",
             'canary_blockers = canary.get("blockers", [])',
             "route canary blockers must be a list of non-empty canonical strings",
             "route canary blockers must not contain duplicate strings",
             "route canary blockers must be empty",
+            "def _active_launch_route_canary_template_hash_blockers(",
+            "route canary hashes must be live evidence, not built-in template material",
+            '("call_data_sha256", "call data SHA-256"),',
+            '("payload_hash", "payload hash"),',
+            '("statement_hash", "statement hash"),',
+            '("commitment_root", "commitment root"),',
+            '("finality_height", "finality height"),',
+            '("finality_block_hash", "finality block hash"),',
             '("transaction_hash", "transaction hash"),',
             '("block_receipts_root", "block receipts root"),',
             '("message_id", "message id"),',
             "route canary {field_label} must be a canonical ",
             "route canary receipt block number must be a positive ",
+            "route canary log_index must be a u32 integer",
+            "route canary target_domain must be active launch domain",
+            "route canary proof_version must be 1",
+            "route canary proof_source_domain must be SORA domain",
             "route canary evidence_bound must be boolean",
             "route canary message_proof_used must be boolean",
             "route canary message proof must be used",
@@ -9050,11 +9334,17 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active route allowlist summary is malformed",
             "active route canary summary is malformed",
             "source_record_hashes.hash_reuse",
+            "source_record_hashes.template_source_material_hash",
+            "source_record_hashes.template_source_deployment_hash",
             "route_allowlist.hash_reuse_source_verifier",
             "route_allowlist.hash_reuse_source_adapter",
             "route_allowlist.hash_reuse_destination_binding",
+            "route_allowlist.template_route_hash",
+            "route_allowlist.template_expected_route_hash",
             "destination_binding.hash_reuse_source_verifier",
             "destination_binding.hash_reuse_source_adapter",
+            "destination_binding.template_destination_binding_hash",
+            "destination_binding.template_expected_destination_binding_hash",
             "destination_binding.blockers.scalar",
             "destination_binding.blockers.valid_nonempty",
             "destination rollout blockers[0] contains sensitive name",
@@ -9063,6 +9353,10 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "source_adapter_gate.hash_reuse_source_verifier",
             "source_adapter_gate.hash_reuse_source_adapter",
             "source_adapter_gate.hash_reuse_destination_binding",
+            "source_adapter_gate.template_gate_hash",
+            "source_adapter_gate.template_audit_hash",
+            "active_source_gate_template_hash_blocker",
+            "active_source_gate_template_audit_hash_blocker",
             "source_adapter_gate.blockers.scalar",
             "source_adapter_gate.blockers.valid_nonempty",
             "source adapter gate blockers[0] contains sensitive name",
@@ -9094,6 +9388,9 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             '"present_null.evidence_bound"',
             '"present_null.message_proof_used"',
             '"present_null.receipt_block_finalized"',
+            "route_canary_template_hash_cases = tuple(",
+            '"template_hash.evidence_hash"',
+            "route canary evidence hash must be live evidence, not built-in template material",
             '"present_null.evidence_source"',
             "route_canary_status_exactness_cases = (",
             "route_canary_evidence_source_exactness_cases = (",
@@ -9236,6 +9533,17 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "source adapter gate blockers[0] contains sensitive name",
             "source adapter gate blockers must not contain duplicate strings",
             "source adapter gate blockers must be empty",
+            "active_template_hash =",
+            "template source verifier material hash",
+            "template source adapter deployment hash",
+            "template destination binding hash",
+            "template expected destination binding hash",
+            "template route hash",
+            "template expected route hash",
+            "template gate hash",
+            "template audit hash",
+            "route_canary_template_hash_cases =",
+            "route canary evidence hash must be live evidence, not built-in template material",
             "expected_destination_match_flag_exactness_cases = (",
             "def test_release_bundle_verifier_treats_missing_active_governed_blockers_as_empty",
             "def test_release_bundle_verifier_recomputes_active_required_record_identity_scalars",
@@ -11935,9 +12243,47 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "has_sccp_test_name_token",
             "is_canonical_trx_identifier",
             "Hyperledger.Iroha.Sdk.Tests.dll",
+            "not is_printable_ascii_trx_attribute_value(value)",
+            "has_sensitive_trx_attribute_value(value)",
+            'not segments[-1].endswith(".dll")',
+            'segment.endswith(".dll") for segment in segments[:-1]',
             "requires TRX result to be at most",
             'dtd_probe = lowered_trx.replace(b"\\x00", b"")',
             "requires TRX result to contain no DTD or entity declarations",
+            "requires TRX result to contain no XML comments",
+            "processing_instruction_probe",
+            "requires TRX result to contain no XML processing instructions",
+            "TRUSTED_VSTEST_ATTRIBUTES_BY_ELEMENT",
+            "TRUSTED_VSTEST_METADATA_ATTRIBUTES_BY_ELEMENT",
+            "attribute_namespace",
+            "requires TRX VSTest attributes to be unqualified",
+            "requires TRX VSTest attributes to use the expected schema",
+            "SENSITIVE_TRX_ATTRIBUTE_VALUE_MARKERS",
+            "urllib.parse.unquote",
+            "iter_percent_decoded_trx_attribute_values",
+            "TRX_DURATION_METADATA_RE",
+            "TRX_TIMESTAMP_METADATA_RE",
+            "TRX_GUID_METADATA_RE",
+            "TRX_ZERO_GUID_METADATA",
+            "is_canonical_trx_guid_metadata_value",
+            "TRX_RELATIVE_RESULTS_DIRECTORY_FORBIDDEN_RE",
+            "is_canonical_trx_relative_results_directory",
+            'element_name == "TestRun" and attribute_name == "id"',
+            'attribute_name == "relativeResultsDirectory"',
+            "is_canonical_trx_metadata_attribute",
+            "requires canonical TRX VSTest metadata attribute values",
+            "is_printable_ascii_trx_attribute_value",
+            "reject_untrusted_trx_attribute_metadata",
+            "requires TRX XML attributes to contain only printable ASCII metadata",
+            "requires TRX XML attributes to contain no sensitive metadata",
+            "reject_untrusted_trx_element_metadata",
+            "requires TRX XML element names to contain only printable ASCII metadata",
+            "requires TRX XML element names to contain no sensitive metadata",
+            "requires TRX VSTest attributes to contain only printable ASCII metadata",
+            "has_sensitive_trx_attribute_value",
+            "requires TRX VSTest attributes to contain no sensitive metadata",
+            "text_value.strip()",
+            "requires TRX XML elements to contain no non-whitespace text",
             "requires TRX VSTest elements to use no namespace or the VSTest 2010 XML namespace",
             "requires TRX VSTest elements to use one consistent namespace",
             "not is_vstest_element(root, \"TestRun\")",
@@ -12162,8 +12508,53 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "test_sccp_production_corridor_dotnet_phase_rejects_malformed_trx_content",
             "test_sccp_production_corridor_dotnet_phase_rejects_oversized_trx_before_xml_parse",
             "test_sccp_production_corridor_dotnet_phase_rejects_utf16_dtd_trx",
+            "test_sccp_production_corridor_dotnet_phase_rejects_xml_processing_instruction_trx",
+            "test_sccp_production_corridor_dotnet_phase_rejects_xml_comment_trx",
+            "test_sccp_production_corridor_dotnet_phase_rejects_text_node_trx",
+            "namespaced-trusted-attribute",
+            "unexpected-trusted-attribute",
+            "schema-known-sensitive-attribute",
+            "schema-known-percent-sensitive-attribute",
+            "schema-known-percent-control-attribute",
+            "schema-known-percent-nonascii-attribute",
+            "schema-known-freeform-duration-attribute",
+            "schema-known-percent-duration-attribute",
+            "schema-known-timestamp-without-zone-attribute",
+            "schema-known-percent-timestamp-attribute",
+            "schema-known-nonguid-testlist-attribute",
+            "schema-known-uppercase-testtype-attribute",
+            "schema-known-percent-guid-testlist-attribute",
+            "schema-known-zero-guid-testtype-attribute",
+            "schema-known-relative-results-path-attribute",
+            "schema-known-relative-results-percent-path-attribute",
+            "schema-known-relative-results-dot-component-attribute",
+            "schema-known-relative-results-uri-attribute",
+            "test-run-nonguid-id",
+            "test-run-uppercase-id",
+            "test-run-percent-guid-id",
+            "test-run-zero-guid-id",
+            "assembly-decoy-percent-control-path",
+            "assembly-decoy-nonascii-path",
+            "assembly-decoy-uri-delimiter-path",
+            "assembly-decoy-nondll-path",
+            "assembly-decoy-nested-dll-path",
+            "unknown-element-sensitive-attribute-name",
+            "unknown-element-percent-sensitive-attribute-value",
+            "unknown-element-percent-control-attribute-value",
+            "unknown-element-sensitive-name",
+            "unknown-element-percent-sensitive-namespace",
+            "unknown-element-percent-control-namespace",
+            "schema-known-control-attribute",
+            "schema-known-nonascii-attribute",
             "requires TRX result to be at most 16777216 bytes before XML parsing",
             "requires TRX result to contain no DTD or entity declarations",
+            "requires TRX result to contain no XML comments",
+            "requires TRX result to contain no XML processing instructions",
+            "requires TRX VSTest attributes to be unqualified",
+            "requires TRX VSTest attributes to use the expected schema",
+            "requires TRX VSTest attributes to contain only printable ASCII metadata",
+            "requires TRX VSTest attributes to contain no sensitive metadata",
+            "requires TRX XML elements to contain no non-whitespace text",
             "requires TRX result to be well-formed XML",
             "requires TRX VSTest elements to use no namespace or the VSTest 2010 XML namespace",
             "requires TRX VSTest elements to use one consistent namespace",
@@ -12351,6 +12742,19 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "--log-dir requires a directory.",
             "direct .NET TRX TestResults path must remain the only accepted path",
             "nested .NET TRX TestResults paths must remain rejected",
+            r"\( -type f -o -type l \)",
+            "test_sccp_production_corridor_dotnet_phase_rejects_nested_trx_symlink_inventory",
+            "compute_dotnet_bridge_sha256",
+            "hashlib.sha256",
+            'open(path, "rb")',
+            "requires Python hashlib to record the native bridge digest",
+            "requires canonical native bridge SHA-256 digest output",
+            "command -v sha256sum",
+            "shasum -a 256",
+            "2>/dev/null",
+            "test_sccp_production_corridor_dotnet_phase_uses_python_hashlib_not_path_hash_tools",
+            "secret-token-path-hash-tool-should-not-run",
+            "expected_bridge_sha256",
             "exactly one canonical SDK version line",
             "exactly one OS Name and one OS Platform",
             "dotnet_info_field_value",
@@ -14219,6 +14623,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             '"ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN": {True: "forged"}',
             'with pytest.raises(TypeError, match="_expected_evm_rpc_chain_id return"):',
             "test_release_bundle_rejects_unknown_copied_crypto_evidence_before_render",
+            "test_release_bundle_rejects_mixed_malformed_duplicate_crypto_rows_before_render",
             "test_release_bundle_rejects_malformed_copied_crypto_evidence_before_render",
             "test_release_bundle_rejects_unbound_copied_crypto_evidence_before_render",
             "test_release_bundle_rejects_copied_crypto_route_canary_metadata_drift_before_render",
@@ -15355,6 +15760,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "JSON-RPC {method} returned error response",
             'raise RuntimeError(f"{label} account data is invalid base64") from None',
             'raise ValueError(f"{label} must be base64") from None',
+            "def _parse_solana_program_id(",
+            "type(value) is not str",
             "def _exact_live_string(",
             "label=\"verifier_program_id\"",
             "label=\"programdata_metadata_blake2b256\"",
@@ -15390,6 +15797,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "if not path.is_file():\n        raise ValueError(error_message) from None",
             'error_message="--api-key-file cannot be read",',
             "TON accountStates account address must be a canonical raw address",
+            "def _parse_ton_raw_address(",
+            "type(value) is not str",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "def _exact_live_string(",
             "label=\"verifier_contract_address\"",
@@ -15549,8 +15958,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
     (
         "scripts/sccp_evm_receipt_proof_evidence.py",
         (
+            "type(value) is not str",
             "type(domain) is not int",
             "type(expected_rpc_chain_id) is not int",
+            'f"{label} must be canonical lowercase 0x hex"',
             "parse_hex_bytes nonzero must be a boolean",
             "RPC fixed hex nonzero must be a boolean",
             "compact trie path leaf must be a boolean",
@@ -15577,6 +15988,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
     (
         "scripts/sccp_evm_source_live_evidence.py",
         (
+            "type(value) is not str",
+            'f"{label} must be canonical lowercase 0x hex"',
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             'raise ValueError(f"{label} metadata is invalid") from None',
@@ -15612,6 +16025,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         (
             "domain must have a canonical RPC chain id",
             "domain must have a canonical EVM mainnet network id",
+            "type(value) is not str",
             "except (KeyError, SystemExit, RuntimeError, TypeError, ValueError, argparse.ArgumentTypeError):",
             "EVM live exact hex nonzero must be a boolean",
             "EVM live exact hex32 nonzero must be a boolean",
@@ -16020,6 +16434,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "malformed Solana live account executable control was accepted",
             "def test_live_solana_evidence_rejects_boolean_expected_programdata_slot",
             "boolean Solana expected ProgramData slot pin was accepted",
+            "def test_solana_live_cli_parsers_reject_non_string_values_without_stringification",
+            "HostileSolanaLiveParserValue",
+            "secret-token-solana-live-parser-value",
             "def test_solana_live_cli_omits_unknown_summary_fields",
             '"rpc_url": "https://solana.example.invalid/secret-token-provider"',
             'assert "rpc_url" not in payload',
@@ -16062,6 +16479,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "TON live last_transaction_lt metadata is invalid",
             "def test_live_ton_last_transaction_lt_rejects_boolean_json_value",
             "boolean live TON last_transaction_lt was accepted",
+            "def test_ton_live_cli_parsers_reject_non_string_values_without_stringification",
+            "HostileTonLiveParserValue",
+            "secret-token-ton-live-parser-value",
             "def test_ton_live_cli_omits_unknown_summary_fields",
             '"api_url": "https://toncenter.example/secret-token-provider"',
             'assert "api_url" not in payload',
@@ -16103,6 +16523,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "malformed TRON runtime boolean default accepted",
             "def test_live_tron_rejects_non_string_copied_hash_metadata_without_stringifying",
             "secret-token imported TRON metadata was stringified",
+            "def test_tron_live_cli_parsers_reject_non_string_values_without_stringification",
+            "HostileTronLiveParserValue",
+            "secret-token-tron-live-parser-value",
             "used_message_proof must be a boolean",
             "raw_data_owner_matches_transaction must be a boolean",
             "signature_recovers_to_owner must be a boolean",
@@ -16304,6 +16727,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_evm_source_live_evidence_test.py",
         (
             "def test_evm_source_live_cli_redacts_top_level_exception_details",
+            "def test_evm_source_live_cli_parsers_reject_non_string_values_without_stringification",
+            "HostileSourceLiveParserValue",
+            "secret-token-evm-source-live-parser-value",
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "SCCP EVM source live evidence collection failed",
             "JSON-RPC eth_chainId returned duplicate JSON keys",
@@ -16374,6 +16800,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "test_live_evm_rejects_non_string_copied_route_metadata_without_stringifying",
             "test_live_evm_rejects_non_string_copied_destination_hash_without_stringifying",
             "test_live_evm_torii_query_rejects_non_string_copied_destination_metadata",
+            "test_evm_live_cli_parsers_reject_non_string_values_without_stringification",
+            "HostileEvmLiveParserValue",
+            "secret-token-evm-live-parser-value",
             "secret-token imported EVM live metadata was stringified",
             "secret-token bridge address parser detail",
             "module.argparse.ArgumentTypeError",
@@ -18370,6 +18799,802 @@ def _all_lanes_route_canary_template_hash_errors(
             errors.append(
                 f"{label} {field} must be live evidence, "
                 "not built-in template material"
+            )
+    return errors
+
+
+def _all_lanes_template_hash_errors(
+    label: str,
+    domain: Any,
+    row: Any,
+    *,
+    fields: tuple[str, ...],
+    evidence_label: str,
+) -> list[str]:
+    """Return errors for all-lanes hashes replaying source templates."""
+
+    if type(domain) is not int or not isinstance(row, dict):
+        return []
+    template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
+        label,
+        domain,
+    )
+    if template_errors:
+        return template_errors
+    errors: list[str] = []
+    for field in fields:
+        value = row.get(field)
+        if not _is_canonical_fixed_hex_text(value, byte_length=32):
+            continue
+        assert isinstance(value, str)
+        if bytes.fromhex(value[2:]) in template_hashes:
+            errors.append(
+                f"{label} {field} must be {evidence_label}, "
+                "not built-in template material"
+            )
+    return errors
+
+
+def _all_lanes_unknown_key_errors(
+    label: str,
+    payload: dict[str, Any],
+    allowed_keys: set[str],
+) -> list[str]:
+    """Return redacted unknown-field diagnostics without requiring all fields."""
+
+    return [
+        _native_evm_prover_field_name_blocker(label, key, "unknown")
+        for key in sorted(
+            set(payload) - allowed_keys,
+            key=_safe_public_key_sort_key,
+        )
+    ]
+
+
+def _all_lanes_missing_key_errors(
+    label: str,
+    payload: dict[str, Any],
+    required_keys: set[str],
+) -> list[str]:
+    """Return missing-field diagnostics for copied nested lane evidence."""
+
+    return [
+        f"{label} missing field: {key}"
+        for key in sorted(
+            required_keys - set(payload),
+            key=_safe_public_key_sort_key,
+        )
+    ]
+
+
+def _all_lanes_route_canary_common_present_semantic_errors(
+    label: str,
+    domain: Any,
+    route_canary: dict[str, Any],
+) -> list[str]:
+    """Return bounded common route-canary semantic errors for copied evidence."""
+
+    errors: list[str] = []
+    status = route_canary.get("status")
+    if isinstance(status, str) and status != "passed":
+        errors.append(f"{label} status must be passed")
+
+    expected_source = ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN.get(domain)
+    evidence_source = route_canary.get("evidence_source")
+    if (
+        expected_source is not None
+        and isinstance(evidence_source, str)
+        and evidence_source != expected_source
+    ):
+        errors.append(f"{label} evidence_source must be {expected_source}")
+
+    evidence_bound = route_canary.get("evidence_bound")
+    if "evidence_bound" in route_canary and type(evidence_bound) is bool:
+        if evidence_bound is not True:
+            errors.append(f"{label} evidence_bound must be true")
+    return errors
+
+
+def _all_lanes_route_canary_required_truth_present_semantic_errors(
+    label: str,
+    domain: Any,
+    route_canary: dict[str, Any],
+) -> list[str]:
+    """Return bounded required truth-flag errors for copied canary evidence."""
+
+    if domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
+        fields = ("message_proof_used", "receipt_block_finalized")
+    elif domain == SCCP_DOMAIN_TRON:
+        fields = (
+            "message_proof_used",
+            "raw_data_owner_matches_transaction",
+            "signature_recovers_to_owner",
+        )
+    else:
+        fields = ()
+
+    errors: list[str] = []
+    for field in fields:
+        value = route_canary.get(field)
+        if field in route_canary and type(value) is bool and value is not True:
+            errors.append(f"{label} {field} must be true")
+    return errors
+
+
+def _all_lanes_route_canary_not_ready_proof_context_semantic_errors(
+    label: str,
+    domain: Any,
+    route_canary: dict[str, Any],
+) -> list[str]:
+    """Return bounded proof-context errors for copied not-ready canaries."""
+
+    errors: list[str] = []
+
+    def require_u32(field: str) -> None:
+        value = route_canary.get(field)
+        if field in route_canary and type(value) is int:
+            if value < 0 or value > 0xFFFF_FFFF:
+                errors.append(f"{label} {field} must be a u32 integer")
+
+    def require_positive_int(field: str) -> None:
+        value = route_canary.get(field)
+        if field in route_canary and type(value) is int and value <= 0:
+            errors.append(f"{label} {field} must be a positive integer")
+
+    def require_nonnegative_int(field: str) -> None:
+        value = route_canary.get(field)
+        if field in route_canary and type(value) is int and value < 0:
+            errors.append(f"{label} {field} must be a non-negative integer")
+
+    def require_int_constant(field: str, expected: int, expected_label: str) -> None:
+        value = route_canary.get(field)
+        if field in route_canary and type(value) is int and value != expected:
+            errors.append(f"{label} {field} must be {expected_label}")
+
+    def require_positive_decimal_string(field: str) -> None:
+        value = route_canary.get(field)
+        if field in route_canary and isinstance(value, str):
+            if not _is_canonical_decimal_text(value, positive=True):
+                errors.append(
+                    f"{label} {field} must be a canonical positive decimal string"
+                )
+
+    if domain in ALL_LANES_EVM_DESTINATION_DOMAINS:
+        require_positive_int("receipt_block_number")
+        require_u32("log_index")
+        require_int_constant("target_domain", domain, "the lane domain")
+        require_int_constant("proof_version", 1, "1")
+        require_int_constant("proof_source_domain", SCCP_DOMAIN_SORA, "SORA")
+    elif domain == SCCP_DOMAIN_TRON:
+        require_positive_int("block_number")
+        require_nonnegative_int("block_timestamp")
+        require_u32("log_index")
+        require_int_constant("target_domain", SCCP_DOMAIN_TRON, "TRON")
+        require_int_constant("proof_version", 1, "1")
+        require_int_constant("proof_source_domain", SCCP_DOMAIN_SORA, "SORA")
+        owner = route_canary.get("transaction_owner_address")
+        recovered = route_canary.get("signature_recovered_address")
+        owner_canonical = _is_canonical_tron_address_text(owner)
+        recovered_canonical = _is_canonical_tron_address_text(recovered)
+        if "transaction_owner_address" in route_canary and not owner_canonical:
+            errors.append(
+                f"{label} transaction_owner_address must be a non-zero canonical "
+                "0x41-prefixed 21-byte hex string"
+            )
+        if "signature_recovered_address" in route_canary and not recovered_canonical:
+            errors.append(
+                f"{label} signature_recovered_address must be a non-zero canonical "
+                "0x41-prefixed 21-byte hex string"
+            )
+        if owner_canonical and recovered_canonical and owner != recovered:
+            errors.append(
+                f"{label} signature_recovered_address must match "
+                "transaction_owner_address"
+            )
+    elif domain == SCCP_DOMAIN_SOL:
+        errors.extend(
+            _solana_pubkey_field_errors(
+                label,
+                route_canary,
+                "solana_programdata_address",
+            )
+        )
+        require_positive_decimal_string("solana_programdata_slot")
+    elif domain == SCCP_DOMAIN_TON:
+        require_positive_decimal_string("ton_last_transaction_lt")
+
+    return errors
+
+
+def _all_lanes_route_canary_not_ready_hash_role_errors(
+    label: str,
+    domain: Any,
+    lane: dict[str, Any],
+    route_allowlist: dict[str, Any],
+    destination_binding: dict[str, Any],
+    route_canary: dict[str, Any],
+) -> list[str]:
+    """Return hash-role reuse errors for copied not-ready route canaries."""
+
+    role_fields: list[tuple[str, Any]] = []
+    source_hashes = lane.get("source_record_hashes")
+    if isinstance(source_hashes, dict):
+        role_fields.extend(
+            (
+                (field, source_hashes.get(field))
+                for field in ALL_LANES_SOURCE_RECORD_HASH_KEYS
+            )
+        )
+    role_fields.extend(_source_adapter_gate_hash_role_fields(label, lane))
+    role_fields.append(
+        ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+    )
+    role_fields.append(
+        (
+            "destination_binding_hash",
+            destination_binding.get("destination_binding_hash"),
+        )
+    )
+    canary_hash_fields = ALL_LANES_ROUTE_CANARY_KEYS_BY_DOMAIN.get(
+        domain,
+        ALL_LANES_ROUTE_CANARY_COMMON_KEYS,
+    ) & set(ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS)
+    role_fields.extend(
+        (field, route_canary.get(field)) for field in sorted(canary_hash_fields)
+    )
+    return _distinct_nonzero_hex_field_errors(
+        f"{label} hash role",
+        tuple(role_fields),
+        byte_length=32,
+    )
+
+
+def _all_lanes_destination_binding_not_ready_domain_semantic_errors(
+    label: str,
+    domain: Any,
+    destination_binding: dict[str, Any],
+) -> list[str]:
+    """Return domain-specific destination errors for copied not-ready evidence."""
+
+    errors: list[str] = []
+    if domain in ALL_LANES_EVM_DESTINATION_DOMAINS:
+        errors.extend(
+            _nonzero_fixed_hex_field_errors(
+                label,
+                destination_binding,
+                "destination_network_id",
+                byte_length=32,
+                type_label="bytes32",
+            )
+        )
+        errors.extend(
+            _nonzero_fixed_hex_field_errors(
+                label,
+                destination_binding,
+                "destination_bridge_address",
+                byte_length=20,
+                type_label="20-byte",
+            )
+        )
+    elif domain == SCCP_DOMAIN_TRON:
+        errors.extend(
+            _nonzero_fixed_hex_field_errors(
+                label,
+                destination_binding,
+                "destination_network_id",
+                byte_length=32,
+                type_label="bytes32",
+            )
+        )
+        if "destination_bridge_address" in destination_binding:
+            errors.append(
+                f"{label} destination_bridge_address is only valid for EVM-family lanes"
+            )
+    elif domain in ALL_LANES_STATIC_DESTINATION_DOMAINS:
+        if "destination_network_id" in destination_binding:
+            errors.append(
+                f"{label} destination_network_id is only valid for "
+                "EVM-family or TRON lanes"
+            )
+        if "destination_bridge_address" in destination_binding:
+            errors.append(
+                f"{label} destination_bridge_address is only valid for EVM-family lanes"
+            )
+    return errors
+
+
+def _all_lanes_not_ready_nested_schema_errors(
+    lane_label: str,
+    domain: Any,
+    lane: dict[str, Any],
+) -> list[str]:
+    """Return public-schema blockers for copied not-ready nested lane evidence."""
+
+    errors: list[str] = []
+    source_hashes = lane.get("source_record_hashes")
+    if isinstance(source_hashes, dict):
+        source_hashes_label = f"{lane_label} source_record_hashes"
+        errors.extend(
+            _all_lanes_unknown_key_errors(
+                source_hashes_label,
+                source_hashes,
+                ALL_LANES_SOURCE_RECORD_HASH_KEYS,
+            )
+        )
+        errors.extend(
+            _all_lanes_missing_key_errors(
+                source_hashes_label,
+                source_hashes,
+                ALL_LANES_SOURCE_RECORD_HASH_KEYS,
+            )
+        )
+        for field in ALL_LANES_SOURCE_RECORD_HASH_KEYS:
+            errors.extend(
+                _nonzero_fixed_hex_field_errors(
+                    source_hashes_label,
+                    source_hashes,
+                    field,
+                    byte_length=32,
+                    type_label="bytes32",
+                )
+            )
+
+    source_gate = lane.get("source_adapter_gate")
+    if isinstance(source_gate, dict):
+        source_gate_label = f"{lane_label} source_adapter_gate"
+        errors.extend(
+            _all_lanes_unknown_key_errors(
+                source_gate_label,
+                source_gate,
+                ALL_LANES_SOURCE_ADAPTER_GATE_KEYS,
+            )
+        )
+        errors.extend(
+            _all_lanes_missing_key_errors(
+                source_gate_label,
+                source_gate,
+                ALL_LANES_SOURCE_ADAPTER_GATE_KEYS,
+            )
+        )
+        for field in ("required", "ready"):
+            errors.extend(_boolean_field_errors(source_gate_label, source_gate, field))
+        errors.extend(
+            _empty_or_nonzero_fixed_hex_field_errors(
+                source_gate_label,
+                source_gate,
+                "gate_hash",
+                byte_length=32,
+                type_label="bytes32",
+            )
+        )
+        audit_hashes = source_gate.get("audit_hashes")
+        if "audit_hashes" in source_gate and not isinstance(audit_hashes, dict):
+            errors.append(f"{source_gate_label} audit_hashes is not an object")
+        elif isinstance(audit_hashes, dict):
+            audit_label = f"{source_gate_label} audit_hashes"
+            audit_keys = ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN.get(
+                domain,
+                set(),
+            )
+            errors.extend(
+                _all_lanes_unknown_key_errors(
+                    audit_label,
+                    audit_hashes,
+                    audit_keys,
+                )
+            )
+            errors.extend(
+                _all_lanes_missing_key_errors(
+                    audit_label,
+                    audit_hashes,
+                    audit_keys,
+                )
+            )
+            for field in audit_keys:
+                errors.extend(
+                    _nonzero_fixed_hex_field_errors(
+                        audit_label,
+                        audit_hashes,
+                        field,
+                        byte_length=32,
+                        type_label="bytes32",
+                    )
+                )
+        errors.extend(
+            _public_blocker_list_field_errors(
+                source_gate_label,
+                source_gate,
+                "blockers",
+                allow_empty=True,
+            )
+        )
+
+    evm_metadata = lane.get("evm_live_metadata")
+    if isinstance(evm_metadata, dict):
+        metadata_label = f"{lane_label} evm_live_metadata"
+        errors.extend(
+            _all_lanes_unknown_key_errors(
+                metadata_label,
+                evm_metadata,
+                ALL_LANES_EVM_LIVE_METADATA_KEYS,
+            )
+        )
+        errors.extend(
+            _all_lanes_missing_key_errors(
+                metadata_label,
+                evm_metadata,
+                ALL_LANES_EVM_LIVE_METADATA_KEYS,
+            )
+        )
+        for field in ("required", "ready"):
+            errors.extend(_boolean_field_errors(metadata_label, evm_metadata, field))
+        for field in (
+            "source_rpc_chain_id",
+            "source_block_tag",
+            "destination_rpc_chain_id",
+            "destination_block_tag",
+        ):
+            errors.extend(
+                _string_field_errors(
+                    metadata_label,
+                    evm_metadata,
+                    field,
+                    allow_empty=True,
+                )
+            )
+
+    destination_binding = lane.get("destination_binding")
+    if isinstance(destination_binding, dict):
+        destination_label = f"{lane_label} destination_binding"
+        errors.extend(
+            _all_lanes_unknown_key_errors(
+                destination_label,
+                destination_binding,
+                ALL_LANES_DESTINATION_BINDING_KEYS,
+            )
+        )
+        required_destination_keys = set(ALL_LANES_DESTINATION_BINDING_REQUIRED_KEYS)
+        if domain in ALL_LANES_EVM_DESTINATION_DOMAINS:
+            required_destination_keys.update(
+                ("destination_network_id", "destination_bridge_address")
+            )
+        elif domain == SCCP_DOMAIN_TRON:
+            required_destination_keys.add("destination_network_id")
+        errors.extend(
+            _all_lanes_missing_key_errors(
+                destination_label,
+                destination_binding,
+                required_destination_keys,
+            )
+        )
+        for field in (
+            "destination_binding_hash",
+            "expected_destination_binding_hash",
+        ):
+            errors.extend(
+                _nonzero_fixed_hex_field_errors(
+                    destination_label,
+                    destination_binding,
+                    field,
+                    byte_length=32,
+                    type_label="bytes32",
+                )
+            )
+        errors.extend(
+            _string_field_errors(
+                destination_label,
+                destination_binding,
+                "destination_binding_key",
+                allow_empty=True,
+            )
+        )
+        for field in ("expected_destination_binding_hash_matches", "recomputed"):
+            errors.extend(_boolean_field_errors(destination_label, destination_binding, field))
+        errors.extend(
+            _matching_nonzero_fixed_hex_field_errors(
+                destination_label,
+                destination_binding,
+                "expected_destination_binding_hash",
+                destination_binding.get("destination_binding_hash"),
+                "destination_binding_hash",
+                byte_length=32,
+            )
+        )
+        errors.extend(
+            _matching_nonzero_fixed_hex_flag_errors(
+                destination_label,
+                destination_binding,
+                "expected_destination_binding_hash_matches",
+                "destination_binding_hash",
+                "expected_destination_binding_hash",
+                byte_length=32,
+            )
+        )
+        errors.extend(
+            _matching_nonzero_fixed_hex_flag_errors(
+                destination_label,
+                destination_binding,
+                "recomputed",
+                "destination_binding_hash",
+                "expected_destination_binding_hash",
+                byte_length=32,
+            )
+        )
+        for field in ("destination_network_id", "destination_bridge_address"):
+            errors.extend(
+                _string_field_errors(
+                    destination_label,
+                    destination_binding,
+                    field,
+                    allow_empty=True,
+                )
+            )
+        errors.extend(
+            _all_lanes_destination_binding_not_ready_domain_semantic_errors(
+                destination_label,
+                domain,
+                destination_binding,
+            )
+        )
+
+    route_allowlist = lane.get("route_allowlist")
+    if isinstance(route_allowlist, dict):
+        route_label = f"{lane_label} route_allowlist"
+        errors.extend(
+            _all_lanes_unknown_key_errors(
+                route_label,
+                route_allowlist,
+                ALL_LANES_ROUTE_ALLOWLIST_KEYS,
+            )
+        )
+        errors.extend(
+            _all_lanes_missing_key_errors(
+                route_label,
+                route_allowlist,
+                ALL_LANES_ROUTE_ALLOWLIST_KEYS,
+            )
+        )
+        for field in ("route_allowlist_hash", "expected_route_allowlist_hash"):
+            errors.extend(
+                _nonzero_fixed_hex_field_errors(
+                    route_label,
+                    route_allowlist,
+                    field,
+                    byte_length=32,
+                    type_label="bytes32",
+                )
+            )
+        errors.extend(
+            _boolean_field_errors(
+                route_label,
+                route_allowlist,
+                "expected_route_allowlist_hash_matches",
+            )
+        )
+        errors.extend(
+            _matching_nonzero_fixed_hex_field_errors(
+                route_label,
+                route_allowlist,
+                "expected_route_allowlist_hash",
+                route_allowlist.get("route_allowlist_hash"),
+                "route_allowlist_hash",
+                byte_length=32,
+            )
+        )
+        errors.extend(
+            _matching_nonzero_fixed_hex_flag_errors(
+                route_label,
+                route_allowlist,
+                "expected_route_allowlist_hash_matches",
+                "route_allowlist_hash",
+                "expected_route_allowlist_hash",
+                byte_length=32,
+            )
+        )
+        route_canary = route_allowlist.get("route_canary")
+        if "route_canary" in route_allowlist and not isinstance(route_canary, dict):
+            errors.append(f"{route_label} route_canary is not an object")
+        elif isinstance(route_canary, dict):
+            canary_label = f"{route_label} route_canary"
+            canary_keys = ALL_LANES_ROUTE_CANARY_KEYS_BY_DOMAIN.get(
+                domain,
+                ALL_LANES_ROUTE_CANARY_COMMON_KEYS,
+            )
+            errors.extend(
+                _all_lanes_unknown_key_errors(
+                    canary_label,
+                    route_canary,
+                    canary_keys,
+                )
+            )
+            errors.extend(
+                _all_lanes_missing_key_errors(
+                    canary_label,
+                    route_canary,
+                    canary_keys,
+                )
+            )
+            for field in canary_keys & set(ALL_LANES_ROUTE_CANARY_TEMPLATE_HASH_FIELDS):
+                errors.extend(
+                    _nonzero_fixed_hex_field_errors(
+                        canary_label,
+                        route_canary,
+                        field,
+                        byte_length=32,
+                        type_label="bytes32",
+                    )
+                )
+            for field in ("status", "evidence_source"):
+                errors.extend(
+                    _non_empty_string_field_errors(canary_label, route_canary, field)
+                )
+            for field in (
+                "evidence_bound",
+                "message_proof_used",
+                "receipt_block_finalized",
+                "raw_data_owner_matches_transaction",
+                "signature_recovers_to_owner",
+            ):
+                errors.extend(_boolean_field_errors(canary_label, route_canary, field))
+            for field in (
+                "log_index",
+                "receipt_block_number",
+                "target_domain",
+                "proof_version",
+                "proof_source_domain",
+                "block_number",
+                "block_timestamp",
+            ):
+                errors.extend(
+                    _integer_field_errors(
+                        canary_label,
+                        route_canary,
+                        field,
+                        positive=False,
+                    )
+                )
+            for field in (
+                "transaction_owner_address",
+                "signature_recovered_address",
+                "solana_programdata_address",
+            ):
+                errors.extend(
+                    _string_field_errors(
+                        canary_label,
+                        route_canary,
+                        field,
+                        allow_empty=False,
+                    )
+                )
+            errors.extend(
+                _matching_nonzero_fixed_hex_field_errors(
+                    canary_label,
+                    route_canary,
+                    "route_allowlist_hash",
+                    route_allowlist.get("route_allowlist_hash"),
+                    "lane route_allowlist_hash",
+                    byte_length=32,
+                )
+            )
+            if isinstance(destination_binding, dict):
+                errors.extend(
+                    _matching_nonzero_fixed_hex_field_errors(
+                        canary_label,
+                        route_canary,
+                        "destination_binding_hash",
+                        destination_binding.get("destination_binding_hash"),
+                        "lane destination_binding_hash",
+                        byte_length=32,
+                    )
+                )
+            errors.extend(
+                _all_lanes_route_canary_common_present_semantic_errors(
+                    canary_label,
+                    domain,
+                    route_canary,
+                )
+            )
+            errors.extend(
+                _all_lanes_route_canary_required_truth_present_semantic_errors(
+                    canary_label,
+                    domain,
+                    route_canary,
+                )
+            )
+            errors.extend(
+                _all_lanes_route_canary_not_ready_proof_context_semantic_errors(
+                    canary_label,
+                    domain,
+                    route_canary,
+                )
+            )
+            errors.extend(
+                _all_lanes_route_canary_not_ready_hash_role_errors(
+                    canary_label,
+                    domain,
+                    lane,
+                    route_allowlist,
+                    destination_binding if isinstance(destination_binding, dict) else {},
+                    route_canary,
+                )
+            )
+    return errors
+
+
+def _all_lanes_not_ready_template_hash_errors(
+    lane_label: str,
+    domain: Any,
+    lane: dict[str, Any],
+) -> list[str]:
+    """Return copied-template blockers for not-ready lanes with nested evidence."""
+
+    errors: list[str] = []
+    source_hashes = lane.get("source_record_hashes")
+    if isinstance(source_hashes, dict):
+        errors.extend(
+            _source_record_template_hash_errors(
+                f"{lane_label} source_record_hashes",
+                domain,
+                source_hashes,
+            )
+        )
+
+    source_gate = lane.get("source_adapter_gate")
+    if isinstance(source_gate, dict):
+        errors.extend(
+            _source_adapter_gate_template_hash_errors(
+                f"{lane_label} source_adapter_gate gate_hash",
+                domain,
+                source_gate.get("gate_hash"),
+            )
+        )
+        audit_hashes = source_gate.get("audit_hashes")
+        if isinstance(audit_hashes, dict):
+            errors.extend(
+                _source_adapter_gate_template_audit_errors(
+                    f"{lane_label} source_adapter_gate audit_hashes",
+                    domain,
+                    audit_hashes,
+                )
+            )
+
+    destination_binding = lane.get("destination_binding")
+    if isinstance(destination_binding, dict):
+        errors.extend(
+            _all_lanes_template_hash_errors(
+                f"{lane_label} destination_binding",
+                domain,
+                destination_binding,
+                fields=(
+                    "destination_binding_hash",
+                    "expected_destination_binding_hash",
+                ),
+                evidence_label="destination binding evidence",
+            )
+        )
+
+    route_allowlist = lane.get("route_allowlist")
+    if isinstance(route_allowlist, dict):
+        errors.extend(
+            _all_lanes_template_hash_errors(
+                f"{lane_label} route_allowlist",
+                domain,
+                route_allowlist,
+                fields=(
+                    "route_allowlist_hash",
+                    "expected_route_allowlist_hash",
+                ),
+                evidence_label="route binding evidence",
+            )
+        )
+        route_canary = route_allowlist.get("route_canary")
+        if isinstance(route_canary, dict):
+            errors.extend(
+                _all_lanes_route_canary_template_hash_errors(
+                    f"{lane_label} route_allowlist route_canary",
+                    domain,
+                    route_canary,
+                )
             )
     return errors
 
@@ -20867,6 +22092,19 @@ def _tron_route_config_canonical_manifest_inventory_errors(
     return _source_marker_inventory_errors(
         inventory,
         label="SCCP TRON route-config canonical-manifest",
+    )
+
+
+def _ton_route_manifest_cli_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for TON route-manifest CLI guards."""
+
+    if inventory is None:
+        inventory = TON_ROUTE_MANIFEST_CLI_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP TON route-manifest CLI",
     )
 
 
@@ -23483,6 +24721,12 @@ def _active_launch_route_canary_metadata_blockers(
             f"{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}"
         )
     for field, field_label in (
+        ("call_data_sha256", "call data SHA-256"),
+        ("payload_hash", "payload hash"),
+        ("statement_hash", "statement hash"),
+        ("commitment_root", "commitment root"),
+        ("finality_height", "finality height"),
+        ("finality_block_hash", "finality block hash"),
         ("transaction_hash", "transaction hash"),
         ("receipt_block_hash", "receipt block hash"),
         ("block_receipts_root", "block receipts root"),
@@ -23493,6 +24737,12 @@ def _active_launch_route_canary_metadata_blockers(
                 f"{lane_label}: route canary {field_label} must be a canonical "
                 "non-zero bytes32 hex string"
             )
+    blockers.extend(
+        _active_launch_route_canary_template_hash_blockers(
+            lane_label,
+            canary,
+        )
+    )
     if (
         type(canary.get("receipt_block_number")) is not int
         or canary.get("receipt_block_number") <= 0
@@ -23501,6 +24751,24 @@ def _active_launch_route_canary_metadata_blockers(
             f"{lane_label}: route canary receipt block number must be a positive "
             "integer"
         )
+    if (
+        type(canary.get("log_index")) is not int
+        or canary.get("log_index") < 0
+        or canary.get("log_index") > 0xFFFF_FFFF
+    ):
+        blockers.append(f"{lane_label}: route canary log_index must be a u32 integer")
+    for field, expected, expected_label in (
+        ("target_domain", ACTIVE_LAUNCH_DOMAIN, "active launch domain"),
+        ("proof_version", 1, "1"),
+        ("proof_source_domain", SCCP_DOMAIN_SORA, "SORA domain"),
+    ):
+        raw = canary.get(field)
+        if type(raw) is not int:
+            blockers.append(f"{lane_label}: route canary {field} must be an integer")
+        elif raw != expected:
+            blockers.append(
+                f"{lane_label}: route canary {field} must be {expected_label}"
+            )
     if (
         "message_proof_used" in canary
         and type(canary.get("message_proof_used")) is not bool
@@ -23521,6 +24789,12 @@ def _active_launch_route_canary_metadata_blockers(
         blockers.append(f"{lane_label}: route canary receipt block must be finalized")
     canary_hash_roles = (
         ("evidence hash", canary.get("evidence_hash")),
+        ("call data SHA-256", canary.get("call_data_sha256")),
+        ("payload hash", canary.get("payload_hash")),
+        ("statement hash", canary.get("statement_hash")),
+        ("commitment root", canary.get("commitment_root")),
+        ("finality height", canary.get("finality_height")),
+        ("finality block hash", canary.get("finality_block_hash")),
         ("transaction hash", canary.get("transaction_hash")),
         ("receipt block hash", canary.get("receipt_block_hash")),
         ("block receipts root", canary.get("block_receipts_root")),
@@ -23536,6 +24810,104 @@ def _active_launch_route_canary_metadata_blockers(
                 (*upstream_hash_roles, *canary_hash_roles[:index]),
             )
         )
+    return blockers
+
+
+def _active_launch_route_canary_binding_hash_blockers(
+    lane_label: str,
+    lane: dict[str, Any],
+    canary: dict[str, Any],
+) -> list[str]:
+    """Return blockers for route-canary hashes that bind copied route evidence."""
+
+    blockers: list[str] = []
+    route_summary = lane.get("route_allowlist")
+    if not isinstance(route_summary, dict):
+        route_summary = {}
+    destination_binding = lane.get("destination_binding")
+    if not isinstance(destination_binding, dict):
+        destination_binding = {}
+
+    route_hash = canary.get("route_allowlist_hash")
+    if not _is_nonzero_hex32(route_hash):
+        # Source-inventory marker: route canary route allowlist hash must be a canonical non-zero bytes32 hex string
+        blockers.append(
+            f"{lane_label}: route canary route allowlist hash must be a canonical "
+            "non-zero bytes32 hex string"
+        )
+    expected_route_hash = route_summary.get("route_allowlist_hash")
+    if (
+        _is_nonzero_hex32(route_hash)
+        and _is_nonzero_hex32(expected_route_hash)
+        and route_hash != expected_route_hash
+    ):
+        # Source-inventory marker: route canary route allowlist hash must match route_allowlist_hash
+        blockers.append(
+            f"{lane_label}: route canary route allowlist hash must match "
+            "route_allowlist_hash"
+        )
+
+    destination_hash = canary.get("destination_binding_hash")
+    if not _is_nonzero_hex32(destination_hash):
+        # Source-inventory marker: route canary destination binding hash must be a canonical non-zero bytes32 hex string
+        blockers.append(
+            f"{lane_label}: route canary destination binding hash must be a "
+            "canonical non-zero bytes32 hex string"
+        )
+    expected_destination_hash = destination_binding.get("destination_binding_hash")
+    if (
+        _is_nonzero_hex32(destination_hash)
+        and _is_nonzero_hex32(expected_destination_hash)
+        and destination_hash != expected_destination_hash
+    ):
+        # Source-inventory marker: route canary destination binding hash must match destination_binding_hash
+        blockers.append(
+            f"{lane_label}: route canary destination binding hash must match "
+            "destination_binding_hash"
+        )
+    return blockers
+
+
+def _active_launch_route_canary_template_hash_blockers(
+    lane_label: str,
+    canary: Any,
+) -> list[str]:
+    """Return blockers when copied active route-canary hashes replay templates."""
+
+    if not isinstance(canary, dict):
+        return []
+    template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
+        f"{lane_label}: route canary",
+        ACTIVE_LAUNCH_DOMAIN,
+    )
+    if template_errors:
+        return template_errors
+    if not template_hashes:
+        return []
+    blockers: list[str] = []
+    for field, field_label in (
+        ("evidence_hash", "evidence hash"),
+        ("call_data_sha256", "call data SHA-256"),
+        ("payload_hash", "payload hash"),
+        ("statement_hash", "statement hash"),
+        ("commitment_root", "commitment root"),
+        ("finality_height", "finality height"),
+        ("finality_block_hash", "finality block hash"),
+        ("transaction_hash", "transaction hash"),
+        ("receipt_block_hash", "receipt block hash"),
+        ("block_receipts_root", "block receipts root"),
+        ("message_id", "message id"),
+    ):
+        value = canary.get(field)
+        if not _is_nonzero_hex32(value):
+            continue
+        assert isinstance(value, str)
+        if bytes.fromhex(value[2:]) in template_hashes:
+            # Source-inventory marker: route canary hashes must be live evidence, not built-in template material
+            blockers.append(
+                f"{lane_label}: route canary {field_label} must be live "
+                "evidence, not built-in template material"
+            )
     return blockers
 
 
@@ -23648,6 +25020,12 @@ def _active_launch_governed_deployment_metadata_blockers(
             "governed deployment",
         )
     )
+    blockers.extend(
+        _active_launch_source_record_template_hash_blockers(
+            lane_label,
+            source_hashes,
+        )
+    )
 
     destination_binding = lane.get("destination_binding")
     if not isinstance(destination_binding, dict):
@@ -23676,6 +25054,13 @@ def _active_launch_governed_deployment_metadata_blockers(
             "destination binding hash",
             supplied_hash,
             source_hash_roles,
+        )
+    )
+    blockers.extend(
+        _active_launch_destination_binding_template_hash_blockers(
+            lane_label,
+            supplied_hash,
+            expected_hash,
         )
     )
     if not _is_nonzero_hex32(expected_hash):
@@ -23749,6 +25134,116 @@ def _active_launch_governed_deployment_metadata_blockers(
         blockers.append(
             f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must match audit hash evm_source_gate_hash"
         )
+    blockers.extend(
+        _active_launch_source_adapter_gate_template_hash_blockers(
+            lane_label,
+            gate_hash,
+            audit_hashes,
+        )
+    )
+    return blockers
+
+
+def _active_launch_destination_binding_template_hash_blockers(
+    lane_label: str,
+    supplied_hash: Any,
+    expected_hash: Any,
+) -> list[str]:
+    """Return blockers when copied active destination hashes replay templates."""
+
+    template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
+        f"{lane_label}: governed deployment destination binding",
+        ACTIVE_LAUNCH_DOMAIN,
+    )
+    if template_errors:
+        return template_errors
+    if not template_hashes:
+        return []
+    blockers: list[str] = []
+    for value, label in (
+        (supplied_hash, "destination binding hash"),
+        (expected_hash, "expected destination binding hash"),
+    ):
+        if not _is_nonzero_hex32(value):
+            continue
+        assert isinstance(value, str)
+        if bytes.fromhex(value[2:]) in template_hashes:
+            # Source-inventory marker: destination binding hashes must be destination binding evidence, not built-in template material
+            blockers.append(
+                f"{lane_label}: governed deployment {label} must be destination "
+                "binding evidence, not built-in template material"
+            )
+    return blockers
+
+
+def _active_launch_source_adapter_gate_template_hash_blockers(
+    lane_label: str,
+    gate_hash: Any,
+    audit_hashes: Any,
+) -> list[str]:
+    """Return blockers when copied active source-gate hashes replay templates."""
+
+    template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
+        f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate",
+        ACTIVE_LAUNCH_DOMAIN,
+    )
+    if template_errors:
+        return template_errors
+    if not template_hashes:
+        return []
+    blockers: list[str] = []
+    if _is_nonzero_hex32(gate_hash):
+        assert isinstance(gate_hash, str)
+        if bytes.fromhex(gate_hash[2:]) in template_hashes:
+            blockers.append(
+                f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be deployed gate evidence, not built-in template material"
+            )
+    if isinstance(audit_hashes, dict):
+        audit_hash = audit_hashes.get("evm_source_gate_hash")
+        if _is_nonzero_hex32(audit_hash):
+            assert isinstance(audit_hash, str)
+            if bytes.fromhex(audit_hash[2:]) in template_hashes:
+                blockers.append(
+                    f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes evm_source_gate_hash must be deployed audit evidence, not built-in template material"
+                )
+    return blockers
+
+
+def _active_launch_source_record_template_hash_blockers(
+    lane_label: str,
+    source_hashes: Any,
+) -> list[str]:
+    """Return blockers when copied active source records replay templates."""
+
+    if not isinstance(source_hashes, dict):
+        return []
+    template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
+        f"{lane_label}: governed deployment source records",
+        ACTIVE_LAUNCH_DOMAIN,
+    )
+    if template_errors:
+        return template_errors
+    if not template_hashes:
+        return []
+    blockers: list[str] = []
+    for field, field_label in (
+        ("source_verifier_material_hash", "source verifier material hash"),
+        (
+            "source_adapter_engine_deployment_hash",
+            "source adapter engine deployment hash",
+        ),
+    ):
+        value = source_hashes.get(field)
+        if not _is_nonzero_hex32(value):
+            continue
+        assert isinstance(value, str)
+        if bytes.fromhex(value[2:]) in template_hashes:
+            # Source-inventory marker: governed deployment source verifier material hash must be deployed evidence, not built-in template material
+            # Source-inventory marker: governed deployment source adapter engine deployment hash must be deployed evidence, not built-in template material
+            blockers.append(
+                f"{lane_label}: governed deployment {field_label} must be "
+                "deployed evidence, not built-in template material"
+            )
     return blockers
 
 
@@ -23947,6 +25442,13 @@ def _active_launch_route_allowlist_binding_blockers(
             ),
         )
     )
+    blockers.extend(
+        _active_launch_route_allowlist_template_hash_blockers(
+            lane_label,
+            supplied_hash,
+            expected_hash,
+        )
+    )
     if not _is_nonzero_hex32(expected_hash):
         blockers.append(
             f"{lane_label}: expected route allowlist hash must be a canonical "
@@ -23965,6 +25467,38 @@ def _active_launch_route_allowlist_binding_blockers(
         blockers.append(
             f"{lane_label}: route allowlist expected hash match flag must be true"
         )
+    return blockers
+
+
+def _active_launch_route_allowlist_template_hash_blockers(
+    lane_label: str,
+    supplied_hash: Any,
+    expected_hash: Any,
+) -> list[str]:
+    """Return blockers when copied active route hashes replay templates."""
+
+    template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
+        f"{lane_label}: route allowlist",
+        ACTIVE_LAUNCH_DOMAIN,
+    )
+    if template_errors:
+        return template_errors
+    if not template_hashes:
+        return []
+    blockers: list[str] = []
+    for value, label in (
+        (supplied_hash, "route allowlist hash"),
+        (expected_hash, "expected route allowlist hash"),
+    ):
+        if not _is_nonzero_hex32(value):
+            continue
+        assert isinstance(value, str)
+        if bytes.fromhex(value[2:]) in template_hashes:
+            # Source-inventory marker: route allowlist hashes must be route binding evidence, not built-in template material
+            blockers.append(
+                f"{lane_label}: {label} must be route binding evidence, "
+                "not built-in template material"
+            )
     return blockers
 
 
@@ -26612,6 +28146,13 @@ def _active_launch_release_checklist(
             _active_launch_route_canary_upstream_hash_roles(lane),
         )
     )
+    canary_blockers.extend(
+        _active_launch_route_canary_binding_hash_blockers(
+            lane_label,
+            lane,
+            canary,
+        )
+    )
     if (
         "evidence_bound" in canary
         and type(canary.get("evidence_bound")) is not bool
@@ -27789,9 +29330,10 @@ def _render_readiness_markdown(
             "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
             "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, raw publish HTTP-error preservation, browser-prover sidecar/reference duplicate-or-malformed-alias rejection, accessor-backed scalar alias suppression, handoff-placeholder, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, duplicate-alias, accessor-backed alias suppression, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP TON route-manifest CLI source inventory must pin redacted duplicate-option rejection, explicit option-value requirements, valued-help rejection, non-empty path preflight, unknown-command and unknown-option rejection, redacted unexpected positional arguments, exact publish booleans, submit-only option rejection, gas metadata preflight before manifest reads, canonical I105 authorities, submit metadata preflight before private-key lookup, bounded private-key env names, HTTPS-or-loopback Torii URLs, output path collision rejection, and string-only nanoTON manifest ingestion before governed TAIRA TON XOR route-manifest artifacts can satisfy production readiness.",
             "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
             "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
-            "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, and non-string section-key blockers before all-lanes evidence can satisfy production readiness.",
+            "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, non-string section-key, not-ready nested schema, hash/flag-coherence, and route-canary proof-context/hash-role/common/truth-semantic blockers before all-lanes evidence can satisfy production readiness.",
             "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
             "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, route-canary hash replay rejection, and upstream route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
             "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed release-checklist roots, malformed lane metadata, and verifier recomputation before production readiness can pass.",
@@ -32502,6 +34044,62 @@ def _canonical_nonzero_fixed_hex_value(value: Any, *, byte_length: int) -> str |
     return value
 
 
+def _matching_nonzero_fixed_hex_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+    expected: Any,
+    expected_field: str,
+    *,
+    byte_length: int,
+) -> list[str]:
+    value = _canonical_nonzero_fixed_hex_value(
+        payload.get(field),
+        byte_length=byte_length,
+    )
+    expected_value = _canonical_nonzero_fixed_hex_value(
+        expected,
+        byte_length=byte_length,
+    )
+    if value is None or expected_value is None:
+        return []
+    if value != expected_value:
+        return [f"{label} {field} must match {expected_field}"]
+    return []
+
+
+def _matching_nonzero_fixed_hex_flag_errors(
+    label: str,
+    payload: dict[str, Any],
+    flag_field: str,
+    hash_field: str,
+    expected_hash_field: str,
+    *,
+    byte_length: int,
+) -> list[str]:
+    if flag_field not in payload or type(payload.get(flag_field)) is not bool:
+        return []
+    hash_value = _canonical_nonzero_fixed_hex_value(
+        payload.get(hash_field),
+        byte_length=byte_length,
+    )
+    expected_hash_value = _canonical_nonzero_fixed_hex_value(
+        payload.get(expected_hash_field),
+        byte_length=byte_length,
+    )
+    if (
+        hash_value is not None
+        and expected_hash_value is not None
+        and hash_value == expected_hash_value
+        and payload.get(flag_field) is not True
+    ):
+        return [
+            f"{label} {flag_field} must be true when "
+            f"{expected_hash_field} matches {hash_field}"
+        ]
+    return []
+
+
 def _source_adapter_gate_hash_role_fields(
     label: str,
     lane: dict[str, Any],
@@ -33354,6 +34952,20 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             domain != ACTIVE_LAUNCH_DOMAIN
             and lane.get("production_ready") is False
         ):
+            errors.extend(
+                _all_lanes_not_ready_nested_schema_errors(
+                    lane_label,
+                    domain,
+                    lane,
+                )
+            )
+            errors.extend(
+                _all_lanes_not_ready_template_hash_errors(
+                    lane_label,
+                    domain,
+                    lane,
+                )
+            )
             continue
         source_hashes = lane.get("source_record_hashes")
         if isinstance(source_hashes, dict):
@@ -33681,6 +35293,18 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                     destination_binding,
                 )
             )
+            errors.extend(
+                _all_lanes_template_hash_errors(
+                    destination_label,
+                    domain,
+                    destination_binding,
+                    fields=(
+                        "destination_binding_hash",
+                        "expected_destination_binding_hash",
+                    ),
+                    evidence_label="destination binding evidence",
+                )
+            )
         route_allowlist = lane.get("route_allowlist")
         if isinstance(route_allowlist, dict):
             route_label = f"{lane_label} route_allowlist"
@@ -33722,6 +35346,18 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                     route_label,
                     lane,
                     route_allowlist,
+                )
+            )
+            errors.extend(
+                _all_lanes_template_hash_errors(
+                    route_label,
+                    domain,
+                    route_allowlist,
+                    fields=(
+                        "route_allowlist_hash",
+                        "expected_route_allowlist_hash",
+                    ),
+                    evidence_label="route binding evidence",
                 )
             )
             route_canary = route_allowlist.get("route_canary")

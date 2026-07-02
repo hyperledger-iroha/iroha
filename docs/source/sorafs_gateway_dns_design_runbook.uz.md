@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_dns_design_runbook.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f1f8de6c5ff283479cd76dc60afbdc4bc142596f3e48c52472d2a943ec805b0d
+source_hash: 92f77373324398b1fb3bfb5c205dd7bb856ea8066b8e9b094ce4328868a34021
 source_last_modified: "2025-12-29T18:16:36.144614+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS Gateway & DNS Kickoff Runbook

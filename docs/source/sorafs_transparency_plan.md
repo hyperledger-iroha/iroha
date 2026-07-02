@@ -221,7 +221,10 @@ moderation ledger publication service described by the original plan.
   unless explicitly waived, checks anchor metadata and verification flags, and
   emits `sorafs.transparency.publication_canary.v1` evidence with status,
   sizes, and BLAKE3 response hashes without archiving publication bodies,
-  source entries, or private payload material.
+  source entries, or private payload material. Publication canaries and the
+  transparency rollout collection runner reject non-lowercase, wrong-length, or
+  otherwise malformed `--cycle-id` values before rendering dry-run command
+  plans or contacting deployed cycle-detail routes.
 - Torii exposes `/v1/sorafs/transparency/explorer` as a local read-only
   explorer snapshot. The endpoint composes the Governance DAG publish-index into
   cycle summaries, proof-token issuance summaries, payload-kind counts, source
@@ -291,7 +294,12 @@ moderation ledger publication service described by the original plan.
   signals, requires both action-labeled aggregate source-event and publish-due
   probes, requires request/response hash binding for probe evidence, requires
   response hash binding for publication and explorer route evidence, checks the
-  explorer snapshot/UI/proof-token index routes, and
+  explorer snapshot/UI/proof-token index routes, binds publication and explorer
+  `route_count` to the unique canonical `routes[].name` inventories with
+  duplicate route rejection, keeps probe-based `probe_count` values equal to
+  the `probes[]` inventory length, requires source-entry, source-event,
+  publish-due, and proof-token issuance sub-counts to match the corresponding
+  `probes[]` role inventory, and
   recursively rejects raw
   payload, request/response body, bearer-token, signed-transaction,
   proof-token frame, private-key, and private digest-key fields. Publication
@@ -303,17 +311,33 @@ moderation ledger publication service described by the original plan.
   so dry-run collection plans and downstream automation can inspect the exact
   evidence contract before live collection. It supports shell-style `@ARGFILE`
   inputs for direct replay of reviewed artifact directories.
+- `scripts/build_sorafs_transparency_canary.py` is the checked-in
+  payload-free SFM-4c transparency canary builder for reviewed source-entry,
+  publication, privacy-aggregate, proof-token issuance, and explorer rollout
+  artifacts. It requires complete source kind, publication route, privacy action,
+  and explorer route coverage where applicable, enforces reviewed
+  deployment/environment context, source-batch and cycle digest bindings, and
+  validates every generated artifact through the transparency rollout checker
+  before atomically writing JSON without following output symlinks. The source
+  entry and publication response-file examples are
+  `scripts/examples/sorafs_transparency_source_entry_canary.args.example` and
+  `scripts/examples/sorafs_transparency_publication_canary.args.example`.
 - `scripts/run_sorafs_transparency_rollout_evidence.py --torii-url URL
   --out-dir DIR ...` is the operator harness for collecting the required
   source-entry, privacy aggregate, proof-token issuance, publication, and
   explorer canary artifacts and then running the rollout evidence verifier. It
   fails before live submission when required source-entry kinds, privacy
   source-event/publish-due payloads, proof-token issuance payloads, or
-  publication cycle-detail ids are missing, accepts repeated `--iroha-arg ARG`
-  values for runtime-only client config/signing options that must be passed
-  before `sorafs`, accepts shell-style `@ARGFILE` response files for reviewed
-  operator inputs, requires a reviewed `--deployment-id` plus `--environment`,
-  stamps that context onto generated canary artifacts before verification, and
+  publication cycle-detail ids are missing or not canonical 16-byte lowercase
+  hex strings. It also rejects duplicate or unsupported `--source-entry` kinds
+  before rendering the plan or contacting live services. The runner accepts
+  repeated `--iroha-arg ARG` values for runtime-only
+  client config/signing options that must be passed before `sorafs`, accepts
+  shell-style `@ARGFILE` response files for reviewed operator inputs, requires
+  a reviewed `--deployment-id` plus `--environment`,
+  stamps that context onto generated canary artifacts before verification,
+  validates the schema-closed collection plan, deployment context, evidence
+  contract, and command steps before dry-run output or live canaries, and
   `--dry-run` emits the command plan plus the checker-backed
   `evidence_contract` field map without contacting live services.
   `scripts/examples/sorafs_transparency_rollout_evidence.args.example`

@@ -2825,6 +2825,13 @@ fn read_der_element(
 mod tests {
     use super::*;
 
+    const HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET: usize =
+        VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32;
+    const SMALL_ORDER_ED25519_POINT: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
     #[test]
     fn parse_multiaddr_accepts_ipv4_quic() {
         let parsed = parse_multiaddr("/ip4/127.0.0.1/udp/7777/quic").expect("parse");
@@ -2940,6 +2947,52 @@ mod tests {
         let decoded = decode_helper_ticket_metadata(&encoded).expect("ticket metadata");
 
         assert_eq!(decoded, ticket);
+    }
+
+    #[test]
+    fn helper_ticket_metadata_rejects_inert_metering_public_key_material() {
+        let metering_keys = KeyPair::try_from_seed(vec![0x66; 32], Algorithm::Ed25519)
+            .expect("derive metering fixture key");
+        let ticket = VpnHelperTicketV1 {
+            session_id: [0x11; 16],
+            quote_id: [0x22; 32],
+            account_hash: [0x33; 32],
+            relay_id: [0x44; 32],
+            payment_tx_hash: [0x55; 32],
+            metering_public_key: metering_keys.public_key().clone(),
+            tariff: VpnTariffV1 {
+                lease_fee_nanos: 1_000,
+                active_fee_nanos_per_minute: 100,
+                ingress_fee_nanos_per_mib: 7,
+                egress_fee_nanos_per_mib: 11,
+            },
+            expires_at_ms: 99_000,
+        };
+
+        for (label, public_key, expected) in [
+            ("all-zero", [0u8; 32], "all zero"),
+            ("small-order", SMALL_ORDER_ED25519_POINT, "small-order"),
+        ] {
+            let mut bytes = ticket.to_bytes(&[0xAA; 32]);
+            bytes[HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET
+                ..HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET + 32]
+                .copy_from_slice(&public_key);
+            let encoded = hex::encode(bytes);
+
+            match decode_helper_ticket_metadata(&encoded) {
+                Err(ControllerError::InvalidPayload(message)) => {
+                    assert!(
+                        message.contains("invalid metering public key"),
+                        "unexpected {label} ticket metadata error: {message}"
+                    );
+                    assert!(
+                        message.contains(expected),
+                        "unexpected {label} ticket metadata error: {message}"
+                    );
+                }
+                other => panic!("expected invalid {label} ticket metadata, got {other:?}"),
+            }
+        }
     }
 
     #[test]

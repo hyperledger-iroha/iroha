@@ -24,14 +24,18 @@ use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
 use iroha_config::parameters::defaults;
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash, HashOf, KeyGenOption, KeyPair, LaneCommitmentId,
-    PrivateKey, PublicKey, Signature, derive_keyset_from_slice,
+    PrivateKey, PublicKey, Signature, derive_keyset_from_slice, ed25519_parse_signature,
     error::ParseError,
     kex::{KeyExchangeScheme, X25519Sha256},
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 use iroha_data_model::{
-    account::Account,
+    account::{
+        Account,
+        address::{AccountAddress, AccountAddressError},
+    },
     asset::{
+        AssetBalanceScope,
         alias::AssetDefinitionAlias,
         definition::{AssetBalancePolicy, AssetConfidentialPolicy},
         prelude::{AssetDefinition, AssetDefinitionId, AssetId, Mintable},
@@ -84,8 +88,9 @@ use iroha_data_model::{
         action::{Action as TriggerAction, Repeats},
     },
     zk::{
-        ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER, ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
-        ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG, ZkAcePublicInputsV1, ZkAceWitnessV1,
+        OpenVerifyEnvelope, ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+        ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+        ZkAcePublicInputsV1, ZkAceWitnessV1,
     },
 };
 use iroha_primitives::{
@@ -402,9 +407,67 @@ fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()> {
 }
 
 fn parse_account_id(value: &str) -> PyResult<AccountId> {
-    AccountId::parse_encoded(value)
-        .map(|parsed| parsed.into_account_id())
-        .map_err(|err| PyValueError::new_err(format!("invalid account id: {err}")))
+    let raw = value.trim();
+    let parsed = match AccountAddress::parse_encoded(raw, None) {
+        Ok(address) => address.to_account_id().map_err(|err| err.to_string()),
+        Err(AccountAddressError::UnsupportedAddressFormat) => AccountId::parse_encoded(raw)
+            .map(|parsed| parsed.into_account_id())
+            .map_err(|err| err.to_string()),
+        Err(err) => Err(err.to_string()),
+    };
+    parsed.map_err(|err| PyValueError::new_err(format!("invalid account id: {err}")))
+}
+
+fn parse_asset_id(value: &str) -> PyResult<AssetId> {
+    let raw = value.trim();
+    if let Ok(asset_id) = raw.parse::<AssetId>() {
+        return Ok(asset_id);
+    }
+
+    let mut parts = raw.split('#');
+    let definition_literal = parts.next().ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "invalid asset id `{value}`: missing asset definition id"
+        ))
+    })?;
+    let account_literal = parts.next().ok_or_else(|| {
+        PyValueError::new_err(format!("invalid asset id `{value}`: missing account id"))
+    })?;
+    let scope_literal = parts.next();
+    if parts.next().is_some() {
+        return Err(PyValueError::new_err(format!(
+            "invalid asset id `{value}`: too many `#` segments"
+        )));
+    }
+
+    let definition = AssetDefinitionId::parse_address_literal(definition_literal)
+        .map_err(|err| PyValueError::new_err(format!("invalid asset id `{value}`: {err}")))?;
+    let account = parse_account_id(account_literal)
+        .map_err(|err| PyValueError::new_err(format!("invalid asset id `{value}`: {err}")))?;
+    let scope = match scope_literal {
+        None => AssetBalanceScope::Global,
+        Some(raw_scope) => {
+            let Some(dataspace) = raw_scope.strip_prefix("dataspace:") else {
+                return Err(PyValueError::new_err(format!(
+                    "invalid asset id `{value}`: scope must use `dataspace:<id>`"
+                )));
+            };
+            let dataspace = dataspace
+                .parse::<u64>()
+                .map(DataSpaceId::new)
+                .map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "invalid asset id `{value}`: dataspace scope must be a u64"
+                    ))
+                })?;
+            AssetBalanceScope::Dataspace(dataspace)
+        }
+    };
+    Ok(AssetId::with_scope(definition, account, scope))
+}
+
+fn i105_discriminant_hint(input: &str) -> Option<u16> {
+    AccountAddress::i105_discriminant(input).ok()
 }
 
 fn ensure_ed25519_account(account: &AccountId) -> PyResult<()> {
@@ -522,6 +585,11 @@ fn fixed_array<const N: usize>(bytes: &[u8], context: &str) -> PyResult<[u8; N]>
     let mut arr = [0u8; N];
     arr.copy_from_slice(bytes);
     Ok(arr)
+}
+
+fn checked_signature_from_bytes(bytes: &[u8], context: &str) -> PyResult<Signature> {
+    Signature::try_from_bytes(bytes)
+        .map_err(|err| PyValueError::new_err(format!("{context} is malformed: {err}")))
 }
 
 fn py_text(value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
@@ -780,6 +848,10 @@ fn zk_ace_proof_attachment_json_value(attachment: &ProofAttachment) -> PyResult<
         "proof_b64".to_owned(),
         json::Value::String(BASE64.encode(&attachment.proof.bytes)),
     );
+    proof.insert(
+        "stark_fri_parameters".to_owned(),
+        zk_ace_stark_fri_parameters_json_value()?,
+    );
     if let Some(commitment) = attachment.vk_commitment {
         proof.insert(
             "verifying_key_commitment".to_owned(),
@@ -795,16 +867,155 @@ fn zk_ace_proof_attachment_json_value(attachment: &ProofAttachment) -> PyResult<
     Ok(json::Value::Object(proof))
 }
 
+fn zk_ace_public_inputs_json_value(
+    public_inputs: &ZkAcePublicInputsV1,
+    from_account_literal: &str,
+    to_account_literal: &str,
+) -> PyResult<json::Value> {
+    let mut verifier_key = json::Map::new();
+    verifier_key.insert(
+        "backend".to_owned(),
+        json::Value::String(public_inputs.verifier_key_id.backend.as_str().to_owned()),
+    );
+    verifier_key.insert(
+        "name".to_owned(),
+        json::Value::String(public_inputs.verifier_key_id.name.clone()),
+    );
+
+    let mut value = json::Map::new();
+    value.insert(
+        "version".to_owned(),
+        json::to_value(&1u8).map_err(|err| {
+            PyValueError::new_err(format!("serialize public input version: {err}"))
+        })?,
+    );
+    value.insert(
+        "identity_commitment".to_owned(),
+        json::Value::String(hex_encode(public_inputs.identity_commitment)),
+    );
+    value.insert(
+        "tx_digest".to_owned(),
+        json::Value::String(hex_encode(public_inputs.tx_digest)),
+    );
+    value.insert(
+        "chain_id".to_owned(),
+        json::Value::String(public_inputs.chain_id.to_string()),
+    );
+    value.insert(
+        "domain_tag".to_owned(),
+        json::Value::String(public_inputs.domain_tag.clone()),
+    );
+    value.insert(
+        "action_class".to_owned(),
+        json::Value::String(public_inputs.action_class.clone()),
+    );
+    value.insert(
+        "replay_nullifier".to_owned(),
+        json::Value::String(hex_encode(public_inputs.replay_nullifier)),
+    );
+    value.insert(
+        "policy_hash".to_owned(),
+        json::Value::String(hex_encode(public_inputs.policy_hash)),
+    );
+    value.insert(
+        "from".to_owned(),
+        json::Value::String(from_account_literal.trim().to_owned()),
+    );
+    value.insert(
+        "to".to_owned(),
+        json::Value::String(to_account_literal.trim().to_owned()),
+    );
+    value.insert(
+        "asset".to_owned(),
+        json::Value::String(public_inputs.asset.to_string()),
+    );
+    value.insert(
+        "amount".to_owned(),
+        json::to_value(&public_inputs.amount)
+            .map_err(|err| PyValueError::new_err(format!("serialize public amount: {err}")))?,
+    );
+    value.insert(
+        "verifier_key_id".to_owned(),
+        json::Value::Object(verifier_key),
+    );
+    Ok(json::Value::Object(value))
+}
+
+fn zk_ace_stark_fri_parameters_json_value() -> PyResult<json::Value> {
+    let params = zk_ace_prover::zk_ace_stark_fri_params_v1();
+    let blowup_factor = 1u64
+        .checked_shl(u32::from(params.blowup_log2))
+        .ok_or_else(|| PyValueError::new_err("invalid ZK-ACE STARK/FRI blowup factor"))?;
+    let max_reductions = params.n_log2;
+    let mut value = json::Map::new();
+    value.insert(
+        "version".to_owned(),
+        json::to_value(&params.version)
+            .map_err(|err| PyValueError::new_err(format!("serialize FRI version: {err}")))?,
+    );
+    value.insert(
+        "n_log2".to_owned(),
+        json::to_value(&params.n_log2)
+            .map_err(|err| PyValueError::new_err(format!("serialize FRI n_log2: {err}")))?,
+    );
+    value.insert(
+        "blowup_log2".to_owned(),
+        json::to_value(&params.blowup_log2)
+            .map_err(|err| PyValueError::new_err(format!("serialize FRI blowup_log2: {err}")))?,
+    );
+    value.insert(
+        "blowup_factor".to_owned(),
+        json::to_value(&blowup_factor)
+            .map_err(|err| PyValueError::new_err(format!("serialize FRI blowup: {err}")))?,
+    );
+    value.insert(
+        "fold_arity".to_owned(),
+        json::to_value(&params.fold_arity)
+            .map_err(|err| PyValueError::new_err(format!("serialize FRI fold_arity: {err}")))?,
+    );
+    value.insert(
+        "arity".to_owned(),
+        json::to_value(&params.fold_arity)
+            .map_err(|err| PyValueError::new_err(format!("serialize FRI arity: {err}")))?,
+    );
+    value.insert(
+        "queries".to_owned(),
+        json::to_value(&params.queries)
+            .map_err(|err| PyValueError::new_err(format!("serialize FRI queries: {err}")))?,
+    );
+    value.insert(
+        "max_reductions".to_owned(),
+        json::to_value(&max_reductions)
+            .map_err(|err| PyValueError::new_err(format!("serialize FRI reductions: {err}")))?,
+    );
+    value.insert(
+        "merkle_arity".to_owned(),
+        json::to_value(&params.merkle_arity)
+            .map_err(|err| PyValueError::new_err(format!("serialize FRI merkle_arity: {err}")))?,
+    );
+    value.insert(
+        "hash_fn".to_owned(),
+        json::to_value(&params.hash_fn)
+            .map_err(|err| PyValueError::new_err(format!("serialize FRI hash_fn: {err}")))?,
+    );
+    value.insert(
+        "domain_tag".to_owned(),
+        json::Value::String(params.domain_tag),
+    );
+    Ok(json::Value::Object(value))
+}
+
 fn zk_ace_authorization_json(
     public_inputs: &ZkAcePublicInputsV1,
     proof: &ProofAttachment,
     public_inputs_bytes: &[u8],
+    from_account_literal: &str,
+    to_account_literal: &str,
 ) -> PyResult<String> {
     let mut root = json::Map::new();
     root.insert(
         "public_inputs".to_owned(),
-        json::to_value(public_inputs)
-            .map_err(|err| PyValueError::new_err(format!("serialize public inputs: {err}")))?,
+        zk_ace_public_inputs_json_value(public_inputs, from_account_literal, to_account_literal)?,
     );
     root.insert(
         "proof".to_owned(),
@@ -851,6 +1062,113 @@ fn zk_ace_authorization_json(
     );
     json::to_string(&json::Value::Object(root))
         .map_err(|err| PyValueError::new_err(format!("serialize ZK-ACE authorization: {err}")))
+}
+
+fn decode_zk_ace_authorized_transfer_archive(
+    bytes: &[u8],
+) -> PyResult<SubmitZkAceAuthorizedTransfer> {
+    let mut transfer_input = bytes;
+    if let Ok(transfer) = SubmitZkAceAuthorizedTransfer::decode_all(&mut transfer_input) {
+        return Ok(transfer);
+    }
+    if let Ok(transfer) = decode_from_bytes::<SubmitZkAceAuthorizedTransfer>(bytes) {
+        return Ok(transfer);
+    }
+
+    let mut instruction_input = bytes;
+    let instruction_box =
+        if let Ok(instruction_box) = InstructionBox::decode_all(&mut instruction_input) {
+            instruction_box
+        } else {
+            decode_from_bytes::<InstructionBox>(bytes).map_err(|err| {
+                PyValueError::new_err(format!(
+                    "failed to decode ZK-ACE authorized transfer archive: {err}"
+                ))
+            })?
+        };
+    let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*instruction_box;
+    instruction_ref
+        .as_any()
+        .downcast_ref::<SubmitZkAceAuthorizedTransfer>()
+        .cloned()
+        .ok_or_else(|| {
+            PyValueError::new_err("instruction archive is not SubmitZkAceAuthorizedTransfer")
+        })
+}
+
+#[pyfunction]
+#[pyo3(name = "zk_ace_authorized_transfer_digest_check")]
+fn zk_ace_authorized_transfer_digest_check_py(
+    py: Python<'_>,
+    instruction_archive_hex: &str,
+) -> PyResult<Py<PyDict>> {
+    let bytes = parse_hex_bytes_py(instruction_archive_hex, "instruction_archive_hex")?;
+    let transfer = decode_zk_ace_authorized_transfer_archive(&bytes)?;
+    let expected_tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
+        transfer.from(),
+        transfer.to(),
+        transfer.asset(),
+        *transfer.amount(),
+        transfer.chain_id(),
+        transfer.action_class().trim(),
+        transfer.policy_hash(),
+    );
+
+    let proof_envelope: OpenVerifyEnvelope = decode_from_bytes(&transfer.proof().proof.bytes)
+        .map_err(|err| {
+            PyValueError::new_err(format!("failed to decode ZK-ACE proof envelope: {err}"))
+        })?;
+    let proof_public_inputs: ZkAcePublicInputsV1 = decode_from_bytes(&proof_envelope.public_inputs)
+        .map_err(|err| {
+            PyValueError::new_err(format!("failed to decode ZK-ACE public inputs: {err}"))
+        })?;
+
+    let result = PyDict::new(py);
+    result.set_item("from", transfer.from().to_string())?;
+    result.set_item("to", transfer.to().to_string())?;
+    result.set_item("asset", transfer.asset().to_string())?;
+    result.set_item("amount", transfer.amount().to_string())?;
+    result.set_item("chain_id", transfer.chain_id().to_string())?;
+    result.set_item("domain_tag", transfer.domain_tag())?;
+    result.set_item("action_class", transfer.action_class())?;
+    result.set_item(
+        "identity_commitment",
+        hex_encode(transfer.identity_commitment()),
+    )?;
+    result.set_item("tx_digest", hex_encode(transfer.tx_digest()))?;
+    result.set_item("expected_tx_digest", hex_encode(expected_tx_digest))?;
+    result.set_item(
+        "tx_digest_matches",
+        *transfer.tx_digest() == expected_tx_digest,
+    )?;
+    result.set_item("replay_nullifier", hex_encode(transfer.replay_nullifier()))?;
+    result.set_item("policy_hash", hex_encode(transfer.policy_hash()))?;
+    result.set_item(
+        "proof_public_tx_digest",
+        hex_encode(proof_public_inputs.tx_digest),
+    )?;
+    result.set_item(
+        "proof_public_tx_digest_matches_instruction",
+        proof_public_inputs.tx_digest == *transfer.tx_digest(),
+    )?;
+    result.set_item("proof_public_from", proof_public_inputs.from.to_string())?;
+    result.set_item("proof_public_to", proof_public_inputs.to.to_string())?;
+    result.set_item("proof_public_asset", proof_public_inputs.asset.to_string())?;
+    result.set_item(
+        "proof_public_amount",
+        proof_public_inputs.amount.to_string(),
+    )?;
+    result.set_item(
+        "proof_public_fields_match_instruction",
+        proof_public_inputs.from == *transfer.from()
+            && proof_public_inputs.to == *transfer.to()
+            && proof_public_inputs.asset == *transfer.asset()
+            && proof_public_inputs.amount == *transfer.amount()
+            && proof_public_inputs.chain_id == *transfer.chain_id()
+            && proof_public_inputs.action_class == transfer.action_class().trim()
+            && proof_public_inputs.policy_hash == *transfer.policy_hash(),
+    )?;
+    Ok(result.unbind())
 }
 
 fn parse_u128_text(value: &str, context: &str) -> PyResult<u128> {
@@ -1127,7 +1445,7 @@ fn parse_wallet_signature(fields: &Bound<'_, PyDict>) -> PyResult<WalletSignatur
     };
     Ok(WalletSignatureV1::new(
         algorithm,
-        Signature::from_bytes(&sig),
+        checked_signature_from_bytes(&sig, "approve.signature")?,
     ))
 }
 
@@ -4522,7 +4840,85 @@ fn zk_ace_build_transfer_authorization_v1_py(
         &authorization.public_inputs,
         &authorization.proof,
         &authorization.public_inputs_bytes,
+        from_account_id,
+        to_account_id,
     )
+}
+
+#[pyfunction]
+#[pyo3(name = "zk_ace_verifying_key_registration_payload_v1")]
+fn zk_ace_verifying_key_registration_payload_v1_py() -> PyResult<String> {
+    let record = zk_ace_prover::zk_ace_verifying_key_record_v1(1).map_err(|err| {
+        PyValueError::new_err(format!(
+            "failed to build ZK-ACE verifying key record: {err}"
+        ))
+    })?;
+    let key = record
+        .key
+        .as_ref()
+        .ok_or_else(|| PyValueError::new_err("ZK-ACE verifying key record has no key bytes"))?;
+
+    let mut value = json::Map::new();
+    value.insert(
+        "backend".to_owned(),
+        json::Value::String(key.backend.as_str().to_owned()),
+    );
+    value.insert(
+        "name".to_owned(),
+        json::Value::String(iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned()),
+    );
+    value.insert(
+        "version".to_owned(),
+        json::to_value(&record.version)
+            .map_err(|err| PyValueError::new_err(format!("serialize ZK-ACE key version: {err}")))?,
+    );
+    value.insert(
+        "circuit_id".to_owned(),
+        json::Value::String(record.circuit_id.clone()),
+    );
+    value.insert(
+        "public_inputs_schema_hash_hex".to_owned(),
+        json::Value::String(hex_encode(record.public_inputs_schema_hash)),
+    );
+    value.insert(
+        "curve".to_owned(),
+        json::Value::String(record.curve.clone()),
+    );
+    if let Some(gas_schedule_id) = record.gas_schedule_id.as_deref() {
+        value.insert(
+            "gas_schedule_id".to_owned(),
+            json::Value::String(gas_schedule_id.to_owned()),
+        );
+    }
+    value.insert(
+        "vk_len".to_owned(),
+        json::to_value(&record.vk_len)
+            .map_err(|err| PyValueError::new_err(format!("serialize ZK-ACE key length: {err}")))?,
+    );
+    value.insert(
+        "max_proof_bytes".to_owned(),
+        json::to_value(&record.max_proof_bytes).map_err(|err| {
+            PyValueError::new_err(format!("serialize ZK-ACE max proof bytes: {err}"))
+        })?,
+    );
+    value.insert(
+        "vk_bytes".to_owned(),
+        json::Value::String(BASE64.encode(&key.bytes)),
+    );
+    value.insert(
+        "commitment_hex".to_owned(),
+        json::Value::String(hex_encode(record.commitment)),
+    );
+    value.insert(
+        "status".to_owned(),
+        json::Value::String("Active".to_owned()),
+    );
+
+    json::to_string(&json::Value::Object(value)).map_err(|err| {
+        PyValueError::new_err(format!(
+            "failed to serialize ZK-ACE verifier-key registration payload: {err}"
+        ))
+    })
 }
 
 fn py_sequence_items<'py>(
@@ -6154,6 +6550,93 @@ mod tests {
     }
 
     #[test]
+    fn checked_signature_from_bytes_rejects_empty_and_all_zero_payloads() {
+        let empty = py_err_message(
+            checked_signature_from_bytes(&[], "signature").expect_err("empty signature must fail"),
+        );
+        assert!(
+            empty.contains("signature is malformed: signature payload must not be empty"),
+            "unexpected empty-signature error: {empty}"
+        );
+
+        let all_zero = py_err_message(
+            checked_signature_from_bytes(&[0u8; 64], "signature")
+                .expect_err("all-zero signature must fail"),
+        );
+        assert!(
+            all_zero.contains("signature is malformed: signature payload must not be all zero"),
+            "unexpected all-zero signature error: {all_zero}"
+        );
+
+        let accepted = checked_signature_from_bytes(&[0x42; 64], "signature")
+            .expect("nonzero opaque signature material is admitted for backend verification");
+        assert_eq!(accepted.payload(), &[0x42; 64]);
+    }
+
+    #[test]
+    fn verify_ed25519_rejects_malformed_signature_r_before_backend() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let key_pair = KeyPair::try_from_seed(
+            b"python-native-ed25519-signature-r-admission".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive checked Ed25519 fixture keypair");
+        let (_, public_key) = public_key_to_bytes(key_pair.public_key(), "fixture public key")
+            .expect("fixture public key bytes");
+        let message = b"python native Ed25519 signature admission";
+        let signature =
+            Signature::try_new(key_pair.private_key(), message).expect("checked fixture signature");
+
+        assert!(
+            verify_py(
+                Algorithm::Ed25519.as_static_str(),
+                public_key,
+                message,
+                signature.payload(),
+            )
+            .expect("generic Ed25519 verification returns a bool"),
+            "valid Ed25519 signature must verify through generic wrapper"
+        );
+        assert!(
+            verify_ed25519_py(public_key, message, signature.payload())
+                .expect("Ed25519 verification returns a bool"),
+            "valid Ed25519 signature must verify through Ed25519 wrapper"
+        );
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = signature.payload().to_vec();
+            malformed[..32].copy_from_slice(&replacement_r);
+            assert!(
+                !verify_py(
+                    Algorithm::Ed25519.as_static_str(),
+                    public_key,
+                    message,
+                    &malformed,
+                )
+                .expect("generic Ed25519 verification returns a bool"),
+                "{label} Ed25519 signature R must fail generic wrapper admission"
+            );
+            assert!(
+                !verify_ed25519_py(public_key, message, &malformed)
+                    .expect("Ed25519 verification returns a bool"),
+                "{label} Ed25519 signature R must fail Ed25519 wrapper admission"
+            );
+        }
+    }
+
+    #[test]
     fn python_confidential_transfer_input_requires_canonical_diversifier() {
         ensure_python();
         Python::attach(|py| {
@@ -6213,10 +6696,222 @@ mod tests {
             .expect("canonical I105")
     }
 
+    fn taira_i105_from_seed(seed: u8) -> String {
+        AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
+            .to_i105_for_discriminant(369)
+            .expect("Taira I105")
+    }
+
+    fn custom_i105_from_seed(seed: u8, discriminant: u16) -> String {
+        AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
+            .to_i105_for_discriminant(discriminant)
+            .expect("custom I105")
+    }
+
     fn sample_account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive Python fixture account key");
         AccountId::new(keypair.public_key().clone())
+    }
+
+    #[test]
+    fn i105_discriminant_hint_decodes_valid_literals_only() {
+        let custom_account = custom_i105_from_seed(0x70, 42);
+        assert_eq!(i105_discriminant_hint(&custom_account), Some(42));
+
+        let noncanonical = custom_account.replacen("n42", "n00042", 1);
+        assert_eq!(i105_discriminant_hint(&noncanonical), None);
+
+        let mut chars = custom_account.chars().collect::<Vec<_>>();
+        let last = chars.len().saturating_sub(1);
+        chars[last] = if chars[last] == '1' { '2' } else { '1' };
+        let tampered = chars.into_iter().collect::<String>();
+        assert_eq!(i105_discriminant_hint(&tampered), None);
+        assert_eq!(i105_discriminant_hint("n"), None);
+        assert_eq!(i105_discriminant_hint("nabc"), None);
+        assert_eq!(i105_discriminant_hint("n65536payload"), None);
+    }
+
+    #[test]
+    fn parse_account_id_accepts_taira_i105_literals_without_global_discriminant() {
+        let taira_account = taira_i105_from_seed(0x71);
+        assert!(
+            taira_account.starts_with("test"),
+            "Taira I105 account must use the public test sentinel"
+        );
+        assert_eq!(
+            parse_account_id(&taira_account).expect("Taira account parses"),
+            sample_account(0x71)
+        );
+    }
+
+    #[test]
+    fn parse_account_id_accepts_numeric_custom_i105_literals_without_global_discriminant() {
+        let custom_account = custom_i105_from_seed(0x72, 42);
+        assert!(
+            custom_account.starts_with("n42"),
+            "custom I105 account must use the numeric sentinel"
+        );
+        assert_eq!(
+            parse_account_id(&custom_account).expect("custom account parses"),
+            sample_account(0x72)
+        );
+    }
+
+    #[test]
+    fn parse_account_id_rejects_noncanonical_and_tampered_numeric_custom_i105_literals() {
+        let custom_account = custom_i105_from_seed(0x73, 42);
+        let noncanonical = custom_account.replacen("n42", "n00042", 1);
+        assert!(
+            parse_account_id(&noncanonical).is_err(),
+            "noncanonical numeric sentinel must be rejected"
+        );
+
+        let mut chars = custom_account.chars().collect::<Vec<_>>();
+        let last = chars.len().saturating_sub(1);
+        chars[last] = if chars[last] == '1' { '2' } else { '1' };
+        let tampered = chars.into_iter().collect::<String>();
+        assert!(
+            parse_account_id(&tampered).is_err(),
+            "payload/checksum tampering must be rejected"
+        );
+    }
+
+    #[test]
+    fn zk_ace_json_exports_native_stark_fri_parameters() {
+        let parameters =
+            zk_ace_stark_fri_parameters_json_value().expect("serialize ZK-ACE FRI parameters");
+        let object = parameters
+            .as_object()
+            .expect("ZK-ACE FRI parameters are an object");
+
+        assert_eq!(
+            object.get("queries").and_then(json::Value::as_u64),
+            Some(24)
+        );
+        assert_eq!(
+            object.get("blowup_factor").and_then(json::Value::as_u64),
+            Some(8)
+        );
+        assert_eq!(object.get("arity").and_then(json::Value::as_u64), Some(2));
+        assert_eq!(
+            object.get("fold_arity").and_then(json::Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            object.get("max_reductions").and_then(json::Value::as_u64),
+            Some(10)
+        );
+        assert_eq!(
+            object.get("domain_tag").and_then(json::Value::as_str),
+            Some("iroha:zk-ace:stark-fri:v0")
+        );
+    }
+
+    #[test]
+    fn zk_ace_verifier_key_registration_payload_matches_native_record() {
+        let raw = zk_ace_verifying_key_registration_payload_v1_py()
+            .expect("serialize ZK-ACE verifier-key registration payload");
+        let payload: json::Value =
+            json::from_str(&raw).expect("ZK-ACE verifier-key payload is JSON");
+        let object = payload
+            .as_object()
+            .expect("ZK-ACE verifier-key payload is an object");
+        let record = zk_ace_prover::zk_ace_verifying_key_record_v1(1)
+            .expect("native ZK-ACE verifier-key record");
+        let key = record.key.as_ref().expect("record carries key bytes");
+
+        assert_eq!(
+            object.get("backend").and_then(json::Value::as_str),
+            Some(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND)
+        );
+        assert_eq!(
+            object.get("name").and_then(json::Value::as_str),
+            Some(iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID)
+        );
+        assert_eq!(
+            object.get("circuit_id").and_then(json::Value::as_str),
+            Some(iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID)
+        );
+        assert_eq!(
+            object
+                .get("public_inputs_schema_hash_hex")
+                .and_then(json::Value::as_str),
+            Some(hex_encode(record.public_inputs_schema_hash).as_str())
+        );
+        assert_eq!(
+            object.get("commitment_hex").and_then(json::Value::as_str),
+            Some(hex_encode(record.commitment).as_str())
+        );
+        assert_eq!(
+            object.get("vk_bytes").and_then(json::Value::as_str),
+            Some(BASE64.encode(&key.bytes).as_str())
+        );
+        assert_eq!(
+            object.get("status").and_then(json::Value::as_str),
+            Some("Active")
+        );
+    }
+
+    #[test]
+    fn zk_ace_public_inputs_json_uses_hex_and_submitted_account_literals() {
+        let from_literal = taira_i105_from_seed(0x72);
+        let to_literal = taira_i105_from_seed(0x73);
+        let from = parse_account_id(&from_literal).expect("from account parses");
+        let to = parse_account_id(&to_literal).expect("to account parses");
+        let asset =
+            AssetDefinitionId::from_str("7MBRDd8cGFBZkFGdDMwV7S6FPwbw").expect("asset parses");
+        let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
+            [0x11; 32],
+            [0x22; 32],
+            ChainId::from_str("809574f5-fee7-5e69-bfcf-52451e42d50f").expect("chain id parses"),
+            [0x33; 32],
+            [0x44; 32],
+            from,
+            to,
+            asset,
+            123,
+            zk_ace_prover::zk_ace_verifier_key_id(
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+            ),
+        );
+
+        let projected = zk_ace_public_inputs_json_value(&public_inputs, &from_literal, &to_literal)
+            .expect("serialize public inputs");
+        let object = projected
+            .as_object()
+            .expect("ZK-ACE public inputs are an object");
+
+        assert_eq!(
+            object
+                .get("identity_commitment")
+                .and_then(json::Value::as_str),
+            Some("1111111111111111111111111111111111111111111111111111111111111111")
+        );
+        assert_eq!(
+            object.get("tx_digest").and_then(json::Value::as_str),
+            Some("2222222222222222222222222222222222222222222222222222222222222222")
+        );
+        assert_eq!(
+            object.get("replay_nullifier").and_then(json::Value::as_str),
+            Some("3333333333333333333333333333333333333333333333333333333333333333")
+        );
+        assert_eq!(
+            object.get("policy_hash").and_then(json::Value::as_str),
+            Some("4444444444444444444444444444444444444444444444444444444444444444")
+        );
+        assert_eq!(
+            object.get("from").and_then(json::Value::as_str),
+            Some(from_literal.as_str())
+        );
+        assert_eq!(
+            object.get("to").and_then(json::Value::as_str),
+            Some(to_literal.as_str())
+        );
+        assert_eq!(
+            object.get("amount").and_then(json::Value::as_u64),
+            Some(123)
+        );
     }
 
     #[test]
@@ -17427,9 +18122,7 @@ struct PyAssetId {
 impl PyAssetId {
     #[new]
     fn new(value: &str) -> PyResult<Self> {
-        let inner = value
-            .parse()
-            .map_err(|err| PyValueError::new_err(format!("invalid asset id `{value}`: {err}")))?;
+        let inner = parse_asset_id(value)?;
         Ok(Self { inner })
     }
 
@@ -18065,9 +18758,7 @@ impl Instruction {
         asset_id: &str,
         quantity: &str,
     ) -> PyResult<Self> {
-        let asset_id: AssetId = asset_id.parse().map_err(|err| {
-            PyValueError::new_err(format!("invalid asset id `{asset_id}`: {err}"))
-        })?;
+        let asset_id = parse_asset_id(asset_id)?;
         let quantity = parse_numeric(quantity)?;
         let instruction = Mint::asset_numeric(quantity, asset_id);
         Ok(Instruction::new(instruction.into()))
@@ -18079,9 +18770,7 @@ impl Instruction {
         asset_id: &str,
         quantity: &str,
     ) -> PyResult<Self> {
-        let asset_id: AssetId = asset_id.parse().map_err(|err| {
-            PyValueError::new_err(format!("invalid asset id `{asset_id}`: {err}"))
-        })?;
+        let asset_id = parse_asset_id(asset_id)?;
         let quantity = parse_numeric(quantity)?;
         let instruction = Burn::asset_numeric(quantity, asset_id);
         Ok(Instruction::new(instruction.into()))
@@ -18094,9 +18783,7 @@ impl Instruction {
         quantity: &str,
         destination: &str,
     ) -> PyResult<Self> {
-        let asset_id: AssetId = asset_id.parse().map_err(|err| {
-            PyValueError::new_err(format!("invalid asset id `{asset_id}`: {err}"))
-        })?;
+        let asset_id = parse_asset_id(asset_id)?;
         let destination: AccountId = parse_account_id(destination)?;
         ensure_ed25519_account(&destination)?;
         let quantity = parse_numeric(quantity)?;
@@ -19096,7 +19783,10 @@ impl TransactionBuilder {
 
         let signed = self
             .to_model_builder()
-            .build_with_signature(Signature::from_bytes(signature));
+            .build_with_signature(checked_signature_from_bytes(
+                signature,
+                "Ed25519 signature",
+            )?);
         signed.verify_signature().map_err(|err| {
             PyValueError::new_err(format!("signature verification failed: {err}"))
         })?;
@@ -19437,7 +20127,14 @@ fn verify_py(
 ) -> PyResult<bool> {
     let algorithm = parse_algorithm_arg(algorithm)?;
     let public_key = parse_public_key_for_algorithm(algorithm, public_key)?;
-    let signature = Signature::from_bytes(signature);
+    let signature = match if algorithm == Algorithm::Ed25519 {
+        ed25519_parse_signature(signature)
+    } else {
+        Signature::try_from_bytes(signature).map_err(Into::into)
+    } {
+        Ok(signature) => signature,
+        Err(_) => return Ok(false),
+    };
     Ok(signature.verify(&public_key, message).is_ok())
 }
 
@@ -19560,7 +20257,10 @@ fn sign_ed25519_py(py: Python<'_>, private_key: &[u8], message: &[u8]) -> PyResu
 /// Verify `signature` against `message` and the provided Ed25519 public key.
 fn verify_ed25519_py(public_key: &[u8], message: &[u8], signature: &[u8]) -> PyResult<bool> {
     let public_key = parse_public_key(public_key)?;
-    let signature = Signature::from_bytes(signature);
+    let signature = match ed25519_parse_signature(signature) {
+        Ok(signature) => signature,
+        Err(_) => return Ok(false),
+    };
     Ok(signature.verify(&public_key, message).is_ok())
 }
 
@@ -22840,6 +23540,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         zk_ace_build_transfer_authorization_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        zk_ace_authorized_transfer_digest_check_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        zk_ace_verifying_key_registration_payload_v1_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

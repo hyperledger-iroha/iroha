@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         proof: Some(proof.clone()),
         sig_wallet: proto::WalletSignatureV1::new(
             Algorithm::Ed25519,
-            Signature::from_bytes(&[0u8; 64]),
+            Signature::try_from_bytes(&[0xA6u8; 64])?,
         ),
     };
 

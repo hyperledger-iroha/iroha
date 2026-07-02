@@ -90,6 +90,7 @@ def billing_cycle(cycle_id: str, cycle_index: int, *, generated_at: int = GENERA
         "total_usd_micro": 42_000,
         "reference_price_bound": True,
         "reference_decision_id_hex": DIGEST,
+        "policy_digest_hex": DIGEST,
         "line_item_root_hex": DIGEST,
         "statement_bundle_digest_hex": DIGEST,
         "reconciliation_digest_hex": DIGEST,
@@ -233,6 +234,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
             "reconciliation_digest_hex": DIGEST,
         }
     ]
+    assert payload["valid_policy_digests"] == [DIGEST]
     assert payload["required"]["feed_collector"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
@@ -343,6 +345,40 @@ def test_sensitive_key_spelling_variants_fail(tmp_path: Path) -> None:
     assert "transport.response-body" not in errors
 
 
+def test_statement_publication_route_count_must_match_unique_routes(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = statement_publication()
+    payload["route_count"] += 1
+    payload["passed_route_count"] = payload["route_count"]
+    write_json(tmp_path / "statement-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["statement_publication"]["artifacts"][0]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_statement_publication_routes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = statement_publication()
+    payload["routes"].append(dict(payload["routes"][0]))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "statement-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["statement_publication"]["artifacts"][0]
+    assert "routes must not contain duplicate values" in artifact["errors"]
+    assert "route_count must match unique routes count" in artifact["errors"]
+
+
 def test_governed_hedge_execution_can_pass(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = governance_approval()
@@ -393,6 +429,26 @@ def test_billing_cycle_requires_reference_binding_digest(tmp_path: Path) -> None
     assert run_gate(tmp_path) == 1
 
 
+def test_billing_cycle_requires_policy_digest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = billing_cycle("cycle-1", 1)
+    del payload["policy_digest_hex"]
+    write_json(tmp_path / "billing-cycle-1.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    required = result["required"]["billing_cycle"]
+    artifact = next(
+        artifact
+        for artifact in required["artifacts"]
+        if artifact["fingerprint"]["cycle_id"] == "cycle-1"
+    )
+    assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+    assert result["valid_policy_digests"] == [DIGEST]
+
+
 def test_billing_cycle_reference_must_match_valid_reference_price(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
@@ -414,6 +470,52 @@ def test_billing_cycle_reference_must_match_valid_reference_price(tmp_path: Path
     assert artifact["errors"] == [
         "billing_cycle reference_decision_id_hex must reference a valid "
         "reference_price decision_id_hex"
+    ]
+
+
+def test_governance_policy_digest_must_match_valid_billing_cycle(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = governance_approval()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-approval.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert result["valid_policy_digests"] == [DIGEST]
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval policy_digest_hex must reference a valid "
+        "billing_cycle policy_digest_hex"
+    ]
+
+
+def test_policy_bound_subset_requires_billing_cycle_anchor(tmp_path: Path) -> None:
+    write_json(tmp_path / "governance-approval.json", governance_approval())
+    summary = tmp_path / "summary.json"
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-kind",
+            "governance_approval",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert result["valid_policy_digests"] == []
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "governance_approval statement_bundle_digest_hex and "
+        "reconciliation_digest_hex require a valid billing_cycle artifact",
+        "governance_approval policy_digest_hex requires a valid billing_cycle "
+        "policy_digest_hex",
     ]
 
 
@@ -532,6 +634,36 @@ def test_reconciliation_reconciled_line_item_count_must_match(tmp_path: Path) ->
     )
 
 
+def test_reconciliation_source_count_must_match_unique_sources(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["source_count"] += 1
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["reconciliation"]["artifacts"][0]
+    assert "source_count must match unique sources count" in artifact["errors"]
+
+
+def test_reconciliation_sources_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["sources"].append(dict(payload["sources"][0]))
+    payload["source_count"] = len(payload["sources"])
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["reconciliation"]["artifacts"][0]
+    assert "sources must not contain duplicate values" in artifact["errors"]
+    assert "source_count must match unique sources count" in artifact["errors"]
+
+
 def test_metrics_critical_alert_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "metrics-alerts.json", metrics_alerts(critical=True))
@@ -544,6 +676,39 @@ def test_native_bridge_abi_below_twelve_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "native-bridge-release.json", native_bridge_release(abi=11))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_native_bridge_artifact_count_must_match_unique_artifacts(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = native_bridge_release()
+    payload["artifact_count"] += 1
+    write_json(tmp_path / "native-bridge-release.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["native_bridge_release"]["artifacts"][0]
+    assert "artifact_count must equal artifacts length" in artifact["errors"]
+    assert "artifact_count must match unique artifacts count" in artifact["errors"]
+
+
+def test_native_bridge_artifacts_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = native_bridge_release()
+    payload["artifacts"].append(dict(payload["artifacts"][0]))
+    payload["artifact_count"] = len(payload["artifacts"])
+    write_json(tmp_path / "native-bridge-release.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["native_bridge_release"]["artifacts"][0]
+    assert "artifacts must not contain duplicate values" in artifact["errors"]
+    assert "artifact_count must match unique artifacts count" in artifact["errors"]
 
 
 def test_invalid_duplicate_artifact_fails_even_with_valid_artifact(tmp_path: Path) -> None:

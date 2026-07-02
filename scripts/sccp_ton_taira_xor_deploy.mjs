@@ -12,6 +12,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { normalizeAccountId } from "../javascript/iroha_js/src/normalizers.js";
 
 const ROUTE_ID = "taira_ton_xor";
 const ASSET_KEY = "xor";
@@ -23,6 +24,7 @@ const DEFAULT_TAIRA_TORII_URL = "https://taira.sora.org";
 const DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV =
   "SCCP_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY";
 const DEFAULT_COMMIT_TIMEOUT_MS = 120_000;
+const DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT = 2_000_000;
 const DEFAULT_ROUTE_MANIFEST_OUT =
   "artifacts/sccp-ton/testnet-taira-xor-route.manifest.json";
 const DEFAULT_ROUTE_MANIFEST_ISI_OUT =
@@ -33,20 +35,20 @@ const TON_TESTNET_EXPLORER_URL = "https://testnet.tonscan.org";
 const TON_DESTINATION_BINDING_KEY = "sccp:0:4:ton:ton-contract-v1:3";
 const TON_DESTINATION_BINDING_HASH =
   "0x8651c1b818973f92050f69e66e8491e9681d23db1cb37393b9ea15c5e7e02799";
+const DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO = "100000000";
 const TON_COUNTERPARTY_DOMAIN = 4;
 const TON_COUNTERPARTY_ACCOUNT_CODEC = 4;
 const TON_COUNTERPARTY_ACCOUNT_CODEC_KEY = "ton_raw";
 const TON_VERIFIER_TARGET = "TonContract";
-const TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID =
-  "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
+const TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const TAIRA_BURN_RECORD_VK_BACKEND = "halo2/ipa";
-const TAIRA_BURN_RECORD_VK_NAME = "taira_xor_burn_record_v1";
+const DEFAULT_TAIRA_BURN_RECORD_VK_NAME = "taira_bsc_xor_burn_record_v1";
 const TAIRA_BURN_RECORD_GAS_LIMIT = 2_000_000;
 
 function usage(command = "") {
   const common = `Usage:
-  node scripts/sccp_ton_taira_xor_deploy.mjs route-manifest --token <0:...> --bridge <0:...> --source-bridge <0:...> --verifier <0:...> --verifier-code-hash <0x...> --verifier-key-hash <0x...> --proof-artifact-hash <0x...> --proving-key-hash <0x...> --deployment-evidence <public-json> --source-verifier-material <public-json> --source-adapter-engine-deployment <public-json> --destination-browser-prover-manifest <public-json> --source-browser-prover-manifest <public-json> --taira-contract <public-json> --post-deploy-source-bridge-config-hash <0x...> --post-deploy-source-event-transaction-id <0x...> --post-deploy-route-canary-evidence-hash <0x...> --post-deploy-route-canary-transaction-id <0x...> --offline-full-toml-evidence <public-json-or-toml> [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
-  node scripts/sccp_ton_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --authority <taira-route-manifest-manager-account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${TAIRA_CHAIN_ID}] [--wait-for-commit true|false] [--commit-timeout-ms ${DEFAULT_COMMIT_TIMEOUT_MS}]
+  node scripts/sccp_ton_taira_xor_deploy.mjs route-manifest --token <0:...> --bridge <0:...> --source-bridge <0:...> --verifier <0:...> --verifier-code-hash <0x...> --verifier-key-hash <0x...> --proof-artifact-hash <0x...> --proving-key-hash <0x...> --deployment-evidence <public-json> --source-verifier-material <public-json> --source-adapter-engine-deployment <public-json> --destination-browser-prover-manifest <public-json> --source-browser-prover-manifest <public-json> --taira-contract <public-json> --post-deploy-source-bridge-config-hash <0x...> --post-deploy-source-event-transaction-id <0x...> --post-deploy-route-canary-evidence-hash <0x...> --post-deploy-route-canary-transaction-id <0x...> --offline-full-toml-evidence <public-json-or-toml> [--vk-name ${DEFAULT_TAIRA_BURN_RECORD_VK_NAME}] [--ton-finalize-message-value-nano ${DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+  node scripts/sccp_ton_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --authority <taira-route-manifest-manager-account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${TAIRA_CHAIN_ID}] [--gas-asset-id ${TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID}] [--gas-limit ${DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT}] [--wait-for-commit true|false] [--commit-timeout-ms ${DEFAULT_COMMIT_TIMEOUT_MS}]
 
 Commands:
   route-manifest          Render a production TON testnet route manifest draft.
@@ -69,32 +71,103 @@ function parseArgs(argv) {
     return { command: "help", options: {} };
   }
   const options = {};
+  const setOption = (key, value) => {
+    if (Object.hasOwn(options, key)) {
+      throw new Error("Option must be specified at most once.");
+    }
+    options[key] = value;
+  };
   for (let index = 0; index < rest.length; index += 1) {
     const token = rest[index];
     if (token === "--help" || token === "-h") {
-      options.help = true;
+      setOption("help", true);
       continue;
     }
     if (!token.startsWith("--")) {
-      throw new Error(`Unexpected argument: ${token}`);
+      throw new Error("Unexpected positional argument.");
     }
     const equalsIndex = token.indexOf("=");
     if (equalsIndex !== -1) {
       const key = token.slice(2, equalsIndex);
       const value = token.slice(equalsIndex + 1);
-      options[key] = value;
+      if (key === "help") {
+        throw new Error("Help option must not have a value.");
+      }
+      setOption(key, value);
       continue;
     }
     const key = token.slice(2);
     const next = rest[index + 1];
     if (next === undefined || next.startsWith("--")) {
-      options[key] = "true";
-      continue;
+      throw new Error("Option requires a value.");
     }
-    options[key] = next;
+    setOption(key, next);
     index += 1;
   }
   return { command, options };
+}
+
+const COMMAND_OPTION_ALLOWLISTS = Object.freeze({
+  "route-manifest": new Set([
+    "token",
+    "bridge",
+    "source-bridge",
+    "verifier",
+    "verifier-code-hash",
+    "verifier-key-hash",
+    "proof-artifact-hash",
+    "proving-key-hash",
+    "deployment-evidence",
+    "source-verifier-material",
+    "source-adapter-engine-deployment",
+    "destination-browser-prover-manifest",
+    "source-browser-prover-manifest",
+    "taira-contract",
+    "post-deploy-source-bridge-config-hash",
+    "post-deploy-source-event-transaction-id",
+    "post-deploy-source-event-explorer-url",
+    "post-deploy-route-canary-evidence-hash",
+    "post-deploy-route-canary-transaction-id",
+    "post-deploy-route-canary-explorer-url",
+    "offline-full-toml-evidence",
+    "offline-full-toml-sha256",
+    "vk-name",
+    "ton-finalize-message-value-nano",
+    "out",
+    "help",
+  ]),
+  "publish-route-manifest": new Set([
+    "manifest",
+    "out",
+    "submit",
+    "authority",
+    "private-key-env",
+    "torii-url",
+    "chain-id",
+    "gas-asset-id",
+    "gas-limit",
+    "wait-for-commit",
+    "commit-timeout-ms",
+    "help",
+  ]),
+});
+
+function assertKnownCommand(command) {
+  if (!Object.hasOwn(COMMAND_OPTION_ALLOWLISTS, command)) {
+    throw new Error("Unknown command.");
+  }
+}
+
+function assertKnownOptions(command, options) {
+  const allowlist = COMMAND_OPTION_ALLOWLISTS[command];
+  if (!allowlist) {
+    return;
+  }
+  for (const key of Object.keys(options)) {
+    if (!allowlist.has(key)) {
+      throw new Error(`Unknown option for ${command}.`);
+    }
+  }
 }
 
 function requireOption(options, key) {
@@ -105,23 +178,47 @@ function requireOption(options, key) {
   return value;
 }
 
+function normalizeCliPathOption(value, label, fallback) {
+  const candidate = value ?? fallback;
+  if (
+    typeof candidate !== "string" ||
+    candidate.trim() !== candidate ||
+    candidate === "" ||
+    /[\u0000-\u001f\u007f]/u.test(candidate)
+  ) {
+    throw new Error(`${label} must be a non-empty path.`);
+  }
+  return candidate;
+}
+
 function optionEnabled(options, key, fallback = false) {
-  const value = options[key];
-  if (value === undefined || value === null || value === "") {
+  if (!Object.hasOwn(options, key)) {
     return fallback;
   }
-  if (value === true || value === "true" || value === "1" || value === "yes") {
-    return true;
+  const value = options[key];
+  if (value === undefined) {
+    return fallback;
   }
-  if (
-    value === false ||
-    value === "false" ||
-    value === "0" ||
-    value === "no"
-  ) {
-    return false;
-  }
+  if (value === "true") return true;
+  if (value === "false") return false;
   throw new Error(`--${key} must be true or false.`);
+}
+
+const SUBMIT_ONLY_OPTIONS = Object.freeze([
+  "authority",
+  "private-key-env",
+  "torii-url",
+  "chain-id",
+  "wait-for-commit",
+  "commit-timeout-ms",
+]);
+
+function assertSubmitOnlyOptionsAbsentWhenNotSubmitting(options) {
+  for (const key of SUBMIT_ONLY_OPTIONS) {
+    if (Object.hasOwn(options, key)) {
+      throw new Error(`--${key} requires --submit true.`);
+    }
+  }
 }
 
 function normalizePositiveInteger(value, label, fallback = null) {
@@ -135,6 +232,18 @@ function normalizePositiveInteger(value, label, fallback = null) {
     throw new Error(`${label} must be a positive integer.`);
   }
   return parsed;
+}
+
+function normalizePositiveDecimalString(value, label, fallback = null) {
+  const candidate = value ?? fallback;
+  if (typeof candidate !== "string") {
+    throw new Error(`${label} must be a positive integer decimal string.`);
+  }
+  const text = candidate.trim();
+  if (!/^[1-9][0-9]*$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer decimal string.`);
+  }
+  return text;
 }
 
 function normalizeHex32(value, label, { nonzero = true } = {}) {
@@ -160,7 +269,9 @@ function normalizeTonRawAddress(value, label) {
   }
   const text = value.trim();
   if (text !== value || text !== text.toLowerCase()) {
-    throw new Error(`${label} must be canonical lowercase TON raw address text.`);
+    throw new Error(
+      `${label} must be canonical lowercase TON raw address text.`,
+    );
   }
   const match = text.match(/^0:([0-9a-f]{64})$/u);
   if (!match) {
@@ -296,17 +407,35 @@ async function writeJsonNoSecrets(path, value) {
   return out;
 }
 
+function assertDistinctResolvedPaths(outputPath, outputLabel, inputPaths) {
+  const outputResolved = resolve(outputPath);
+  for (const [inputPath, inputLabel] of inputPaths) {
+    if (typeof inputPath !== "string" || inputPath.trim() === "") {
+      continue;
+    }
+    if (outputResolved === resolve(inputPath)) {
+      throw new Error(
+        `${outputLabel} must not be the same path as ${inputLabel}.`,
+      );
+    }
+  }
+}
+
 function normalizeModuleUrl(value, label) {
   if (typeof value !== "string" || value.trim() !== value || value === "") {
     throw new Error(`${label} must be a deterministic module URL.`);
   }
   if (/[?#\\]/u.test(value) || value.includes("\0")) {
-    throw new Error(`${label} must not include credentials, query, fragment, or escapes.`);
+    throw new Error(
+      `${label} must not include credentials, query, fragment, or escapes.`,
+    );
   }
   if (/^https:\/\//u.test(value)) {
     const url = new URL(value);
     if (url.username || url.password || url.search || url.hash) {
-      throw new Error(`${label} must not include credentials, query, or fragment.`);
+      throw new Error(
+        `${label} must not include credentials, query, or fragment.`,
+      );
     }
     return value;
   }
@@ -319,15 +448,21 @@ function normalizeModuleUrl(value, label) {
       host === "::1" ||
       host.endsWith(".localhost");
     if (!loopback || url.username || url.password || url.search || url.hash) {
-      throw new Error(`${label} http URLs must be loopback and credential-free.`);
+      throw new Error(
+        `${label} http URLs must be loopback and credential-free.`,
+      );
     }
     return value;
   }
   if (/^[a-z][a-z0-9+.-]*:/iu.test(value) || value.startsWith("//")) {
-    throw new Error(`${label} must be HTTPS, loopback HTTP, or package-relative.`);
+    throw new Error(
+      `${label} must be HTTPS, loopback HTTP, or package-relative.`,
+    );
   }
   if (!/^(?:\.{0,2}\/|\/|@?[A-Za-z0-9_-])[-A-Za-z0-9_@./]*$/u.test(value)) {
-    throw new Error(`${label} must be package-relative, HTTPS, or loopback HTTP.`);
+    throw new Error(
+      `${label} must be package-relative, HTTPS, or loopback HTTP.`,
+    );
   }
   if (value.split("/").includes("..")) {
     throw new Error(`${label} must not traverse parent directories.`);
@@ -374,10 +509,14 @@ function normalizeBrowserProverRef(record, label, proofArtifactHash) {
     `${label}.bound_proof_hash`,
   );
   if (boundRouteHash !== TON_DESTINATION_BINDING_HASH) {
-    throw new Error(`${label}.bound_route_hash must match the TON destination binding hash.`);
+    throw new Error(
+      `${label}.bound_route_hash must match the TON destination binding hash.`,
+    );
   }
   if (boundProofHash !== proofArtifactHash) {
-    throw new Error(`${label}.bound_proof_hash must match proof_artifact_hash.`);
+    throw new Error(
+      `${label}.bound_proof_hash must match proof_artifact_hash.`,
+    );
   }
   return {
     module_url: moduleUrl,
@@ -411,7 +550,9 @@ function rejectSecretLikeMaterial(value, label) {
     }
     for (const [key, entry] of Object.entries(current.value)) {
       if (secretKeyPattern.test(key)) {
-        throw new Error(`${current.path}.${key} looks secret-like; remove it before publishing.`);
+        throw new Error(
+          `${current.path}.${key} looks secret-like; remove it before publishing.`,
+        );
       }
       stack.push({ value: entry, path: `${current.path}.${key}` });
     }
@@ -424,7 +565,15 @@ function normalizePublicJsonRecord(value, label) {
   return stableJsonValue(record);
 }
 
-function normalizeTairaContractMaterial(raw) {
+function normalizeTairaBurnRecordVkName(value) {
+  const normalized = String(value ?? DEFAULT_TAIRA_BURN_RECORD_VK_NAME).trim();
+  if (!normalized || !/^[A-Za-z0-9._:-]{1,128}$/u.test(normalized)) {
+    throw new Error("--vk-name must be 1-128 verifier-key identifier characters.");
+  }
+  return normalized;
+}
+
+function normalizeTairaContractMaterial(raw, { vkName: expectedVkName } = {}) {
   const record = requireRecord(raw, "TAIRA burn-record contract");
   const contract =
     firstRecord(record, "tairaXorBurnRecord", "taira_xor_burn_record") ??
@@ -444,14 +593,21 @@ function normalizeTairaContractMaterial(raw) {
       ),
     "TAIRA burn-record settlement asset definition id",
   );
-  if (settlementAssetDefinitionId !== TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID) {
+  if (
+    settlementAssetDefinitionId !== TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID
+  ) {
     throw new Error(
       `TAIRA burn-record settlement asset must be ${TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID}.`,
     );
   }
   const vkRef =
-    firstRecord(contract, "vk_ref", "vkRef", "verifying_key_ref", "verifyingKeyRef") ??
-    {};
+    firstRecord(
+      contract,
+      "vk_ref",
+      "vkRef",
+      "verifying_key_ref",
+      "verifyingKeyRef",
+    ) ?? {};
   const vkBackend =
     firstString(vkRef, "backend", "proof_backend", "proofBackend") ||
     firstString(contract, "vk_backend", "vkBackend");
@@ -463,9 +619,9 @@ function normalizeTairaContractMaterial(raw) {
       `TAIRA burn-record VK backend must be ${TAIRA_BURN_RECORD_VK_BACKEND}.`,
     );
   }
-  if (vkName !== TAIRA_BURN_RECORD_VK_NAME) {
+  if (vkName !== expectedVkName) {
     throw new Error(
-      `TAIRA burn-record VK name must be ${TAIRA_BURN_RECORD_VK_NAME}.`,
+      `TAIRA burn-record VK name must be ${expectedVkName}.`,
     );
   }
   const gasLimit = normalizePositiveInteger(
@@ -538,19 +694,37 @@ function normalizeTonRouteManifestForPublication(input) {
     throw new Error("TON route manifest network_id_hex must be TON testnet.");
   }
   if (manifest.destination_binding_key !== TON_DESTINATION_BINDING_KEY) {
-    throw new Error("TON route manifest destination_binding_key is not canonical.");
+    throw new Error(
+      "TON route manifest destination_binding_key is not canonical.",
+    );
   }
   if (manifest.destination_binding_hash !== TON_DESTINATION_BINDING_HASH) {
-    throw new Error("TON route manifest destination_binding_hash is not canonical.");
+    throw new Error(
+      "TON route manifest destination_binding_hash is not canonical.",
+    );
   }
   for (const [key, label] of [
     ["taira_xor_token_address", "TON TairaXOR token address"],
     ["taira_xor_bridge_address", "TON bridge address"],
-    ["source_bridge_address", "TON source bridge address"],
-    ["destination_verifier_address", "TON verifier address"],
   ]) {
     manifest[key] = normalizeTonRawAddress(manifest[key], label);
   }
+  manifest.source_bridge_address = normalizeTonRawAddress(
+    firstString(
+      manifest,
+      "source_bridge_address",
+      "sccp_tron_source_bridge_address",
+    ),
+    "TON source bridge address",
+  );
+  manifest.destination_verifier_address = normalizeTonRawAddress(
+    firstString(
+      manifest,
+      "destination_verifier_address",
+      "tron_verifier_address",
+    ),
+    "TON verifier address",
+  );
   if (
     new Set([
       manifest.taira_xor_token_address,
@@ -559,8 +733,15 @@ function normalizeTonRouteManifestForPublication(input) {
       manifest.destination_verifier_address,
     ]).size !== 4
   ) {
-    throw new Error("TON token, bridge, source bridge, and verifier addresses must be distinct.");
+    throw new Error(
+      "TON token, bridge, source bridge, and verifier addresses must be distinct.",
+    );
   }
+  manifest.ton_finalize_message_value_nano = normalizePositiveDecimalString(
+    manifest.ton_finalize_message_value_nano,
+    "TON finalize message value in nanoTON",
+    DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO,
+  );
   manifest.verifier_code_hash = normalizeHex32(
     manifest.verifier_code_hash,
     "TON verifier code hash",
@@ -614,54 +795,130 @@ function normalizeTonRouteManifestForPublication(input) {
     "TAIRA burn-record code hash",
   );
   manifest.taira_burn_record_vk_backend = TAIRA_BURN_RECORD_VK_BACKEND;
-  manifest.taira_burn_record_vk_name = TAIRA_BURN_RECORD_VK_NAME;
+  manifest.taira_burn_record_vk_name = normalizeTairaBurnRecordVkName(
+    manifest.taira_burn_record_vk_name,
+  );
   manifest.taira_burn_record_gas_limit = TAIRA_BURN_RECORD_GAS_LIMIT;
   if (manifest.production_ready !== true) {
     throw new Error("TON route manifest production_ready must be true.");
   }
-  if (manifest.disabled_reason !== undefined && manifest.disabled_reason !== null) {
-    throw new Error("Production TON route manifest must not carry disabled_reason.");
+  if (
+    manifest.disabled_reason !== undefined &&
+    manifest.disabled_reason !== null
+  ) {
+    throw new Error(
+      "Production TON route manifest must not carry disabled_reason.",
+    );
   }
   if (manifest.post_deploy_full_toml_ready !== true) {
-    throw new Error("TON route manifest post_deploy_full_toml_ready must be true.");
+    throw new Error(
+      "TON route manifest post_deploy_full_toml_ready must be true.",
+    );
   }
   for (const [key, label] of [
-    ["post_deploy_source_bridge_config_hash", "post-deploy source bridge config hash"],
-    ["post_deploy_source_event_transaction_id", "post-deploy source event transaction id"],
-    ["post_deploy_route_canary_evidence_hash", "post-deploy route canary evidence hash"],
-    ["post_deploy_route_canary_transaction_id", "post-deploy route canary transaction id"],
-    ["post_deploy_offline_full_toml_sha256", "post-deploy offline full TOML sha256"],
+    [
+      "post_deploy_source_bridge_config_hash",
+      "post-deploy source bridge config hash",
+    ],
+    [
+      "post_deploy_source_event_transaction_id",
+      "post-deploy source event transaction id",
+    ],
+    [
+      "post_deploy_route_canary_evidence_hash",
+      "post-deploy route canary evidence hash",
+    ],
+    [
+      "post_deploy_route_canary_transaction_id",
+      "post-deploy route canary transaction id",
+    ],
+    [
+      "post_deploy_offline_full_toml_sha256",
+      "post-deploy offline full TOML sha256",
+    ],
   ]) {
     manifest[key] = normalizeHex32(manifest[key], label);
   }
   return stableJsonValue(manifest);
 }
 
+function bridgeRouteManifestForInstruction(manifest) {
+  const bridgeManifest = { ...manifest };
+  bridgeManifest.sccp_tron_source_bridge_address =
+    manifest.sccp_tron_source_bridge_address ?? manifest.source_bridge_address;
+  bridgeManifest.tron_verifier_address =
+    manifest.tron_verifier_address ?? manifest.destination_verifier_address;
+  delete bridgeManifest.source_bridge_address;
+  delete bridgeManifest.destination_verifier_address;
+  return stableJsonValue(bridgeManifest);
+}
+
 async function commandRouteManifest(options) {
+  const outPath = normalizeCliPathOption(
+    options.out,
+    "--out",
+    DEFAULT_ROUTE_MANIFEST_OUT,
+  );
+  const tairaContractPath = requireOption(options, "taira-contract");
+  const sourceVerifierMaterialPath = requireOption(
+    options,
+    "source-verifier-material",
+  );
+  const sourceAdapterEngineDeploymentPath = requireOption(
+    options,
+    "source-adapter-engine-deployment",
+  );
+  const destinationBrowserProverManifestPath = requireOption(
+    options,
+    "destination-browser-prover-manifest",
+  );
+  const sourceBrowserProverManifestPath = requireOption(
+    options,
+    "source-browser-prover-manifest",
+  );
+  const deploymentEvidencePath = requireOption(options, "deployment-evidence");
+  const offlineFullTomlEvidencePath = options["offline-full-toml-evidence"];
+  assertDistinctResolvedPaths(outPath, "--out", [
+    [tairaContractPath, "--taira-contract"],
+    [sourceVerifierMaterialPath, "--source-verifier-material"],
+    [
+      sourceAdapterEngineDeploymentPath,
+      "--source-adapter-engine-deployment",
+    ],
+    [
+      destinationBrowserProverManifestPath,
+      "--destination-browser-prover-manifest",
+    ],
+    [sourceBrowserProverManifestPath, "--source-browser-prover-manifest"],
+    [deploymentEvidencePath, "--deployment-evidence"],
+    [offlineFullTomlEvidencePath, "--offline-full-toml-evidence"],
+  ]);
   const proofArtifactHash = normalizeHex32(
     requireOption(options, "proof-artifact-hash"),
     "--proof-artifact-hash",
   );
+  const vkName = normalizeTairaBurnRecordVkName(options["vk-name"]);
   const tairaContract = normalizeTairaContractMaterial(
-    await readJson(requireOption(options, "taira-contract"), "TAIRA burn-record contract"),
+    await readJson(tairaContractPath, "TAIRA burn-record contract"),
+    { vkName },
   );
   const sourceVerifierMaterial = normalizePublicJsonRecord(
     await readJson(
-      requireOption(options, "source-verifier-material"),
+      sourceVerifierMaterialPath,
       "TON source verifier material",
     ),
     "TON source verifier material",
   );
   const sourceAdapterEngineDeployment = normalizePublicJsonRecord(
     await readJson(
-      requireOption(options, "source-adapter-engine-deployment"),
+      sourceAdapterEngineDeploymentPath,
       "TON source adapter engine deployment",
     ),
     "TON source adapter engine deployment",
   );
   const destinationBrowserProver = normalizeBrowserProverRef(
     await readJson(
-      requireOption(options, "destination-browser-prover-manifest"),
+      destinationBrowserProverManifestPath,
       "TON destination browser prover manifest",
     ),
     "destination_browser_prover",
@@ -669,11 +926,44 @@ async function commandRouteManifest(options) {
   );
   const sourceBrowserProver = normalizeBrowserProverRef(
     await readJson(
-      requireOption(options, "source-browser-prover-manifest"),
+      sourceBrowserProverManifestPath,
       "TON source browser prover manifest",
     ),
     "source_browser_prover",
     proofArtifactHash,
+  );
+  const tonFinalizeMessageValueNano = normalizePositiveDecimalString(
+    options["ton-finalize-message-value-nano"],
+    "--ton-finalize-message-value-nano",
+    DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO,
+  );
+  const tokenAddress = normalizeTonRawAddress(
+    requireOption(options, "token"),
+    "--token",
+  );
+  const bridgeAddress = normalizeTonRawAddress(
+    requireOption(options, "bridge"),
+    "--bridge",
+  );
+  const sourceBridgeAddress = normalizeTonRawAddress(
+    requireOption(options, "source-bridge"),
+    "--source-bridge",
+  );
+  const verifierAddress = normalizeTonRawAddress(
+    requireOption(options, "verifier"),
+    "--verifier",
+  );
+  const verifierCodeHash = normalizeHex32(
+    requireOption(options, "verifier-code-hash"),
+    "--verifier-code-hash",
+  );
+  const verifierKeyHash = normalizeHex32(
+    requireOption(options, "verifier-key-hash"),
+    "--verifier-key-hash",
+  );
+  const provingKeyHash = normalizeHex32(
+    requireOption(options, "proving-key-hash"),
+    "--proving-key-hash",
   );
   const manifest = normalizeTonRouteManifestForPublication({
     schema: ROUTE_MANIFEST_SCHEMA,
@@ -693,41 +983,40 @@ async function commandRouteManifest(options) {
     verifier_target: TON_VERIFIER_TARGET,
     production_ready: true,
     network_id_hex: TON_TESTNET_CHAIN_ID_HEX,
-    taira_xor_token_address: normalizeTonRawAddress(
-      requireOption(options, "token"),
-      "--token",
-    ),
-    taira_xor_bridge_address: normalizeTonRawAddress(
-      requireOption(options, "bridge"),
-      "--bridge",
-    ),
-    source_bridge_address: normalizeTonRawAddress(
-      requireOption(options, "source-bridge"),
-      "--source-bridge",
-    ),
-    destination_verifier_address: normalizeTonRawAddress(
-      requireOption(options, "verifier"),
-      "--verifier",
-    ),
-    verifier_code_hash: normalizeHex32(
-      requireOption(options, "verifier-code-hash"),
-      "--verifier-code-hash",
-    ),
-    verifier_key_hash: normalizeHex32(
-      requireOption(options, "verifier-key-hash"),
-      "--verifier-key-hash",
-    ),
+    taira_xor_token_address: tokenAddress,
+    taira_xor_bridge_address: bridgeAddress,
+    source_bridge_address: sourceBridgeAddress,
+    destination_verifier_address: verifierAddress,
+    ton_finalize_message_value_nano: tonFinalizeMessageValueNano,
+    verifier_code_hash: verifierCodeHash,
+    verifier_key_hash: verifierKeyHash,
     proof_artifact_hash: proofArtifactHash,
-    proving_key_hash: normalizeHex32(
-      requireOption(options, "proving-key-hash"),
-      "--proving-key-hash",
-    ),
+    proving_key_hash: provingKeyHash,
+    destination_rollout: {
+      version: 1,
+      destination_network_id: TON_TESTNET_CHAIN_ID_HEX,
+      source_domain: 0,
+      target_domain: TON_COUNTERPARTY_DOMAIN,
+      verifier_identity: verifierAddress,
+      verifier_backend: "ton-contract-v1",
+      proof_family: "stark-fri-v1",
+      verifier_code_hash: verifierCodeHash,
+      verifier_key_hash: verifierKeyHash,
+      proof_artifact_hash: proofArtifactHash,
+      proving_key_hash: provingKeyHash,
+      destination_bridge_address: bridgeAddress,
+      source_bridge_address: sourceBridgeAddress,
+      destination_binding_hash: TON_DESTINATION_BINDING_HASH,
+      destination_binding_key: TON_DESTINATION_BINDING_KEY,
+      finalize_message_value_nano: tonFinalizeMessageValueNano,
+      ton_finalize_message_value_nano: tonFinalizeMessageValueNano,
+    },
     source_verifier_material: sourceVerifierMaterial,
     source_adapter_engine_deployment: sourceAdapterEngineDeployment,
     destination_browser_prover: destinationBrowserProver,
     source_browser_prover: sourceBrowserProver,
     deployment_evidence_sha256: await sha256HexFileOrJson(
-      requireOption(options, "deployment-evidence"),
+      deploymentEvidencePath,
       "TON deployment evidence",
     ),
     destination_binding_key: TON_DESTINATION_BINDING_KEY,
@@ -771,7 +1060,7 @@ async function commandRouteManifest(options) {
           "TON offline full TOML evidence",
         ),
   });
-  const out = await writeJsonNoSecrets(options.out ?? DEFAULT_ROUTE_MANIFEST_OUT, {
+  const out = await writeJsonNoSecrets(outPath, {
     schema: ROUTE_MANIFEST_SCHEMA,
     generated_at_ms: Date.now(),
     manifest,
@@ -783,6 +1072,7 @@ async function commandRouteManifest(options) {
     assetKey: manifest.asset_key,
     productionReady: manifest.production_ready,
     destinationBindingHash: manifest.destination_binding_hash,
+    tonFinalizeMessageValueNano: manifest.ton_finalize_message_value_nano,
     deploymentEvidenceSha256: manifest.deployment_evidence_sha256,
     nextStep:
       "Review the manifest, publish it with publish-route-manifest, then rerun the public TAIRA TON preflight before UI smoke.",
@@ -790,12 +1080,42 @@ async function commandRouteManifest(options) {
 }
 
 async function commandPublishRouteManifest(options) {
-  const manifestPath = options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT;
+  const manifestPath = normalizeCliPathOption(
+    options.manifest,
+    "--manifest",
+    DEFAULT_ROUTE_MANIFEST_OUT,
+  );
+  const outPath = normalizeCliPathOption(
+    options.out,
+    "--out",
+    DEFAULT_ROUTE_MANIFEST_ISI_OUT,
+  );
+  assertDistinctResolvedPaths(outPath, "--out", [[manifestPath, "--manifest"]]);
+  const submit = optionEnabled(options, "submit", false);
+  if (!submit) {
+    assertSubmitOnlyOptionsAbsentWhenNotSubmitting(options);
+  }
+  const waitForCommit = submit
+    ? optionEnabled(options, "wait-for-commit", true)
+    : true;
+  const gasAssetId =
+    options["gas-asset-id"] === undefined || options["gas-asset-id"] === null
+      ? TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID
+      : normalizeCanonicalAssetDefinitionId(
+          options["gas-asset-id"],
+          "--gas-asset-id",
+        );
+  const gasLimit = normalizePositiveInteger(
+    options["gas-limit"],
+    "--gas-limit",
+    DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT,
+  );
   const manifestEnvelope = await readJson(manifestPath, "TON route manifest");
   const manifest = normalizeTonRouteManifestForPublication(manifestEnvelope);
+  const instructionManifest = bridgeRouteManifestForInstruction(manifest);
   const instruction = {
     UpsertSccpRouteManifest: {
-      manifest,
+      manifest: instructionManifest,
     },
   };
   const artifact = {
@@ -811,14 +1131,17 @@ async function commandPublishRouteManifest(options) {
     requiredPermission: "CanManageSccpRouteManifests",
     instruction,
     manifestSha256: sha256HexJson(manifest),
+    instructionManifestSha256: sha256HexJson(instructionManifest),
     productionReady: manifest.production_ready,
+    tonFinalizeMessageValueNano: manifest.ton_finalize_message_value_nano,
     destinationBrowserProverManifestHash:
       manifest.destination_browser_prover.manifest_hash,
     sourceBrowserProverManifestHash:
       manifest.source_browser_prover.manifest_hash,
+    gasAssetId,
+    gasLimit,
   };
-  const outPath = options.out ?? DEFAULT_ROUTE_MANIFEST_ISI_OUT;
-  if (!optionEnabled(options, "submit", false)) {
+  if (!submit) {
     const out = await writeJsonNoSecrets(outPath, artifact);
     return {
       ok: true,
@@ -832,40 +1155,48 @@ async function commandPublishRouteManifest(options) {
     };
   }
 
-  const authority = requireOption(options, "authority");
-  const privateKeyEnv =
-    options["private-key-env"] ?? DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV;
-  const privateKeyHex = process.env[privateKeyEnv];
-  if (typeof privateKeyHex !== "string" || privateKeyHex.trim() === "") {
-    throw new Error(`${privateKeyEnv} must be set at runtime for --submit true.`);
-  }
-  const privateKey = Buffer.from(
-    normalizePrivateKeyHex(privateKeyHex, privateKeyEnv).slice(2),
-    "hex",
+  const authority = normalizeAuthority(requireOption(options, "authority"));
+  const privateKeyEnv = normalizePrivateKeyEnvName(
+    options["private-key-env"] ?? DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV,
   );
   const chainId = options["chain-id"] ?? TAIRA_CHAIN_ID;
   if (chainId !== TAIRA_CHAIN_ID) {
     throw new Error(`--chain-id must be ${TAIRA_CHAIN_ID} for TAIRA.`);
   }
-  const toriiUrl = normalizeToriiUrl(options["torii-url"] ?? DEFAULT_TAIRA_TORII_URL);
-  const waitForCommit = optionEnabled(options, "wait-for-commit", true);
+  const toriiUrl = normalizeToriiUrl(
+    options["torii-url"] ?? DEFAULT_TAIRA_TORII_URL,
+  );
   const timeoutMs = normalizePositiveInteger(
     options["commit-timeout-ms"],
     "--commit-timeout-ms",
     DEFAULT_COMMIT_TIMEOUT_MS,
   );
+  const privateKeyHex = process.env[privateKeyEnv];
+  if (typeof privateKeyHex !== "string" || privateKeyHex.trim() === "") {
+    throw new Error(
+      `${privateKeyEnv} must be set at runtime for --submit true.`,
+    );
+  }
+  const privateKey = Buffer.from(
+    normalizePrivateKeyHex(privateKeyHex, privateKeyEnv).slice(2),
+    "hex",
+  );
   const { buildUpsertSccpRouteManifestTransaction } = await import(
     "../javascript/iroha_js/src/transaction.js"
   );
-  const { ToriiClient } = await import("../javascript/iroha_js/src/toriiClient.js");
+  const { ToriiClient } = await import(
+    "../javascript/iroha_js/src/toriiClient.js"
+  );
   const transaction = buildUpsertSccpRouteManifestTransaction({
     chainId,
     authority,
-    manifest,
+    manifest: instructionManifest,
     metadata: {
       route_id: manifest.route_id,
       asset_key: manifest.asset_key,
       action: "publish_sccp_ton_route_manifest",
+      gas_asset_id: gasAssetId,
+      gas_limit: gasLimit,
     },
     privateKey,
   });
@@ -886,6 +1217,8 @@ async function commandPublishRouteManifest(options) {
     waitForCommit,
     commitTimeoutMs: timeoutMs,
     status,
+    gasAssetId,
+    gasLimit,
   };
   const out = await writeJsonNoSecrets(outPath, {
     ...artifact,
@@ -900,6 +1233,8 @@ async function commandPublishRouteManifest(options) {
     authority,
     hash,
     waitForCommit,
+    gasAssetId,
+    gasLimit,
     routeId: manifest.route_id,
     assetKey: manifest.asset_key,
   };
@@ -909,25 +1244,78 @@ function normalizePrivateKeyHex(value, label) {
   const text = value.trim();
   const prefixed = text.startsWith("0x") ? text : `0x${text}`;
   if (!/^0x[0-9a-fA-F]{64}(?:[0-9a-fA-F]{64})?$/u.test(prefixed)) {
-    throw new Error(`${label} must contain a 32- or 64-byte Ed25519 private key.`);
+    throw new Error(
+      `${label} must contain a 32- or 64-byte Ed25519 private key.`,
+    );
   }
   return `0x${prefixed.slice(2).toLowerCase()}`;
 }
 
+function normalizePrivateKeyEnvName(
+  value = DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV,
+) {
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    !/^[A-Z_][A-Z0-9_]{0,127}$/u.test(value)
+  ) {
+    throw new Error(
+      "--private-key-env must be an uppercase environment variable name containing only letters, digits, and underscores.",
+    );
+  }
+  return value;
+}
+
+function normalizeAuthority(value) {
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new Error("--authority must be a canonical I105 account id.");
+  }
+  try {
+    return normalizeAccountId(value, "--authority");
+  } catch (_error) {
+    throw new Error("--authority must be a canonical I105 account id.");
+  }
+}
+
 function normalizeToriiUrl(value) {
-  const url = new URL(value);
-  if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error("--torii-url must be an HTTP(S) URL.");
+  if (
+    typeof value !== "string" ||
+    value.trim() !== value ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) {
+    throw new Error("--torii-url must be a valid HTTP(S) URL.");
+  }
+  let url;
+  try {
+    url = new URL(value);
+  } catch (_error) {
+    throw new Error("--torii-url must be a valid HTTP(S) URL.");
+  }
+  const loopback = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(loopback && url.protocol === "http:")) {
+    throw new Error("--torii-url must use HTTPS unless it is loopback HTTP.");
   }
   if (url.username || url.password || url.search || url.hash) {
-    throw new Error("--torii-url must not include credentials, query, or fragment.");
+    throw new Error(
+      "--torii-url must not include credentials, query, or fragment.",
+    );
   }
   return url.toString().replace(/\/$/u, "");
 }
 
 async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv);
-  if (command === "help" || options.help) {
+  if (command === "help") {
+    process.stdout.write(usage(command));
+    return 0;
+  }
+  assertKnownCommand(command);
+  assertKnownOptions(command, options);
+  if (options.help) {
     process.stdout.write(usage(command));
     return 0;
   }
@@ -937,7 +1325,7 @@ async function main(argv = process.argv.slice(2)) {
   } else if (command === "publish-route-manifest") {
     result = await commandPublishRouteManifest(options);
   } else {
-    throw new Error(`Unknown command: ${command}`);
+    throw new Error("Unknown command.");
   }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return 0;

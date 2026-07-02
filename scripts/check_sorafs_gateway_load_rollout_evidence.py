@@ -58,6 +58,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_inventory_count_match,
     required_evidence_kind_names,
     validate_bound_evidence_digest_references,
     validate_standard_evidence_payload,
@@ -109,6 +110,7 @@ STAGING_REPORT_BOUND_KINDS = (
     "transport_scope",
     "governance_approval",
 )
+POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -184,6 +186,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "suite_report_digest_hex",
         "staging_report_digest_hex",
         "fixture_bundle_digest_hex",
+        "policy_digest_hex",
         "gateway_version",
         "hardware_profile",
         "cache_state",
@@ -258,6 +261,7 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_context_reviewed",
     "suite_report_digest_hex",
     "staging_report_digest_hex",
+    "policy_digest_hex",
 )
 
 
@@ -278,6 +282,7 @@ def validate_local_conformance(payload: dict[str, Any], errors: list[str]) -> No
     require_minimum_int(payload, "load_profile_streams", DEFAULT_MIN_STREAMS, errors)
     require_positive_int(payload, "load_profile_window_seconds", errors)
     require_string_coverage(payload, "scenarios", "", REQUIRED_SCENARIOS, errors)
+    require_string_inventory_count_match(payload, "scenarios", "scenario_count", errors)
     require_false(payload, "raw_report_included", errors)
     require_false(payload, "private_keys_included", errors)
 
@@ -290,6 +295,7 @@ def validate_staging_load(
     require_hex(payload, "suite_report_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "staging_report_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "fixture_bundle_digest_hex", HEX64_LEN, errors)
+    require_policy_digest(payload, errors)
     require_string(payload, "gateway_version", errors)
     require_object(payload, "hardware_profile", errors)
     require_object(payload, "cache_state", errors)
@@ -402,6 +408,8 @@ def build_summary(
     valid_staging_report_digests: set[str] = set()
     suite_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     staging_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    valid_policy_digests: set[str] = set()
+    policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -434,15 +442,20 @@ def build_summary(
             fingerprint = evidence_artifact_fingerprint(artifact)
             suite_digest = fingerprint.get("suite_report_digest_hex")
             staging_digest = fingerprint.get("staging_report_digest_hex")
+            policy_digest = fingerprint.get("policy_digest_hex")
             if kind_name == "local_conformance" and isinstance(suite_digest, str):
                 valid_suite_report_digests.add(suite_digest.lower())
-            elif kind_name == "staging_load":
+            if kind_name == "staging_load":
                 if isinstance(suite_digest, str):
                     suite_bound_artifacts.append((kind_name, artifact))
                 if isinstance(staging_digest, str):
                     valid_staging_report_digests.add(staging_digest.lower())
-            elif kind_name in STAGING_REPORT_BOUND_KINDS:
+                if isinstance(policy_digest, str):
+                    valid_policy_digests.add(policy_digest.lower())
+            if kind_name in STAGING_REPORT_BOUND_KINDS:
                 staging_bound_artifacts.append((kind_name, artifact))
+            if kind_name in POLICY_BOUND_KINDS:
+                policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
@@ -478,6 +491,22 @@ def build_summary(
             "staging_load staging_report_digest_hex"
         ),
     )
+    validate_bound_evidence_digest_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("staging_load",),
+        bound_artifacts=policy_bound_artifacts,
+        valid_anchor_digests=valid_policy_digests,
+        digest_field="policy_digest_hex",
+        errors=errors,
+        binding_error_template=(
+            "{kind_name} policy_digest_hex must reference a valid "
+            "staging_load policy_digest_hex"
+        ),
+        missing_anchor_error_template=(
+            "{kind_name} policy_digest_hex requires a valid "
+            "staging_load policy_digest_hex"
+        ),
+    )
 
     required = build_required_evidence_summary(
         required_kinds,
@@ -505,6 +534,7 @@ def build_summary(
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_suite_report_digests": sorted(valid_suite_report_digests),
         "valid_staging_report_digests": sorted(valid_staging_report_digests),
+        "valid_policy_digests": sorted(valid_policy_digests),
         "required": required,
         "errors": errors,
     }

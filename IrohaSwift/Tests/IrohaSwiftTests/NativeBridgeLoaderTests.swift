@@ -4,12 +4,12 @@ import XCTest
 @testable import IrohaSwift
 
 final class NativeBridgeLoaderTests: XCTestCase {
-    func testExpectedBridgeAbiVersionIsTwelveForPackagedArtifacts() {
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64"), 12)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 12)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 12)
-        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(12, for: "macos-arm64"))
-        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(11, for: "macos-arm64"))
+    func testExpectedBridgeAbiVersionIsFourteenForPackagedArtifacts() {
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64"), 14)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 14)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 14)
+        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(14, for: "macos-arm64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(13, for: "macos-arm64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(nil, for: "macos-arm64"))
     }
 

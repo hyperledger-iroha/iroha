@@ -104,6 +104,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string_value_equal,
     require_string_value_in,
     require_string_coverage,
+    require_string_inventory_count_match,
     require_sum_equal,
     require_zero_count,
     required_evidence_kind_names,
@@ -3157,9 +3158,9 @@ def test_record_consistent_deployment_context_records_summary() -> None:
 def test_deployment_context_summary_rejects_malformed_values() -> None:
     assert deployment_context_summary("bad") == {}
     assert deployment_context_summary(None) == {}
-    assert deployment_context_summary({"deployment_id": 1, "environment": "prod"}) == {
-        "environment": "prod"
-    }
+    assert deployment_context_summary({"deployment_id": 1, "environment": "prod"}) == {}
+    assert deployment_context_summary({"environment": "prod"}) == {}
+    assert deployment_context_summary({"deployment_id": "prod-202606"}) == {}
     assert deployment_context_summary(
         {
             "deployment_id": "prod\nbad",
@@ -3256,6 +3257,39 @@ def test_record_consistent_deployment_context_rejects_malformed_labels() -> None
         ),
         (
             "bad-value.json: validation evidence value must be a non-empty "
+            "canonical string"
+        ),
+    ]
+
+
+def test_record_consistent_deployment_context_rejects_empty_fingerprint_values() -> None:
+    values: dict[str, str] = {}
+    errors: list[str] = []
+    artifact = {
+        "path": "empty-context.json",
+        "valid": True,
+        "errors": [],
+        "fingerprint": {
+            "deployment_id": "",
+            "environment": "",
+        },
+    }
+
+    record_consistent_deployment_context(values, artifact, "gateway", errors)
+
+    assert values == {}
+    assert artifact["valid"] is False
+    assert artifact["errors"] == [
+        "validation evidence value must be a non-empty canonical string",
+        "validation evidence value must be a non-empty canonical string",
+    ]
+    assert errors == [
+        (
+            "empty-context.json: validation evidence value must be a non-empty "
+            "canonical string"
+        ),
+        (
+            "empty-context.json: validation evidence value must be a non-empty "
             "canonical string"
         ),
     ]
@@ -5521,12 +5555,12 @@ def test_require_string_in_accepts_allowed_string_values() -> None:
 
     assert (
         require_string_in(
-            {"manual_trigger_route_state": "wired"},
-            "manual_trigger_route_state",
-            ("wired", "retired"),
+            {"archive_route_state": "active"},
+            "archive_route_state",
+            ("active", "retired"),
             errors,
         )
-        == "wired"
+        == "active"
     )
 
     assert errors == []
@@ -5537,15 +5571,15 @@ def test_require_string_in_reports_disallowed_values() -> None:
 
     assert (
         require_string_in(
-            {"manual_trigger_route_state": "missing"},
-            "manual_trigger_route_state",
-            ("wired", "retired"),
+            {"archive_route_state": "missing"},
+            "archive_route_state",
+            ("active", "retired"),
             errors,
         )
         == ""
     )
 
-    assert errors == ["manual_trigger_route_state must be `wired` or `retired`"]
+    assert errors == ["archive_route_state must be `active` or `retired`"]
 
 
 def test_require_string_in_rejects_malformed_quote_option() -> None:
@@ -5554,9 +5588,9 @@ def test_require_string_in_rejects_malformed_quote_option() -> None:
     for quote_values in ("yes", 1, None):
         assert (
             require_string_in(
-                {"manual_trigger_route_state": "missing"},
-                "manual_trigger_route_state",
-                ("wired", "retired"),
+                {"archive_route_state": "missing"},
+                "archive_route_state",
+                ("active", "retired"),
                 errors,
                 quote_values=quote_values,
             )
@@ -5571,18 +5605,18 @@ def test_require_string_in_rejects_noncanonical_values_before_membership() -> No
 
     assert (
         require_string_in(
-            {"manual_trigger_route_state": " wired"},
-            "manual_trigger_route_state",
-            ("wired", "retired"),
+            {"archive_route_state": " active"},
+            "archive_route_state",
+            ("active", "retired"),
             errors,
         )
         == ""
     )
     assert (
         require_string_in(
-            {"manual_trigger_route_state": "wired\nbad"},
-            "manual_trigger_route_state",
-            ("wired", "retired"),
+            {"archive_route_state": "active\nbad"},
+            "archive_route_state",
+            ("active", "retired"),
             errors,
         )
         == ""
@@ -5599,40 +5633,40 @@ def test_require_string_in_rejects_malformed_allowed_containers() -> None:
 
     assert (
         require_string_in(
-            {"manual_trigger_route_state": "wired"},
-            "manual_trigger_route_state",
-            "wired-retired",
+            {"archive_route_state": "active"},
+            "archive_route_state",
+            "active-retired",
             errors,
         )
         == ""
     )
     assert (
         require_string_in(
-            {"manual_trigger_route_state": "wired"},
-            "manual_trigger_route_state",
-            {"wired": True},
+            {"archive_route_state": "active"},
+            "archive_route_state",
+            {"active": True},
             errors,
-            path="archive.manual_trigger_route_state",
+            path="archive.route_state",
         )
         == ""
     )
     assert (
         require_string_in(
-            {"manual_trigger_route_state": "wired"},
-            "manual_trigger_route_state",
-            ("wired", 1),
+            {"archive_route_state": "active"},
+            "archive_route_state",
+            ("active", 1),
             errors,
         )
         == ""
     )
 
     assert errors == [
-        "manual_trigger_route_state allowed values must be a sequence of strings",
+        "archive_route_state allowed values must be a sequence of strings",
         (
-            "archive.manual_trigger_route_state allowed values must be a "
+            "archive.route_state allowed values must be a "
             "sequence of strings"
         ),
-        "manual_trigger_route_state allowed values must be a sequence of strings",
+        "archive_route_state allowed values must be a sequence of strings",
     ]
 
 
@@ -5641,18 +5675,18 @@ def test_require_string_in_rejects_malformed_labels_before_lookup() -> None:
 
     assert (
         require_string_in(
-            {"bad\nstate": "wired"},
+            {"bad\nstate": "active"},
             "bad\nstate",
-            ("wired",),
+            ("active",),
             errors,
         )
         == ""
     )
     assert (
         require_string_in(
-            {"manual_trigger_route_state": "wired"},
-            "manual_trigger_route_state",
-            ("wired",),
+            {"archive_route_state": "active"},
+            "archive_route_state",
+            ("active",),
             errors,
             path="archive\nstate",
         )
@@ -5660,9 +5694,9 @@ def test_require_string_in_rejects_malformed_labels_before_lookup() -> None:
     )
     assert (
         require_string_in(
-            {"manual_trigger_route_state": "wired"},
-            "manual_trigger_route_state",
-            ("wired\nbad",),
+            {"archive_route_state": "active"},
+            "archive_route_state",
+            ("active\nbad",),
             errors,
         )
         == ""
@@ -5760,6 +5794,590 @@ def test_require_rollout_deployment_id_rejects_compact_handoff_markers() -> None
         "deployment_id must not contain non-reviewed deployment markers ['notprod']",
         "deployment_id must not contain non-reviewed deployment markers "
         "['development']",
+    ]
+
+
+def test_require_rollout_deployment_id_rejects_joined_nonproduction_aliases() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "reputation-testproduction-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-stageproduction-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "productionuat-transparency-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "repair-testrelease-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "localproduction-gateway-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "releaselocal-reputation-202606"}, errors
+        )
+        == ""
+    )
+
+    assert errors == [
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['test']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['stage']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['uat']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['test']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['local']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['local']",
+    ]
+
+
+def test_require_rollout_deployment_id_rejects_prerelease_aliases() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "transparency-prerelease-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-releasecandidate-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "candidateproduction-potr-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-productionpreview-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "transparency-preprodrelease-202606"}, errors
+        )
+        == ""
+    )
+
+    assert errors == [
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['prerelease']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['releasecandidate']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['candidate']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['preview']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['preprod']",
+    ]
+
+
+def test_require_rollout_deployment_id_rejects_tokenized_prerelease_aliases() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "transparency-pre-production-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-production-candidate-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "potr-prod-rc-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "repair-productioncandidate-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-prod-preview-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "repair-preprod-production-202606"}, errors
+        )
+        == ""
+    )
+
+    assert errors == [
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['pre']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['candidate']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['rc']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['candidate']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['preview']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['preprod']",
+    ]
+
+
+def test_require_rollout_deployment_id_rejects_synthetic_rollout_markers() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-canary-production-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "transparency-beta-release-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "pdp-production-alpha-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-prod-dry-run-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "repair-pilotprod-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "reference-releaseexperimental-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "por-trialproduction-202606"}, errors
+        )
+        == ""
+    )
+
+    assert errors == [
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['canary']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['beta']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['alpha']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['dryrun']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['pilot']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['experimental']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['trial']",
+    ]
+
+
+def test_require_rollout_deployment_id_rejects_staging_abbreviations() -> None:
+    errors: list[str] = []
+
+    assert require_rollout_deployment_id({"deployment_id": "gateway-stg-a"}, errors) == ""
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-stgproduction-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-release-stg-202606"}, errors
+        )
+        == ""
+    )
+
+    assert errors == [
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['stg']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['stg']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['stg']",
+    ]
+
+
+def test_require_rollout_deployment_id_rejects_numbered_marker_aliases() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-qa2-production-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "orderbook-uat01release-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "repair-canary2-202606"}, errors
+        )
+        == ""
+    )
+
+    assert errors == [
+        "deployment_id must not contain non-reviewed deployment markers ['qa']",
+        "deployment_id must not contain non-reviewed deployment markers ['uat']",
+        "deployment_id must not contain non-reviewed deployment markers ['canary']",
+    ]
+
+
+def test_require_rollout_deployment_id_rejects_proof_of_concept_markers() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-prod-poc-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-proof-of-concept-production-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "repair-releaseprototype-202606"}, errors
+        )
+        == ""
+    )
+
+    assert errors == [
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['poc']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['proofofconcept']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['prototype']",
+    ]
+
+
+def test_require_rollout_deployment_id_rejects_test_harness_markers() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-production-smoke-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "reference-releasefixture-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "pdp-stubproduction-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-prod-lab-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "repair-prod-temporary-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "por-productionbenchmark-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "orderbook-prod-loadtest-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "pdp-prod-wip-202606"}, errors
+        )
+        == ""
+    )
+
+    assert errors == [
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['smoke']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['fixture']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['stub']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['lab']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['temporary']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['benchmark']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['loadtest']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['wip']",
+    ]
+
+
+def test_require_rollout_deployment_id_rejects_perf_resilience_markers() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-prod-perf-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "repair-productionperformance-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "pdp-stressproduction-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "por-release-soak-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-production-chaos-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "reference-prod-burn-in-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "orderbook-release-scaletest-202606"}, errors
+        )
+        == ""
+    )
+
+    assert errors == [
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['perf']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['performance']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['stress']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['soak']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['chaos']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['burnin']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['scaletest']",
+    ]
+
+
+def test_require_rollout_deployment_id_rejects_rehearsal_markers() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-prod-shadow-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "repair-production-dogfood-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "pdp-dark-launch-production-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-release-dress-rehearsal-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "por-prod-drill-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "reference-prod-training-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "orderbook-release-game-day-202606"}, errors
+        )
+        == ""
+    )
+
+    assert errors == [
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['shadow']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['dogfood']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['darklaunch']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['dressrehearsal']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['drill']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['training']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['gameday']",
+    ]
+
+
+def test_require_rollout_deployment_id_rejects_transition_markers() -> None:
+    errors: list[str] = []
+
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-prod-cutover-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "repair-production-blue-green-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "pdp-greenblueproduction-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "por-release-rollback-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-prod-roll-forward-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "reference-production-failover-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "orderbook-fallbackrelease-202606"}, errors
+        )
+        == ""
+    )
+    assert (
+        require_rollout_deployment_id(
+            {"deployment_id": "gateway-prod-switchover-202606"}, errors
+        )
+        == ""
+    )
+
+    assert errors == [
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['cutover']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['bluegreen']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['greenblue']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['rollback']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['rollforward']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['failover']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['fallback']",
+        "deployment_id must not contain non-reviewed deployment markers "
+        "['switchover']",
     ]
 
 
@@ -8216,6 +8834,74 @@ def test_require_string_coverage_rejects_malformed_scalar_rows() -> None:
         "validation value must be a non-empty canonical string",
         "validation value must be a non-empty canonical string",
     ]
+
+
+def test_require_string_inventory_count_match_rejects_duplicate_scalars() -> None:
+    errors: list[str] = []
+
+    require_string_inventory_count_match(
+        {"items": ["alpha", "beta", "alpha"], "item_count": 3},
+        "items",
+        "item_count",
+        errors,
+    )
+
+    assert errors == [
+        "items must not contain duplicate values",
+        "item_count must match unique items count",
+    ]
+    assert all("alpha" not in error and "beta" not in error for error in errors)
+
+
+def test_require_string_inventory_count_match_rejects_count_mismatch() -> None:
+    errors: list[str] = []
+
+    require_string_inventory_count_match(
+        {"items": ["alpha", "beta"], "item_count": 3},
+        "items",
+        "item_count",
+        errors,
+    )
+
+    assert errors == ["item_count must match unique items count"]
+
+
+def test_require_string_inventory_count_match_supports_object_rows() -> None:
+    errors: list[str] = []
+
+    require_string_inventory_count_match(
+        {
+            "routes": [
+                {"name": "healthz"},
+                {"name": "status"},
+                {"name": "healthz"},
+            ],
+            "route_count": 3,
+        },
+        "routes",
+        "route_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+
+    assert errors == [
+        "routes must not contain duplicate values",
+        "route_count must match unique routes count",
+    ]
+
+
+def test_require_string_inventory_count_match_leaves_malformed_rows_to_coverage() -> None:
+    errors: list[str] = []
+
+    require_string_inventory_count_match(
+        {"items": ["alpha", {}, "beta"], "item_count": 3},
+        "items",
+        "item_count",
+        errors,
+    )
+
+    assert errors == []
 
 
 def test_require_string_coverage_rejects_malformed_required_values() -> None:

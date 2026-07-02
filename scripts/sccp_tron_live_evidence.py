@@ -181,6 +181,8 @@ def _hex(raw: bytes) -> str:
 
 
 def _parse_hex32(value: str, *, label: str) -> bytes:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     return evidence.parse_hex_bytes(value, label=label, byte_length=32)
 
 
@@ -381,7 +383,9 @@ def tron_base58check_from_address20(address: bytes) -> str:
 def parse_tron_address_payload(value: str, *, label: str) -> bytes:
     """Parse base58check, 0x41-prefixed hex, or 20-byte hex into a 21-byte payload."""
 
-    if not isinstance(value, str) or not value:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be a TRON address")
+    if not value:
         raise argparse.ArgumentTypeError(f"{label} must not be empty")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain surrounding whitespace")

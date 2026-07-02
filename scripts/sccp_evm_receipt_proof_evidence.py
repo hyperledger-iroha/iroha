@@ -44,6 +44,10 @@ def _hex(raw: bytes) -> str:
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        )
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     if not value.startswith("0x"):
@@ -87,6 +91,8 @@ def parse_evm_address(value: str, *, label: str) -> bytes:
 def parse_domain(value: str) -> int:
     """Parse an EVM-family source domain."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
     if value != value.strip():
         raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
     text = value.lower()
@@ -107,6 +113,10 @@ def parse_domain(value: str) -> int:
 def parse_rpc_chain_id(value: str) -> int:
     """Parse an expected chain id flag."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            "--expected-rpc-chain-id must be a canonical decimal integer"
+        )
     if value != value.strip():
         raise argparse.ArgumentTypeError(
             "--expected-rpc-chain-id must be a canonical decimal integer"

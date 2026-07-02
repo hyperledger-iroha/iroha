@@ -297,6 +297,10 @@ const REBROADCAST_COOLDOWN_CEILING: Duration = Duration::from_millis(200);
 const REBROADCAST_COOLDOWN_DIVISOR: u32 = 8;
 /// Payload rebroadcasts (block payloads/RBC chunks) are heavier, so keep them slower.
 const PAYLOAD_REBROADCAST_COOLDOWN_MULTIPLIER: u32 = 2;
+/// Cached proposal rebroadcasts include full block/proposal metadata. Keep
+/// their retry cadence below the small control-plane cadence so recovery cannot
+/// flood per-peer post queues while waiting for a commit QC.
+const CACHED_PROPOSAL_REBROADCAST_COOLDOWN_FLOOR: Duration = Duration::from_millis(500);
 /// Frontier recovery can locally retry at the pacemaker nudge cadence, but network-wide
 /// NEW_VIEW convergence rebroadcasts need a wider cadence to avoid filling per-peer post queues.
 const FRONTIER_RECOVERY_NEW_VIEW_REBROADCAST_MULTIPLIER: u32 = 4;
@@ -1039,6 +1043,8 @@ mod requeue_block_transaction_tests {
             nexus.enabled = true;
             nexus.routing_policy = policy.clone();
             nexus.lane_catalog = current_lane_catalog.clone();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog.clone();
             nexus.fees.base_fee = Numeric::zero();
             nexus.fees.per_byte_fee = Numeric::zero();
@@ -3737,6 +3743,7 @@ fn validation_reject_reason_label(err: &BlockValidationError) -> &'static str {
         | BlockValidationError::EmptyBlock
         | BlockValidationError::DuplicateTransactions
         | BlockValidationError::SccpCommitmentRootMismatch { .. }
+        | BlockValidationError::SccpDuplicateOutboundMessage { .. }
         | BlockValidationError::ExecutionContextInvalid(_)
         | BlockValidationError::CommittedFragmentCountMismatch { .. }
         | BlockValidationError::TransactionAccept(_)
@@ -30524,9 +30531,7 @@ impl Actor {
         let quorum_floor = quorum_slice
             .max(COMMIT_QC_ONLY_RETRY_FLOOR)
             .min(COMMIT_QC_ONLY_RETRY_CEILING);
-        self.recovery_missing_qc_reacquire_window()
-            .max(self.targeted_payload_rescue_cooldown())
-            .max(quorum_floor)
+        self.targeted_payload_rescue_cooldown().max(quorum_floor)
     }
 
     fn lock_lag_range_pull_cooldown_floor(&self) -> Duration {
@@ -47968,6 +47973,11 @@ impl RbcSession {
             if ready.signature.is_empty() {
                 return Err(PersistedLoadError::InvalidMetadata("empty READY signature"));
             }
+            if ready.signature.iter().all(|byte| *byte == 0) {
+                return Err(PersistedLoadError::InvalidMetadata(
+                    "all-zero READY signature",
+                ));
+            }
             if previous_ready_sender.is_some_and(|previous| ready.sender < previous) {
                 return Err(PersistedLoadError::InvalidMetadata(
                     "non-canonical READY sender order",
@@ -47998,7 +48008,13 @@ impl RbcSession {
                 persisted.deliver_sender,
                 persisted.deliver_signature.as_deref(),
             ) {
-                (Some(_), Some(signature)) if !signature.is_empty() => {}
+                (Some(_), Some(signature)) if !signature.is_empty() => {
+                    if signature.iter().all(|byte| *byte == 0) {
+                        return Err(PersistedLoadError::InvalidMetadata(
+                            "all-zero DELIVER signature",
+                        ));
+                    }
+                }
                 _ => {
                     return Err(PersistedLoadError::InvalidMetadata(
                         "delivered flag set without deliver sender/signature",

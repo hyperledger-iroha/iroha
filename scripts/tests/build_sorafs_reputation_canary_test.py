@@ -1,0 +1,169 @@
+"""Tests for scripts/build_sorafs_reputation_canary.py."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+
+SCRIPT_ROOT = Path(__file__).resolve().parents[1]
+MODULE_PATH = SCRIPT_ROOT / "build_sorafs_reputation_canary.py"
+CHECKER_PATH = SCRIPT_ROOT / "check_sorafs_reputation_rollout_evidence.py"
+
+SPEC = importlib.util.spec_from_file_location("build_sorafs_reputation_canary", MODULE_PATH)
+MODULE = importlib.util.module_from_spec(SPEC)
+assert SPEC and SPEC.loader  # pragma: no cover - defensive
+sys.modules[SPEC.name] = MODULE
+SPEC.loader.exec_module(MODULE)
+
+CHECKER_SPEC = importlib.util.spec_from_file_location(
+    "check_sorafs_reputation_rollout_evidence",
+    CHECKER_PATH,
+)
+CHECKER = importlib.util.module_from_spec(CHECKER_SPEC)
+assert CHECKER_SPEC and CHECKER_SPEC.loader  # pragma: no cover - defensive
+sys.modules[CHECKER_SPEC.name] = CHECKER
+CHECKER_SPEC.loader.exec_module(CHECKER)
+
+
+NOW_UNIX = 1_800_100_000
+GENERATED_AT = NOW_UNIX - 120
+SNAPSHOT_ID = "11" * 16
+MERKLE_ROOT = "22" * 32
+PROVIDER_ID = "provider-a"
+PROOF_SIBLING = "33" * 32
+
+
+def canary_path(tmp_path: Path, kind: str) -> Path:
+    return tmp_path / f"{kind}.json"
+
+
+def args_for(kind: str, tmp_path: Path) -> list[str]:
+    args = [
+        "--kind",
+        kind,
+        "--out",
+        str(canary_path(tmp_path, kind)),
+        "--deployment-id",
+        "sorafs-mainnet-20260701",
+        "--environment",
+        "production",
+        "--generated-at-unix",
+        str(GENERATED_AT),
+        "--now-unix",
+        str(NOW_UNIX),
+        "--snapshot-id-hex",
+        SNAPSHOT_ID,
+        "--merkle-root-hex",
+        MERKLE_ROOT,
+        "--provider-id",
+        PROVIDER_ID,
+    ]
+    if kind == "provider":
+        args.extend(["--sibling-hex", PROOF_SIBLING])
+    return args
+
+
+def test_builds_payload_free_metrics_canary(tmp_path: Path) -> None:
+    assert MODULE.main(args_for("metrics", tmp_path)) == 0
+
+    payload = json.loads(canary_path(tmp_path, "metrics").read_text("utf-8"))
+
+    assert payload["schema"] == "sorafs.reputation.metrics_canary.v1"
+    assert payload["status"] == "passed"
+    assert payload["metrics_scrape_success"] is True
+    assert payload["response_bodies_included"] is False
+    errors = MODULE.validate_generated_payload(payload, MODULE.parse_args(args_for("metrics", tmp_path)))
+    assert errors == []
+
+
+def test_generated_canaries_pass_full_reputation_gate(tmp_path: Path) -> None:
+    evidence_paths: list[Path] = []
+    for kind in MODULE.CANARY_KINDS:
+        assert MODULE.main(args_for(kind, tmp_path)) == 0
+        evidence_paths.append(canary_path(tmp_path, kind))
+    summary = tmp_path / "summary.json"
+
+    command = ["--now-unix", str(NOW_UNIX), "--require-provider", PROVIDER_ID]
+    for path in evidence_paths:
+        command.extend(["--evidence", str(path)])
+    command.extend(["--summary-out", str(summary)])
+
+    assert CHECKER.main(command) == 0
+
+    payload = json.loads(summary.read_text("utf-8"))
+    assert payload["status"] == "ready"
+    assert payload["snapshot_id_hex"] == SNAPSHOT_ID
+    assert payload["merkle_root_hex"] == MERKLE_ROOT
+    assert payload["provider_ids"] == [PROVIDER_ID]
+    for kind in MODULE.CANARY_KINDS:
+        assert payload["required"][kind]["artifact_count"] == 1
+        assert payload["required"][kind]["artifacts"][0]["valid"] is True
+
+
+def test_response_file_can_build_provider_canary(tmp_path: Path) -> None:
+    args_file = tmp_path / "provider.args"
+    args_file.write_text(
+        "\n".join(args_for("provider", tmp_path)),
+        encoding="utf-8",
+    )
+
+    assert MODULE.main([f"@{args_file}"]) == 0
+
+    payload = json.loads(canary_path(tmp_path, "provider").read_text("utf-8"))
+    assert payload["provider"]["provider_id"] == PROVIDER_ID
+    assert payload["proof"]["siblings_hex"] == [PROOF_SIBLING]
+
+
+def test_provider_requires_proof_sibling_before_write(tmp_path: Path, capsys) -> None:
+    args = args_for("provider", tmp_path)
+    index = args.index("--sibling-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--sibling-hex is required for provider" in captured.err
+    assert not canary_path(tmp_path, "provider").exists()
+
+
+def test_duplicate_provider_proof_sibling_fails_before_write(
+    tmp_path: Path, capsys
+) -> None:
+    args = args_for("provider", tmp_path)
+    args.extend(["--sibling-hex", PROOF_SIBLING])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "duplicate --sibling-hex" in captured.err
+    assert not canary_path(tmp_path, "provider").exists()
+
+
+def test_metrics_thresholds_fail_before_write(tmp_path: Path, capsys) -> None:
+    args = args_for("metrics", tmp_path)
+    args.extend(["--snapshot-age-seconds", "691201", "--ingest-lag-seconds", "901"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--snapshot-age-seconds must be <=" in captured.err
+    assert "--ingest-lag-seconds must be <=" in captured.err
+    assert not canary_path(tmp_path, "metrics").exists()
+
+
+def test_output_symlink_is_refused(tmp_path: Path, capsys) -> None:
+    target = tmp_path / "target.json"
+    link = tmp_path / "link.json"
+    link.symlink_to(target)
+    args = args_for("latest", tmp_path)
+    index = args.index("--out")
+    args[index + 1] = str(link)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "must not be a symlink" in captured.err
+    assert not target.exists()

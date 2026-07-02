@@ -132,8 +132,25 @@ max_lanes = 5
     );
 
     assert!(
-        message.contains("min_lanes must be <= max_lanes"),
+        message.contains("min_lanes must be < max_lanes"),
         "error should identify inverted autoscale lane bounds: {message}"
+    );
+}
+
+#[test]
+fn autoscale_rejects_empty_elastic_lane_range() {
+    let message = autoscale_config_error(
+        r"
+[nexus.autoscale]
+enabled = true
+min_lanes = 4
+max_lanes = 4
+",
+    );
+
+    assert!(
+        message.contains("min_lanes must be < max_lanes"),
+        "error should reject an enabled autoscale profile with no elastic lane ids: {message}"
     );
 }
 
@@ -237,9 +254,45 @@ rules = []
 
     assert!(
         message.contains("nexus.routing_policy.default_lane")
-            && message.contains("reserved autoscale elastic lane id range [1, 2)")
-            && message.contains("base default lane outside"),
-        "error should identify default lanes inside the autoscale elastic range: {message}"
+            && message.contains("must be below nexus.autoscale.min_lanes 1"),
+        "error should identify non-base default lanes: {message}"
+    );
+}
+
+#[test]
+fn autoscale_rejects_default_lane_above_elastic_id_range() {
+    let message = autoscale_config_error(
+        r#"
+[nexus]
+enabled = true
+lane_count = 3
+
+[[nexus.lane_catalog]]
+index = 0
+alias = "default"
+metadata = {}
+
+[[nexus.lane_catalog]]
+index = 2
+alias = "high-default"
+metadata = {}
+
+[nexus.autoscale]
+enabled = true
+min_lanes = 1
+max_lanes = 2
+
+[nexus.routing_policy]
+default_lane = 2
+default_dataspace = "universal"
+rules = []
+"#,
+    );
+
+    assert!(
+        message.contains("nexus.routing_policy.default_lane")
+            && message.contains("must be below nexus.autoscale.min_lanes 1"),
+        "error should reject high-side default lanes: {message}"
     );
 }
 

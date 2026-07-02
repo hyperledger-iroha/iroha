@@ -110,6 +110,15 @@ use norito::json::Value as JsonValue;
 use rust_decimal::Decimal;
 use sha2::Digest as _;
 
+const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+
+fn is_public_taira_chain_id(chain_id: &ChainId) -> bool {
+    matches!(
+        chain_id.as_str(),
+        PUBLIC_TAIRA_CHAIN_ID | "iroha3-taira" | "taira"
+    )
+}
+
 fn taira_legacy_replay_confidential_digest(
     expected: Option<ConfidentialFeatureDigest>,
     actual: Option<ConfidentialFeatureDigest>,
@@ -977,7 +986,8 @@ use crate::{
     },
     prelude::*,
     queue::{
-        evaluate_policy_plan_with_nexus_and_world_at, resolve_routing_decision, routing_ledger,
+        evaluate_policy_plan_with_nexus_and_world_at_block_height, resolve_routing_decision,
+        routing_ledger,
     },
     smartcontracts::isi::triggers::{set::SetReadOnly, specialized::LoadedActionTrait},
     state::{
@@ -2335,6 +2345,15 @@ pub enum BlockValidationError {
         expected: Option<[u8; 32]>,
         /// Root advertised in the block header.
         actual: Option<[u8; 32]>,
+    },
+    /// SCCP committed block contains duplicate successful outbound message. Source domain: {source_domain}, target domain: {target_domain}, message id: {message_id:?}
+    SccpDuplicateOutboundMessage {
+        /// SCCP source domain encoded in the duplicate payload.
+        source_domain: u32,
+        /// SCCP target domain encoded in the duplicate payload.
+        target_domain: u32,
+        /// SCCP message identifier derived from the canonical payload.
+        message_id: [u8; 32],
     },
     /// Mismatch between the actual and expected hashes of the previous block. Expected: {expected:?}, actual: {actual:?}
     PrevBlockHashMismatch {
@@ -5382,6 +5401,17 @@ pub(crate) mod valid {
 
         fn validate_sccp_commitment_root(block: &SignedBlock) -> Result<(), BlockValidationError> {
             let messages = crate::bridge::collect_sccp_messages_from_signed_block(block);
+            let mut seen = std::collections::BTreeSet::new();
+            for message in &messages {
+                let key = crate::bridge::sccp_outbound_message_key(&message.payload);
+                if !seen.insert(key) {
+                    return Err(BlockValidationError::SccpDuplicateOutboundMessage {
+                        source_domain: key.source_domain,
+                        target_domain: key.target_domain,
+                        message_id: key.message_id,
+                    });
+                }
+            }
             let expected = crate::bridge::sccp_commitment_root_from_messages(&messages);
             let actual = block.header().sccp_commitment_root();
             if actual == expected {
@@ -5389,13 +5419,6 @@ pub(crate) mod valid {
             } else {
                 Err(BlockValidationError::SccpCommitmentRootMismatch { expected, actual })
             }
-        }
-
-        fn refresh_sccp_commitment_root(block: &mut SignedBlock) {
-            let messages = crate::bridge::collect_sccp_messages_from_signed_block(block);
-            block.set_sccp_commitment_root(crate::bridge::sccp_commitment_root_from_messages(
-                &messages,
-            ));
         }
 
         #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -5827,8 +5850,10 @@ pub(crate) mod valid {
                 allow_missing_legacy_context,
             )?;
 
+            let block_height = block.header().height().get();
             let nexus = state.nexus();
-            let expected_policy_hash = crate::da::active_proof_policy_bundle_hash(nexus);
+            let expected_policy_hash =
+                crate::da::active_proof_policy_bundle_hash_at_height(nexus, block_height);
             if block.header().da_proof_policies_hash() != Some(expected_policy_hash) {
                 return Err(BlockValidationError::ProofPolicyHashMismatch {
                     expected: expected_policy_hash,
@@ -5836,7 +5861,6 @@ pub(crate) mod valid {
                 });
             }
 
-            let block_height = block.header().height().get();
             let computed_digest =
                 compute_confidential_feature_digest(state.world(), state.zk(), block_height);
             let expected_digest = if computed_digest.is_empty() {
@@ -5846,13 +5870,26 @@ pub(crate) mod valid {
             };
             let actual_digest = block.header().confidential_features();
             if actual_digest != expected_digest {
-                if allow_missing_legacy_context
-                    && taira_legacy_replay_confidential_digest(expected_digest, actual_digest)
+                let is_legacy_taira_digest =
+                    taira_legacy_replay_confidential_digest(expected_digest, actual_digest);
+                let is_public_taira_genesis =
+                    block.header().is_genesis() && is_public_taira_chain_id(chain_id);
+                if is_legacy_taira_digest
+                    && (allow_missing_legacy_context || is_public_taira_genesis)
                 {
-                    iroha_logger::debug!(
-                        block_height,
-                        "accepting legacy Taira confidential feature digest during replay"
-                    );
+                    if is_public_taira_genesis && !allow_missing_legacy_context {
+                        iroha_logger::warn!(
+                            block_height,
+                            chain_id = chain_id.as_str(),
+                            "accepting public Taira genesis with legacy confidential feature digest"
+                        );
+                    } else {
+                        iroha_logger::debug!(
+                            block_height,
+                            chain_id = chain_id.as_str(),
+                            "accepting legacy Taira confidential feature digest during replay"
+                        );
+                    }
                 } else {
                     return Err(BlockValidationError::ConfidentialFeaturesMismatch {
                         expected: expected_digest,
@@ -5965,9 +6002,10 @@ pub(crate) mod valid {
             };
 
             let world = state.world();
-            crate::da::validate_pin_intent_bundle_against_nexus(
+            crate::da::validate_pin_intent_bundle_against_nexus_at_height(
                 bundle,
                 state.nexus(),
+                block.header().height().get(),
                 |account| world.accounts().get(account).is_some(),
             )?;
             for intent in &bundle.intents {
@@ -6414,11 +6452,12 @@ pub(crate) mod valid {
                 );
                 let routing_ledger_time_ms =
                     u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX);
-                let plan = evaluate_policy_plan_with_nexus_and_world_at(
+                let plan = evaluate_policy_plan_with_nexus_and_world_at_block_height(
                     nexus,
                     &accepted,
                     state.world(),
                     routing_ledger_time_ms,
+                    block.header().height().get(),
                 )
                 .map_err(|err| {
                     Self::execution_context_error(format!(
@@ -7418,11 +7457,12 @@ pub(crate) mod valid {
                     let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
                         Cow::Borrowed(entrypoint),
                     );
-                    match evaluate_policy_plan_with_nexus_and_world_at(
+                    match evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &state_block.nexus,
                         &accepted,
                         &state_block.world,
                         routing_ledger_time_ms,
+                        height_u64,
                     ) {
                         Ok(plan) => {
                             decisions.push(plan.coordinator_route());
@@ -7564,7 +7604,7 @@ pub(crate) mod valid {
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             block.set_trigger_completions(trigger_completions);
-            Self::refresh_sccp_commitment_root(block);
+            Self::validate_sccp_commitment_root(block)?;
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), start) {
                 let elapsed = to_ms(start.elapsed());
                 timings.execution_tx_apply_ms = elapsed;
@@ -7852,11 +7892,12 @@ pub(crate) mod valid {
                                     let accepted = crate::tx::AcceptedTransaction::new_unchecked(
                                         Cow::Borrowed(*tx),
                                     );
-                                    evaluate_policy_plan_with_nexus_and_world_at(
+                                    evaluate_policy_plan_with_nexus_and_world_at_block_height(
                                         &state_block.nexus,
                                         &accepted,
                                         &state_block.world,
                                         routing_ledger_time_ms,
+                                        height,
                                     )
                                     .map(|plan| plan.coordinator_route())
                                 })
@@ -7868,11 +7909,12 @@ pub(crate) mod valid {
                                 let accepted = crate::tx::AcceptedTransaction::new_unchecked(
                                     Cow::Borrowed(*tx),
                                 );
-                                evaluate_policy_plan_with_nexus_and_world_at(
+                                evaluate_policy_plan_with_nexus_and_world_at_block_height(
                                     &state_block.nexus,
                                     &accepted,
                                     &state_block.world,
                                     routing_ledger_time_ms,
+                                    height,
                                 )
                                 .map(|plan| plan.coordinator_route())
                             })
@@ -7883,11 +7925,12 @@ pub(crate) mod valid {
                         .map(|tx| {
                             let accepted =
                                 crate::tx::AcceptedTransaction::new_unchecked(Cow::Borrowed(*tx));
-                            evaluate_policy_plan_with_nexus_and_world_at(
+                            evaluate_policy_plan_with_nexus_and_world_at_block_height(
                                 &state_block.nexus,
                                 &accepted,
                                 &state_block.world,
                                 routing_ledger_time_ms,
+                                height,
                             )
                             .map(|plan| plan.coordinator_route())
                         })
@@ -11653,7 +11696,7 @@ pub(crate) mod valid {
                 )
                 .map_err(|_| BlockValidationError::MerkleRootMismatch)?;
             block.set_trigger_completions(trigger_completions);
-            Self::refresh_sccp_commitment_root(block);
+            Self::validate_sccp_commitment_root(block)?;
             if let (Some(timings), Some(start)) = (timings.as_deref_mut(), set_results_start) {
                 timings.execution_tx_finalize_set_results_ms = to_ms(start.elapsed());
             }
@@ -12670,22 +12713,26 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn refresh_sccp_commitment_root_sets_root_after_successful_result() {
+        fn sccp_commitment_root_validation_rejects_missing_root_after_successful_result() {
             let mut block = signed_sccp_block(None);
             set_single_sccp_transaction_result(
                 &mut block,
                 Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
             );
 
-            ValidBlock::refresh_sccp_commitment_root(&mut block);
-
-            assert!(block.header().sccp_commitment_root().is_some());
-            ValidBlock::validate_sccp_commitment_root(&block)
-                .expect("successful SCCP result should leave a matching root");
+            let err = ValidBlock::validate_sccp_commitment_root(&block)
+                .expect_err("successful SCCP result must be signed with the matching root");
+            assert!(matches!(
+                err,
+                BlockValidationError::SccpCommitmentRootMismatch {
+                    expected: Some(_),
+                    actual: None,
+                }
+            ));
         }
 
         #[test]
-        fn refresh_sccp_commitment_root_keeps_block_signature_verifiable() {
+        fn sccp_commitment_root_change_invalidates_block_signature() {
             let leader = crate::block::checked_keypair();
             let mut block: SignedBlock = BlockBuilder::new(vec![sccp_accepted_transaction()])
                 .chain(0, None)
@@ -12699,31 +12746,37 @@ pub(crate) mod valid {
                 .expect("signed SCCP test block should have a leader signature")
                 .signature()
                 .verify_hash(leader.public_key(), signed_hash)
-                .expect("leader signature should verify before SCCP root refresh");
+                .expect("leader signature should verify before SCCP root change");
 
             set_single_sccp_transaction_result(
                 &mut block,
                 Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
             );
-            ValidBlock::refresh_sccp_commitment_root(&mut block);
+            let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
+            let root = crate::bridge::sccp_commitment_root_from_messages(&messages)
+                .expect("successful SCCP result should have a commitment root");
+            block.set_sccp_commitment_root(Some(root));
 
             assert!(block.header().sccp_commitment_root().is_some());
-            assert_eq!(
+            assert_ne!(
                 signed_hash,
                 block.hash(),
-                "post-execution SCCP root refresh must not change block hash"
+                "SCCP root changes must change the signed block hash"
             );
-            block
-                .signatures()
-                .next()
-                .expect("signed SCCP test block should retain its leader signature")
-                .signature()
-                .verify_hash(leader.public_key(), block.hash())
-                .expect("leader signature should verify after SCCP root refresh");
+            assert!(
+                block
+                    .signatures()
+                    .next()
+                    .expect("signed SCCP test block should retain its leader signature")
+                    .signature()
+                    .verify_hash(leader.public_key(), block.hash())
+                    .is_err(),
+                "leader signature must not verify after the SCCP root changes"
+            );
         }
 
         #[test]
-        fn refresh_sccp_commitment_root_clears_root_after_failed_result() {
+        fn sccp_commitment_root_validation_rejects_root_after_failed_result() {
             let mut block = signed_sccp_block(Some([0xAA; 32]));
             set_single_sccp_transaction_result(
                 &mut block,
@@ -12736,15 +12789,96 @@ pub(crate) mod valid {
                 ),
             );
 
-            ValidBlock::refresh_sccp_commitment_root(&mut block);
-
-            assert_eq!(block.header().sccp_commitment_root(), None);
-            ValidBlock::validate_sccp_commitment_root(&block)
-                .expect("failed SCCP result should clear the commitment root");
+            let err = ValidBlock::validate_sccp_commitment_root(&block)
+                .expect_err("failed SCCP result must not keep a signed commitment root");
+            assert!(matches!(
+                err,
+                BlockValidationError::SccpCommitmentRootMismatch {
+                    expected: None,
+                    actual: Some(_),
+                }
+            ));
         }
 
         #[test]
-        fn validate_and_record_transactions_clears_sccp_root_after_rejected_record_tx() {
+        fn sccp_commitment_root_validation_rejects_deduped_root_for_successful_duplicates() {
+            let (account_id, keypair) = gen_account_in("sccp");
+            let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 2);
+            let candidate_messages =
+                crate::bridge::collect_sccp_messages_from_accepted_transactions(
+                    &[accepted.clone()],
+                );
+            assert_eq!(
+                candidate_messages.len(),
+                1,
+                "proposal SCCP collection deduplicates outbound replay keys"
+            );
+            let deduplicated_root =
+                crate::bridge::sccp_commitment_root_from_messages(&candidate_messages)
+                    .expect("deduplicated candidate root");
+            let leader = crate::block::checked_keypair();
+            let mut block: SignedBlock = BlockBuilder::new(vec![accepted])
+                .chain(0, None)
+                .with_sccp_commitment_root(Some(deduplicated_root))
+                .sign(leader.private_key())
+                .unpack(|_| {})
+                .into();
+            set_single_sccp_transaction_result(
+                &mut block,
+                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
+            );
+
+            let err = ValidBlock::validate_sccp_commitment_root(&block).expect_err(
+                "successful duplicate SCCP records must not validate with a deduplicated root",
+            );
+            assert!(matches!(
+                err,
+                BlockValidationError::SccpDuplicateOutboundMessage { .. }
+            ));
+        }
+
+        #[test]
+        fn sccp_commitment_root_validation_rejects_duplicate_inclusive_root() {
+            let (account_id, keypair) = gen_account_in("sccp");
+            let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 2);
+            let leader = crate::block::checked_keypair();
+            let probe_block: SignedBlock = BlockBuilder::new(vec![accepted.clone()])
+                .chain(0, None)
+                .sign(leader.private_key())
+                .unpack(|_| {})
+                .into();
+            let duplicate_messages =
+                crate::bridge::collect_sccp_messages_from_signed_block(&probe_block);
+            assert_eq!(
+                duplicate_messages.len(),
+                2,
+                "signed-block SCCP collection preserves duplicate successful records"
+            );
+            let duplicate_inclusive_root =
+                crate::bridge::sccp_commitment_root_from_messages(&duplicate_messages)
+                    .expect("duplicate-inclusive candidate root");
+            let mut block: SignedBlock = BlockBuilder::new(vec![accepted])
+                .chain(0, None)
+                .with_sccp_commitment_root(Some(duplicate_inclusive_root))
+                .sign(leader.private_key())
+                .unpack(|_| {})
+                .into();
+            set_single_sccp_transaction_result(
+                &mut block,
+                Ok(iroha_data_model::transaction::DataTriggerSequence::default()),
+            );
+
+            let err = ValidBlock::validate_sccp_commitment_root(&block).expect_err(
+                "successful duplicate SCCP records must not validate with a duplicate-inclusive root",
+            );
+            assert!(matches!(
+                err,
+                BlockValidationError::SccpDuplicateOutboundMessage { .. }
+            ));
+        }
+
+        #[test]
+        fn validate_and_record_transactions_rejects_sccp_root_after_rejected_record_tx() {
             let (account_id, keypair) = gen_account_in("sccp");
             let state = sccp_state_with_account(&account_id);
             let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 1);
@@ -12757,26 +12891,97 @@ pub(crate) mod valid {
                     .expect("candidate SCCP root");
             let key = crate::bridge::sccp_outbound_message_key(&sccp_transfer_payload());
             let leader = crate::block::checked_keypair();
-            let block = BlockBuilder::new(vec![accepted])
+            let new_block = BlockBuilder::new(vec![accepted])
                 .chain(0, None)
                 .with_sccp_commitment_root(Some(candidate_root))
                 .sign(leader.private_key())
                 .unpack(|_| {});
-            assert_eq!(block.header().sccp_commitment_root(), Some(candidate_root));
+            assert_eq!(
+                new_block.header().sccp_commitment_root(),
+                Some(candidate_root)
+            );
 
-            let mut state_block = state.block(block.header);
-            let valid = block
-                .validate_and_record_transactions(&mut state_block)
-                .unpack(|_| {});
+            let mut state_block = state.block(new_block.header());
+            let mut signed_block: SignedBlock = new_block.into();
+            let err = ValidBlock::validate_and_record_transactions(
+                &mut signed_block,
+                &mut state_block,
+                None,
+                false,
+            )
+            .expect_err("failed SCCP record must reject the signed root instead of rewriting it");
 
             assert!(
-                valid.as_ref().error(0).is_some(),
+                signed_block.error(0).is_some(),
                 "invalid SCCP proved record should reject the transaction"
             );
-            assert_eq!(valid.as_ref().header().sccp_commitment_root(), None);
+            assert_eq!(
+                signed_block.header().sccp_commitment_root(),
+                Some(candidate_root)
+            );
             assert!(state_block.world.sccp_outbound_messages.get(&key).is_none());
-            ValidBlock::validate_sccp_commitment_root(valid.as_ref())
-                .expect("failed SCCP record transaction must not leave a commitment root");
+            assert!(matches!(
+                err,
+                BlockValidationError::SccpCommitmentRootMismatch {
+                    expected: None,
+                    actual: Some(_),
+                }
+            ));
+        }
+
+        #[test]
+        fn validate_and_record_transactions_rejects_sccp_root_after_duplicate_overlay_records() {
+            let (account_id, keypair) = gen_account_in("sccp");
+            let state = sccp_state_with_account(&account_id);
+            let accepted = sccp_accepted_transaction_with_record_count(account_id, &keypair, 2);
+            let candidate_messages =
+                crate::bridge::collect_sccp_messages_from_accepted_transactions(
+                    &[accepted.clone()],
+                );
+            assert_eq!(
+                candidate_messages.len(),
+                1,
+                "pre-execution SCCP root collection deduplicates outbound keys"
+            );
+            let candidate_root =
+                crate::bridge::sccp_commitment_root_from_messages(&candidate_messages)
+                    .expect("candidate SCCP root");
+            let key = crate::bridge::sccp_outbound_message_key(&sccp_transfer_payload());
+            let leader = crate::block::checked_keypair();
+            let new_block = BlockBuilder::new(vec![accepted])
+                .chain(0, None)
+                .with_sccp_commitment_root(Some(candidate_root))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+
+            let mut state_block = state.block(new_block.header());
+            let mut signed_block: SignedBlock = new_block.into();
+            let err = ValidBlock::validate_and_record_transactions(
+                &mut signed_block,
+                &mut state_block,
+                None,
+                false,
+            )
+            .expect_err(
+                "duplicate SCCP overlay records must reject the transaction and signed root",
+            );
+
+            assert!(
+                signed_block.error(0).is_some(),
+                "duplicate SCCP proved records should reject the transaction"
+            );
+            assert_eq!(
+                signed_block.header().sccp_commitment_root(),
+                Some(candidate_root)
+            );
+            assert!(state_block.world.sccp_outbound_messages.get(&key).is_none());
+            assert!(matches!(
+                err,
+                BlockValidationError::SccpCommitmentRootMismatch {
+                    expected: None,
+                    actual: Some(_),
+                }
+            ));
         }
 
         #[test]
@@ -12957,6 +13162,36 @@ pub(crate) mod valid {
             kura.store_block(committed.clone())
                 .expect("store committed block");
             committed.as_ref().hash()
+        }
+
+        fn install_future_created_autoscale_lane(
+            state: &State,
+            lane_id: LaneId,
+            created_height: u64,
+        ) {
+            let mut elastic_lane = LaneConfig {
+                id: lane_id,
+                alias: format!("elastic-lane-{}", lane_id.as_u32()),
+                ..LaneConfig::default()
+            };
+            elastic_lane
+                .metadata
+                .insert("autoscale.managed".to_owned(), "true".to_owned());
+            elastic_lane.metadata.insert(
+                "autoscale.created_height".to_owned(),
+                created_height.to_string(),
+            );
+            let lane_catalog =
+                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+                    .expect("future-created autoscale lane catalog");
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = true;
+            nexus.autoscale.min_lanes = nonzero!(1_u32);
+            nexus.autoscale.max_lanes = nonzero!(3_u32);
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+            nexus.lane_catalog = lane_catalog;
         }
 
         #[test]
@@ -14540,11 +14775,12 @@ pub(crate) mod valid {
             let accepted_for_plan = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
             let plan = {
                 let view = state.view();
-                crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                     &view.nexus,
                     &accepted_for_plan,
                     view.world(),
                     u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                    2,
                 )
                 .expect("mixed dataspace write targets should build a native AMX plan")
             };
@@ -14651,11 +14887,12 @@ pub(crate) mod valid {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
                 let plan = {
                     let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &view.nexus,
                         &accepted,
                         view.world(),
                         u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                        2,
                     )
                     .expect("default elastic route resolves")
                 };
@@ -14766,11 +15003,12 @@ pub(crate) mod valid {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
                 let plan = {
                     let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &view.nexus,
                         &accepted,
                         view.world(),
                         u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                        2,
                     )
                     .expect("default elastic route resolves")
                 };
@@ -14899,6 +15137,146 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn validate_static_state_dependent_rejects_future_created_autoscale_da_policy_hash() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
+                Algorithm::BlsNormal,
+            )];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let future_created_lane = LaneId::new(1);
+            install_future_created_autoscale_lane(&state, future_created_lane, 7);
+            let candidate_height = 2;
+            let nexus = state.nexus_snapshot();
+            let expected_policy_hash =
+                crate::da::active_proof_policy_bundle_hash_at_height(&nexus, candidate_height);
+            let heightless_policies = crate::da::active_proof_policy_bundle(&nexus);
+            assert!(
+                heightless_policies
+                    .policies
+                    .iter()
+                    .any(|policy| policy.lane_id == future_created_lane),
+                "fixture requires the heightless policy snapshot to include the future-created lane"
+            );
+            let heightless_policy_hash = Some(HashOf::new(&heightless_policies));
+            assert_ne!(
+                heightless_policy_hash,
+                Some(expected_policy_hash),
+                "height-aware block policy hash must exclude the not-yet-created autoscale lane"
+            );
+
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
+            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_da_proof_policies(Some(heightless_policies))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
+            assert_eq!(signed.header().height().get(), candidate_height);
+
+            let view = state.query_view();
+            let err = ValidBlock::validate_static_state_dependent(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &ALICE_ID,
+                &view,
+                false,
+                &time_source,
+                false,
+                false,
+            )
+            .expect_err("heightless future-created autoscale policy hash must be rejected");
+
+            assert!(matches!(
+                err,
+                BlockValidationError::ProofPolicyHashMismatch { expected, actual }
+                    if expected == expected_policy_hash && actual == heightless_policy_hash
+            ));
+        }
+
+        #[test]
+        fn validate_static_state_dependent_accepts_height_aware_da_policy_hash() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let key_pairs = vec![crate::block::checked_keypair_with_algorithm(
+                Algorithm::BlsNormal,
+            )];
+            let topology = test_topology_with_keys(&key_pairs);
+            let leader = &key_pairs[0];
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "leader",
+                leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
+
+            let future_created_lane = LaneId::new(1);
+            install_future_created_autoscale_lane(&state, future_created_lane, 7);
+            let candidate_height = 2;
+            let nexus = state.nexus_snapshot();
+            let height_aware_policies =
+                crate::da::active_proof_policy_bundle_at_height(&nexus, candidate_height);
+            assert!(
+                height_aware_policies
+                    .policies
+                    .iter()
+                    .all(|policy| policy.lane_id != future_created_lane),
+                "policy snapshot before creation height must exclude the autoscale lane"
+            );
+            let expected_policy_hash = Some(HashOf::new(&height_aware_policies));
+
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
+            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_da_proof_policies(Some(height_aware_policies))
+                .sign(leader.private_key())
+                .unpack(|_| {});
+            let signed: SignedBlock = new_block.into();
+            assert_eq!(signed.header().height().get(), candidate_height);
+            assert_eq!(
+                signed.header().da_proof_policies_hash(),
+                expected_policy_hash
+            );
+
+            let view = state.query_view();
+            ValidBlock::validate_static_state_dependent(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &ALICE_ID,
+                &view,
+                false,
+                &time_source,
+                false,
+                false,
+            )
+            .expect("height-aware DA policy hash must validate before autoscale lane creation");
+        }
+
+        #[test]
         fn validate_static_state_dependent_rejects_elastic_context_when_nexus_disabled() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
@@ -14962,11 +15340,12 @@ pub(crate) mod valid {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
                 let plan = {
                     let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &view.nexus,
                         &accepted,
                         view.world(),
                         u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                        2,
                     )
                     .expect("enabled Nexus should resolve default elastic route")
                 };
@@ -15085,11 +15464,12 @@ pub(crate) mod valid {
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
                 let plan = {
                     let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &view.nexus,
                         &accepted,
                         view.world(),
                         u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                        2,
                     )
                     .expect("enabled Nexus should resolve default elastic route")
                 };
@@ -15535,6 +15915,99 @@ pub(crate) mod valid {
                 BlockValidationError::DaPinIntentBundle(DaPinIntentValidationError::UnknownLane {
                     lane
                 }) if *lane == stale_lane
+            ));
+        }
+
+        #[test]
+        fn validate_keep_voting_block_rejects_future_created_autoscale_da_pin_intent_lane() {
+            let kura = Arc::new(Kura::blank_kura_for_testing());
+            let query = LiveQueryStore::start_test();
+            let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
+
+            let mut world = World::new();
+            insert_consensus_key(
+                &mut world,
+                "validator",
+                &leader,
+                0,
+                None,
+                ConsensusKeyStatus::Active,
+            );
+            let mut params = Parameters::default();
+            params.sumeragi.da_enabled = true;
+            world.parameters = Cell::new(params);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            let _prev_hash =
+                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 0);
+
+            let future_created_lane = LaneId::new(1);
+            let mut elastic_lane = LaneConfig {
+                id: future_created_lane,
+                alias: "elastic-lane-1".to_owned(),
+                ..LaneConfig::default()
+            };
+            elastic_lane
+                .metadata
+                .insert("autoscale.managed".to_owned(), "true".to_owned());
+            elastic_lane
+                .metadata
+                .insert("autoscale.created_height".to_owned(), "7".to_owned());
+            {
+                let mut nexus = state.nexus.write();
+                nexus.enabled = true;
+                nexus.autoscale.enabled = true;
+                nexus.autoscale.min_lanes = nonzero!(1_u32);
+                nexus.autoscale.max_lanes = nonzero!(3_u32);
+                nexus.lane_catalog =
+                    LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
+                        .expect("future-created autoscale lane catalog");
+                nexus.lane_config =
+                    iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            }
+
+            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+            let intent = DaPinIntent::new(
+                future_created_lane,
+                1,
+                1,
+                StorageTicketId::new([0xBC; 32]),
+                ManifestDigest::new([0xBD; 32]),
+            );
+            let signed: SignedBlock =
+                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                    .chain(0, state.view().latest_block().as_deref())
+                    .with_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])))
+                    .sign(leader.private_key())
+                    .unpack(|_| {})
+                    .into();
+            assert!(
+                signed.header().height().get() < 7,
+                "fixture block must precede the autoscale lane creation height"
+            );
+
+            let mut voting_block = None;
+            let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
+            let result = ValidBlock::validate_keep_voting_block(
+                signed,
+                &topology,
+                &state.chain_id.clone(),
+                &ALICE_ID,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            let Err((_, err)) = result else {
+                panic!("expected future-created autoscale DA pin-intent rejection");
+            };
+            assert!(matches!(
+                err.as_ref(),
+                BlockValidationError::DaPinIntentBundle(DaPinIntentValidationError::UnknownLane {
+                    lane
+                }) if *lane == future_created_lane
             ));
         }
 
@@ -19870,8 +20343,7 @@ mod event {
                         | TransactionEntrypoint::Time(_) => return None,
                     };
                     let hash = tx.hash();
-                    let routing = routing_ledger::take(&hash).unwrap_or_default();
-                    let _ = routing_ledger::take_plan(&hash);
+                    let routing = routing_ledger::take_route(&hash).unwrap_or_default();
                     let status = block.error(idx).map_or_else(
                         || TransactionStatus::Approved,
                         |error| TransactionStatus::Rejected(Box::new(error.clone())),
@@ -19939,6 +20411,9 @@ mod event {
             BlockValidationError::EmptyBlock => Reason::EmptyBlock,
             BlockValidationError::DuplicateTransactions => Reason::TransactionValidationFailed,
             BlockValidationError::SccpCommitmentRootMismatch { .. } => {
+                Reason::SccpCommitmentRootMismatch
+            }
+            BlockValidationError::SccpDuplicateOutboundMessage { .. } => {
                 Reason::SccpCommitmentRootMismatch
             }
             BlockValidationError::ExecutionContextInvalid(_)
@@ -20107,6 +20582,60 @@ mod event {
                 transaction_event.status,
                 TransactionStatus::Rejected(_)
             ));
+        }
+
+        #[test]
+        fn valid_block_transaction_events_prefer_full_routing_plan_over_legacy_decision() {
+            let keypair = iroha_crypto::KeyPair::try_random()
+                .expect("test keypair generation should succeed");
+            let chain_id: iroha_data_model::ChainId =
+                "event-routing-plan-first".parse().expect("chain id");
+            let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
+            let tx =
+                iroha_data_model::prelude::TransactionBuilder::new(chain_id, authority.clone())
+                    .sign(keypair.private_key());
+            let hash = tx.hash();
+            let plan_route =
+                crate::queue::RoutingDecision::new(LaneId::new(7), DataSpaceId::new(70));
+            let stale_route =
+                crate::queue::RoutingDecision::new(LaneId::new(99), DataSpaceId::new(99));
+            let plan = crate::queue::RoutingPlan::single(plan_route);
+            routing_ledger::record_plan_bounded(
+                hash,
+                plan.clone(),
+                iroha_config::parameters::defaults::queue::CAPACITY.get(),
+            );
+            routing_ledger::record(hash, stale_route);
+            let header = iroha_data_model::block::BlockHeader::new(
+                nonzero_ext::nonzero!(1_u64),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let signature = iroha_data_model::block::BlockSignature::new(
+                0,
+                iroha_crypto::SignatureOf::try_from_hash(keypair.private_key(), header.hash())
+                    .expect("test block signing should succeed"),
+            );
+            let block =
+                iroha_data_model::block::SignedBlock::presigned(signature, header, vec![tx]);
+
+            let valid = ValidBlock::new_unverified_for_tests(block);
+            let events = valid.produce_events().collect::<Vec<_>>();
+            let transaction_event = events
+                .iter()
+                .find_map(|event| match event {
+                    PipelineEventBox::Transaction(event) => Some(event),
+                    _ => None,
+                })
+                .expect("transaction event should be produced");
+
+            assert_eq!(transaction_event.lane_id, plan_route.lane_id);
+            assert_eq!(transaction_event.dataspace_id, plan_route.dataspace_id);
+            assert_eq!(routing_ledger::get_plan(&hash), None);
+            assert_eq!(routing_ledger::get(&hash), None);
         }
     }
 }
@@ -20727,6 +21256,18 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn public_taira_chain_id_guard_accepts_only_taira_ids() {
+        assert!(is_public_taira_chain_id(&ChainId::from(
+            "809574f5-fee7-5e69-bfcf-52451e42d50f"
+        )));
+        assert!(is_public_taira_chain_id(&ChainId::from("iroha3-taira")));
+        assert!(is_public_taira_chain_id(&ChainId::from("taira")));
+        assert!(!is_public_taira_chain_id(&ChainId::from(
+            "00000000-0000-0000-0000-000000000000"
+        )));
+    }
+
     fn native_amx_test_catalog(
         paynet: DataSpaceId,
         cbuae: DataSpaceId,
@@ -21264,11 +21805,12 @@ mod tests {
         let accepted_for_plan = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
         let plan = {
             let view = state.view();
-            crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
+            crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
                 &view.nexus,
                 &accepted_for_plan,
                 view.world(),
                 u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
+                1,
             )
             .expect("mixed dataspace write targets should build a native AMX plan")
         };

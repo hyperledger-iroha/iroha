@@ -139,9 +139,14 @@ pub struct RequestNonce([u8; REQUEST_NONCE_LEN]);
 
 impl RequestNonce {
     /// Construct a nonce from raw bytes.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; REQUEST_NONCE_LEN]) -> Self {
-        Self(bytes)
+    ///
+    /// # Errors
+    /// Returns [`BlindingError::WeakInput`] if the nonce is all zero.
+    pub fn from_bytes(bytes: [u8; REQUEST_NONCE_LEN]) -> Result<Self, BlindingError> {
+        if bytes.iter().all(|&byte| byte == 0) {
+            return Err(BlindingError::WeakInput("request_nonce"));
+        }
+        Ok(Self(bytes))
     }
 
     /// Borrow the nonce bytes.
@@ -294,8 +299,8 @@ mod tests {
         let key = CircuitBlindingKey::derive(&salt, &circuit_secret).expect("hkdf");
         let cid = b"popular-content";
 
-        let nonce_a = RequestNonce::from_bytes([0xAA; REQUEST_NONCE_LEN]);
-        let nonce_b = RequestNonce::from_bytes([0xBB; REQUEST_NONCE_LEN]);
+        let nonce_a = RequestNonce::from_bytes([0xAA; REQUEST_NONCE_LEN]).expect("nonce A parses");
+        let nonce_b = RequestNonce::from_bytes([0xBB; REQUEST_NONCE_LEN]).expect("nonce B parses");
 
         let blinded_a = key.request_scoped_blinded(cid, &nonce_a);
         let blinded_b = key.request_scoped_blinded(cid, &nonce_b);
@@ -304,6 +309,14 @@ mod tests {
         // Same nonce => same digest to support deterministic retries.
         let blinded_a_again = key.request_scoped_blinded(cid, &nonce_a);
         assert_eq!(blinded_a, blinded_a_again);
+    }
+
+    #[test]
+    fn request_nonce_from_bytes_rejects_all_zero_material() {
+        let err = RequestNonce::from_bytes([0_u8; REQUEST_NONCE_LEN])
+            .expect_err("all-zero nonce bytes must fail");
+
+        assert!(matches!(err, BlindingError::WeakInput("request_nonce")));
     }
 
     #[test]

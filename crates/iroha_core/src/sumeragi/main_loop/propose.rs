@@ -455,6 +455,7 @@ fn refresh_proposal_routing_from_state(
     routing_plan_batch: &mut Vec<crate::queue::RoutingPlan>,
     state_view: &crate::state::StateView<'_>,
     ledger_time_ms: u64,
+    proposal_height: u64,
 ) -> Result<bool> {
     if tx_batch.len() != routing_batch.len() || tx_batch.len() != routing_plan_batch.len() {
         return Err(eyre!(
@@ -472,15 +473,19 @@ fn refresh_proposal_routing_from_state(
     let mut refreshed_routing = Vec::with_capacity(tx_batch.len());
     let mut refreshed_plans = Vec::with_capacity(tx_batch.len());
     for (idx, tx) in tx_batch.iter().enumerate() {
-        let refreshed_plan = crate::queue::evaluate_policy_plan_with_nexus_and_world_at(
-            nexus,
-            tx,
-            state_view.world(),
-            ledger_time_ms,
-        )
-        .map_err(|err| {
-            eyre!("proposal routing cannot be resolved from committed state at index {idx}: {err}")
-        })?;
+        let refreshed_plan =
+            crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                nexus,
+                tx,
+                state_view.world(),
+                ledger_time_ms,
+                proposal_height,
+            )
+            .map_err(|err| {
+                eyre!(
+                    "proposal routing cannot be resolved from committed state at index {idx}: {err}"
+                )
+            })?;
         refreshed_routing.push(refreshed_plan.coordinator_route());
         refreshed_plans.push(refreshed_plan);
     }
@@ -492,6 +497,38 @@ fn refresh_proposal_routing_from_state(
         *routing_plan_batch = refreshed_plans;
     }
     Ok(changed)
+}
+
+fn collect_sccp_messages_for_active_proposal_routes<F>(
+    tx_batch: &[AcceptedTransaction<'static>],
+    routing_batch: &[RoutingDecision],
+    nexus: &iroha_config::parameters::actual::Nexus,
+    is_already_recorded: F,
+) -> Result<Vec<crate::bridge::RecordedSccpMessage>>
+where
+    F: Fn(&iroha_data_model::bridge::SccpOutboundMessageKey) -> bool,
+{
+    if tx_batch.len() != routing_batch.len() {
+        return Err(eyre!(
+            "proposal SCCP routing vector length mismatch: txs={} routes={}",
+            tx_batch.len(),
+            routing_batch.len()
+        ));
+    }
+    if !nexus.enabled {
+        return Ok(Vec::new());
+    }
+    Ok(
+        crate::bridge::collect_new_sccp_messages_from_accepted_transactions_where(
+            tx_batch,
+            |tx_index| {
+                let route = routing_batch[tx_index];
+                crate::state::nexus_active_lane_dataspace(route.lane_id, nexus)
+                    .is_some_and(|dataspace_id| dataspace_id == route.dataspace_id)
+            },
+            is_already_recorded,
+        ),
+    )
 }
 
 const PROPOSAL_TIME_PADDING: std::time::Duration = std::time::Duration::from_millis(1);
@@ -1151,6 +1188,14 @@ impl Actor {
         }
     }
 
+    pub(super) fn proposal_multilane_lookahead_enabled(
+        nexus: &iroha_config::parameters::actual::Nexus,
+        block_height: u64,
+    ) -> bool {
+        nexus.enabled
+            && crate::queue::routable_lane_ids_for_nexus_at_height(nexus, block_height).len() > 1
+    }
+
     pub(super) fn pull_transactions_for_proposal(
         &self,
         state: &State,
@@ -1177,7 +1222,7 @@ impl Actor {
         let scan_budget = scan_budget.max(1);
         let committed_nexus = state.nexus_snapshot();
         let multilane_lookahead =
-            committed_nexus.enabled && committed_nexus.uses_multilane_catalogs();
+            Self::proposal_multilane_lookahead_enabled(&committed_nexus, height);
         if self.queue.reconfigure_nexus_with_state_if_needed(
             &committed_nexus,
             state,
@@ -1256,7 +1301,7 @@ impl Actor {
                     }
                 };
 
-            for idx in order {
+            for (order_pos, idx) in order.iter().copied().enumerate() {
                 let Some(guard) = fetched_slots.get_mut(idx).and_then(Option::take) else {
                     continue;
                 };
@@ -1286,7 +1331,24 @@ impl Actor {
                     let allow_oversized =
                         gas_used_in_block == 0 && tx_guards.is_empty() && accepted.is_empty();
 
-                    if would_exceed && !allow_oversized {
+                    let fitting_later_candidate = would_exceed
+                        && allow_oversized
+                        && order.iter().skip(order_pos + 1).any(|candidate_idx| {
+                            fetched_slots
+                                .get(*candidate_idx)
+                                .and_then(Option::as_ref)
+                                .is_some_and(|candidate| {
+                                    let candidate_is_ivm_heavy = Self::is_ivm_heavy_transaction(
+                                        candidate.as_accepted(),
+                                        replay_ivm_proved,
+                                    );
+                                    max_ivm_transactions.is_none_or(|max| {
+                                        !candidate_is_ivm_heavy || ivm_transactions_included < max
+                                    }) && candidate.gas_cost() <= remaining_gas
+                                })
+                        });
+
+                    if would_exceed && (!allow_oversized || fitting_later_candidate) {
                         release_lane_consumption(&guard, &mut lane_consumption);
                         deferred_accumulator.push((guard.clone_accepted(), guard.routing_plan()));
                         continue;
@@ -1996,7 +2058,7 @@ impl Actor {
         };
         let frontier_commit_qc_blocks_yield = frontier_commit_qc_observed && !recovery_exhausted;
         let competing_quorum_blocks_yield =
-            competing_quorum_locked && !new_view_qc_supersedes_owner;
+            competing_quorum_locked && !new_view_qc_supersedes_owner && owner_age < yield_age;
         if owner_qc_observed
             || frontier_commit_qc_blocks_yield
             || local_vote_consensus_locked
@@ -3292,6 +3354,7 @@ impl Actor {
                         &mut routing_plan_batch,
                         &state_view,
                         routing_ledger_time_ms,
+                        proposal_height,
                     )? {
                         info!(
                             height = proposal_height,
@@ -3312,11 +3375,12 @@ impl Actor {
                     self.build_npos_consensus_effects_for_proposal(proposal_height)?;
                 builder = builder.with_npos_consensus_effects(npos_effects);
                 let world_view = self.state.world_view();
-                let sccp_messages =
-                    crate::bridge::collect_new_sccp_messages_from_accepted_transactions(
-                        &tx_batch,
-                        |key| world_view.sccp_outbound_messages().get(key).is_some(),
-                    );
+                let sccp_messages = collect_sccp_messages_for_active_proposal_routes(
+                    &tx_batch,
+                    &routing_batch,
+                    &nexus,
+                    |key| world_view.sccp_outbound_messages().get(key).is_some(),
+                )?;
                 builder = builder.with_sccp_commitment_root(
                     crate::bridge::sccp_commitment_root_from_messages(&sccp_messages),
                 );
@@ -3456,7 +3520,7 @@ impl Actor {
                     if bundle.is_empty() {
                         bundle_opt = None;
                     } else {
-                        self.validate_da_bundle(bundle)?;
+                        self.validate_da_bundle(bundle, proposal_height)?;
                     }
 
                     if let Some(bundle) = bundle_opt.as_ref() {
@@ -3530,11 +3594,13 @@ impl Actor {
                     let account_exists = |account: &iroha_data_model::account::AccountId| -> bool {
                         world.accounts().get(account).is_some()
                     };
-                    let (mut intents, rejected) = crate::da::sanitize_pin_intents_against_nexus(
-                        bundle.intents,
-                        &nexus,
-                        account_exists,
-                    );
+                    let (mut intents, rejected) =
+                        crate::da::sanitize_pin_intents_against_nexus_at_height(
+                            bundle.intents,
+                            &nexus,
+                            proposal_height,
+                            account_exists,
+                        );
                     if let Some(first_rejection) = rejected.first().cloned() {
                         for reason in &rejected {
                             #[cfg(feature = "telemetry")]
@@ -3596,7 +3662,8 @@ impl Actor {
                     }
                 }
 
-                let proof_policy_bundle = crate::da::active_proof_policy_bundle(&nexus);
+                let proof_policy_bundle =
+                    crate::da::active_proof_policy_bundle_at_height(&nexus, proposal_height);
                 builder = builder.with_da_proof_policies(Some(proof_policy_bundle));
 
                 if !tx_batch.is_empty() {
@@ -3616,6 +3683,7 @@ impl Actor {
                             &mut routing_plan_batch,
                             &state_view,
                             routing_ledger_time_ms,
+                            proposal_height,
                         )?;
                         (state_height, refreshed)
                     };
@@ -4125,7 +4193,11 @@ impl Actor {
     /// The current `PoR` proof bundle is tracked by commitments only; we bound proof
     /// openings by the same count until proof summaries are threaded through the
     /// consensus path.
-    pub(super) fn validate_da_bundle(&mut self, bundle: &DaCommitmentBundle) -> Result<()> {
+    pub(super) fn validate_da_bundle(
+        &mut self,
+        bundle: &DaCommitmentBundle,
+        proposal_height: u64,
+    ) -> Result<()> {
         let nexus = self.state.nexus_snapshot();
         let lane_config = nexus.lane_config.clone();
         validate_da_bundle_caps(
@@ -4135,7 +4207,8 @@ impl Actor {
         )?;
 
         for record in &bundle.commitments {
-            crate::da::active_lane_proof_policy(&nexus, record.lane_id).map_err(|err| {
+            crate::da::active_lane_proof_policy_at_height(&nexus, record.lane_id, proposal_height)
+                .map_err(|err| {
                 eyre!(
                     "DA commitment active lane validation failed for lane {} epoch {} seq {}: {err}",
                     record.lane_id.as_u32(),
@@ -4190,8 +4263,12 @@ impl Actor {
             )?;
         }
 
-        crate::da::validate_commitment_bundle_against_nexus(bundle, &nexus)
-            .map_err(|err| eyre!("DA commitment bundle failed validation: {err}"))?;
+        crate::da::validate_commitment_bundle_against_nexus_at_height(
+            bundle,
+            &nexus,
+            proposal_height,
+        )
+        .map_err(|err| eyre!("DA commitment bundle failed validation: {err}"))?;
 
         Ok(())
     }
@@ -4654,6 +4731,7 @@ impl Actor {
         } else {
             payload_cooldown
         };
+        cooldown = cooldown.max(CACHED_PROPOSAL_REBROADCAST_COOLDOWN_FLOOR);
         if self.relay_backpressure_active(now, payload_cooldown)
             && (!frontier_recovery_cached || prior_body_rebroadcast)
         {
@@ -7457,9 +7535,10 @@ mod tests {
         ProposalBackpressure, age_starved_queue_allows_stale_pending_override,
         cached_slot_timeout_hysteresis_remaining, canonicalize_parallel_batch_by_key,
         canonicalize_proposal_batch, canonicalize_proposal_batch_with_plans,
-        consensus_queue_backpressure, da_payload_budget, drain_aligned_batch,
-        next_cached_slot_timeout_streak, refresh_proposal_routing_from_state,
-        reorder_vec_by_indices, trim_batch_for_size_cap, trim_batch_for_size_cap_with_plans,
+        collect_sccp_messages_for_active_proposal_routes, consensus_queue_backpressure,
+        da_payload_budget, drain_aligned_batch, next_cached_slot_timeout_streak,
+        refresh_proposal_routing_from_state, reorder_vec_by_indices, trim_batch_for_size_cap,
+        trim_batch_for_size_cap_with_plans,
     };
     use crate::queue::{
         BackpressureState, ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingPlan,
@@ -7467,6 +7546,7 @@ mod tests {
     use crate::sumeragi::status;
     use crate::tx::AcceptedTransaction;
     use iroha_config::parameters::actual::LaneRoutingPolicy;
+    use iroha_crypto::Hash;
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         ChainId, Level,
@@ -7477,6 +7557,7 @@ mod tests {
             DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
         },
         prelude::{AccountId, InstructionBox, TransactionBuilder},
+        transaction::{Executable, IvmBytecode, IvmProved},
     };
     use std::borrow::Cow;
     use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
@@ -7498,6 +7579,47 @@ mod tests {
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
 
+    fn proposal_sccp_transfer_payload(nonce: u64) -> iroha_sccp::SccpPayloadV1 {
+        iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        })
+    }
+
+    fn accepted_sccp_record_transaction(nonce: u64) -> AcceptedTransaction<'static> {
+        let chain: ChainId = "proposal-sccp-root".parse().expect("chain id");
+        let key_pair = checked_key_pair();
+        let (_, private_key) = key_pair.clone().into_parts();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let payload =
+            iroha_sccp::canonical_sccp_payload_bytes(&proposal_sccp_transfer_payload(nonce));
+        let executable = Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+            overlay: vec![InstructionBox::from(
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(payload),
+            )]
+            .into(),
+            events_commitment: Hash::new(b"proposal-sccp-events"),
+            gas_policy_commitment: Hash::new(b"proposal-sccp-gas"),
+        });
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_executable(executable)
+            .sign(&private_key);
+        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
     fn blank_state() -> crate::state::State {
         let world = crate::state::World::default();
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -7511,6 +7633,85 @@ mod tests {
         {
             crate::state::State::new(world, kura, query)
         }
+    }
+
+    #[test]
+    fn proposal_sccp_collection_ignores_records_when_nexus_disabled() {
+        let state = blank_state();
+        let tx = accepted_sccp_record_transaction(1);
+        let routing = vec![RoutingDecision::default()];
+        let nexus = state.nexus_snapshot();
+
+        let messages =
+            collect_sccp_messages_for_active_proposal_routes(&[tx], &routing, &nexus, |_| false)
+                .expect("disabled Nexus should not be a routing error");
+
+        assert!(
+            messages.is_empty(),
+            "proposal roots must not commit SCCP records that disabled Nexus execution will reject"
+        );
+    }
+
+    #[test]
+    fn proposal_sccp_collection_includes_active_route_records() {
+        let mut state = blank_state();
+        state.nexus.get_mut().enabled = true;
+        let tx = accepted_sccp_record_transaction(2);
+        let routing = vec![RoutingDecision::default()];
+        let nexus = state.nexus_snapshot();
+
+        let messages =
+            collect_sccp_messages_for_active_proposal_routes(&[tx], &routing, &nexus, |_| false)
+                .expect("active default route should collect");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].tx_index, 0);
+        assert_eq!(messages[0].instruction_index, 0);
+    }
+
+    #[test]
+    fn proposal_sccp_collection_filters_inactive_routes_without_renumbering() {
+        let mut state = blank_state();
+        state.nexus.get_mut().enabled = true;
+        let skipped = accepted_sccp_record_transaction(3);
+        let included = accepted_sccp_record_transaction(4);
+        let routing = vec![
+            RoutingDecision::new(LaneId::new(99), DataSpaceId::UNIVERSAL),
+            RoutingDecision::default(),
+        ];
+        let nexus = state.nexus_snapshot();
+
+        let messages = collect_sccp_messages_for_active_proposal_routes(
+            &[skipped, included],
+            &routing,
+            &nexus,
+            |_| false,
+        )
+        .expect("inactive routed entries should be filtered, not fatal");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].tx_index, 1,
+            "route filtering must preserve canonical entrypoint indices"
+        );
+        assert_eq!(messages[0].instruction_index, 0);
+    }
+
+    #[test]
+    fn proposal_sccp_collection_rejects_routing_vector_length_drift() {
+        let mut state = blank_state();
+        state.nexus.get_mut().enabled = true;
+        let tx = accepted_sccp_record_transaction(5);
+        let nexus = state.nexus_snapshot();
+
+        let err = collect_sccp_messages_for_active_proposal_routes(&[tx], &[], &nexus, |_| false)
+            .expect_err("routing length drift must reject before root computation");
+
+        assert!(
+            err.to_string()
+                .contains("SCCP routing vector length mismatch"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -7532,6 +7733,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            1,
         )
         .expect("refresh should use committed state routing");
 
@@ -7545,6 +7747,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            1,
         )
         .expect("second refresh should remain valid");
 
@@ -7596,6 +7799,7 @@ mod tests {
                 &mut routing_plan_batch,
                 &state.view(),
                 0,
+                2,
             )
             .expect("proposal refresh should resolve autoscale candidates");
             if routing_batch[0].lane_id == LaneId::new(1) {
@@ -7613,6 +7817,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            2,
         )
         .expect("proposal refresh should use live Nexus autoscale range");
 
@@ -7676,6 +7881,7 @@ mod tests {
                 &mut routing_plan_batch,
                 &state.view(),
                 0,
+                2,
             )
             .expect("enabled Nexus should resolve autoscale candidates");
             if routing_batch == vec![stale_elastic_route] {
@@ -7700,6 +7906,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            2,
         )
         .expect("disabled Nexus should refresh stale elastic proposal vectors");
 
@@ -7832,6 +8039,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            1,
         )
         .expect("proposal refresh should replace stale Native AMX participant legs");
 
@@ -7856,6 +8064,7 @@ mod tests {
             &mut routing_plan_batch,
             &state.view(),
             0,
+            1,
         )
         .expect_err("routing vector drift must fail closed");
 

@@ -638,7 +638,9 @@ fn verify_council_signature(signature: &Value, payload: &[u8]) -> Result<(), Fix
             signature_bytes.len()
         )));
     }
-    let signature = Signature::from_bytes(&signature_bytes);
+    let signature = Signature::try_from_bytes(&signature_bytes).map_err(|err| {
+        FixtureError::Invalid(format!("invalid council signature material: {err}"))
+    })?;
     signature
         .verify(&public_key, payload)
         .map_err(|err| FixtureError::Invalid(format!("council signature did not verify: {err}")))

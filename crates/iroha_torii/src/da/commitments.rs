@@ -9,8 +9,8 @@ use std::num::{NonZeroU64, NonZeroUsize};
 use axum::extract::State;
 use iroha_config::parameters::actual::Nexus;
 use iroha_core::da::{
-    active_proof_policy_bundle, build_da_commitment_proof, commitment_store::DaCommitmentStore,
-    verify_da_commitment_proof,
+    active_lane_proof_policy_at_height, active_proof_policy_bundle_at_height,
+    build_da_commitment_proof, commitment_store::DaCommitmentStore, verify_da_commitment_proof,
 };
 use iroha_data_model::{
     da::commitment::{
@@ -103,7 +103,7 @@ pub async fn handler_list_commitments(
     crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_COMMITMENTS)?;
     let store = app.state.da_commitments();
     let items = list_active_from_store(&store, &request, &nexus);
-    let policies = active_proof_policy_bundle(&nexus);
+    let policies = active_proof_policy_bundle_for_state(&nexus, app.state.as_ref());
     Ok(JsonBody(DaCommitmentListResponse {
         policies,
         commitments: items,
@@ -122,7 +122,7 @@ pub async fn handler_prove_commitment(
     proof.map_or_else(
         || Ok(JsonBody(None)),
         |proof| {
-            let policies = active_proof_policy_bundle(&nexus);
+            let policies = active_proof_policy_bundle_for_state(&nexus, app.state.as_ref());
             Ok(JsonBody(Some(DaCommitmentProofResponse {
                 policies,
                 proof,
@@ -153,7 +153,7 @@ pub async fn handler_list_proof_policies(
 ) -> Result<JsonBody<DaProofPolicyBundle>, Error> {
     let nexus = app.state.nexus_snapshot();
     crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_PROOF_POLICIES)?;
-    let policies = active_proof_policy_bundle(&nexus);
+    let policies = active_proof_policy_bundle_for_state(&nexus, app.state.as_ref());
     Ok(JsonBody(policies))
 }
 
@@ -163,8 +163,16 @@ pub async fn handler_proof_policy_bundle(
 ) -> Result<JsonBody<DaProofPolicyBundle>, Error> {
     let nexus = app.state.nexus_snapshot();
     crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_PROOF_POLICY_SNAPSHOT)?;
-    let bundle = active_proof_policy_bundle(&nexus);
+    let bundle = active_proof_policy_bundle_for_state(&nexus, app.state.as_ref());
     Ok(JsonBody(bundle))
+}
+
+fn active_proof_policy_bundle_for_state(
+    nexus: &Nexus,
+    state: &iroha_core::state::State,
+) -> DaProofPolicyBundle {
+    let committed_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+    active_proof_policy_bundle_at_height(nexus, committed_height)
 }
 
 fn list_active_from_store(
@@ -248,7 +256,12 @@ fn list_from_store(
 }
 
 fn commitment_lane_is_active(nexus: &Nexus, target: &DaCommitmentWithLocation) -> bool {
-    iroha_core::da::active_lane_proof_policy(nexus, target.commitment.lane_id).is_ok()
+    active_lane_proof_policy_at_height(
+        nexus,
+        target.commitment.lane_id,
+        target.location.block_height,
+    )
+    .is_ok()
 }
 
 fn find_in_store(
@@ -369,7 +382,11 @@ fn verify_against_store(
     };
 
     let header = block.header();
-    if let Err(err) = iroha_core::da::active_lane_proof_policy(nexus, proof.commitment.lane_id) {
+    if let Err(err) = active_lane_proof_policy_at_height(
+        nexus,
+        proof.commitment.lane_id,
+        proof.location.block_height,
+    ) {
         return DaCommitmentVerifyResponse {
             valid: false,
             error: Some(err.to_string()),
@@ -393,6 +410,7 @@ mod tests {
 
     use iroha_config::parameters::actual::LaneConfig as ConfigLaneConfig;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_data_model::nexus::{AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED};
     use iroha_data_model::{
         block::{BlockHeader, builder::BlockBuilder},
         da::{
@@ -495,6 +513,39 @@ mod tests {
             nexus.lane_config.entry(stale_lane).is_some(),
             "fixture must keep stale runtime geometry for the removed lane"
         );
+    }
+
+    fn install_future_created_autoscale_lane(
+        app: &crate::SharedAppState,
+        lane_id: LaneId,
+        created_height: u64,
+    ) {
+        let mut elastic_lane = ModelLaneConfig {
+            id: lane_id,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            alias: format!("elastic-lane-{}", lane_id.as_u32()),
+            proof_scheme: DaProofScheme::MerkleSha256,
+            ..ModelLaneConfig::default()
+        };
+        elastic_lane
+            .metadata
+            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+        elastic_lane.metadata.insert(
+            AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            created_height.to_string(),
+        );
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![ModelLaneConfig::default(), elastic_lane],
+        )
+        .expect("future-created autoscale lane catalog");
+        let mut nexus = app.state.nexus.write();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        nexus.lane_config = ConfigLaneConfig::from_catalog(&lane_catalog);
+        nexus.lane_catalog = lane_catalog;
     }
 
     fn app_with_da_commitment_bundle(records: Vec<DaCommitmentRecord>) -> crate::SharedAppState {
@@ -797,13 +848,12 @@ mod tests {
         let mut app = mk_app_state_for_tests();
         enable_nexus(&mut app);
         let request = DaCommitmentProofRequest::default();
-        let JsonBody(_response) =
+        let JsonBody(response) =
             super::handler_list_commitments(State(app.clone()), NoritoJson(request))
                 .await
                 .expect("handler should succeed");
-        let expected = active_proof_policy_bundle(&app.state.nexus_snapshot());
 
-        assert_eq!(expected.version, DaProofPolicyBundle::VERSION_V1);
+        assert_eq!(response.policies.version, DaProofPolicyBundle::VERSION_V1);
     }
 
     #[tokio::test]
@@ -901,6 +951,91 @@ mod tests {
         assert!(
             proof_response.is_none(),
             "stale runtime-only lane commitments must not produce proofs"
+        );
+    }
+
+    #[tokio::test]
+    async fn proof_policy_handlers_hide_future_created_autoscale_lane() {
+        let lane = LaneId::new(1);
+        let app = app_with_da_commitment_bundle(vec![sample_record(0, 1, 1)]);
+        install_future_created_autoscale_lane(&app, lane, 7);
+
+        let JsonBody(bundle) = super::handler_proof_policy_bundle(State(app.clone()))
+            .await
+            .expect("handler should succeed");
+
+        assert!(
+            bundle
+                .policies
+                .iter()
+                .any(|policy| policy.lane_id == LaneId::new(0)),
+            "default lane policy must remain visible"
+        );
+        assert!(
+            !bundle.policies.iter().any(|policy| policy.lane_id == lane),
+            "future-created autoscale lane must not appear before its creation height"
+        );
+    }
+
+    #[tokio::test]
+    async fn commitment_handlers_hide_future_created_autoscale_lane_records() {
+        let lane = LaneId::new(1);
+        let records = vec![sample_record(lane.as_u32(), 1, 1)];
+        let manifest = records[0].manifest_hash;
+        let app = app_with_da_commitment_bundle(records);
+        install_future_created_autoscale_lane(&app, lane, 7);
+
+        let JsonBody(list_response) = super::handler_list_commitments(
+            State(app.clone()),
+            NoritoJson(DaCommitmentProofRequest::default()),
+        )
+        .await
+        .expect("list handler should succeed");
+        assert!(
+            list_response.commitments.is_empty(),
+            "future-created autoscale lane commitments must not be listed before creation height"
+        );
+        assert!(
+            !list_response
+                .policies
+                .policies
+                .iter()
+                .any(|policy| policy.lane_id == lane),
+            "list response policies must also hide the future-created lane"
+        );
+
+        let request = DaCommitmentProofRequest {
+            manifest_hash: Some(manifest),
+            ..DaCommitmentProofRequest::default()
+        };
+        let JsonBody(proof_response) =
+            super::handler_prove_commitment(State(app.clone()), NoritoJson(request.clone()))
+                .await
+                .expect("proof handler should succeed");
+        assert!(
+            proof_response.is_none(),
+            "future-created autoscale lane commitments must not produce public proofs"
+        );
+
+        let proof = {
+            let store = app.state.da_commitments();
+            super::build_proof_from_store(&store, &request)
+                .expect("raw proof fixture should exist in the commitment store")
+        };
+        let JsonBody(verification) =
+            super::handler_verify_commitment(State(app), NoritoJson(proof))
+                .await
+                .expect("verify handler should succeed");
+        assert!(
+            !verification.valid,
+            "verify must reject proofs for a future-created autoscale lane"
+        );
+        assert!(
+            verification
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("configured lane catalog")),
+            "verification should explain the inactive lane, got {verification:?}"
         );
     }
 

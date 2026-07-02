@@ -1464,7 +1464,7 @@ fn lane_proof_scheme_accepts_kzg_policy() {
     let lane_id = LaneId::new(3);
     let nexus = nexus_with_scheme(lane_id, DaProofScheme::KzgBls12_381);
 
-    let scheme = lane_proof_scheme(&nexus, lane_id).expect("kzg lane should resolve");
+    let scheme = lane_proof_scheme(&nexus, lane_id, 1).expect("kzg lane should resolve");
     assert_eq!(scheme, DaProofScheme::KzgBls12_381);
 }
 
@@ -1489,11 +1489,47 @@ fn lane_proof_scheme_rejects_stale_geometry_only_lane() {
         "test must seed derived geometry for the removed lane"
     );
 
-    let err = lane_proof_scheme(&nexus, stale_lane)
+    let err = lane_proof_scheme(&nexus, stale_lane, 1)
         .expect_err("stale geometry-only lane must not resolve a proof scheme");
 
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
     assert!(err.1.contains("active lane catalog"));
+}
+
+#[test]
+fn lane_proof_scheme_rejects_future_created_autoscale_lane_before_committed_height() {
+    let lane_id = LaneId::new(1);
+    let mut elastic_lane = ModelLaneConfig {
+        id: lane_id,
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        alias: "elastic-lane-1".to_owned(),
+        proof_scheme: DaProofScheme::KzgBls12_381,
+        ..ModelLaneConfig::default()
+    };
+    elastic_lane.metadata.insert(
+        iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+        "true".to_owned(),
+    );
+    elastic_lane.metadata.insert(
+        iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+        "7".to_owned(),
+    );
+    let mut nexus = nexus_with_catalog(lane_catalog_with_lanes(vec![
+        ModelLaneConfig::default(),
+        elastic_lane,
+    ]));
+    nexus.autoscale.enabled = true;
+    nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("non-zero min lanes");
+    nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("non-zero max lanes");
+
+    let err = lane_proof_scheme(&nexus, lane_id, 6)
+        .expect_err("future-created autoscale lane must not resolve before creation height");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("active lane catalog"));
+
+    let scheme = lane_proof_scheme(&nexus, lane_id, 7)
+        .expect("autoscale lane should resolve at creation height");
+    assert_eq!(scheme, DaProofScheme::KzgBls12_381);
 }
 
 #[test]
@@ -4945,7 +4981,7 @@ fn test_receipt(
         stripe_layout: DaStripeLayout::default(),
         queued_at_unix: 1234,
         rent_quote: DaRentQuote::default(),
-        operator_signature: Signature::from_bytes(&RECEIPT_SIGNATURE_PLACEHOLDER),
+        operator_signature: persistence::receipt_signature_placeholder(),
     };
     let unsigned =
         persistence::unsigned_receipt_bytes(&receipt, sequence).expect("test receipt encodes");

@@ -9,7 +9,7 @@ import re
 import shlex
 import subprocess
 import sys
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -774,6 +774,43 @@ def validate_runner_preflight(
     return errors
 
 
+def require_no_unrequired_evidence(
+    paths_by_kind: Mapping[str, Sequence[Path]],
+    required_kinds: Iterable[str],
+    errors: list[str],
+    *,
+    diagnostic: str,
+) -> None:
+    """Reject evidence supplied for kinds excluded by --require-kind."""
+
+    error_list = _require_error_list(errors)
+    message = _runner_notice_message(diagnostic)
+    if not isinstance(paths_by_kind, Mapping):
+        raise ValueError("runner evidence paths must be keyed by evidence kind")
+    if isinstance(required_kinds, (str, bytes, bytearray, Mapping)) or not isinstance(
+        required_kinds,
+        Iterable,
+    ):
+        raise ValueError("required evidence kinds must be an iterable of strings")
+    required = frozenset(required_kinds)
+    if not all(isinstance(kind, str) and kind for kind in required):
+        raise ValueError("required evidence kinds must be non-empty strings")
+    for kind, paths in paths_by_kind.items():
+        if not isinstance(kind, str) or not kind:
+            raise ValueError("runner evidence kind keys must be non-empty strings")
+        if kind in required:
+            continue
+        if isinstance(paths, (str, bytes, bytearray, Mapping)) or not isinstance(
+            paths,
+            Sequence,
+        ):
+            if message not in error_list:
+                error_list.append(message)
+            continue
+        if paths and message not in error_list:
+            error_list.append(message)
+
+
 def resolve_runner_input_file(path: Path, errors: list[str]) -> Path | None:
     """Return a canonical runner input path identity, recording resolver failures."""
 
@@ -936,6 +973,890 @@ def validate_runner_plan_steps(rendered_plan: Any, command_plan: Any) -> list[st
             f"failed to render runner plan JSON: {error_diagnostic_label(error)}"
         ]
     return []
+
+
+def canonical_runner_plan_string(value: Any) -> str | None:
+    """Return a non-empty runner-plan string without control characters."""
+
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or value != value.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        return None
+    return value
+
+
+def _append_once(errors: list[str], emitted: set[str], diagnostic: str) -> None:
+    if diagnostic not in emitted:
+        errors.append(diagnostic)
+        emitted.add(diagnostic)
+
+
+def _kind_schema(kind: Any) -> str | None:
+    schema = getattr(kind, "schema", None)
+    return schema if isinstance(schema, str) else None
+
+
+def _validate_runner_evidence_contract(
+    rendered_contract: Any,
+    *,
+    prefix: str,
+    known_kinds: Mapping[str, Any],
+    allowed_kinds: Iterable[str],
+    allowed_kinds_label: str,
+    evidence_contract: Mapping[str, Mapping[str, Any]],
+    evidence_required_fields: Mapping[str, Sequence[str]],
+) -> list[str]:
+    """Validate a checker-backed evidence contract object."""
+
+    errors: list[str] = []
+    allowed_kind_set = set(allowed_kinds)
+    if not isinstance(rendered_contract, Mapping):
+        errors.append(f"{prefix} evidence_contract must be an object")
+    else:
+        emitted: set[str] = set()
+        for kind_name, contract in rendered_contract.items():
+            kind_label = canonical_runner_plan_string(kind_name)
+            kind = known_kinds.get(kind_label) if kind_label else None
+            if kind_label is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} evidence_contract keys must be canonical kind names",
+                )
+            elif kind is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} evidence_contract keys must use known kind names",
+                )
+            elif kind_label not in allowed_kind_set:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} evidence_contract must contain only {allowed_kinds_label}",
+                )
+            if not isinstance(contract, Mapping):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} evidence_contract must map each kind to a contract object",
+                )
+                continue
+            if any(
+                canonical_runner_plan_string(field_name) is None
+                for field_name in contract
+            ):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} evidence_contract fields must be canonical strings",
+                )
+            if set(contract) != {"schema", "required_payload_fields"}:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} evidence_contract fields must be schema and required_payload_fields",
+                )
+            contract_schema = contract.get("schema")
+            if canonical_runner_plan_string(contract_schema) is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} evidence_contract schemas must be canonical strings",
+                )
+            elif kind is not None and contract_schema != _kind_schema(kind):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} evidence_contract schemas must match evidence kind",
+                )
+            required_payload_fields = contract.get("required_payload_fields")
+            if (
+                not isinstance(required_payload_fields, list)
+                or not required_payload_fields
+            ):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} evidence_contract required_payload_fields must be non-empty lists",
+                )
+                continue
+            seen_fields: set[str] = set()
+            for field_name in required_payload_fields:
+                field_label = canonical_runner_plan_string(field_name)
+                if field_label is None:
+                    _append_once(
+                        errors,
+                        emitted,
+                        f"{prefix} evidence_contract required_payload_fields must contain canonical strings",
+                    )
+                    continue
+                if field_label in seen_fields:
+                    _append_once(
+                        errors,
+                        emitted,
+                        f"{prefix} evidence_contract required_payload_fields must not contain duplicate fields",
+                    )
+                else:
+                    seen_fields.add(field_label)
+            if (
+                kind_label is not None
+                and kind_label in evidence_required_fields
+                and list(required_payload_fields)
+                != list(evidence_required_fields[kind_label])
+            ):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} evidence_contract required_payload_fields must match checker fields",
+                )
+    if rendered_contract != dict(evidence_contract):
+        errors.append(f"{prefix} evidence_contract must match checker fields")
+    return errors
+
+
+def validate_runner_evidence_plan(
+    rendered: Any,
+    command_plan: Any,
+    *,
+    diagnostic_prefix: str,
+    plan_schema: str,
+    plan_fields: frozenset[str],
+    summary_schema: str,
+    required_kinds: Sequence[str],
+    known_kinds: Mapping[str, Any],
+    thresholds: Mapping[str, int],
+    required_threshold_fields: frozenset[str],
+    positive_threshold_fields: frozenset[str],
+    non_negative_threshold_fields: frozenset[str],
+    external_evidence: Mapping[str, Sequence[str]],
+    evidence_contract: Mapping[str, Mapping[str, Any]],
+    evidence_required_fields: Mapping[str, Sequence[str]],
+) -> list[str]:
+    """Validate a schema-closed rollout evidence collection plan."""
+
+    prefix = _runner_notice_message(diagnostic_prefix)
+    errors: list[str] = []
+    if not isinstance(rendered, Mapping):
+        return [f"{prefix} must be an object"]
+    if any(canonical_runner_plan_string(field_name) is None for field_name in rendered):
+        errors.append(f"{prefix} fields must be canonical strings")
+    if set(rendered) != plan_fields:
+        errors.append(f"{prefix} fields must match the schema-closed contract")
+
+    rendered_schema = rendered.get("schema")
+    if canonical_runner_plan_string(rendered_schema) is None:
+        errors.append(f"{prefix} schema must be canonical")
+    if rendered_schema != plan_schema:
+        errors.append(f"{prefix} schema must match the contract")
+
+    rendered_summary_schema = rendered.get("verifier_summary_schema")
+    if canonical_runner_plan_string(rendered_summary_schema) is None:
+        errors.append(f"{prefix} verifier schema must be canonical")
+    if rendered_summary_schema != summary_schema:
+        errors.append(f"{prefix} verifier schema must match checker summary")
+
+    rendered_required_kinds = rendered.get("required_kinds")
+    if not isinstance(rendered_required_kinds, list):
+        errors.append(f"{prefix} required_kinds must be a list")
+    else:
+        emitted: set[str] = set()
+        seen: set[str] = set()
+        for kind_name in rendered_required_kinds:
+            kind_label = canonical_runner_plan_string(kind_name)
+            if kind_label is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} required_kinds must contain canonical strings",
+                )
+                continue
+            if kind_label in seen:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} required_kinds must not contain duplicate kinds",
+                )
+            else:
+                seen.add(kind_label)
+            if kind_label not in known_kinds:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} required_kinds must use known kind names",
+                )
+    if rendered_required_kinds != list(required_kinds):
+        errors.append(f"{prefix} required_kinds must match args")
+
+    rendered_thresholds = rendered.get("thresholds")
+    allowed_threshold_fields = (
+        required_threshold_fields
+        | positive_threshold_fields
+        | non_negative_threshold_fields
+    )
+    if not isinstance(rendered_thresholds, Mapping):
+        errors.append(f"{prefix} thresholds must be an object")
+    else:
+        emitted: set[str] = set()
+        for field_name in rendered_thresholds:
+            field_label = canonical_runner_plan_string(field_name)
+            if field_label is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} thresholds keys must be canonical strings",
+                )
+                continue
+            if field_label not in allowed_threshold_fields:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} thresholds must contain only configured threshold fields",
+                )
+        if not required_threshold_fields <= set(rendered_thresholds):
+            errors.append(f"{prefix} thresholds must include all required threshold fields")
+        for field_name in sorted(non_negative_threshold_fields):
+            value = rendered_thresholds.get(field_name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                errors.append(
+                    f"{prefix} thresholds.{field_name} must be a non-negative integer"
+                )
+        for field_name in sorted(positive_threshold_fields):
+            if field_name not in rendered_thresholds:
+                continue
+            value = rendered_thresholds.get(field_name)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                errors.append(
+                    f"{prefix} thresholds.{field_name} must be a positive integer"
+                )
+    if rendered_thresholds != dict(thresholds):
+        errors.append(f"{prefix} thresholds must match args")
+
+    rendered_external_evidence = rendered.get("external_evidence")
+    if not isinstance(rendered_external_evidence, Mapping):
+        errors.append(f"{prefix} external_evidence must be an object")
+    else:
+        emitted: set[str] = set()
+        for kind_name, paths in rendered_external_evidence.items():
+            kind_label = canonical_runner_plan_string(kind_name)
+            if kind_label is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_evidence keys must be canonical kind names",
+                )
+                continue
+            if kind_label not in known_kinds:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_evidence keys must use known kind names",
+                )
+            elif kind_label not in required_kinds:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_evidence must contain only required kinds",
+                )
+            if not isinstance(paths, list) or not paths:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_evidence must map each kind to non-empty path lists",
+                )
+                continue
+            if any(canonical_runner_plan_string(path) is None for path in paths):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_evidence paths must be canonical strings",
+                )
+    if rendered_external_evidence != dict(external_evidence):
+        errors.append(f"{prefix} external_evidence must match args")
+
+    errors.extend(
+        _validate_runner_evidence_contract(
+            rendered.get("evidence_contract"),
+            prefix=prefix,
+            known_kinds=known_kinds,
+            allowed_kinds=required_kinds,
+            allowed_kinds_label="required kinds",
+            evidence_contract=evidence_contract,
+            evidence_required_fields=evidence_required_fields,
+        )
+    )
+
+    errors.extend(validate_runner_plan_steps(rendered, command_plan))
+    return errors
+
+
+def validate_runner_fixed_evidence_plan(
+    rendered: Any,
+    command_plan: Any,
+    *,
+    diagnostic_prefix: str,
+    plan_schema: str,
+    plan_fields: frozenset[str],
+    summary_schema: str,
+    external_evidence: Mapping[str, str],
+    external_evidence_fields: frozenset[str],
+    known_kinds: Mapping[str, Any],
+    evidence_contract: Mapping[str, Mapping[str, Any]],
+    evidence_required_fields: Mapping[str, Sequence[str]],
+) -> list[str]:
+    """Validate a schema-closed plan with fixed scalar external evidence."""
+
+    prefix = _runner_notice_message(diagnostic_prefix)
+    errors: list[str] = []
+    if not isinstance(rendered, Mapping):
+        return [f"{prefix} must be an object"]
+    if any(canonical_runner_plan_string(field_name) is None for field_name in rendered):
+        errors.append(f"{prefix} fields must be canonical strings")
+    if set(rendered) != plan_fields:
+        errors.append(f"{prefix} fields must match the schema-closed contract")
+
+    rendered_schema = rendered.get("schema")
+    if canonical_runner_plan_string(rendered_schema) is None:
+        errors.append(f"{prefix} schema must be canonical")
+    if rendered_schema != plan_schema:
+        errors.append(f"{prefix} schema must match the contract")
+
+    rendered_summary_schema = rendered.get("verifier_summary_schema")
+    if canonical_runner_plan_string(rendered_summary_schema) is None:
+        errors.append(f"{prefix} verifier schema must be canonical")
+    if rendered_summary_schema != summary_schema:
+        errors.append(f"{prefix} verifier schema must match checker summary")
+
+    rendered_external_evidence = rendered.get("external_evidence")
+    if not isinstance(rendered_external_evidence, Mapping):
+        errors.append(f"{prefix} external_evidence must be an object")
+    else:
+        emitted: set[str] = set()
+        for kind_name, path in rendered_external_evidence.items():
+            kind_label = canonical_runner_plan_string(kind_name)
+            if kind_label is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_evidence keys must be canonical kind names",
+                )
+                continue
+            if kind_label not in known_kinds:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_evidence keys must use known kind names",
+                )
+            elif kind_label not in external_evidence_fields:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_evidence must contain only configured evidence fields",
+                )
+            if canonical_runner_plan_string(path) is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_evidence values must be canonical strings",
+                )
+        if set(rendered_external_evidence) != external_evidence_fields:
+            errors.append(f"{prefix} external_evidence must match configured fields")
+    if rendered_external_evidence != dict(external_evidence):
+        errors.append(f"{prefix} external_evidence must match args")
+
+    errors.extend(
+        _validate_runner_evidence_contract(
+            rendered.get("evidence_contract"),
+            prefix=prefix,
+            known_kinds=known_kinds,
+            allowed_kinds=evidence_contract,
+            allowed_kinds_label="configured evidence kinds",
+            evidence_contract=evidence_contract,
+            evidence_required_fields=evidence_required_fields,
+        )
+    )
+
+    errors.extend(validate_runner_plan_steps(rendered, command_plan))
+    return errors
+
+
+def validate_runner_context_evidence_plan(
+    rendered: Any,
+    command_plan: Any,
+    *,
+    diagnostic_prefix: str,
+    plan_schema: str,
+    plan_fields: frozenset[str],
+    summary_schema: str,
+    deployment_context: Mapping[str, Any],
+    deployment_context_fields: frozenset[str],
+    deployment_context_errors: Sequence[str],
+    known_kinds: Mapping[str, Any],
+    evidence_contract: Mapping[str, Mapping[str, Any]],
+    evidence_required_fields: Mapping[str, Sequence[str]],
+) -> list[str]:
+    """Validate a schema-closed plan with reviewed deployment context."""
+
+    prefix = _runner_notice_message(diagnostic_prefix)
+    errors: list[str] = []
+    if not isinstance(rendered, Mapping):
+        return [f"{prefix} must be an object"]
+    if any(canonical_runner_plan_string(field_name) is None for field_name in rendered):
+        errors.append(f"{prefix} fields must be canonical strings")
+    if set(rendered) != plan_fields:
+        errors.append(f"{prefix} fields must match the schema-closed contract")
+
+    rendered_schema = rendered.get("schema")
+    if canonical_runner_plan_string(rendered_schema) is None:
+        errors.append(f"{prefix} schema must be canonical")
+    if rendered_schema != plan_schema:
+        errors.append(f"{prefix} schema must match the contract")
+
+    rendered_summary_schema = rendered.get("verifier_summary_schema")
+    if canonical_runner_plan_string(rendered_summary_schema) is None:
+        errors.append(f"{prefix} verifier schema must be canonical")
+    if rendered_summary_schema != summary_schema:
+        errors.append(f"{prefix} verifier schema must match checker summary")
+
+    rendered_context = rendered.get("deployment_context")
+    if not isinstance(rendered_context, Mapping):
+        errors.append(f"{prefix} deployment_context must be an object")
+    else:
+        if any(
+            canonical_runner_plan_string(field_name) is None
+            for field_name in rendered_context
+        ):
+            errors.append(f"{prefix} deployment_context keys must be canonical strings")
+        if set(rendered_context) != deployment_context_fields:
+            errors.append(f"{prefix} deployment_context fields must match configured fields")
+        value_error_emitted = False
+        for field_name, value in rendered_context.items():
+            if field_name == "deployment_context_reviewed":
+                if value is not True:
+                    errors.append(f"{prefix} deployment_context must be reviewed")
+            elif (
+                not value_error_emitted
+                and canonical_runner_plan_string(value) is None
+            ):
+                errors.append(
+                    f"{prefix} deployment_context values must be canonical strings"
+                )
+                value_error_emitted = True
+        if rendered_context == dict(deployment_context):
+            errors.extend(deployment_context_errors)
+    if rendered_context != dict(deployment_context):
+        errors.append(f"{prefix} deployment_context must match args")
+
+    errors.extend(
+        _validate_runner_evidence_contract(
+            rendered.get("evidence_contract"),
+            prefix=prefix,
+            known_kinds=known_kinds,
+            allowed_kinds=evidence_contract,
+            allowed_kinds_label="configured evidence kinds",
+            evidence_contract=evidence_contract,
+            evidence_required_fields=evidence_required_fields,
+        )
+    )
+
+    errors.extend(validate_runner_plan_steps(rendered, command_plan))
+    return errors
+
+
+def _aggregate_summary_contract_required_kinds(gate: Any) -> Sequence[str]:
+    required_kinds = getattr(gate, "required_kinds", ())
+    return required_kinds if isinstance(required_kinds, Sequence) else ()
+
+
+def _validate_runner_aggregate_steps(
+    rendered_steps: Any,
+    command_plan: Any,
+    *,
+    prefix: str,
+) -> list[str]:
+    """Validate aggregate collection-plan steps with aggregate diagnostics."""
+
+    errors: list[str] = []
+    command_steps = command_plan_steps(command_plan)
+    if command_steps is None or validate_command_plan_step_shapes(command_plan):
+        expected_steps: list[dict[str, object]] = []
+        errors.append(COMMAND_PLAN_SHAPE_DIAGNOSTIC)
+    else:
+        expected_steps = []
+        for step in command_steps:
+            artifact = getattr(step, "artifact", None)
+            expected_steps.append(
+                {
+                    "label": getattr(step, "label"),
+                    "artifact": None if artifact is None else str(artifact),
+                    "command": getattr(step, "command"),
+                }
+            )
+
+    if not isinstance(rendered_steps, list) or not rendered_steps:
+        errors.append(f"{prefix} steps must be a non-empty list")
+    else:
+        emitted: set[str] = set()
+        for step in rendered_steps:
+            if not isinstance(step, Mapping):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} steps must contain objects",
+                )
+                continue
+            if set(step) != {"label", "artifact", "command"}:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} step fields must be label, artifact, and command",
+                )
+            if any(canonical_runner_plan_string(field_name) is None for field_name in step):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} step fields must be canonical strings",
+                )
+            if canonical_runner_plan_string(step.get("label")) is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} step labels must be canonical strings",
+                )
+            artifact = step.get("artifact")
+            if artifact is not None and canonical_runner_plan_string(artifact) is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} step artifacts must be null or canonical strings",
+                )
+            command = step.get("command")
+            if not isinstance(command, list) or not command:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} step commands must be non-empty lists",
+                )
+                continue
+            if any(canonical_runner_plan_string(argument) is None for argument in command):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} step commands must contain canonical strings",
+                )
+    if rendered_steps != expected_steps:
+        errors.append(f"{prefix} steps must match command plan")
+    return errors
+
+
+def validate_runner_aggregate_readiness_plan(
+    rendered: Any,
+    command_plan: Any,
+    *,
+    diagnostic_prefix: str,
+    plan_schema: str,
+    plan_fields: frozenset[str],
+    summary_schema: str,
+    required_gates: Sequence[str],
+    known_gates: Mapping[str, Any],
+    thresholds: Mapping[str, int],
+    required_threshold_fields: frozenset[str],
+    positive_threshold_fields: frozenset[str],
+    non_negative_threshold_fields: frozenset[str],
+    threshold_fields_label: str,
+    deployment_context: Mapping[str, Any],
+    deployment_context_fields: frozenset[str],
+    deployment_context_value_errors: Callable[[Mapping[str, Any]], Sequence[str]],
+    external_summaries: Mapping[str, Sequence[str]],
+    summary_contract: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    """Validate the aggregate SoraFS production-readiness collection plan."""
+
+    prefix = _runner_notice_message(diagnostic_prefix)
+    errors: list[str] = []
+    if not isinstance(rendered, Mapping):
+        return [f"{prefix} must be an object"]
+    if any(canonical_runner_plan_string(field_name) is None for field_name in rendered):
+        errors.append(f"{prefix} fields must be canonical strings")
+    if set(rendered) != plan_fields:
+        errors.append(f"{prefix} fields must match the schema-closed contract")
+
+    rendered_schema = rendered.get("schema")
+    if canonical_runner_plan_string(rendered_schema) is None:
+        errors.append(f"{prefix} schema must be canonical")
+    if rendered_schema != plan_schema:
+        errors.append(f"{prefix} schema must match the contract")
+
+    rendered_summary_schema = rendered.get("verifier_summary_schema")
+    if canonical_runner_plan_string(rendered_summary_schema) is None:
+        errors.append(f"{prefix} verifier schema must be canonical")
+    if rendered_summary_schema != summary_schema:
+        errors.append(f"{prefix} verifier schema must match aggregate schema")
+
+    rendered_required_gates = rendered.get("required_gates")
+    if not isinstance(rendered_required_gates, list):
+        errors.append(f"{prefix} required_gates must be a list")
+    else:
+        emitted: set[str] = set()
+        seen: set[str] = set()
+        for gate_name in rendered_required_gates:
+            gate_label = canonical_runner_plan_string(gate_name)
+            if gate_label is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} required_gates must contain canonical strings",
+                )
+                continue
+            if gate_label in seen:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} required_gates must not contain duplicate gates",
+                )
+            else:
+                seen.add(gate_label)
+            if gate_label not in known_gates:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} required_gates must use known gate names",
+                )
+    if rendered_required_gates != list(required_gates):
+        errors.append(f"{prefix} required_gates must match args")
+
+    rendered_thresholds = rendered.get("thresholds")
+    allowed_threshold_fields = (
+        required_threshold_fields
+        | positive_threshold_fields
+        | non_negative_threshold_fields
+    )
+    if not isinstance(rendered_thresholds, Mapping):
+        errors.append(f"{prefix} thresholds must be an object")
+    else:
+        emitted: set[str] = set()
+        for field_name in rendered_thresholds:
+            field_label = canonical_runner_plan_string(field_name)
+            if field_label is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} thresholds keys must be canonical strings",
+                )
+                continue
+            if field_label not in allowed_threshold_fields:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} thresholds must contain only {threshold_fields_label}",
+                )
+        for field_name in sorted(required_threshold_fields):
+            if field_name not in rendered_thresholds:
+                errors.append(f"{prefix} thresholds.{field_name} must be present")
+        for field_name in sorted(non_negative_threshold_fields):
+            value = rendered_thresholds.get(field_name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                errors.append(
+                    f"{prefix} thresholds.{field_name} must be a non-negative integer"
+                )
+        for field_name in sorted(positive_threshold_fields):
+            if field_name not in rendered_thresholds:
+                continue
+            value = rendered_thresholds.get(field_name)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                errors.append(
+                    f"{prefix} thresholds.{field_name} must be a positive integer"
+                )
+    if rendered_thresholds != dict(thresholds):
+        errors.append(f"{prefix} thresholds must match args")
+
+    rendered_context = rendered.get("deployment_context")
+    if not isinstance(rendered_context, Mapping):
+        errors.append(f"{prefix} deployment_context must be an object")
+    else:
+        if set(rendered_context) != deployment_context_fields:
+            errors.append(
+                f"{prefix} deployment_context fields must be deployment_id and environment"
+            )
+        if any(
+            canonical_runner_plan_string(field_name) is None
+            for field_name in rendered_context
+        ):
+            errors.append(f"{prefix} deployment_context keys must be canonical strings")
+        values_are_canonical = all(
+            canonical_runner_plan_string(rendered_context.get(field_name)) is not None
+            for field_name in deployment_context_fields
+        )
+        if not values_are_canonical:
+            errors.append(f"{prefix} deployment_context must be canonical")
+        else:
+            errors.extend(deployment_context_value_errors(rendered_context))
+    if rendered_context != dict(deployment_context):
+        errors.append(f"{prefix} deployment_context must match args")
+
+    rendered_external_summaries = rendered.get("external_summaries")
+    if not isinstance(rendered_external_summaries, Mapping):
+        errors.append(f"{prefix} external_summaries must be an object")
+    else:
+        emitted: set[str] = set()
+        for gate_name, paths in rendered_external_summaries.items():
+            gate_label = canonical_runner_plan_string(gate_name)
+            if gate_label is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_summaries keys must be canonical gate names",
+                )
+                continue
+            if gate_label not in known_gates:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_summaries keys must use known gate names",
+                )
+            elif gate_label not in required_gates:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_summaries must contain only required gates",
+                )
+            if not isinstance(paths, list):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_summaries must map each gate to a summary path list",
+                )
+                continue
+            if len(paths) != 1:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_summaries must contain exactly one summary path per gate",
+                )
+            if any(canonical_runner_plan_string(path) is None for path in paths):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} external_summaries paths must be canonical strings",
+                )
+    if rendered_external_summaries != dict(external_summaries):
+        errors.append(
+            f"{prefix} external_summaries must contain exactly one summary per required gate"
+        )
+
+    rendered_summary_contract = rendered.get("summary_contract")
+    if not isinstance(rendered_summary_contract, Mapping):
+        errors.append(f"{prefix} summary_contract must be an object")
+    else:
+        emitted: set[str] = set()
+        for gate_name, contract in rendered_summary_contract.items():
+            gate_label = canonical_runner_plan_string(gate_name)
+            gate = known_gates.get(gate_label) if gate_label else None
+            if gate_label is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} summary_contract keys must be canonical gate names",
+                )
+            elif gate is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} summary_contract keys must use known gate names",
+                )
+            elif gate_label not in required_gates:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} summary_contract must contain only required gates",
+                )
+            if not isinstance(contract, Mapping):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} summary_contract must map each gate to a contract object",
+                )
+                continue
+            if any(
+                canonical_runner_plan_string(field_name) is None
+                for field_name in contract
+            ):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} summary_contract gate fields must be canonical strings",
+                )
+            if set(contract) != {"schema", "required_kinds"}:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} summary_contract gate fields must be schema and required_kinds",
+                )
+            contract_schema = contract.get("schema")
+            if canonical_runner_plan_string(contract_schema) is None:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} summary_contract schemas must be canonical strings",
+                )
+            elif gate is not None and contract_schema != getattr(gate, "schema", None):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} summary_contract schemas must match gate schema",
+                )
+            required_kinds = contract.get("required_kinds")
+            if not isinstance(required_kinds, list) or not required_kinds:
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} summary_contract required_kinds must be non-empty lists",
+                )
+                continue
+            seen_kinds: set[str] = set()
+            for kind_name in required_kinds:
+                kind_label = canonical_runner_plan_string(kind_name)
+                if kind_label is None:
+                    _append_once(
+                        errors,
+                        emitted,
+                        f"{prefix} summary_contract required_kinds must contain canonical strings",
+                    )
+                    continue
+                if kind_label in seen_kinds:
+                    _append_once(
+                        errors,
+                        emitted,
+                        f"{prefix} summary_contract required_kinds must not contain duplicate kinds",
+                    )
+                else:
+                    seen_kinds.add(kind_label)
+            if gate is not None and list(required_kinds) != list(
+                _aggregate_summary_contract_required_kinds(gate)
+            ):
+                _append_once(
+                    errors,
+                    emitted,
+                    f"{prefix} summary_contract required_kinds must match gate contract",
+                )
+    if rendered_summary_contract != dict(summary_contract):
+        errors.append(f"{prefix} summary_contract must match required gates")
+
+    errors.extend(
+        _validate_runner_aggregate_steps(
+            rendered.get("steps"),
+            command_plan,
+            prefix=prefix,
+        )
+    )
+    try:
+        render_runner_plan(rendered)
+    except (TypeError, ValueError):
+        errors.append(f"{prefix} must be strict JSON renderable")
+    return errors
 
 
 def runner_arg_label(field: str) -> str:

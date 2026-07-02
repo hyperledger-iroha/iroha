@@ -11,7 +11,7 @@ use std::{
 
 use iroha_config::parameters::actual::{
     DataspaceGossip, DataspaceGossipFallback, LaneConfig as LaneGeometry, Network as NetworkConfig,
-    RestrictedPublicPayload, TransactionGossiper as Config,
+    Nexus, RestrictedPublicPayload, TransactionGossiper as Config,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
@@ -72,6 +72,7 @@ const DROP_REASON_NO_RESTRICTED_TARGETS: &str = "no_restricted_targets";
 const DROP_REASON_PUBLIC_OVERLAY_REFUSED: &str = "restricted_public_overlay_refused";
 const DROP_REASON_ROUTE_MISMATCH: &str = "route_mismatch";
 const DROP_REASON_NONCANONICAL_ROUTING_PLAN: &str = "noncanonical_routing_plan";
+const DROP_REASON_INACTIVE_LANE: &str = "inactive_lane";
 const DROP_REASON_PEER_RECENT_SUPPRESSION: &str = "peer_recent_suppression";
 const OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY: &str = "peer_recent_suppression_replay";
 const OUTCOME_PUBLIC_OVERLAY_FORWARD: &str = "restricted_public_overlay_forward";
@@ -80,6 +81,21 @@ const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
 const GOSSIP_SEED_RESTRICTED_DOMAIN: u64 = 0x5245_5354_5249_4354;
 const GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS: usize = 8;
 const TX_GOSSIP_FRAME_PROBE_KEY_SEED: &[u8] = b"iroha:tx-gossip-frame-probe:v1";
+
+fn active_gossip_lane_ids(state: &State, nexus: &Nexus) -> Option<BTreeSet<LaneId>> {
+    nexus.enabled.then(|| {
+        nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .filter_map(|lane| {
+                state
+                    .is_lane_active_for_authority(lane.id)
+                    .then_some(lane.id)
+            })
+            .collect()
+    })
+}
 
 #[derive(Debug, Clone)]
 struct PeerRecentSuppressionEntry {
@@ -619,11 +635,19 @@ impl TransactionGossiper {
         }
         self.expire_peer_recent_suppression();
         self.release_deferred_gossip();
-        let (entries, lane_config, lane_catalog, dataspace_catalog, commit_topology) = {
+        let (
+            entries,
+            lane_config,
+            lane_catalog,
+            dataspace_catalog,
+            active_lane_ids,
+            commit_topology,
+        ) = {
             let nexus = self.state.nexus_snapshot();
             let lane_config = nexus.lane_config.clone();
             let lane_catalog = nexus.lane_catalog.clone();
             let dataspace_catalog = nexus.dataspace_catalog.clone();
+            let active_lane_ids = active_gossip_lane_ids(&self.state, &nexus);
             let entries = self
                 .queue
                 .gossip_batch_with_state(self.gossip_size.get(), &self.state);
@@ -633,6 +657,7 @@ impl TransactionGossiper {
                 lane_config,
                 lane_catalog,
                 dataspace_catalog,
+                active_lane_ids,
                 commit_topology,
             )
         };
@@ -655,7 +680,12 @@ impl TransactionGossiper {
                 lane_id: entry.routing.lane_id,
                 dataspace_id: entry.routing.dataspace_id,
             };
-            if let Err(reason) = validate_route(&lane_catalog, &dataspace_catalog, route) {
+            if let Err(reason) = validate_route(
+                &lane_catalog,
+                &dataspace_catalog,
+                active_lane_ids.as_ref(),
+                route,
+            ) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
@@ -1457,6 +1487,7 @@ impl TransactionGossiper {
         let committed_transactions = state.transactions.view();
         let ed25519_batch_cap = self.state.pipeline.signature_batch_max_ed25519;
         let stateless_cache_cap = self.state.pipeline.stateless_cache_cap;
+        let active_lane_ids = active_gossip_lane_ids(state, &nexus);
 
         struct MaterializedGossipCandidate {
             entrypoint: TransactionEntrypoint,
@@ -1524,7 +1555,12 @@ impl TransactionGossiper {
                 );
                 continue;
             }
-            if let Err(reason) = validate_route(&lane_catalog, &dataspace_catalog, route) {
+            if let Err(reason) = validate_route(
+                &lane_catalog,
+                &dataspace_catalog,
+                active_lane_ids.as_ref(),
+                route,
+            ) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
@@ -1545,9 +1581,12 @@ impl TransactionGossiper {
                 );
                 continue;
             }
-            if let Err(reason) =
-                validate_advertised_routing_plan(&lane_catalog, &dataspace_catalog, &plan)
-            {
+            if let Err(reason) = validate_advertised_routing_plan(
+                &lane_catalog,
+                &dataspace_catalog,
+                active_lane_ids.as_ref(),
+                &plan,
+            ) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
@@ -2062,6 +2101,7 @@ impl TransactionGossiper {
         let mut batch_seen_hashes = HashSet::with_capacity(batch_txs);
         let state = self.state.as_ref();
         let committed_transactions = state.transactions.view();
+        let active_lane_ids = active_gossip_lane_ids(state, &nexus);
 
         for (idx, tx) in txs.iter().enumerate() {
             let Some(route) = routes.get(idx).copied() else {
@@ -2118,7 +2158,12 @@ impl TransactionGossiper {
                 );
                 continue;
             }
-            if let Err(reason) = validate_route(&lane_catalog, &dataspace_catalog, route) {
+            if let Err(reason) = validate_route(
+                &lane_catalog,
+                &dataspace_catalog,
+                active_lane_ids.as_ref(),
+                route,
+            ) {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
@@ -2142,6 +2187,7 @@ impl TransactionGossiper {
             if let Err(reason) = validate_advertised_routing_plan(
                 &lane_catalog,
                 &dataspace_catalog,
+                active_lane_ids.as_ref(),
                 &advertised_plan,
             ) {
                 iroha_logger::warn!(
@@ -2501,30 +2547,43 @@ fn decide_restricted_target_plan(
 fn validate_route(
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
     route: GossipRoute,
 ) -> Result<(), &'static str> {
-    resolve_routing_decision(
+    let resolved = resolve_routing_decision(
         RoutingDecision::new(route.lane_id, route.dataspace_id),
         lane_catalog,
         dataspace_catalog,
     )
-    .map(|_| ())
-    .map_err(|err| err.as_label())
+    .map_err(|err| err.as_label())?;
+    if let Some(active_lane_ids) = active_lane_ids
+        && !active_lane_ids.contains(&resolved.lane_id)
+    {
+        return Err(DROP_REASON_INACTIVE_LANE);
+    }
+    Ok(())
 }
 
 fn validate_advertised_routing_plan(
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
+    active_lane_ids: Option<&BTreeSet<LaneId>>,
     plan: &RoutingPlan,
 ) -> Result<(), &'static str> {
     let resolved =
         resolve_routing_plan_against_catalogs(plan.clone(), lane_catalog, dataspace_catalog)
             .map_err(|err| err.as_label())?;
-    if resolved == *plan {
-        Ok(())
-    } else {
-        Err(DROP_REASON_NONCANONICAL_ROUTING_PLAN)
+    if resolved != *plan {
+        return Err(DROP_REASON_NONCANONICAL_ROUTING_PLAN);
     }
+    if let Some(active_lane_ids) = active_lane_ids {
+        for leg in resolved.legs() {
+            if !active_lane_ids.contains(&leg.route.lane_id) {
+                return Err(DROP_REASON_INACTIVE_LANE);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn dataspace_plane(lane_config: &LaneGeometry, dataspace_id: DataSpaceId) -> Option<GossipPlane> {
@@ -4776,7 +4835,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             dataspace_id: DataSpaceId::new(7),
         };
         assert_eq!(
-            validate_route(&catalog, &dataspace_catalog, route),
+            validate_route(&catalog, &dataspace_catalog, None, route),
             Err("unknown_lane")
         );
     }
@@ -4815,7 +4874,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             dataspace_id: DataSpaceId::new(3),
         };
         assert_eq!(
-            validate_route(&catalog, &dataspace_catalog, route),
+            validate_route(&catalog, &dataspace_catalog, None, route),
             Err("lane_dataspace_mismatch")
         );
     }
@@ -4840,7 +4899,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             dataspace_id: DataSpaceId::new(9),
         };
         assert_eq!(
-            validate_route(&catalog, &dataspace_catalog, route),
+            validate_route(&catalog, &dataspace_catalog, None, route),
             Err("unknown_dataspace")
         );
     }
@@ -4870,7 +4929,91 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             lane_id: LaneId::new(2),
             dataspace_id: DataSpaceId::new(9),
         };
-        assert_eq!(validate_route(&catalog, &dataspace_catalog, route), Ok(()));
+        assert_eq!(
+            validate_route(&catalog, &dataspace_catalog, None, route),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn validate_route_rejects_inactive_lane() {
+        let lane = iroha_data_model::nexus::LaneConfig {
+            id: LaneId::new(2),
+            dataspace_id: DataSpaceId::new(9),
+            alias: "inactive".to_string(),
+            visibility: LaneVisibility::Restricted,
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(3).expect("nonzero lanes"),
+            vec![lane],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            id: DataSpaceId::new(9),
+            alias: "inactive-dataspace".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        }])
+        .expect("dataspace catalog");
+        let active_lane_ids = BTreeSet::from([LaneId::SINGLE]);
+        let route = GossipRoute {
+            lane_id: LaneId::new(2),
+            dataspace_id: DataSpaceId::new(9),
+        };
+
+        assert_eq!(
+            validate_route(&catalog, &dataspace_catalog, Some(&active_lane_ids), route),
+            Err(DROP_REASON_INACTIVE_LANE)
+        );
+    }
+
+    #[test]
+    fn validate_advertised_routing_plan_rejects_inactive_participant_lane() {
+        let coordinator = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let participant = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(9));
+        let catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(3).expect("nonzero lanes"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: participant.lane_id,
+                    dataspace_id: participant.dataspace_id,
+                    alias: "inactive-participant".to_string(),
+                    visibility: LaneVisibility::Restricted,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: participant.dataspace_id,
+                alias: "participant-dataspace".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![crate::queue::RouteLeg::new(
+                participant,
+                crate::queue::RouteLegRole::Participant,
+            )],
+        );
+        let active_lane_ids = BTreeSet::from([LaneId::SINGLE]);
+
+        assert_eq!(
+            validate_advertised_routing_plan(
+                &catalog,
+                &dataspace_catalog,
+                Some(&active_lane_ids),
+                &plan,
+            ),
+            Err(DROP_REASON_INACTIVE_LANE)
+        );
     }
 
     #[test]
@@ -5741,6 +5884,90 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         assert!(
             !retained.txs[0].is_entrypoint_materialized(),
             "route rejection should not force entrypoint decode"
+        );
+        assert_eq!(gossiper.queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn inactive_autoscale_route_gossip_drop_does_not_materialize_entrypoint() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let inactive_lane = LaneId::new(1);
+        let mut autoscale_lane = iroha_data_model::nexus::LaneConfig {
+            id: inactive_lane,
+            alias: "elastic-lane-1".to_string(),
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            visibility: iroha_data_model::nexus::LaneVisibility::Public,
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_string(),
+            "true".to_string(),
+        );
+        autoscale_lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_string(),
+            "7".to_string(),
+        );
+        let lane_catalog = LaneCatalog::new(
+            core::num::NonZeroU32::new(2).expect("nonzero lanes"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                autoscale_lane,
+            ],
+        )
+        .expect("future-created autoscale lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_config: LaneGeometry::from_catalog(&lane_catalog),
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("nonzero max lanes");
+        {
+            let mut current = gossiper.state.nexus.write();
+            *current = nexus;
+        }
+        assert_eq!(
+            crate::state::nexus_active_lane_dataspace_at_height(
+                inactive_lane,
+                &gossiper.state.nexus_snapshot(),
+                7,
+            ),
+            Some(DataSpaceId::UNIVERSAL),
+            "future-created autoscale gossip fixture must be a valid elastic lane at its creation height"
+        );
+        assert!(
+            !gossiper.state.is_lane_active_for_authority(inactive_lane),
+            "future-created autoscale gossip fixture must be inactive at the committed lane-authority height"
+        );
+
+        let route = GossipRoute {
+            lane_id: inactive_lane,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let (signed, _) = build_transaction("lazy-inactive-autoscale-route");
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                signed.clone(),
+                payload_for(&signed),
+            )],
+            routes: vec![route],
+            plans: vec![plan_for_route(route)],
+            plane: GossipPlane::Public,
+        });
+        assert!(
+            !decoded.txs[0].is_entrypoint_materialized(),
+            "decoded gossip should start without semantic entrypoint materialization"
+        );
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert!(
+            !retained.txs[0].is_entrypoint_materialized(),
+            "inactive route rejection should not force entrypoint decode"
         );
         assert_eq!(gossiper.queue.queued_len(), 0);
     }

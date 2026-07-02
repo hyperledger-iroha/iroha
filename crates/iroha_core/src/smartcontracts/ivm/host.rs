@@ -2145,8 +2145,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
         let mut lane_for_dataspace = BTreeMap::new();
         let nexus = state.nexus();
+        let state_height = u64::try_from(state.height()).unwrap_or(u64::MAX);
         for lane in nexus.lane_catalog.lanes() {
-            let Some(dataspace_id) = crate::state::nexus_active_lane_dataspace(lane.id, nexus)
+            let Some(dataspace_id) =
+                crate::state::nexus_active_lane_dataspace_at_height(lane.id, nexus, state_height)
             else {
                 continue;
             };
@@ -2262,23 +2264,40 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     AxtPolicyCacheEvent::CacheMiss,
                 )
             } else {
+                let nexus = state.nexus();
+                let state_height = u64::try_from(state.height()).unwrap_or(u64::MAX);
                 let mut entries: Vec<_> = policies
                     .iter()
-                    .map(|(dsid, policy)| {
+                    .filter_map(|(dsid, policy)| {
+                        let active_dataspace = crate::state::nexus_active_lane_dataspace_at_height(
+                            policy.target_lane,
+                            nexus,
+                            state_height,
+                        )?;
+                        if active_dataspace != *dsid {
+                            return None;
+                        }
                         let mut policy = *policy;
                         policy.current_slot = current_slot;
-                        AxtPolicyBinding {
+                        Some(AxtPolicyBinding {
                             dsid: *dsid,
                             policy,
-                        }
+                        })
                     })
                     .collect();
                 entries.sort_by_key(|entry| entry.dsid);
-                let version = AxtPolicySnapshot::compute_version(&entries);
-                (
-                    Some(AxtPolicySnapshot { version, entries }),
-                    AxtPolicyCacheEvent::CacheHit,
-                )
+                if entries.is_empty() {
+                    (
+                        Self::derive_axt_policy_snapshot_from_directory(state),
+                        AxtPolicyCacheEvent::CacheMiss,
+                    )
+                } else {
+                    let version = AxtPolicySnapshot::compute_version(&entries);
+                    (
+                        Some(AxtPolicySnapshot { version, entries }),
+                        AxtPolicyCacheEvent::CacheHit,
+                    )
+                }
             }
         };
 

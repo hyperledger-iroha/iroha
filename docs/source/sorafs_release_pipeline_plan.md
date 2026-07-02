@@ -99,20 +99,26 @@ summary: Current SF-6 release automation and QA surfaces.
   lane metadata as payload-free canonical strings, non-negative integers,
   booleans, objects, and lists with expected container shapes, bind those
   metadata fields to the lane-specific contract that emits them, validate exact
-  lowercase-hex binding-list metadata shapes before aggregate promotion,
+  lowercase-hex binding-list metadata shapes before aggregate promotion, require
+  every fingerprint-backed top-level scalar hex, string-list, positive-integer
+  list, and tuple binding-list metadata field to declare its owning required
+  artifact kind or kinds before aggregate fingerprint matching,
   validate exact lowercase-hex and positive-integer scalar list metadata shapes
   before aggregate promotion, validate governance public-head identifiers as
   lowercase hex list metadata before aggregate promotion, validate exact
   object-list metadata shapes before aggregate promotion, reject exact duplicate
-  object-list metadata entries while preserving artifact order, validate exact
+  object-list metadata entries while preserving artifact order, require every
+  object-list metadata field to declare its owning required artifact kind before
+  its detail rows can be matched to recognized artifact fingerprints, validate exact
   object metadata shapes before aggregate
   promotion, require set-derived lane metadata lists to be duplicate-free and
   sorted in canonical order, sanitize malformed sensitive-field path diagnostics
   before writing aggregate errors,
-  require canonical required-row schema labels when present, reject extra
-  required-row fields outside the schema-closed payload-free required-row
-  contract, require canonical unique artifact paths and lowercase SHA-256
-  digests plus canonical artifact schema/status labels when present, reject
+  require required-row and artifact schema labels to match the owning checker
+  evidence schemas, reject extra required-row fields outside the schema-closed
+  payload-free required-row contract, require canonical unique artifact paths
+  and lowercase SHA-256 digests, reject explicit artifact `status` labels
+  outside successful states such as `passed` or `verified`, reject
   extra artifact-row fields
   outside the schema-closed payload-free
   artifact contract, require per-lane rollout/release checkers to normalize
@@ -127,7 +133,11 @@ summary: Current SF-6 release automation and QA surfaces.
   envelope before writing the final production-readiness report, require
   aggregate status to match canonical aggregate diagnostics, require ready
   aggregate summaries to carry complete deployment context for a final
-  `prod`/`production` environment and only present, valid required rows,
+  `prod`/`production` environment and only present, valid required rows whose
+  deployment context matches the aggregate deployment block, require each
+  aggregate required row deployment_id must match aggregate deployment_id, and
+  require each aggregate required row environment must match aggregate
+  environment,
   validate final
   aggregate required rows for exact present and missing row output contracts,
   validate invalid aggregate required-row metadata before blocked rows are
@@ -138,19 +148,24 @@ summary: Current SF-6 release automation and QA surfaces.
   count every duplicate lane-summary input while keeping one duplicate row
   diagnostic per gate, pin aggregate blockers for unknown schemas and explicit
   unrequired summaries, avoid payload or secret-bearing
-  fields, reject unknown summary schemas discovered in summary directories, and
-  share the same reviewed `deployment_id` with no non-reviewed deployment
-  markers plus a final `prod`/`production` `environment`
+  fields, reject unknown summary schemas discovered in summary directories,
+  require an explicit final `--deployment-id`/`--environment` pair even for
+  direct checker invocations, and share the same reviewed `deployment_id` with
+  no non-reviewed or staging deployment markers plus a final
+  `prod`/`production` `environment`
   before emitting
   `sorafs.production_readiness.aggregate_gate.v1`. The companion
   `scripts/run_sorafs_production_readiness.py` accepts reviewed per-lane
   summary paths, requires exactly one summary input per required gate, requires
   an explicit canonical `--deployment-id`/`--environment` pair whose deployment
-  id passes the reviewed deployment-id policy and whose environment is `prod`
-  or `production`, supports `@ARGFILE`, rejects explicit summaries for lanes
+  id passes the reviewed deployment-id policy, carries no staging markers, and
+  whose environment is `prod` or `production`, advertises both flags as
+  required final deployment context in `--help`, supports `@ARGFILE`, rejects
+  explicit summaries for lanes
   outside a narrowed
   `--require-gate` selection, validates the schema-closed collection plan
-  envelope against the built command plan before dry-run output or execution,
+  envelope against the built command plan and independently rechecks final
+  production deployment context before dry-run output or execution,
   rejects non-object or non-strict-JSON collection-plan renderings before
   stdout or verifier launch,
   and emits that dry-run collection plan so release operators can inspect the

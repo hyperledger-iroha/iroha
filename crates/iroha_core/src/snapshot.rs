@@ -776,7 +776,9 @@ fn verify_signature_hex(
     digest: &[u8],
     verification_key: &PublicKey,
 ) -> Result<(), TryReadError> {
-    let signature = Signature::from_hex(signature_hex)
+    let signature_bytes = hex::decode(signature_hex)
+        .map_err(|_| TryReadError::SignatureMalformed(signature_hex.to_owned()))?;
+    let signature = Signature::try_from_bytes(&signature_bytes)
         .map_err(|_| TryReadError::SignatureMalformed(signature_hex.to_owned()))?;
     signature
         .verify(verification_key, digest)
@@ -2219,6 +2221,7 @@ mod tests {
             taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
             sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
             tron_verifier_address: "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ".to_owned(),
+            ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", "11".repeat(32)),
             verifier_key_hash: format!("0x{}", "22".repeat(32)),
             proof_artifact_hash: None,
@@ -2900,6 +2903,37 @@ mod tests {
         };
 
         assert!(matches!(error, TryReadError::SignatureInvalid(_)));
+    }
+
+    #[test]
+    async fn snapshot_read_rejects_all_zero_signature_sidecar_before_verification() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair = checked_random_snapshot_keypair();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
+        std::fs::write(
+            store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
+            "00".repeat(64),
+        )
+        .expect("replace snapshot signature");
+
+        let Err(error) = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::default(),
+        ) else {
+            panic!("snapshot with all-zero signature should be rejected")
+        };
+
+        assert!(matches!(error, TryReadError::SignatureMalformed(_)));
     }
 
     #[test]

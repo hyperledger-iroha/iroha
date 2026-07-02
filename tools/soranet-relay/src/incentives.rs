@@ -213,7 +213,8 @@ mod tests {
                 jitter_p95_ms: 8,
                 confidence_per_mille,
             },
-            signature: Signature::from_bytes(&[1_u8; 64]),
+            signature: Signature::try_from_bytes(&[1_u8; 64])
+                .expect("relay incentive fixture signature is non-empty and nonzero"),
             metadata: Metadata::default(),
         }
     }

@@ -156,14 +156,16 @@ fn emit_claim_identifier() {
                 opened_at_ms: 1_735_000_000_000,
                 expires_at_ms: None,
             },
-            signature: iroha_crypto::Signature::from_bytes(&signature_bytes),
+            signature: iroha_crypto::Signature::try_from_bytes(&signature_bytes)
+                .expect("Kotlin fixture opening signature is non-empty and nonzero"),
         },
         opaque_id,
         receipt_hash: dummy_hash,
         uaid,
         account_id: account_id.clone(),
     };
-    let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
+    let signature = iroha_crypto::Signature::try_from_bytes(&signature_bytes)
+        .expect("Kotlin fixture receipt signature is non-empty and nonzero");
 
     let receipt = IdentifierResolutionReceipt {
         payload: receipt_payload,

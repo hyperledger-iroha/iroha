@@ -647,7 +647,8 @@ mod tests {
             other => panic!("signature field should be a string, got {other:?}"),
         };
         let signature_bytes = hex::decode(signature_hex).expect("signature hex");
-        let signature = Signature::from_bytes(&signature_bytes);
+        let signature = Signature::try_from_bytes(&signature_bytes)
+            .expect("council envelope signature is non-empty and nonzero");
 
         signature
             .verify(keypair.public_key(), record.digest.as_bytes())
