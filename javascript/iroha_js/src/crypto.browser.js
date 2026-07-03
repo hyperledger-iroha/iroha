@@ -1066,6 +1066,7 @@ export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outpu
 export function isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) {
   const normalized = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
   return (
+    normalized === "" ||
     normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
     normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
   );
@@ -1093,6 +1094,9 @@ export function canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
     return false;
   }
   const normalized = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
+  if (normalized === "") {
+    return previousHopCount < KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS;
+  }
   if (normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) {
     return previousHopCount < KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS;
   }
@@ -1122,6 +1126,8 @@ export function isSupportedKagemushaRecursiveSpendAppendProofTransition(
   const normalizedOutput =
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
   return (
+    (normalizedOutput === "" &&
+      isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(previousProofCircuitId)) ||
     (previousProofCircuitId === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 &&
       normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) ||
     (isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId) &&
