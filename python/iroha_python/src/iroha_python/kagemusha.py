@@ -1527,7 +1527,7 @@ class KagemushaRecursiveSpendAppendRequest:
     record_bundle: bytes
     pallas_open_envelopes: bytes
     current_note: KagemushaRecursiveSpendableNoteDescriptor
-    output_proof_circuit_id: str | None = None
+    output_proof_circuit_id: str
     previous_lineage_verifier_record: KagemushaRecursiveSpendVerifierRecordRef | None = None
     previous_proof_open_envelopes: bytes | None = None
     lineage_verifier_key: bytes | None = None
