@@ -6328,7 +6328,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       "",
     ),
-    true,
+    false,
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
@@ -6479,11 +6479,11 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     ),
     true,
   );
-  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(""), true);
-  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(null), true);
+  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(""), false);
+  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(null), false);
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(undefined, 1),
-    true,
+    false,
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -6491,9 +6491,9 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
       undefined,
       1,
     ),
-    true,
+    false,
   );
-  assert.equal(canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1), true);
+  assert.equal(canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1), false);
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
