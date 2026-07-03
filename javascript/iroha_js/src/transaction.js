@@ -36,6 +36,7 @@ import {
   buildRegisterSmartContractBytesInstruction,
   buildRemoveSmartContractBytesInstruction,
   buildProposeDeployContractInstruction,
+  buildProposeSccpRouteManifestInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,
   buildEnactReferendumInstruction,
@@ -3056,6 +3057,41 @@ export function buildProposeDeployContractTransaction({
   privateKeyAlgorithm = null,
 }) {
   const instruction = buildProposeDeployContractInstruction(proposal);
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+    privateKeyAlgorithm,
+  });
+}
+
+/**
+ * Build a transaction containing a `ProposeSccpRouteManifest` instruction.
+ */
+export function buildProposeSccpRouteManifestTransaction({
+  chainId,
+  authority,
+  proposal,
+  manifest,
+  routeManifest,
+  route_manifest,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+  privateKeyAlgorithm = null,
+}) {
+  const instruction = buildProposeSccpRouteManifestInstruction(
+    proposal ?? {
+      manifest: manifest ?? routeManifest ?? route_manifest,
+    },
+  );
   return buildTransaction({
     chainId,
     authority,

@@ -13501,6 +13501,15 @@ export interface ToriiGovernanceDeployContractProposalRequest {
   limits?: JsonValue;
 }
 
+export interface ToriiGovernanceSccpRouteManifestProposalRequest {
+  manifest: Record<string, unknown>;
+  routeManifest?: Record<string, unknown>;
+  route_manifest?: Record<string, unknown>;
+  window?: ToriiGovernanceWindow | null;
+  mode?: "Zk" | "Plain" | "zk" | "plain";
+  authority?: string;
+}
+
 export interface ToriiGovernancePlainBallotRequest {
   authority: string;
   chainId: string;
@@ -15975,6 +15984,15 @@ export interface ProposeDeployContractInstructionInput {
   votingMode?: GovernanceVotingMode | string | null;
 }
 
+export interface ProposeSccpRouteManifestInstructionInput {
+  manifest?: SccpRouteManifestInput;
+  routeManifest?: SccpRouteManifestInput;
+  route_manifest?: SccpRouteManifestInput;
+  window?: GovernanceWindowInput | null;
+  votingMode?: GovernanceVotingMode | string | null;
+  mode?: GovernanceVotingMode | string | null;
+}
+
 export interface CastZkBallotInstructionInput {
   electionId: string;
   proof: ArrayBufferView | ArrayBuffer | Buffer | string;
@@ -17845,6 +17863,14 @@ export interface ProposeDeployContractTransactionInput {
   privateKeyAlgorithm?: string | null;
 }
 
+export interface ProposeSccpRouteManifestTransactionInput
+  extends Omit<TransactionAssemblyInput, "instructions"> {
+  proposal?: ProposeSccpRouteManifestInstructionInput;
+  manifest?: SccpRouteManifestInput;
+  routeManifest?: SccpRouteManifestInput;
+  route_manifest?: SccpRouteManifestInput;
+}
+
 export interface CastZkBallotTransactionInput {
   chainId: string;
   authority: string;
@@ -19125,6 +19151,10 @@ export declare class ToriiClient {
   ): Promise<ToriiGovernanceDraftResponse>;
   governanceProposeDeployContract(
     payload: ToriiGovernanceDeployContractProposalRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiGovernanceDraftResponse>;
+  governanceProposeSccpRouteManifest(
+    payload: ToriiGovernanceSccpRouteManifestProposalRequest,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiGovernanceDraftResponse>;
   governanceSubmitPlainBallot(
@@ -20877,6 +20907,9 @@ export function buildRemoveSmartContractBytesTransaction(
 export function buildProposeDeployContractTransaction(
   input: ProposeDeployContractTransactionInput,
 ): SignedTransactionResult;
+export function buildProposeSccpRouteManifestTransaction(
+  input: ProposeSccpRouteManifestTransactionInput,
+): SignedTransactionResult;
 export function buildCastZkBallotTransaction(
   input: CastZkBallotTransactionInput,
 ): SignedTransactionResult;
@@ -21322,6 +21355,9 @@ export function buildRegisterKaigiRelayInstruction(
 
 export function buildProposeDeployContractInstruction(
   input: ProposeDeployContractInstructionInput,
+): object;
+export function buildProposeSccpRouteManifestInstruction(
+  input: ProposeSccpRouteManifestInstructionInput,
 ): object;
 
 export function buildCastZkBallotInstruction(

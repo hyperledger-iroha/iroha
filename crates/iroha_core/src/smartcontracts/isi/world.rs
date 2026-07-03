@@ -79,7 +79,7 @@ pub mod isi {
         },
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
-            ProposalKind, RuntimeUpgradeProposal,
+            ProposalKind, RuntimeUpgradeProposal, SccpRouteManifestProposal,
         },
         isi::{
             bridge, consensus_keys, endorsement,
@@ -3119,6 +3119,57 @@ pub mod isi {
         Ok(out)
     }
 
+    fn compute_sccp_route_manifest_proposal_id(
+        manifest: &bridge::SccpRouteManifest,
+    ) -> Result<[u8; 32], Error> {
+        let canonical = norito::codec::Encode::encode(manifest);
+        let manifest_len: u32 = canonical.len().try_into().map_err(|_| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "SCCP route manifest length exceeds 2^32 bytes".into(),
+            ))
+        })?;
+        let mut input = Vec::with_capacity(
+            b"iroha:gov:sccp-route-manifest:proposal:v1|".len()
+                + core::mem::size_of::<u32>()
+                + canonical.len(),
+        );
+        input.extend_from_slice(b"iroha:gov:sccp-route-manifest:proposal:v1|");
+        input.extend_from_slice(&manifest_len.to_le_bytes());
+        input.extend_from_slice(&canonical);
+        let digest = Blake2b512::digest(&input);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest[..32]);
+        Ok(out)
+    }
+
+    fn ensure_sccp_route_manifest_proposer(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if has_permission(
+            &state_transaction.world,
+            authority,
+            "CanProposeSccpRouteManifest",
+        ) || has_permission(
+            &state_transaction.world,
+            authority,
+            "CanProposeContractDeployment",
+        ) {
+            return Ok(());
+        }
+
+        let required = state_transaction.gov.citizenship_bond_amount;
+        if let Some(record) = state_transaction.world.citizens.get(authority)
+            && record.amount >= required
+        {
+            return Ok(());
+        }
+
+        Err(InstructionExecutionError::InvariantViolation(
+            "not permitted: registered citizen or CanProposeSccpRouteManifest required".into(),
+        ))
+    }
+
     impl Execute for gov::ProposeRuntimeUpgradeProposal {
         fn execute(
             self,
@@ -3194,6 +3245,145 @@ pub mod isi {
             let kind = ProposalKind::RuntimeUpgrade(payload.clone());
             if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
                 let Some(existing_payload) = existing.as_runtime_upgrade() else {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                };
+                if existing_payload.manifest != payload.manifest {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                }
+                if let Some(ref_rec) = state_transaction.world.governance_referenda.get(&rid) {
+                    if ref_rec.h_start != start
+                        || ref_rec.h_end != end
+                        || ref_rec.mode != desired_mode
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "existing referendum parameters mismatch".into(),
+                        ));
+                    }
+                }
+                return Ok(());
+            }
+
+            if let Some(ref_rec) = state_transaction.world.governance_referenda.get(&rid) {
+                if ref_rec.h_start != start || ref_rec.h_end != end || ref_rec.mode != desired_mode
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "referendum already exists with different parameters".into(),
+                    ));
+                }
+            } else {
+                state_transaction.world.governance_referenda.insert(
+                    rid.clone(),
+                    crate::state::GovernanceReferendumRecord {
+                        h_start: start,
+                        h_end: end,
+                        status: crate::state::GovernanceReferendumStatus::Proposed,
+                        mode: desired_mode,
+                    },
+                );
+            }
+
+            let created_height = h_now;
+            let referendum_snapshot = state_transaction
+                .world
+                .governance_referenda
+                .get(&rid)
+                .copied();
+            let pipeline = crate::state::GovernancePipeline::seeded(
+                created_height,
+                referendum_snapshot.as_ref(),
+                &state_transaction.gov,
+            );
+            let parliament_snapshot = match resolve_governance_approval_mode(state_transaction) {
+                GovernanceApprovalMode::ParliamentSortitionJit => Some(
+                    derive_jit_parliament_snapshot(id, created_height, state_transaction)?,
+                ),
+                GovernanceApprovalMode::LegacyCouncilEpoch => None,
+            };
+            state_transaction.world.governance_proposals.insert(
+                id,
+                crate::state::GovernanceProposalRecord {
+                    proposer: authority.clone(),
+                    kind,
+                    created_height,
+                    status: crate::state::GovernanceProposalStatus::Proposed,
+                    pipeline,
+                    parliament_snapshot,
+                },
+            );
+
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                        id,
+                        proposer: authority.clone(),
+                        contract_address: None,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+
+    impl Execute for gov::ProposeSccpRouteManifest {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_sccp_route_manifest_proposer(authority, state_transaction)?;
+            let _validated_manifest = sccp_route_manifest_to_actual(self.manifest.clone())?;
+
+            let id = compute_sccp_route_manifest_proposal_id(&self.manifest)?;
+            let rid = hex::encode(id);
+            let desired_mode = match self.mode {
+                Some(iroha_data_model::isi::governance::VotingMode::Plain) => {
+                    crate::state::GovernanceReferendumMode::Plain
+                }
+                _ => crate::state::GovernanceReferendumMode::Zk,
+            };
+
+            let h_now = state_transaction._curr_block.height().get();
+            let min_start = h_now.saturating_add(state_transaction.gov.min_enactment_delay);
+            let (start, end) = if let Some(win) = self.window {
+                if win.upper < win.lower {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "window.upper must be >= window.lower".into(),
+                        ),
+                    ));
+                }
+                if win.lower < min_start {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "window.lower below minimum enactment delay".into(),
+                        ),
+                    ));
+                }
+                (win.lower, win.upper)
+            } else {
+                let span = state_transaction.gov.window_span.max(1);
+                let end = min_start.saturating_add(span.saturating_sub(1));
+                (min_start, end)
+            };
+
+            if end < start {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "enactment window upper precedes lower".into(),
+                    ),
+                ));
+            }
+
+            let payload = SccpRouteManifestProposal {
+                manifest: self.manifest.clone(),
+            };
+            let kind = ProposalKind::SccpRouteManifest(payload.clone());
+            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+                let Some(existing_payload) = existing.as_sccp_route_manifest() else {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "governance proposal id collision".into(),
                     ));
@@ -5050,6 +5240,10 @@ pub mod isi {
                 ProposalKind::RuntimeUpgrade(payload) => {
                     enact_runtime_upgrade_proposal(state_transaction, payload, &proposal.proposer)?;
                 }
+                ProposalKind::SccpRouteManifest(payload) => {
+                    let manifest = sccp_route_manifest_to_actual(payload.manifest.clone())?;
+                    upsert_sccp_route_manifest_actual(state_transaction, manifest);
+                }
             }
 
             if !already_enacted {
@@ -5812,7 +6006,7 @@ pub mod isi {
                 ParliamentBody::PolicyJury,
                 ParliamentBody::OversightCommittee,
             ],
-            ProposalKind::RuntimeUpgrade(_) => &[
+            ProposalKind::RuntimeUpgrade(_) | ProposalKind::SccpRouteManifest(_) => &[
                 ParliamentBody::RulesCommittee,
                 ParliamentBody::AgendaCouncil,
                 ParliamentBody::InterestPanel,
@@ -9604,6 +9798,23 @@ pub mod isi {
         )
     }
 
+    fn upsert_sccp_route_manifest_actual(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        manifest: iroha_config::parameters::actual::SccpRouteManifest,
+    ) {
+        let key = sccp_route_manifest_key(&manifest);
+        if let Some(existing) = state_transaction
+            .zk
+            .sccp_route_manifests
+            .iter_mut()
+            .find(|candidate| sccp_route_manifest_key(candidate) == key)
+        {
+            *existing = manifest;
+        } else {
+            state_transaction.zk.sccp_route_manifests.push(manifest);
+        }
+    }
+
     fn sccp_route_manifest_removal_key(
         route_id: String,
         asset_key: String,
@@ -9749,6 +9960,24 @@ pub mod isi {
                 ));
             }
         }
+        if actual.production_ready && actual.counterparty_domain == iroha_sccp::SCCP_DOMAIN_SOL {
+            if actual.route_id != "taira_sol_xor" || actual.asset_key != "xor" {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "production Solana SCCP route manifest must target taira_sol_xor/xor"
+                            .into(),
+                    ),
+                ));
+            }
+            if actual.verifier_target != "SolanaProgram" {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "production Solana SCCP route manifest verifier_target must be SolanaProgram"
+                            .into(),
+                    ),
+                ));
+            }
+        }
         Ok(actual)
     }
 
@@ -9760,17 +9989,7 @@ pub mod isi {
         ) -> Result<(), Error> {
             ensure_can_manage_sccp_route_manifests(authority, state_transaction)?;
             let manifest = sccp_route_manifest_to_actual(self.manifest)?;
-            let key = sccp_route_manifest_key(&manifest);
-            if let Some(existing) = state_transaction
-                .zk
-                .sccp_route_manifests
-                .iter_mut()
-                .find(|candidate| sccp_route_manifest_key(candidate) == key)
-            {
-                *existing = manifest;
-            } else {
-                state_transaction.zk.sccp_route_manifests.push(manifest);
-            }
+            upsert_sccp_route_manifest_actual(state_transaction, manifest);
             Ok(())
         }
     }

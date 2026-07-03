@@ -5807,7 +5807,8 @@ impl GovernanceProposalRecord {
             iroha_data_model::governance::types::ProposalKind::DeployContract(payload) => {
                 Some(payload)
             }
-            iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_) => None,
+            iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteManifest(_) => None,
         }
     }
 
@@ -5819,7 +5820,21 @@ impl GovernanceProposalRecord {
             iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(payload) => {
                 Some(payload)
             }
-            iroha_data_model::governance::types::ProposalKind::DeployContract(_) => None,
+            iroha_data_model::governance::types::ProposalKind::DeployContract(_)
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteManifest(_) => None,
+        }
+    }
+
+    /// Access the SCCP route-manifest payload when the proposal represents route publication.
+    pub fn as_sccp_route_manifest(
+        &self,
+    ) -> Option<&iroha_data_model::governance::types::SccpRouteManifestProposal> {
+        match &self.kind {
+            iroha_data_model::governance::types::ProposalKind::SccpRouteManifest(payload) => {
+                Some(payload)
+            }
+            iroha_data_model::governance::types::ProposalKind::DeployContract(_)
+            | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_) => None,
         }
     }
 
@@ -22841,7 +22856,8 @@ impl State {
                                             ParliamentBody::PolicyJury,
                                             ParliamentBody::OversightCommittee,
                                         ],
-                                        iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_) => &[
+                                        iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+                                        | iroha_data_model::governance::types::ProposalKind::SccpRouteManifest(_) => &[
                                             ParliamentBody::RulesCommittee,
                                             ParliamentBody::AgendaCouncil,
                                             ParliamentBody::InterestPanel,

@@ -970,6 +970,7 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         || any.is::<iroha_data_model::isi::ExecuteTrigger>()
         || any.is::<iroha_data_model::isi::CustomInstruction>()
         || any.is::<iroha_data_model::isi::governance::ProposeDeployContract>()
+        || any.is::<iroha_data_model::isi::governance::ProposeSccpRouteManifest>()
         || any.is::<iroha_data_model::isi::governance::CastZkBallot>()
         || any.is::<iroha_data_model::isi::governance::CastPlainBallot>()
         || any.is::<iroha_data_model::isi::governance::ApproveGovernanceProposal>()
