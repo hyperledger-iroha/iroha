@@ -1015,10 +1015,8 @@ mod tests {
             ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
         ] {
             let mut invalid_signed = signed.clone();
-            invalid_signed.signatures[0].signature = signature_with_malformed_ed25519_r(
-                &signed.signatures[0].signature,
-                &replacement_r,
-            );
+            invalid_signed.signatures[0].signature =
+                signature_with_malformed_ed25519_r(&signed.signatures[0].signature, &replacement_r);
 
             assert_eq!(
                 invalid_signed.verify_against_keyset(&keyset),
