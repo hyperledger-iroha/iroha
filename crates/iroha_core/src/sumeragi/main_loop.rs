@@ -22992,6 +22992,7 @@ impl Actor {
                 );
             }
         }
+        self.publish_canonical_pending_finality_status(tick_start);
         self.tick_in_progress = false;
         progress
     }
@@ -31124,6 +31125,24 @@ impl Actor {
         committed_height: u64,
         now: Instant,
     ) -> bool {
+        self.missing_commit_qc_request_has_live_local_repair_dependency(
+            block_hash,
+            request,
+            committed_height,
+            now,
+        ) && !self.known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(
+            request.height,
+            request.view,
+        )
+    }
+
+    fn missing_commit_qc_request_has_live_local_repair_dependency(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        request: &MissingBlockRequest,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
         let pending_payload_available =
             self.pending
                 .pending_blocks
@@ -31145,10 +31164,6 @@ impl Actor {
             && self
                 .cached_commit_qc_for_block(block_hash, request.height, request.view)
                 .is_none()
-            && !self.known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(
-                request.height,
-                request.view,
-            )
             && !self.missing_block_request_is_non_actionable_dependency(
                 block_hash,
                 request,
@@ -31769,6 +31784,81 @@ impl Actor {
             || frontier_commit_inflight
             || frontier_slot_active
             || next_slot_prefetch_active
+    }
+
+    fn pending_block_waiting_for_commit_finality(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+        frontier_height: u64,
+        tip_height: usize,
+        tip_hash: Option<HashOf<BlockHeader>>,
+    ) -> bool {
+        pending.height == frontier_height
+            && !pending.aborted
+            && !pending.is_retry_aborted()
+            && pending.validation_status == ValidationStatus::Valid
+            && pending_extends_tip(
+                pending.height,
+                pending.block.header().prev_block_hash(),
+                tip_height,
+                tip_hash,
+            )
+            && self
+                .cached_commit_qc_for_block(block_hash, pending.height, pending.view)
+                .is_none()
+            && (pending.local_commit_vote_emitted()
+                || pending.commit_qc_observed()
+                || pending.validated_commit_artifact.is_some()
+                || self
+                    .commit_vote_quorum_status_for_block_detail(
+                        block_hash,
+                        pending.height,
+                        pending.view,
+                    )
+                    .quorum_reached)
+    }
+
+    fn canonical_pending_finality_hash(&self, now: Instant) -> Option<HashOf<BlockHeader>> {
+        let committed_height = self.committed_height_snapshot();
+        let frontier_height = committed_height.saturating_add(1);
+        if let Some((block_hash, _)) =
+            self.pending
+                .missing_commit_qc_requests
+                .iter()
+                .find(|(block_hash, request)| {
+                    request.phase == crate::sumeragi::consensus::Phase::Commit
+                        && request.height == frontier_height
+                        && self.missing_commit_qc_request_has_live_local_repair_dependency(
+                            **block_hash,
+                            request,
+                            committed_height,
+                            now,
+                        )
+                })
+        {
+            return Some(*block_hash);
+        }
+
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        self.pending
+            .pending_blocks
+            .iter()
+            .find_map(|(block_hash, pending)| {
+                self.pending_block_waiting_for_commit_finality(
+                    *block_hash,
+                    pending,
+                    frontier_height,
+                    tip_height,
+                    tip_hash,
+                )
+                .then_some(*block_hash)
+            })
+    }
+
+    pub(super) fn publish_canonical_pending_finality_status(&self, now: Instant) {
+        status::set_canonical_pending_finality(self.canonical_pending_finality_hash(now));
     }
 
     pub(super) fn sync_external_hints(&self) {
@@ -41376,6 +41466,47 @@ impl Actor {
                 || request.height != height
                 || request.view != view
                 || !self.missing_commit_qc_request_has_actionable_dependency(
+                    *block_hash,
+                    request,
+                    committed_height,
+                    now,
+                )
+            {
+                continue;
+            }
+            let repair_window =
+                self.frontier_slot_lag_window()
+                    .max(request.view_change_window.unwrap_or_else(|| {
+                        self.known_block_commit_qc_recovery_view_change_window()
+                    }))
+                    .max(Duration::from_millis(1));
+            let progress_age = now.saturating_duration_since(request.last_dependency_progress);
+            let rotation_ready = request.attempts >= 2
+                && request.view_change_due(now)
+                && progress_age >= repair_window;
+            if !request.view_change_triggered_in_view() && !rotation_ready {
+                let dwell = now.saturating_duration_since(request.first_seen);
+                return Some((*block_hash, dwell, repair_window, request.attempts));
+            }
+        }
+        None
+    }
+
+    pub(super) fn known_block_commit_qc_repair_should_defer_new_view_install(
+        &self,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> Option<(HashOf<BlockHeader>, Duration, Duration, u32)> {
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return None;
+        }
+        let committed_height = self.committed_height_snapshot();
+        for (block_hash, request) in &self.pending.missing_commit_qc_requests {
+            if !matches!(request.phase, crate::sumeragi::consensus::Phase::Commit)
+                || request.height != height
+                || request.view != view
+                || !self.missing_commit_qc_request_has_live_local_repair_dependency(
                     *block_hash,
                     request,
                     committed_height,

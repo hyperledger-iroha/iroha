@@ -4286,6 +4286,34 @@ def test_all_lanes_rejects_evm_live_block_tag_drift():
     assert "BSC source live block-tag metadata must be latest" in blockers
 
 
+def test_all_lanes_rejects_ethereum_nonfinalized_evm_live_metadata():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    eth_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_ETH)
+    eth_material = records["sccp_source_verifier_materials"][eth_index]
+    eth_destination = records["sccp_destination_rollouts"][eth_index]
+    source_finalized_marker = '# sccp_evm_source_block_tag = "finalized"'
+    destination_finalized_marker = '# sccp_evm_block_tag = "finalized"'
+
+    assert source_finalized_marker.endswith('"finalized"')
+    assert destination_finalized_marker.endswith('"finalized"')
+    eth_material["_comment_evm_source_block_tag"] = "latest"
+    eth_destination["_comment_evm_block_tag"] = "latest"
+
+    summary = module.validate_evidence_bundle(records)
+    eth_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    blockers = "\n".join(summary["blockers"])
+
+    assert summary["production_ready"] is False
+    assert eth_lane["evm_live_metadata"]["ready"] is False
+    assert eth_lane["evm_live_metadata"]["source_block_tag"] == "latest"
+    assert eth_lane["evm_live_metadata"]["destination_block_tag"] == "latest"
+    assert "Ethereum source live block-tag metadata must be finalized" in blockers
+    assert "Ethereum destination live block-tag metadata must be finalized" in blockers
+
+
 def test_all_lanes_rejects_ethereum_evm_live_rpc_chain_id_drift():
     module = load_evidence_module()
     records = complete_bundle(module)

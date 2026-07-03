@@ -13417,7 +13417,6 @@ mod sccp_message_backend_tests {
             sccp_tron_source_bridge_address: "0x3333333333333333333333333333333333333333"
                 .to_owned(),
             tron_verifier_address: "0x4444444444444444444444444444444444444444".to_owned(),
-            ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", "45".repeat(32)),
             verifier_key_hash: format!("0x{}", "46".repeat(32)),
             proof_artifact_hash: Some(format!("0x{}", "4c".repeat(32))),
@@ -58064,6 +58063,9 @@ fn native_amx_receipt_json(receipt: &NativeAmxReceipt) -> Value {
 }
 
 fn sumeragi_v1_pending_finality(snap: &sumeragi::StatusSnapshot) -> Option<HashOf<BlockHeader>> {
+    if let Some(block_hash) = snap.canonical_pending_finality {
+        return Some(block_hash);
+    }
     let settled = snap
         .qc_deferred_resolved_total
         .saturating_add(snap.qc_deferred_expired_total);
@@ -60217,6 +60219,41 @@ mod status_tests {
             Some("permissioned_count")
         );
         assert_eq!(quorum.get("validators").and_then(Value::as_u64), Some(4));
+    }
+
+    #[test]
+    fn status_snapshot_json_uses_canonical_pending_finality_snapshot() {
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; Hash::LENGTH]));
+        let snap = sumeragi::StatusSnapshot {
+            membership_height: 13,
+            membership_view: 5,
+            canonical_pending_finality: Some(block_hash),
+            commit_qc: sumeragi::status::QcSnapshot {
+                height: 12,
+                view: 4,
+                validator_set_len: 4,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        let canonical = payload
+            .get("canonical")
+            .and_then(Value::as_object)
+            .expect("canonical v1 status");
+        assert_eq!(canonical.get("height").and_then(Value::as_u64), Some(13));
+        assert_eq!(canonical.get("view").and_then(Value::as_u64), Some(5));
+        assert_eq!(
+            canonical.get("phase").and_then(Value::as_str),
+            Some("pending_finality")
+        );
+        let expected_block_hash = format!("{block_hash}");
+        assert_eq!(
+            canonical.get("pending_finality").and_then(Value::as_str),
+            Some(expected_block_hash.as_str())
+        );
     }
 
     #[test]

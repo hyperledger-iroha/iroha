@@ -9235,9 +9235,9 @@ class ToriiClient(_BaseToriiClient):
         literal = _require_non_empty_string(value, context)
         if "@" in literal:
             return literal
-        candidate_discriminants = [self._chain_discriminant]
+        candidate_discriminants = [DEFAULT_I105_DISCRIMINANT]
         if self._chain_discriminant != DEFAULT_I105_DISCRIMINANT:
-            candidate_discriminants.append(DEFAULT_I105_DISCRIMINANT)
+            candidate_discriminants.append(self._chain_discriminant)
         for discriminant in candidate_discriminants:
             try:
                 address = AccountAddress.parse_encoded(
@@ -9246,7 +9246,7 @@ class ToriiClient(_BaseToriiClient):
                 )
             except AccountAddressError:
                 continue
-            return address.to_i105(self._chain_discriminant)
+            return address.to_i105(DEFAULT_I105_DISCRIMINANT)
         return literal
 
     def _native_transaction_asset_id(self, value: Any, context: str) -> str:
