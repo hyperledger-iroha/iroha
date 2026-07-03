@@ -1057,9 +1057,6 @@ export function canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCo
 }
 
 export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) {
-  if (outputProofCircuitId === undefined || outputProofCircuitId === null || outputProofCircuitId === "") {
-    return "";
-  }
   return outputProofCircuitId;
 }
 
