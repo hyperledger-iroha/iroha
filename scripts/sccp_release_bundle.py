@@ -6629,18 +6629,26 @@ def _all_lanes_nested_bundle_errors(
         domain == _active_launch_domain()
         or lane.get("production_ready") is True
     )
-    source_record_required_fields: frozenset[str] = (
-        field_sets["source_record_hashes"]
-        if enforce_governed_hash_semantics
-        or isinstance(lane.get("source_record_hashes"), dict)
-        else frozenset()
-    )
+
+    def required_fields_for_copied_nested(
+        field: str,
+        required_fields: frozenset[str],
+    ) -> frozenset[str]:
+        value = lane.get(field)
+        if enforce_governed_hash_semantics:
+            return required_fields
+        if isinstance(value, dict) and value:
+            return required_fields
+        return frozenset()
 
     source_hashes = _all_lanes_object(
         lane.get("source_record_hashes"),
         f"{label}.source_record_hashes",
         field_sets["source_record_hashes"],
-        source_record_required_fields,
+        required_fields_for_copied_nested(
+            "source_record_hashes",
+            field_sets["source_record_hashes"],
+        ),
         errors,
     )
     for field in field_sets["source_record_hashes"]:
@@ -6667,11 +6675,9 @@ def _all_lanes_nested_bundle_errors(
         lane.get("source_adapter_gate"),
         f"{label}.source_adapter_gate",
         field_sets["source_adapter_gate"],
-        (
-            field_sets["source_adapter_gate"]
-            if enforce_governed_hash_semantics
-            or isinstance(lane.get("source_adapter_gate"), dict)
-            else frozenset()
+        required_fields_for_copied_nested(
+            "source_adapter_gate",
+            field_sets["source_adapter_gate"],
         ),
         errors,
     )
@@ -6776,11 +6782,9 @@ def _all_lanes_nested_bundle_errors(
         lane.get("evm_live_metadata"),
         f"{label}.evm_live_metadata",
         field_sets["evm_live_metadata"],
-        (
-            field_sets["evm_live_metadata"]
-            if enforce_governed_hash_semantics
-            or isinstance(lane.get("evm_live_metadata"), dict)
-            else frozenset()
+        required_fields_for_copied_nested(
+            "evm_live_metadata",
+            field_sets["evm_live_metadata"],
         ),
         errors,
     )
@@ -6873,11 +6877,9 @@ def _all_lanes_nested_bundle_errors(
         lane.get("destination_binding"),
         f"{label}.destination_binding",
         field_sets["destination_binding"],
-        (
-            frozenset(destination_required_fields)
-            if enforce_governed_hash_semantics
-            or isinstance(lane.get("destination_binding"), dict)
-            else frozenset()
+        required_fields_for_copied_nested(
+            "destination_binding",
+            frozenset(destination_required_fields),
         ),
         errors,
     )
@@ -7054,11 +7056,9 @@ def _all_lanes_nested_bundle_errors(
         lane.get("route_allowlist"),
         f"{label}.route_allowlist",
         field_sets["route_allowlist"],
-        (
-            field_sets["route_allowlist"]
-            if enforce_governed_hash_semantics
-            or isinstance(lane.get("route_allowlist"), dict)
-            else frozenset()
+        required_fields_for_copied_nested(
+            "route_allowlist",
+            field_sets["route_allowlist"],
         ),
         errors,
     )
