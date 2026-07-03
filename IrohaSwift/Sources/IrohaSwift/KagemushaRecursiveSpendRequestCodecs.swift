@@ -117,7 +117,7 @@ public struct KagemushaRecursiveSpendAppendRequest: Equatable, Sendable {
     public let recordBundle: Data
     public let pallasOpenEnvelopes: Data
     public let currentNote: KagemushaRecursiveSpendableNoteDescriptor
-    public let outputProofCircuitId: String?
+    public let outputProofCircuitId: String
     public let previousLineageVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef?
     public let previousProofOpenEnvelopes: Data?
     public let lineageVerifierKey: Data?
@@ -129,7 +129,7 @@ public struct KagemushaRecursiveSpendAppendRequest: Equatable, Sendable {
         recordBundle: Data,
         pallasOpenEnvelopes: Data,
         currentNote: KagemushaRecursiveSpendableNoteDescriptor,
-        outputProofCircuitId: String? = nil,
+        outputProofCircuitId: String,
         previousLineageVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef? = nil,
         previousProofOpenEnvelopes: Data? = nil,
         lineageVerifierKey: Data? = nil,

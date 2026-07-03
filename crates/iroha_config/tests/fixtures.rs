@@ -1743,6 +1743,7 @@ fn minimal_config_snapshot() {
                     ],
                 },
                 dataspace_fee_sponsors: {},
+                dataspace_fee_sponsor_policies: {},
                 routing_policy: LaneRoutingPolicy {
                     default_lane: LaneId(
                         0,

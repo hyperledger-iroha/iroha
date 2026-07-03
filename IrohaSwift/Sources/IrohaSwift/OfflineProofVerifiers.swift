@@ -86,10 +86,8 @@ public struct CounterpartyOfflineProofVerifier: CounterpartyOfflineProofVerifyin
             throw error
         }
         switch value {
-        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.iosAppAttestPlatform:
-            return OfflineNoteV2Constants.iosPlatform
-        case OfflineNoteV2Constants.androidPlatform:
-            return OfflineNoteV2Constants.androidPlatform
+        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:
+            return value
         default:
             throw error
         }
@@ -124,7 +122,7 @@ public struct IosOfflineProofVerifier {
         binding: ToriiOfflineDeviceBinding,
         expectedChallengeHashHex: String
     ) throws {
-        guard Self.isSupportedPlatform(binding.platform) else {
+        guard binding.platform == Self.platform else {
             throw OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
         }
         #if targetEnvironment(simulator)
@@ -133,9 +131,6 @@ public struct IosOfflineProofVerifier {
         }
         #endif
 
-        guard Self.isSupportedPlatform(binding.platform) else {
-            throw OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
-        }
         guard !accountId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw OfflineProofVerifierError.invalidBinding("Offline device binding account id is invalid.")
         }
@@ -191,11 +186,10 @@ public struct IosOfflineProofVerifier {
         binding: ToriiOfflineDeviceBinding,
         proof: ToriiOfflineDeviceProof
     ) throws {
-        guard Self.isSupportedPlatform(binding.platform) else {
+        guard binding.platform == Self.platform else {
             throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
         }
-        guard Self.isSupportedPlatform(proof.platform),
-              Self.platformsMatch(binding.platform, proof.platform) else {
+        guard proof.platform == Self.platform else {
             throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
         }
         #if targetEnvironment(simulator)
@@ -204,9 +198,6 @@ public struct IosOfflineProofVerifier {
         }
         #endif
 
-        guard Self.isSupportedPlatform(proof.platform) else {
-            throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
-        }
         let metadata = try requireMetadata(binding)
         let bindingKeyId = try OfflineProofVerifierSupport.decodeCanonicalBase64(
             binding.attestationKeyId,
@@ -674,11 +665,7 @@ public struct IosOfflineProofVerifier {
     private static let flagAttestedCredentialData = 0x40
 
     private static func isSupportedPlatform(_ platform: String) -> Bool {
-        platform == Self.platform || platform == OfflineNoteV2Constants.iosAppAttestPlatform
-    }
-
-    private static func platformsMatch(_ lhs: String, _ rhs: String) -> Bool {
-        isSupportedPlatform(lhs) && isSupportedPlatform(rhs)
+        platform == Self.platform
     }
 }
 
@@ -729,7 +716,7 @@ public struct AndroidOfflineProofVerifier {
     }
 
     public func verifyDeviceBinding(_ binding: ToriiOfflineDeviceBinding) throws {
-        guard Self.isSupportedPlatform(binding.platform) else {
+        guard binding.platform == Self.platform else {
             throw OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
         }
         guard !binding.attestationKeyId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -817,8 +804,10 @@ public struct AndroidOfflineProofVerifier {
         binding: ToriiOfflineDeviceBinding,
         proof: ToriiOfflineDeviceProof
     ) throws {
-        guard Self.isSupportedPlatform(binding.platform),
-              Self.isSupportedPlatform(proof.platform) else {
+        guard binding.platform == Self.platform else {
+            throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
+        }
+        guard proof.platform == Self.platform else {
             throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
         }
         guard binding.platform == proof.platform,
@@ -841,7 +830,7 @@ public struct AndroidOfflineProofVerifier {
         )
 
         switch proof.platform {
-        case Self.platform, OfflineNoteV2Constants.androidKeyMintPlatform:
+        case Self.platform:
             let publicKey = try keyMintAssertionPublicKey(for: binding)
             guard attestationKeyIdMatches(
                 binding.attestationKeyId,
@@ -866,7 +855,7 @@ public struct AndroidOfflineProofVerifier {
 
     private func expectedAttestedPublicKey(for binding: ToriiOfflineDeviceBinding) throws -> Data {
         switch binding.platform {
-        case Self.platform, OfflineNoteV2Constants.androidKeyMintPlatform:
+        case Self.platform:
             return try keyMintAssertionPublicKey(for: binding)
         default:
             throw OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
@@ -986,12 +975,7 @@ public struct AndroidOfflineProofVerifier {
     private static let securityLevelStrongBox = 2
 
     private static func isSupportedPlatform(_ platform: String) -> Bool {
-        switch platform {
-        case Self.platform, OfflineNoteV2Constants.androidKeyMintPlatform:
-            return true
-        default:
-            return false
-        }
+        platform == Self.platform
     }
     private static let androidKeyAttestationRootCAPEM = """
     -----BEGIN CERTIFICATE-----

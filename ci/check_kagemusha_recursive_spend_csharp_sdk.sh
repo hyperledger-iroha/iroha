@@ -15,6 +15,13 @@ if ! command -v "${DOTNET_BIN}" >/dev/null 2>&1; then
   echo "error: Kagemusha recursive spend C# SDK tests require .NET SDK 8.0.x; '${DOTNET_BIN}' was not found" >&2
   exit 1
 fi
+if [[ -z "${DOTNET_ROOT:-}" ]]; then
+  DOTNET_BIN_PATH="$(command -v "${DOTNET_BIN}")"
+  DOTNET_BIN_DIR="$(cd "$(dirname "${DOTNET_BIN_PATH}")" && pwd)"
+  if [[ -d "${DOTNET_BIN_DIR}/sdk" && -d "${DOTNET_BIN_DIR}/shared" ]]; then
+    export DOTNET_ROOT="${DOTNET_BIN_DIR}"
+  fi
+fi
 DOTNET_VERSION="$("${DOTNET_BIN}" --version)"
 printf '%s\n' "${DOTNET_VERSION}"
 if [[ ! "${DOTNET_VERSION}" =~ ^8\.0\.[1-9][0-9]*$ ]]; then

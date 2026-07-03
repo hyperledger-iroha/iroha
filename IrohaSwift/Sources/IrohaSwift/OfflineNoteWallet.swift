@@ -736,7 +736,12 @@ public enum OfflineNoteReceiveRequestCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        OfflineNoteTextTransferContract.base64URLDecodedData(value)
+        guard !value.isEmpty,
+              !value.contains("="),
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            return nil
+        }
+        return OfflineNoteTextTransferContract.base64URLDecodedData(value)
     }
 }
 
@@ -988,7 +993,12 @@ public enum OfflineNotePaymentTokenCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        OfflineNoteTextTransferContract.base64URLDecodedData(value)
+        guard !value.isEmpty,
+              !value.contains("="),
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            return nil
+        }
+        return OfflineNoteTextTransferContract.base64URLDecodedData(value)
     }
 }
 
@@ -1208,7 +1218,12 @@ public enum OfflineNoteReceiptAckCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        OfflineNoteTextTransferContract.base64URLDecodedData(value)
+        guard !value.isEmpty,
+              !value.contains("="),
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            return nil
+        }
+        return OfflineNoteTextTransferContract.base64URLDecodedData(value)
     }
 }
 

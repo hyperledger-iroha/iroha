@@ -220,6 +220,19 @@ public enum OfflineBearerCashTextCodec {
             return false
         }
         let payload = String(text.dropFirst(prefix.count))
-        return OfflineNoteTextTransferContract.base64URLDecodedData(payload) != nil
+        return !payload.isEmpty
+            && payload.trimmingCharacters(in: .whitespacesAndNewlines) == payload
+            && !payload.contains("=")
+            && payload.unicodeScalars.allSatisfy(isBase64UrlCharacter)
+            && OfflineNoteTextTransferContract.base64URLDecodedData(payload) != nil
+    }
+
+    private static func isBase64UrlCharacter(_ scalar: Unicode.Scalar) -> Bool {
+        let value = scalar.value
+        return (value >= 65 && value <= 90)
+            || (value >= 97 && value <= 122)
+            || (value >= 48 && value <= 57)
+            || value == 45
+            || value == 95
     }
 }
