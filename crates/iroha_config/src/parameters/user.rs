@@ -4703,18 +4703,23 @@ pub struct SccpRouteManifest {
     pub post_deploy_offline_full_toml_sha256: Option<String>,
     /// Remaining post-deploy blocker aliases from route-config live evidence.
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     pub production_blockers: Vec<String>,
     /// Remaining post-deploy blocker aliases from route-config live evidence.
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     pub post_deploy_production_blockers: Vec<String>,
     /// Remaining full-TOML blocker aliases from route-config live evidence.
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     pub full_toml_production_blockers: Vec<String>,
     /// Remaining source-event blocker aliases from route-config live evidence.
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     pub source_event_transaction_production_blockers: Vec<String>,
     /// Remaining route-canary blocker aliases from route-config live evidence.
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     pub route_canary_production_blockers: Vec<String>,
 }
 
