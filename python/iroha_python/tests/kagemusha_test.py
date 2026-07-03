@@ -1194,6 +1194,93 @@ def _instruction_archive_bytes(instruction: object) -> bytes:
     return archive
 
 
+class _FakeKagemushaInstruction:
+    def __init__(self, instruction_type: str, archive: bytes) -> None:
+        self.instruction_type = instruction_type
+        self.archive = archive
+
+    def to_json(self) -> str:
+        return json.dumps(base64.b64encode(self.archive).decode("ascii"))
+
+
+class _FakeSignedTransactionEnvelope:
+    def __init__(self, chain_id: str, authority: str, payload: bytes) -> None:
+        self.chain_id = chain_id
+        self.authority = authority
+        self.signed_transaction = payload
+        self.signed_transaction_versioned = b"v1:" + payload
+
+    def hash_hex(self) -> str:
+        return hashlib.blake2b(self.signed_transaction, digest_size=32).hexdigest()
+
+
+def _install_fake_kagemusha_transfer_instruction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = kagemusha.kagemusha_instruction_archive_instruction
+
+    def fake_instruction(instruction_type: str, instruction_archive: object) -> object:
+        normalized_type = kagemusha._normalize_kagemusha_instruction_archive_type(
+            instruction_type,
+        )
+        if normalized_type != kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER:
+            return original(instruction_type, instruction_archive)  # type: ignore[arg-type]
+        archive = kagemusha._norito_archive_bytes_named(
+            instruction_archive,
+            "instruction_archive",
+        )
+        kagemusha._assert_kagemusha_instruction_archive_schema(
+            archive,
+            normalized_type,
+            "instruction_archive",
+        )
+        return _FakeKagemushaInstruction(normalized_type, archive)
+
+    monkeypatch.setattr(
+        kagemusha,
+        "kagemusha_instruction_archive_instruction",
+        fake_instruction,
+    )
+
+
+def _install_fake_signed_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    import iroha_python.crypto as crypto
+
+    def fake_build_signed_transaction(
+        chain_id: str,
+        authority: str,
+        private_key: bytes,
+        *,
+        instructions: object = (),
+        creation_time_ms: int | None = None,
+        ttl_ms: int | None = None,
+        nonce: int | None = None,
+        metadata: object = None,
+        lane_privacy_attachments: object = None,
+    ) -> _FakeSignedTransactionEnvelope:
+        del lane_privacy_attachments
+        instruction_archives = [
+            _instruction_archive_bytes(instruction) for instruction in instructions  # type: ignore[union-attr]
+        ]
+        payload = b"\x1f".join(
+            (
+                chain_id.encode("utf-8"),
+                authority.encode("utf-8"),
+                bytes(private_key),
+                str(creation_time_ms).encode("ascii"),
+                str(ttl_ms).encode("ascii"),
+                str(nonce).encode("ascii"),
+                json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8",
+                ),
+                *instruction_archives,
+            )
+        )
+        return _FakeSignedTransactionEnvelope(chain_id, authority, payload)
+
+    monkeypatch.setattr(crypto, "build_signed_transaction", fake_build_signed_transaction)
+
+
 def _is_malformed_probe_archive(value: bytes) -> bool:
     return bytes(value) == MALFORMED_PROBE_ARCHIVE
 
@@ -1527,6 +1614,8 @@ def test_kagemusha_recursive_topup_transaction_helper_derives_transfer_before_si
         calls.append(request)
         return transfer_instruction_archive
 
+    _install_fake_kagemusha_transfer_instruction(monkeypatch)
+    _install_fake_signed_transaction(monkeypatch)
     monkeypatch.setattr(kagemusha, "kagemusha_recursive_spend_topup", fake_topup)
 
     instruction = kagemusha.kagemusha_recursive_topup_instruction(init_request_archive)
@@ -1593,6 +1682,8 @@ def test_kagemusha_instruction_transaction_helpers_copy_mutable_archives_before_
         top_up_calls.append(bytes(request_archive))  # type: ignore[arg-type]
         return bytes(top_up_instruction_archive)
 
+    _install_fake_kagemusha_transfer_instruction(monkeypatch)
+    _install_fake_signed_transaction(monkeypatch)
     monkeypatch.setattr(kagemusha, "kagemusha_recursive_spend_topup", fake_topup)
 
     instruction = kagemusha.kagemusha_instruction_archive_instruction(
@@ -4677,6 +4768,9 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
             previous_lineage_verifier_record=_recursive_spend_verifier_record(),
             block_height=block_height,
         ),
@@ -5181,6 +5275,9 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
         )
     with pytest.raises(
         ValueError,
@@ -5219,6 +5316,9 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
             previous_lineage_verifier_record=_recursive_spend_verifier_record(),
         )
     with pytest.raises(
@@ -5230,6 +5330,9 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
             previous_lineage_verifier_record=_recursive_spend_verifier_record(),
             previous_proof_open_envelopes=_synthetic_pallas_open_envelopes_archive(),
         )
@@ -5239,6 +5342,9 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
             previous_lineage_verifier_record={
                 "verifier_key_id": "malformedPreviousLineageRecordBeforeOpenings",
                 "record_bytes": b"\x00",
@@ -5359,6 +5465,9 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
             previous_lineage_verifier_record=_recursive_spend_verifier_record(),
             lineage_key_artifacts=append_artifacts,
         )
@@ -5585,6 +5694,9 @@ def test_recursive_kagemusha_typed_helpers_delegate_encoded_requests(
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
             previous_lineage_verifier_record=verifier_record,
         )
     )

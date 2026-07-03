@@ -23,7 +23,12 @@ enum OfflineNoteTextPayloadEncoding {
     }
 
     static func base64UrlDecode(_ value: String) -> Data? {
-        OfflineNoteTextTransferContract.base64URLDecodedData(value)
+        guard !value.isEmpty,
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.contains("=") else {
+            return nil
+        }
+        return OfflineNoteTextTransferContract.base64URLDecodedData(value)
     }
 
     static func decodeExactBase64(_ value: String) -> Data? {

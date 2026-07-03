@@ -13,7 +13,13 @@ fn print_record(kind: &str, version: u32) -> Result<(), String> {
             "vk_unshield",
             confidential_v2::confidential_unshield_v2_vk_record("vk_unshield", version)?,
         ),
-        _ => return Err("usage: confidential_v2_vk_json <transfer|unshield> <version>".into()),
+        "unshield-v3" => (
+            "vk_unshield",
+            confidential_v2::confidential_unshield_v3_vk_record("vk_unshield", version)?,
+        ),
+        _ => return Err(
+            "usage: confidential_v2_vk_json <transfer|unshield|unshield-v3> <version>".into(),
+        ),
     };
     let key = record
         .key
@@ -54,7 +60,7 @@ fn main() {
             .parse::<u32>()
             .map_err(|err| format!("invalid version: {err}"))
             .and_then(|version| print_record(kind, version)),
-        _ => Err("usage: confidential_v2_vk_json <transfer|unshield> <version>".into()),
+        _ => Err("usage: confidential_v2_vk_json <transfer|unshield|unshield-v3> <version>".into()),
     };
     if let Err(err) = result {
         eprintln!("{err}");

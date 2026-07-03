@@ -151,7 +151,7 @@ function kagemushaRequestCodecError(kind, field, messagePattern) {
 function completeRecursiveSpendBinding(overrides = {}) {
   return {
     connectNoritoBridgeAbiVersion() {
-      return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION + 1;
+      return KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
     },
     kagemushaRecursiveSpendInit(request) {
       rejectMalformedProbe("init", request);
@@ -3267,6 +3267,7 @@ test("Kagemusha recursive spend typed encoders write request schemas and compact
       recordBundle,
       pallasOpenEnvelopes,
       currentNote: note,
+      outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       previousLineageVerifierRecord: verifierRecord,
       blockHeight: 8,
     }),
@@ -3278,7 +3279,14 @@ test("Kagemusha recursive spend typed encoders write request schemas and compact
     appendFields[1],
     assertKagemushaArchiveSchema(recordBundle, KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME),
   );
-  assert.deepEqual(appendFields[4], Buffer.from([0]));
+  const aggregationOutputSelector = Buffer.from(
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    "utf8",
+  );
+  assert.deepEqual(
+    appendFields[4],
+    Buffer.concat([Buffer.from([aggregationOutputSelector.length]), aggregationOutputSelector]),
+  );
   assert.equal(appendFields[5][0], 1);
   assert.equal(appendFields[6].readBigUInt64LE(0), 0n);
 
@@ -3772,6 +3780,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
           recordBundle,
           pallasOpenEnvelopes,
           currentNote: note,
+          outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
           previousLineageVerifierRecord: verifierRecord,
           blockHeight,
         }),
@@ -4055,6 +4064,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         recordBundle,
         pallasOpenEnvelopes,
         currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       }),
     kagemushaRequestCodecError("field", "previousLineageVerifierRecord", null),
   );
@@ -4092,6 +4102,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         recordBundle,
         pallasOpenEnvelopes,
         currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord: recursiveSpendVerifierRecord(),
       }),
     kagemushaRequestCodecError(
@@ -4107,6 +4118,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         recordBundle,
         pallasOpenEnvelopes,
         currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord: {
           verifierKeyId: "danglingPreviousLineageRecord",
           recordBytes: Buffer.from([0]),
@@ -4125,6 +4137,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         recordBundle,
         pallasOpenEnvelopes,
         currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord: recursiveSpendVerifierRecord(),
         previousProofOpenEnvelopes,
       }),
@@ -4141,6 +4154,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         recordBundle,
         pallasOpenEnvelopes,
         currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord: {
           verifierKeyId: "malformedPreviousLineageRecordBeforeOpenings",
           recordBytes: Buffer.from([0]),
@@ -4308,6 +4322,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
           recordBundle,
           pallasOpenEnvelopes,
           currentNote: note,
+          outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
           previousLineageVerifierRecord: verifierRecord,
           ...lineageKeyFields,
         }),
@@ -4539,6 +4554,7 @@ test("Kagemusha recursive spend typed helpers delegate encoded requests", () => 
         recordBundle,
         pallasOpenEnvelopes,
         currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord: verifierRecord,
       }).subarray(0, 4).equals(Buffer.from("NRT0", "ascii")),
     );
@@ -6312,7 +6328,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       "",
     ),
-    true,
+    false,
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
@@ -6463,11 +6479,11 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     ),
     true,
   );
-  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(""), true);
-  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(null), true);
+  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(""), false);
+  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(null), false);
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(undefined, 1),
-    true,
+    false,
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -6475,9 +6491,9 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
       undefined,
       1,
     ),
-    true,
+    false,
   );
-  assert.equal(canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1), true);
+  assert.equal(canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1), false);
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
