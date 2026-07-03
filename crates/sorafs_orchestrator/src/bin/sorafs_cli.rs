@@ -18003,6 +18003,8 @@ fn checked_manifest_ed25519_signature_from_bytes(
         return Err("signature R is small-order (weak); rejected".to_string());
     }
 
+    iroha_crypto::ed25519_parse_signature(signature)
+        .map_err(|err| format!("invalid signature material: {err}"))?;
     Ok(Signature::from_bytes(signature))
 }
 

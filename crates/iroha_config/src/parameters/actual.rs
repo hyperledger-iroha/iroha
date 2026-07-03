@@ -7957,8 +7957,6 @@ pub struct Zk {
     pub bridge_proof_max_past_age_blocks: u64,
     /// Maximum future drift (in blocks) a bridge proof's end height may lead the current block (0 = unlimited).
     pub bridge_proof_max_future_drift_blocks: u64,
-    /// Allow SCCP transparent proof consumption for lanes whose destination verifiers are not production-ready.
-    pub sccp_allow_unready_transparent_proofs: bool,
     /// SCCP source-chain verifier material that can enable non-SORA source lanes.
     pub sccp_source_verifier_materials: Vec<SccpSourceVerifierMaterial>,
     /// SCCP source adapter engine deployments that can enable non-SORA source lanes.

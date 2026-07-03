@@ -464,6 +464,18 @@ def _require_fixed_bytes(
     return raw
 
 
+def _optional_expected_record_hash(
+    args: argparse.Namespace,
+    name: str,
+    *,
+    label: str,
+) -> bytes | None:
+    value = getattr(args, name, None)
+    if value is None:
+        return None
+    return _require_fixed_bytes(value, label=label, byte_length=32)
+
+
 def _require_distinct_hash_roles(
     fields: tuple[tuple[str, bytes], ...],
     *,
@@ -2156,7 +2168,11 @@ def _require_expected_hash(
     attr_name: str,
     actual_hash: bytes,
 ) -> None:
-    expected_hash = getattr(args, attr_name, None)
+    expected_hash = _optional_expected_record_hash(
+        args,
+        attr_name,
+        label=f"--{option_name}",
+    )
     if expected_hash is None:
         raise ValueError(f"--{output} requires --{option_name}")
     if expected_hash != actual_hash:
@@ -2172,10 +2188,10 @@ def _require_expected_source_record_hashes(
     *,
     output: str | None = None,
 ) -> None:
-    expected_material_hash = getattr(
+    expected_material_hash = _optional_expected_record_hash(
         args,
         "expected_source_verifier_material_hash",
-        None,
+        label="--expected-source-verifier-material-hash",
     )
     if expected_material_hash is None:
         if output is not None:
@@ -2191,10 +2207,10 @@ def _require_expected_source_record_hashes(
                 f"expected {_hex(expected_material_hash)}, got {_hex(material_hash)}"
             )
 
-    expected_deployment_hash = getattr(
+    expected_deployment_hash = _optional_expected_record_hash(
         args,
         "expected_source_adapter_engine_deployment_hash",
-        None,
+        label="--expected-source-adapter-engine-deployment-hash",
     )
     if expected_deployment_hash is None:
         if output is not None:
@@ -2214,7 +2230,11 @@ def _require_expected_source_record_hashes(
                 f"expected {_hex(expected_deployment_hash)}, got {_hex(deployment_hash)}"
             )
 
-    expected_gate_hash = getattr(args, "expected_tron_dpos_source_gate_hash", None)
+    expected_gate_hash = _optional_expected_record_hash(
+        args,
+        "expected_tron_dpos_source_gate_hash",
+        label="--expected-tron-dpos-source-gate-hash",
+    )
     if expected_gate_hash is None:
         if output is not None:
             raise ValueError(
@@ -3015,13 +3035,44 @@ def main(argv: list[str] | None = None) -> int:
             target_domain=args.target_domain,
             owner_address=args.owner_address,
         )
-        if (
-            args.expected_config_hash is not None
-            and config_hash != args.expected_config_hash
-        ):
+        expected_config_hash = _optional_expected_record_hash(
+            args,
+            "expected_config_hash",
+            label="--expected-config-hash",
+        )
+        expected_source_verifier_material_hash = _optional_expected_record_hash(
+            args,
+            "expected_source_verifier_material_hash",
+            label="--expected-source-verifier-material-hash",
+        )
+        expected_source_adapter_engine_deployment_hash = (
+            _optional_expected_record_hash(
+                args,
+                "expected_source_adapter_engine_deployment_hash",
+                label="--expected-source-adapter-engine-deployment-hash",
+            )
+        )
+        expected_tron_dpos_source_gate_hash = _optional_expected_record_hash(
+            args,
+            "expected_tron_dpos_source_gate_hash",
+            label="--expected-tron-dpos-source-gate-hash",
+        )
+        expected_destination_binding_hash = _optional_expected_record_hash(
+            args,
+            "expected_destination_binding_hash",
+            label="--expected-destination-binding-hash",
+        )
+        route_allowlist_hash = None
+        if args.route_allowlist_hash is not None:
+            route_allowlist_hash = _require_fixed_bytes(
+                args.route_allowlist_hash,
+                label="route_allowlist_hash",
+                byte_length=32,
+            )
+        if expected_config_hash is not None and config_hash != expected_config_hash:
             raise ValueError(
                 "expected config hash does not match deployment inputs: "
-                f"expected {_hex(args.expected_config_hash)}, got {_hex(config_hash)}"
+                f"expected {_hex(expected_config_hash)}, got {_hex(config_hash)}"
             )
         if args.source_event_digest is not None and (args.toml or args.full_toml):
             raise ValueError(
@@ -3033,9 +3084,9 @@ def main(argv: list[str] | None = None) -> int:
             getattr(args, name) is not None for name in _required_toml_args()
         )
         if (
-            args.expected_source_verifier_material_hash is not None
-            or args.expected_source_adapter_engine_deployment_hash is not None
-            or args.expected_tron_dpos_source_gate_hash is not None
+            expected_source_verifier_material_hash is not None
+            or expected_source_adapter_engine_deployment_hash is not None
+            or expected_tron_dpos_source_gate_hash is not None
         ) and not source_material_complete:
             missing = [
                 name
@@ -3055,8 +3106,8 @@ def main(argv: list[str] | None = None) -> int:
         deployment_hash = None
         source_toml_ready = False
         destination_requested = (
-            args.expected_destination_binding_hash is not None
-            or args.route_allowlist_hash is not None
+            expected_destination_binding_hash is not None
+            or route_allowlist_hash is not None
             or args.route_canary_evidence_hash is not None
             or _route_canary_transaction_supplied(args)
             or any(
@@ -3077,30 +3128,30 @@ def main(argv: list[str] | None = None) -> int:
                 )
             destination_binding_hash = _destination_binding_hash_from_args(args)
             if (
-                args.expected_destination_binding_hash is not None
-                and destination_binding_hash != args.expected_destination_binding_hash
+                expected_destination_binding_hash is not None
+                and destination_binding_hash != expected_destination_binding_hash
             ):
                 raise ValueError(
                     "expected destination binding hash does not match deployment inputs: "
-                    f"expected {_hex(args.expected_destination_binding_hash)}, "
+                    f"expected {_hex(expected_destination_binding_hash)}, "
                     f"got {_hex(destination_binding_hash)}"
                 )
             if (
                 args.route_canary_evidence_hash is not None
-                and args.route_allowlist_hash is None
+                and route_allowlist_hash is None
             ):
                 raise ValueError(
                     "--route-canary-evidence-hash requires --route-allowlist-hash"
                 )
             if (
                 _route_canary_transaction_supplied(args)
-                and args.route_allowlist_hash is None
+                and route_allowlist_hash is None
             ):
                 raise ValueError(
                     "--route-canary-transaction-id requires --route-allowlist-hash"
                 )
-            if args.route_allowlist_hash is not None:
-                if args.expected_destination_binding_hash is None:
+            if route_allowlist_hash is not None:
+                if expected_destination_binding_hash is None:
                     raise ValueError(
                         "--route-allowlist-hash requires "
                         "--expected-destination-binding-hash"
@@ -3139,7 +3190,7 @@ def main(argv: list[str] | None = None) -> int:
                 "adapter_verifier_vk_hash": _hex(args.adapter_verifier_vk_hash),
                 "full_toml_ready": False,
             }
-            if args.expected_config_hash is not None:
+            if expected_config_hash is not None:
                 summary["expected_config_hash_matches"] = True
             if args.source_event_digest is not None:
                 source_bridge_base58 = tron_base58check_from_address20(
@@ -3200,16 +3251,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 source_gate_hash = tron_dpos_source_gate_hash(args, config_hash)
                 expected_material_matches = (
-                    args.expected_source_verifier_material_hash == material_hash
+                    expected_source_verifier_material_hash == material_hash
                 )
                 expected_deployment_matches = (
-                    args.expected_source_adapter_engine_deployment_hash
+                    expected_source_adapter_engine_deployment_hash
                     == deployment_hash
-                )
-                expected_source_gate_hash = getattr(
-                    args,
-                    "expected_tron_dpos_source_gate_hash",
-                    None,
                 )
                 summary["source_verifier_material_hash"] = _hex(material_hash)
                 summary["source_adapter_engine_deployment_hash"] = _hex(
@@ -3222,14 +3268,14 @@ def main(argv: list[str] | None = None) -> int:
                 summary["expected_source_adapter_engine_deployment_hash_matches"] = (
                     expected_deployment_matches
                 )
-                if expected_source_gate_hash is not None:
+                if expected_tron_dpos_source_gate_hash is not None:
                     summary["expected_tron_dpos_source_gate_hash_matches"] = (
-                        expected_source_gate_hash == source_gate_hash
+                        expected_tron_dpos_source_gate_hash == source_gate_hash
                     )
                 else:
                     summary["expected_tron_dpos_source_gate_hash_matches"] = False
                 source_toml_ready = (
-                    args.expected_config_hash is not None
+                    expected_config_hash is not None
                     and expected_material_matches
                     and expected_deployment_matches
                     and summary["expected_tron_dpos_source_gate_hash_matches"]
@@ -3237,7 +3283,7 @@ def main(argv: list[str] | None = None) -> int:
                 summary["toml_ready"] = source_toml_ready
             if destination_binding_hash is not None:
                 destination_binding_matches = (
-                    args.expected_destination_binding_hash == destination_binding_hash
+                    expected_destination_binding_hash == destination_binding_hash
                 )
                 summary.update(
                     {
@@ -3262,15 +3308,15 @@ def main(argv: list[str] | None = None) -> int:
                     summary["destination_verifier_runtime_bytecode_hex"] = (
                         destination_runtime_bytecode
                     )
-                if args.route_allowlist_hash is not None:
-                    summary["route_allowlist_hash"] = _hex(args.route_allowlist_hash)
+                if route_allowlist_hash is not None:
+                    summary["route_allowlist_hash"] = _hex(route_allowlist_hash)
                     summary["expected_route_allowlist_hash"] = _hex(
                         expected_route_allowlist_hash
                     )
                     summary["expected_route_allowlist_hash_matches"] = True
                     route_canary = _route_canary_summary(
                         args,
-                        route_allowlist_hash=args.route_allowlist_hash,
+                        route_allowlist_hash=route_allowlist_hash,
                         destination_binding_hash=destination_binding_hash,
                         source_verifier_material_hash=material_hash,
                         source_adapter_engine_deployment_hash=deployment_hash,

@@ -1500,6 +1500,11 @@ mod tests {
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
+    const NONCANONICAL_ED25519_POINT: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("test fixture random key generation should succeed")
@@ -1704,6 +1709,7 @@ mod tests {
         for (label, public_key) in [
             ("all-zero", [0u8; 32]),
             ("small-order", SMALL_ORDER_ED25519_POINT),
+            ("noncanonical", NONCANONICAL_ED25519_POINT),
         ] {
             let mut bytes = ticket.to_bytes(&secret);
             bytes[HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET

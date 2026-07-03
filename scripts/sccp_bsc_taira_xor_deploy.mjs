@@ -757,7 +757,7 @@ function usage() {
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs native-prover-bundle --route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT} --artifact-root ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT} --proof-artifact <relative-file> --proving-key <relative-file> --verifier-key <relative-file> --groth16-material-manifest <relative-json> --groth16-proof-self-test <relative-json> --snarkjs-bin <snarkjs> --trusted-attestation-signer <0x...> --cross-sdk-parity <relative-json> --native-prover-self-test <relative-json> --javascript-implementation <relative-file> --swift-implementation <relative-file> --kotlin-implementation <relative-file> --java-android-implementation <relative-file> --dotnet-implementation <relative-file> --audit-circuit-security <hex-or-relative-file> --audit-native-implementation <hex-or-relative-file> --audit-reproducible-build <hex-or-relative-file> --audit-no-wasm-no-remote-scan <hex-or-relative-file> [--audit-cross-sdk-parity <matching-hex-or-relative-file>] [--audit-native-prover-self-test <matching-hex-or-relative-file>] [--out ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--attach-route-manifest-out ${DEFAULT_ROUTE_MANIFEST_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs publish-burn-record-vk [--route-manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--vk-template ${DEFAULT_TAIRA_BURN_RECORD_VK_TEMPLATE}] [--name <vk-name>] [--out ${DEFAULT_TAIRA_BSC_BURN_RECORD_VK_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --gas-asset-id <asset-definition-id> --gas-limit ${DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT}] [--wait-for-commit true|false] [--commit-timeout-ms 120000]
   node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --gas-asset-id <asset-definition-id> --gas-limit ${DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT}] [--wait-for-commit true|false] [--commit-timeout-ms 120000]
-  node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs requirements [--bsc-network testnet|mainnet] [--out ${DEFAULT_PRODUCTION_REQUIREMENTS_OUT}]
   node scripts/sccp_bsc_taira_xor_deploy.mjs self-test
 
@@ -858,14 +858,12 @@ proof-self-test requires productionReady material by default;
 mainnet candidate evidence. Neither mode makes candidate material
 production-ready.`,
   "route-config": `Usage:
-  node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
 
 Renders a legacy/offline TAIRA route TOML overlay or merged full config for
 evidence hashing only. Production route material is published on-chain with
 publish-route-manifest; peer configs should not carry a local BSC SCCP route
-stanza. Production-ready manifests must not use --allow-unready; draft
-manifests must opt in to --allow-unready true and cannot be written as
-canonical production material.`,
+stanza. Route-config output requires production-ready manifests.`,
   "publish-route-manifest": `Usage:
   node scripts/sccp_bsc_taira_xor_deploy.mjs publish-route-manifest [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--out ${DEFAULT_ROUTE_MANIFEST_ISI_OUT}] [--submit true --torii-url ${DEFAULT_TAIRA_TORII_URL} --chain-id ${DEFAULT_TAIRA_CHAIN_ID} --authority <account> --private-key-env ${DEFAULT_TAIRA_ROUTE_MANIFEST_PRIVATE_KEY_ENV} --gas-asset-id <asset-definition-id> --gas-limit ${DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT}] [--wait-for-commit true|false] [--commit-timeout-ms 120000]
 
@@ -13762,28 +13760,19 @@ function tomlBrowserProverRefLine(key, ref, label) {
 
 export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
   const route = normalizeRouteManifestForConfig(manifest);
-  const allowUnready = optionEnabled(
-    options,
-    "allow-unready",
-    !route.productionReady,
-  );
-  if (!route.productionReady && !allowUnready) {
+  if (hasOwn(options, "allow-unready")) {
     throw new Error(
-      "non-production route manifests require --allow-unready true.",
+      "--allow-unready was removed; route-config requires production-ready route manifests.",
     );
   }
-  if (route.productionReady && allowUnready) {
-    throw new Error(
-      "production-ready route manifests cannot enable --allow-unready.",
-    );
+  if (!route.productionReady) {
+    throw new Error("route-config requires production-ready route manifests.");
   }
   const lines = [
     "# Generated by scripts/sccp_bsc_taira_xor_deploy.mjs route-config.",
     `# Merge this overlay into the TAIRA Torii/Iroha runtime config for ${route.chain} smoke.`,
     "# BSC route fields are emitted once to avoid ambiguous alias selection.",
     "[zk]",
-    `sccp_allow_unready_transparent_proofs = ${allowUnready ? "true" : "false"}`,
-    "",
     "[[zk.sccp_route_manifests]]",
     `version = ${route.version}`,
     `route_id = ${tomlString(route.routeId, "route_id")}`,
@@ -13888,16 +13877,13 @@ export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
 function routeConfigOverlayParts(manifest, options = {}) {
   const overlay = buildBscTairaXorRouteConfigToml(manifest, options);
   const overlayLines = overlay.trimEnd().split(/\r?\n/u);
-  const allowLine = overlayLines.find((line) =>
-    /^sccp_allow_unready_transparent_proofs\s*=/u.test(line),
-  );
   const routeStart = overlayLines.findIndex(
     (line) => line.trim() === "[[zk.sccp_route_manifests]]",
   );
-  if (!allowLine || routeStart < 0) {
+  if (routeStart < 0) {
     throw new Error("generated BSC route config overlay is incomplete.");
   }
-  return { allowLine, routeLines: overlayLines.slice(routeStart) };
+  return { routeLines: overlayLines.slice(routeStart) };
 }
 
 export function buildMergedBscTairaXorRouteConfigToml(
@@ -13911,7 +13897,7 @@ export function buildMergedBscTairaXorRouteConfigToml(
       "base TAIRA config already contains zk.sccp_route_manifests; merge route manifests manually to avoid duplicate routes.",
     );
   }
-  const { allowLine, routeLines } = routeConfigOverlayParts(manifest, options);
+  const { routeLines } = routeConfigOverlayParts(manifest, options);
   const lines = baseConfig.split("\n");
   const zkStart = lines.findIndex((line) => line.trim() === "[zk]");
   const mergedRouteLines = [
@@ -13922,7 +13908,7 @@ export function buildMergedBscTairaXorRouteConfigToml(
 
   if (zkStart < 0) {
     const trimmed = baseConfig.replace(/\s*$/u, "");
-    return `${trimmed}\n\n[zk]\n${allowLine}\n\n${mergedRouteLines.join("\n")}\n`;
+    return `${trimmed}\n\n${mergedRouteLines.join("\n")}\n`;
   }
 
   let zkEnd = lines.length;
@@ -13940,7 +13926,6 @@ export function buildMergedBscTairaXorRouteConfigToml(
   const mergedLines = [
     ...lines.slice(0, zkStart),
     "[zk]",
-    allowLine,
     ...zkBody,
     "",
     ...mergedRouteLines,
@@ -14521,11 +14506,6 @@ async function commandRouteConfig(options) {
     assetKey: readFirstValue(manifest, "assetKey", "asset_key") ?? null,
     productionReady:
       readFirstValue(manifest, "productionReady", "production_ready") ?? null,
-    allowUnready: optionEnabled(
-      options,
-      "allow-unready",
-      readFirstValue(manifest, "productionReady", "production_ready") !== true,
-    ),
     nextStep: baseConfigPath
       ? "Use this merged TAIRA node config only as legacy/offline evidence. Publish production BSC route material on-chain with publish-route-manifest, and keep peer configs free of local BSC SCCP route stanzas."
       : "Use this TOML only as legacy/offline evidence. Publish production BSC route material on-chain with publish-route-manifest, and keep peer configs free of local BSC SCCP route stanzas.",

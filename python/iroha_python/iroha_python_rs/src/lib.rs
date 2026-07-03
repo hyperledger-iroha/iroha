@@ -6554,6 +6554,27 @@ mod tests {
         Python::attach(|py| err.value(py).to_string())
     }
 
+    const MALFORMED_ED25519_PUBLIC_KEYS: [(&str, [u8; 32], &str); 3] = [
+        ("all-zero", [0u8; 32], "all zero"),
+        (
+            "small-order",
+            [
+                1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0,
+            ],
+            "small-order",
+        ),
+        (
+            "noncanonical",
+            [
+                0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff, 0xff, 0x7f,
+            ],
+            "non-canonical",
+        ),
+    ];
+
     #[test]
     fn checked_signature_from_bytes_rejects_empty_and_all_zero_payloads() {
         let empty = py_err_message(
@@ -6740,6 +6761,51 @@ mod tests {
                 !verify_ed25519_py(public_key, message, &malformed)
                     .expect("Ed25519 verification returns a bool"),
                 "{label} Ed25519 signature R must fail Ed25519 wrapper admission"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_rejects_malformed_ed25519_public_key_material_before_backend() {
+        let key_pair = KeyPair::try_from_seed(
+            b"python-native-ed25519-public-key-admission".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("derive checked Ed25519 fixture keypair");
+        let message = b"python native Ed25519 public key admission";
+        let signature =
+            Signature::try_new(key_pair.private_key(), message).expect("checked fixture signature");
+
+        for (label, public_key, expected_error) in MALFORMED_ED25519_PUBLIC_KEYS {
+            let generic = py_err_message(
+                verify_py(
+                    Algorithm::Ed25519.as_static_str(),
+                    &public_key,
+                    message,
+                    signature.payload(),
+                )
+                .expect_err("generic verifier must reject malformed Ed25519 public keys"),
+            );
+            assert!(
+                generic.contains("failed to parse public key"),
+                "unexpected generic verifier {label} public-key error: {generic}"
+            );
+            assert!(
+                generic.contains(expected_error),
+                "generic verifier {label} public-key error lost parser detail: {generic}"
+            );
+
+            let ed25519 = py_err_message(
+                verify_ed25519_py(&public_key, message, signature.payload())
+                    .expect_err("Ed25519 verifier must reject malformed public keys"),
+            );
+            assert!(
+                ed25519.contains("failed to parse public key"),
+                "unexpected Ed25519 verifier {label} public-key error: {ed25519}"
+            );
+            assert!(
+                ed25519.contains(expected_error),
+                "Ed25519 verifier {label} public-key error lost parser detail: {ed25519}"
             );
         }
     }
@@ -12730,6 +12796,30 @@ mod tests {
             assert_eq!(parsed_algorithm, algorithm.as_static_str());
             assert_eq!(parsed_payload.bind(py).as_bytes(), expected_payload);
         });
+    }
+
+    #[test]
+    fn public_key_multihash_rejects_malformed_ed25519_public_key_material() {
+        for (label, public_key, expected_error) in MALFORMED_ED25519_PUBLIC_KEYS {
+            for prefixed in [false, true] {
+                let err = py_err_message(
+                    public_key_multihash_py(
+                        Algorithm::Ed25519.as_static_str(),
+                        &public_key,
+                        prefixed,
+                    )
+                    .expect_err("malformed Ed25519 public key must not format"),
+                );
+                assert!(
+                    err.contains("failed to parse public key"),
+                    "unexpected public-key multihash {label} error: {err}"
+                );
+                assert!(
+                    err.contains(expected_error),
+                    "public-key multihash {label} error lost parser detail: {err}"
+                );
+            }
+        }
     }
 
     #[test]

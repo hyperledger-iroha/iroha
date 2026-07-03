@@ -1393,10 +1393,18 @@ mod temp_artifact_tests {
         0, 0,
     ];
 
-    fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_with_malformed_ed25519_r(
+        signature: &Signature,
+        replacement_r: &[u8; 32],
+    ) -> Signature {
         let mut payload = signature.payload().to_vec();
-        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
-            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&payload)
     }
 
@@ -1473,19 +1481,26 @@ mod temp_artifact_tests {
         )
         .expect("receipt log");
         let lane_epoch = LaneEpoch::new(LaneId::new(8), 13);
-        let mut receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xB2);
-        receipt.operator_signature =
-            signature_with_malformed_ed25519_r(&receipt.operator_signature);
+        let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xB2);
 
-        let err = log
-            .append(lane_epoch, 1, receipt, test_fingerprint(0xB2))
-            .expect_err("DA receipt log must reject malformed Ed25519 signature R");
-        let message = format!("{err:?}");
-        assert!(
-            message.contains("DA receipt signature verification failed")
-                && message.contains("signature material is malformed"),
-            "unexpected DA receipt signature admission error: {message}"
-        );
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            let mut invalid_receipt = receipt.clone();
+            invalid_receipt.operator_signature =
+                signature_with_malformed_ed25519_r(&receipt.operator_signature, &replacement_r);
+
+            let err = log
+                .append(lane_epoch, 1, invalid_receipt, test_fingerprint(0xB2))
+                .expect_err("DA receipt log must reject malformed Ed25519 signature R");
+            let message = format!("{err:?}");
+            assert!(
+                message.contains("DA receipt signature verification failed")
+                    && message.contains("signature material is malformed"),
+                "{label} DA receipt signature R produced unexpected admission error: {message}"
+            );
+        }
     }
 
     #[test]

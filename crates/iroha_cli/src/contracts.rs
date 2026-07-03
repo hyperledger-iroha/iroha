@@ -4212,6 +4212,52 @@ mod tests {
     }
 
     #[test]
+    fn contract_submit_only_response_keeps_operation_receipt_under_submit() {
+        let response = contract_submit_only_response(
+            norito::json!({
+                "tx_hash_hex": "deadbeef",
+                "operation_receipt": {
+                    "operation_kind": "contract_call",
+                    "status": "submitted",
+                    "transport": "torii",
+                    "dataspace": "universal",
+                    "payload_digest_hex": "payload-digest"
+                }
+            }),
+            None,
+        );
+
+        assert!(response.get("operation_receipt").is_none());
+        assert!(response.get("tx_hash_hex").is_none());
+        assert_eq!(
+            response
+                .get("submit")
+                .and_then(|submit| submit.get("operation_receipt"))
+                .and_then(|receipt| receipt.get("operation_kind"))
+                .and_then(norito::json::Value::as_str),
+            Some("contract_call")
+        );
+        let submit = response
+            .get("submit")
+            .and_then(norito::json::Value::as_object)
+            .expect("submit object");
+        for forbidden_key in [
+            "private_key",
+            "payload",
+            "raw_payload",
+            "normalized_payload",
+            "transaction_scaffold_b64",
+            "signed_transaction_b64",
+            "signing_message_b64",
+        ] {
+            assert!(
+                submit.get(forbidden_key).is_none(),
+                "CLI submit response must not expose `{forbidden_key}`"
+            );
+        }
+    }
+
+    #[test]
     fn resolve_deploy_contract_alias_composes_explicit_fields() {
         let alias = resolve_deploy_contract_alias(None, Some("router"), None, Some("is"))
             .expect("domainless alias");

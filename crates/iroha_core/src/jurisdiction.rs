@@ -1132,7 +1132,10 @@ mod tests {
             version: iroha_data_model::jurisdiction::JDG_SDN_COMMITMENT_VERSION_V1,
             scope: scope.clone(),
             encrypted_payload_hash: Hash::prehashed([0x77; 32]),
-            seal: SignatureOf::from_signature(Signature::from_bytes(&[0u8])),
+            seal: SignatureOf::from_signature(
+                Signature::try_from_bytes(&[0x42u8; 64])
+                    .expect("nonzero JDG SDN commitment seal fixture"),
+            ),
             sdn_public_key: sdn_keypair.public_key().clone(),
         };
         let seal = SignatureOf::try_from_hash(sdn_keypair.private_key(), commitment.signing_hash())

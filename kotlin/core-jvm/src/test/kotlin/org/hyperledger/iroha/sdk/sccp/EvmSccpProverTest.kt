@@ -1091,6 +1091,18 @@ class EvmSccpProverTest {
             parityFixture.toriiSubmitPayloadHash,
             parityFixture.sdkResults.getValue("kotlin").toriiSubmitPayloadHash,
         )
+        assertFailsWith<IllegalArgumentException> {
+            SccpEvm.EthereumMainnetNativeEvmProverParityFixture.fromJson(
+                sampleEthereumNativeEvmProverParityFixtureJson(nativeProverBundle)
+                    .replace(
+                        "\"schema\": \"${SccpEvm.ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1}\"",
+                        "\"schema\": \"sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1\"",
+                    ),
+                nativeProverBundle,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("nativeProverParityFixture.schema") == true)
+        }
         val driftedParityFixture = sampleEthereumNativeEvmProverParityFixtureJson(
             nativeProverBundle,
             kotlinCalldataHash = "0x" + "96".repeat(32),

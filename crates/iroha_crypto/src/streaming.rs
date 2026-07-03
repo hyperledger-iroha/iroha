@@ -2176,6 +2176,19 @@ mod key_update_tests {
         byte: u8,
     }
 
+    const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    const ED25519_NONCANONICAL_IDENTITY: [u8; 32] = [
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80,
+    ];
+
     impl TryRngCore for FixedTryRng {
         type Error = OsError;
 
@@ -2490,5 +2503,75 @@ mod key_update_tests {
         assert!(matches!(err, HandshakeError::BadSignature));
         assert!(viewer_session.transport_keys().is_none());
         assert!(viewer_session.negotiated_suite().is_none());
+    }
+
+    #[test]
+    fn process_remote_key_update_rejects_inert_or_weak_remote_identity_without_state_change() {
+        let publisher_keys = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+            .expect("seeded Ed25519 keypair");
+        let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x42; 32]);
+
+        let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+        publisher_session
+            .set_local_ephemeral_x25519([0x11; 32])
+            .expect("deterministic x25519 ephemeral");
+        let update = publisher_session
+            .build_key_update([0xC7; 32], &suite, 1, 1, publisher_keys.private_key())
+            .expect("key update");
+
+        for remote_identity in [
+            [0u8; 32],
+            ED25519_SMALL_ORDER_POINT,
+            ED25519_NONCANONICAL_IDENTITY,
+        ] {
+            let remote_identity = crate::PublicKey(crate::PublicKeyCompact::new(
+                Algorithm::Ed25519,
+                &remote_identity,
+            ));
+
+            let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+            viewer_session
+                .set_local_ephemeral_x25519([0x22; 32])
+                .expect("deterministic x25519 ephemeral");
+            let err = viewer_session
+                .process_remote_key_update(&update, &remote_identity)
+                .expect_err("invalid identity must fail before state mutation");
+
+            assert!(matches!(err, HandshakeError::BadSignature));
+            assert!(viewer_session.transport_keys().is_none());
+            assert!(viewer_session.negotiated_suite().is_none());
+        }
+    }
+
+    #[test]
+    fn process_remote_key_update_rejects_malformed_signature_r_without_state_change() {
+        let publisher_keys = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+            .expect("seeded Ed25519 keypair");
+        let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x42; 32]);
+
+        let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+        publisher_session
+            .set_local_ephemeral_x25519([0x11; 32])
+            .expect("deterministic x25519 ephemeral");
+        let update = publisher_session
+            .build_key_update([0xC7; 32], &suite, 1, 1, publisher_keys.private_key())
+            .expect("key update");
+
+        for invalid_r in [ED25519_SMALL_ORDER_POINT, ED25519_NONCANONICAL_IDENTITY] {
+            let mut tampered = update.clone();
+            tampered.signature[..32].copy_from_slice(&invalid_r);
+
+            let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+            viewer_session
+                .set_local_ephemeral_x25519([0x22; 32])
+                .expect("deterministic x25519 ephemeral");
+            let err = viewer_session
+                .process_remote_key_update(&tampered, publisher_keys.public_key())
+                .expect_err("malformed signature R must fail before state mutation");
+
+            assert!(matches!(err, HandshakeError::BadSignature));
+            assert!(viewer_session.transport_keys().is_none());
+            assert!(viewer_session.negotiated_suite().is_none());
+        }
     }
 }

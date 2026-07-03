@@ -686,11 +686,11 @@ BSC_COMMIT_VALIDATOR_POWERS = ["1", "1", "1", "1"]
 BSC_COMMIT_VALIDATOR_SET_HASH = "0xc5152802f6ca9ec72a4249646aca7476496f00b71ab5b1482c881a31fb42dd8c"
 BSC_COMMIT_MESSAGE_HASH = "0x5832165d1a87ed49a323f2ecaecbef973489aed1a42e7eab369244e7abec43c7"
 BSC_COMMIT_SIGNATURES = [
-    "0x1b8802069b82c3d4cb6d7bec82323853f36d965c1e71647560084e7c7a0de9c17c85fcc3c6222f905cbbc4ba5b5f3f005f07d144304184181be67b3d02d1ba9f00",
-    "0x921d39c29fb793c496f96cf647128232d228024ed2f3e68cc6a52aa4cf64facf6bbd9dfcf7d703165f7880e7e1310f34d1b0fb8ca6dd8f506bf289ba012387f001",
-    "0xcfa11aa1ec214278afdb4ef7f3c40af97a2784e0336afb5ebef345c0d2eaa9ef629ad2d25cf9709eb9b842fb2fb3f749ce365af97af6e7064771614312d3619600",
+    "0x1b8802069b82c3d4cb6d7bec82323853f36d965c1e71647560084e7c7a0de9c17c85fcc3c6222f905cbbc4ba5b5f3f005f07d144304184181be67b3d02d1ba9f1b",
+    "0x921d39c29fb793c496f96cf647128232d228024ed2f3e68cc6a52aa4cf64facf6bbd9dfcf7d703165f7880e7e1310f34d1b0fb8ca6dd8f506bf289ba012387f01c",
+    "0xcfa11aa1ec214278afdb4ef7f3c40af97a2784e0336afb5ebef345c0d2eaa9ef629ad2d25cf9709eb9b842fb2fb3f749ce365af97af6e7064771614312d361961b",
 ]
-BSC_COMMIT_SEAL_HASH = "0xcd9d87b24d8c1cf7615cb4267cde5a3fc24bbb770807134ee75d4ddaba992172"
+BSC_COMMIT_SEAL_HASH = "0x14659b4643d3a7961f7f86f46319992444617392c8e84967a3bb2a5ad7bc72fb"
 
 
 def sample_solana_stake_state_v2_stake_account() -> bytes:
@@ -925,7 +925,7 @@ TRON_PARENT_RAW_HEADER_HASH = "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b
 TRON_RAW_HEADER_HASH = "0x614a09275b6d0fffb6bc08fb34f737c093d9dd2adefccb04344715e2619c8286"
 TRON_PARENT_BLOCK_ID = "0x0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4"
 TRON_BLOCK_ID = "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286"
-TRON_SOLID_BLOCK_HEADER_PROOF_HASH = "0x25416bda5734ecef1ab9920d15f1011e962f6ff90e9c6247ff6b2ce34a5ab49f"
+TRON_SOLID_BLOCK_HEADER_PROOF_HASH = "0x362579d1667137b9dac3fc20772de7b0b4adb3888d4508bb5d75e53596d43771"
 TRON_SOLID_BLOCK_MESSAGE_HASH = "0x065173d89272a549b504258936729c5226dfdb866ccb9422757d95ec9fa6d688"
 TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR = "be9223cdfd6728fd2512f270a44f928fbd58df98f8e9e5fe13c4dc73503192e4"
 TRON_SOURCE_EVENT_SIGNATURE_VECTOR = (
@@ -949,6 +949,14 @@ TRON_WITNESS_SCHEDULE_TRANSITION_SEAL_HASH = "0xbb3b7ef87bd3efb77d9b7f0a4dba8e73
 
 def tron_header_signature(recovery_id: int) -> bytes:
     return bytes([0xAA] * 32 + [0x01] * 32 + [recovery_id])
+
+
+def tron_signature_hex_with_recovery_id(signature_hex: str, recovery_id: int) -> str:
+    prefix = "0x" if signature_hex.startswith("0x") else ""
+    raw = bytearray(bytes.fromhex(signature_hex.removeprefix("0x")))
+    assert len(raw) == 65
+    raw[-1] = recovery_id
+    return prefix + raw.hex()
 
 
 TRON_RECEIPT_STATE_MPT_NODE_HEX = "0xe4822080a0" + "bb" * 32
@@ -984,6 +992,10 @@ TRON_TRANSACTION_SOURCE_BYTES_HEX = (
     "34343434343434343434347090e5ee3a900180e1eb171241cc58d7ac52c91117"
     "92495fee682b53cab96ff4229043c5b8b90c31447f5934553d8854ab35de3437"
     "2c13331bf3ef5cefd8f2cc5ad026faf223da83969fe8973c012a0410001801"
+)
+TRON_TRANSACTION_SOURCE_SIGNATURE_HEX = (
+    "cc58d7ac52c9111792495fee682b53cab96ff4229043c5b8b90c31447f593455"
+    "3d8854ab35de34372c13331bf3ef5cefd8f2cc5ad026faf223da83969fe8973c01"
 )
 TRON_TRANSACTION_SOURCE_ROOT = (
     "0x1751c62dce36d5d642e48480b45d48ed16dd1b9b40ce216bc2f15c1b1ccf300b"
@@ -1337,6 +1349,67 @@ def test_solana_route_canary_evidence_binds_programdata_snapshot() -> None:
         solana_sccp_route_canary_evidence_hash(
             sample_solana_route_canary_evidence(expected_destination_binding_hash=HEX32_H)
         )
+    for overrides, expected_message in (
+        (
+            {"routeAllowlistHash": evidence["route_allowlist_hash"]},
+            "routeAllowlistHash must not use multiple aliases",
+        ),
+        (
+            {"destinationBindingHash": evidence["destination_binding_hash"]},
+            "destinationBindingHash must not use multiple aliases",
+        ),
+        (
+            {
+                "expected_destination_binding_hash": evidence[
+                    "destination_binding_hash"
+                ],
+                "expectedDestinationBindingHash": evidence[
+                    "destination_binding_hash"
+                ],
+            },
+            "expectedDestinationBindingHash must not use multiple aliases",
+        ),
+        (
+            {
+                "sourceVerifierMaterialHash": evidence[
+                    "source_verifier_material_hash"
+                ],
+            },
+            "sourceVerifierMaterialHash must not use multiple aliases",
+        ),
+        (
+            {
+                "sourceAdapterEngineDeploymentHash": evidence[
+                    "source_adapter_engine_deployment_hash"
+                ],
+            },
+            "sourceAdapterEngineDeploymentHash must not use multiple aliases",
+        ),
+        (
+            {"verifierIdentity": evidence["verifier_identity"]},
+            "verifierIdentity must not use multiple aliases",
+        ),
+        (
+            {
+                "solanaProgramdataAddress": evidence[
+                    "solana_programdata_address"
+                ],
+            },
+            "solanaProgramdataAddress must not use multiple aliases",
+        ),
+        (
+            {
+                "solanaProgramdataExecutableBase64": evidence[
+                    "solana_programdata_executable_base64"
+                ],
+            },
+            "solanaProgramdataExecutableBase64 must not use multiple aliases",
+        ),
+    ):
+        with pytest.raises(TypeError, match=expected_message):
+            solana_sccp_route_canary_evidence_hash(
+                sample_solana_route_canary_evidence(**overrides)
+            )
     for override in (
         {"route_allowlist_hash": evidence["destination_binding_hash"]},
         {"route_allowlist_hash": evidence["source_verifier_material_hash"]},
@@ -5508,6 +5581,17 @@ def test_derives_all_source_proof_hashes_from_canonical_witness_material() -> No
     }
     assert len(canonical_bsc_commit_seal_bytes(commit_seal)) == 297
     assert bsc_commit_seal_hash(commit_seal) == BSC_COMMIT_SEAL_HASH
+    for rejected_recovery_id in (0, 1, 29, 30):
+        with pytest.raises(ValueError, match="canonical recoverable"):
+            canonical_bsc_commit_seal_bytes(
+                {
+                    **commit_seal,
+                    "signatures": [
+                        tron_signature_hex_with_recovery_id(BSC_COMMIT_SIGNATURES[0], rejected_recovery_id),
+                        *BSC_COMMIT_SIGNATURES[1:],
+                    ],
+                }
+            )
     with pytest.raises(ValueError, match="two thirds"):
         canonical_bsc_commit_seal_bytes(
             {
@@ -5827,6 +5911,22 @@ def test_derives_all_source_proof_hashes_from_canonical_witness_material() -> No
             canonical_tron_witness_seal_bytes({**tron_witness_seal, **patch})
     with pytest.raises(ValueError, match="signatures length"):
         canonical_tron_witness_seal_bytes({**tron_witness_seal, "signatures": []})
+    for legacy_recovery_id in range(27, 31):
+        with pytest.raises(
+            ValueError,
+            match="canonical low-S 65-byte TRON signature",
+        ):
+            canonical_tron_witness_seal_bytes(
+                {
+                    **tron_witness_seal,
+                    "signatures": [
+                        tron_signature_hex_with_recovery_id(
+                            "0x" + TRON_SOURCE_EVENT_SIGNATURE_VECTOR,
+                            legacy_recovery_id,
+                        )
+                    ],
+                }
+            )
     with pytest.raises(ValueError, match="declared signer"):
         canonical_tron_witness_seal_bytes(
             {
@@ -5984,6 +6084,25 @@ def test_derives_tron_witness_schedule_transition_transcripts_from_ui_witness_ma
         canonical_tron_witness_schedule_transition_seal_bytes(
             {**seal_input, "transition_message_hash": HEX32_D}
         )
+    for legacy_recovery_id in range(27, 31):
+        with pytest.raises(
+            ValueError,
+            match="canonical low-S 65-byte TRON signature",
+        ):
+            canonical_tron_witness_schedule_transition_seal_bytes(
+                {
+                    **seal_input,
+                    "seal_proof": {
+                        **seal_input["seal_proof"],
+                        "signatures": [
+                            tron_signature_hex_with_recovery_id(
+                                TRON_WITNESS_SCHEDULE_TRANSITION_SIGNATURE,
+                                legacy_recovery_id,
+                            )
+                        ],
+                    },
+                }
+            )
     with pytest.raises(ValueError, match="declared signer"):
         canonical_tron_witness_schedule_transition_seal_bytes(
             {
@@ -7102,8 +7221,27 @@ def test_derives_ton_source_proof_transcripts_from_witness_material() -> None:
                 "transaction_bytes": noncanonical_transaction_signature,
             }
         )
+    for legacy_recovery_id in range(27, 31):
+        legacy_transaction_signature = TRON_TRANSACTION_SOURCE_BYTES_HEX.replace(
+            TRON_TRANSACTION_SOURCE_SIGNATURE_HEX,
+            tron_signature_hex_with_recovery_id(
+                TRON_TRANSACTION_SOURCE_SIGNATURE_HEX,
+                legacy_recovery_id,
+            ),
+        )
+        assert legacy_transaction_signature != TRON_TRANSACTION_SOURCE_BYTES_HEX
+        with pytest.raises(
+            ValueError,
+            match="successful TRON TriggerSmartContract source call",
+        ):
+            canonical_tron_sccp_transaction_source_proof_bytes(
+                {
+                    **tron_transaction_source_input,
+                    "transaction_bytes": legacy_transaction_signature,
+                }
+            )
     wrong_signer_transaction_signature = TRON_TRANSACTION_SOURCE_BYTES_HEX.replace(
-        "cc58d7ac52c9111792495fee682b53cab96ff4229043c5b8b90c31447f5934553d8854ab35de34372c13331bf3ef5cefd8f2cc5ad026faf223da83969fe8973c01",
+        TRON_TRANSACTION_SOURCE_SIGNATURE_HEX,
         "b50455577deef2a0d6c3c521d97de050d5b9ba46df00c8ddad014bac4ca3345173223f1d4c5940538f1b1da069bed6828a9b27794bd1eac1a35810baaef28d2101",
     )
     with pytest.raises(ValueError, match="successful TRON TriggerSmartContract source call"):
@@ -7219,7 +7357,7 @@ def test_derives_ton_source_proof_transcripts_from_witness_material() -> None:
         "raw_data": raw_header,
         "witness_signature": tron_header_signature(0),
         "parent_raw_data": parent_raw_header,
-        "parent_witness_signature": tron_header_signature(27),
+        "parent_witness_signature": tron_header_signature(1),
         "raw_data_hash": TRON_RAW_HEADER_HASH,
         "parent_raw_data_hash": TRON_PARENT_RAW_HEADER_HASH,
         "block_id": TRON_BLOCK_ID,
@@ -7240,7 +7378,7 @@ def test_derives_ton_source_proof_transcripts_from_witness_material() -> None:
         ({"witnessSignature": tron_header_signature(0)}, "witnessSignature must not use multiple aliases"),
         ({"parentRawData": parent_raw_header}, "parentRawData must not use multiple aliases"),
         (
-            {"parentWitnessSignature": tron_header_signature(27)},
+            {"parentWitnessSignature": tron_header_signature(1)},
             "parentWitnessSignature must not use multiple aliases",
         ),
         ({"rawDataHash": TRON_RAW_HEADER_HASH}, "rawDataHash must not use multiple aliases"),
@@ -7290,6 +7428,21 @@ def test_derives_ton_source_proof_transcripts_from_witness_material() -> None:
         canonical_tron_solid_block_header_proof_bytes(
             {**solid_header_proof, "witness_signature": bytes([0xAA]) * 65}
         )
+    for legacy_recovery_id in range(27, 31):
+        with pytest.raises(ValueError, match="recovery id 0\\.\\.3"):
+            canonical_tron_solid_block_header_proof_bytes(
+                {
+                    **solid_header_proof,
+                    "witness_signature": tron_header_signature(legacy_recovery_id),
+                }
+            )
+        with pytest.raises(ValueError, match="recovery id 0\\.\\.3"):
+            canonical_tron_solid_block_header_proof_bytes(
+                {
+                    **solid_header_proof,
+                    "parent_witness_signature": tron_header_signature(legacy_recovery_id),
+                }
+            )
     with pytest.raises(ValueError, match="TRON header signatures must be canonical low-S"):
         canonical_tron_solid_block_header_proof_bytes(
             {**solid_header_proof, "parent_witness_signature": tron_header_signature(4)}
@@ -7860,6 +8013,37 @@ def test_binds_source_adapter_deployment_context_for_ui_provers() -> None:
     )
     assert request["public_inputs"]["source_adapter_deployment_hash"] == HEX32_A
     assert request["public_inputs"]["source_adapter_deployment_receipt_hash"] == HEX32_B
+
+    with pytest.raises(TypeError, match="sourceDomain must not use multiple aliases"):
+        normalize_sccp_source_adapter_deployment_binding(
+            {
+                "sourceDomain": SCCP_DOMAIN_SOL,
+                "source_domain": SCCP_DOMAIN_TON,
+            }
+        )
+    with pytest.raises(TypeError, match="targetDomain must not use multiple aliases"):
+        normalize_sccp_source_adapter_deployment_binding(
+            {
+                "targetDomain": SCCP_DOMAIN_SORA,
+                "target_domain": SCCP_DOMAIN_TON,
+            }
+        )
+    with pytest.raises(TypeError, match="sourceAdapterDeploymentHash must not use multiple aliases"):
+        normalize_sccp_source_adapter_deployment_binding(
+            {
+                "sourceAdapterDeploymentHash": HEX32_A,
+                "source_adapter_deployment_hash": HEX32_B,
+                "source_adapter_deployment_receipt_hash": HEX32_C,
+            }
+        )
+    with pytest.raises(TypeError, match="sourceAdapterDeploymentReceiptHash must not use multiple aliases"):
+        normalize_sccp_source_adapter_deployment_binding(
+            {
+                "source_adapter_deployment_hash": HEX32_A,
+                "sourceAdapterDeploymentReceiptHash": HEX32_B,
+                "source_adapter_deployment_receipt_hash": HEX32_C,
+            }
+        )
 
     with pytest.raises(TypeError, match="launch-scope remote domain"):
         normalize_sccp_source_adapter_deployment_binding(

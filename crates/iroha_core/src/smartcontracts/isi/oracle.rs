@@ -849,6 +849,11 @@ fn verify_defi_oracle_signature(
         .map_err(|err| signature_err(format!("invalid DeFi oracle signature: {err}")))
 }
 
+fn parse_defi_oracle_signer_public_key(signer_public_key: &[u8]) -> Result<PublicKey, Error> {
+    PublicKey::from_bytes(Algorithm::Ed25519, signer_public_key)
+        .map_err(|err| signature_err(format!("invalid DeFi signer public key: {err}")))
+}
+
 fn validate_defi_payload_shape(
     attestation: &DefiOracleAttestation,
 ) -> Result<norito::json::Map, Error> {
@@ -1040,9 +1045,18 @@ mod tests {
         0, 0,
     ];
 
-    fn signature_of_with_malformed_ed25519_r<T>(signature: &SignatureOf<T>) -> SignatureOf<T> {
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_of_with_malformed_ed25519_r<T>(
+        signature: &SignatureOf<T>,
+        replacement_r: &[u8; 32],
+    ) -> SignatureOf<T> {
         let mut payload = signature.payload().to_vec();
-        payload[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
         SignatureOf::from_signature(Signature::from_bytes(&payload))
     }
 
@@ -1074,6 +1088,25 @@ mod tests {
             message.contains("signature payload must not be all zero"),
             "unexpected error message: {message}"
         );
+    }
+
+    #[test]
+    fn defi_oracle_signer_public_key_rejects_inert_or_malformed_ed25519_material() {
+        for (label, signer_public_key) in [
+            ("all-zero", [0_u8; 32]),
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let err = parse_defi_oracle_signer_public_key(&signer_public_key)
+                .expect_err("malformed DeFi oracle signer public key must fail admission");
+            let Error::InvalidParameter(InvalidParameterError::SmartContract(message)) = err else {
+                panic!("unexpected error for {label} signer public key: {err:?}");
+            };
+            assert!(
+                message.contains("invalid DeFi signer public key"),
+                "{label} signer public key produced unexpected error message: {message}"
+            );
+        }
     }
 
     #[test]
@@ -1128,13 +1161,23 @@ mod tests {
         verify_typed_signature_for_signer(&signature, keypair.public_key(), &body)
             .expect("valid oracle observation signature should verify");
 
-        let signature = signature_of_with_malformed_ed25519_r(&signature);
-        let err = verify_typed_signature_for_signer(&signature, keypair.public_key(), &body)
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let malformed_signature =
+                signature_of_with_malformed_ed25519_r(&signature, &replacement_r);
+            let err = verify_typed_signature_for_signer(
+                &malformed_signature,
+                keypair.public_key(),
+                &body,
+            )
             .expect_err("malformed oracle observation signature R must fail admission");
-        assert!(
-            matches!(err, iroha_crypto::Error::BadSignature),
-            "malformed observation signature R should fail before typed verification: {err:?}"
-        );
+            assert!(
+                matches!(err, iroha_crypto::Error::BadSignature),
+                "{label} observation signature R should fail before typed verification: {err:?}"
+            );
+        }
     }
 
     #[test]
@@ -1308,8 +1351,7 @@ impl Execute for SubmitDefiOracleAttestation {
         let provider_signatory = provider.controller().single_signatory().ok_or_else(|| {
             signature_err("DeFi oracle providers must use single-signature controllers")
         })?;
-        let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &attestation.signer_public_key)
-            .map_err(|err| signature_err(format!("invalid DeFi signer public key: {err}")))?;
+        let public_key = parse_defi_oracle_signer_public_key(&attestation.signer_public_key)?;
         if &public_key != provider_signatory {
             return Err(signature_err(
                 "DeFi oracle signer must match provider account controller",

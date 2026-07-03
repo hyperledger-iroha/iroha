@@ -2749,6 +2749,7 @@ mod tests {
         for (label, public_key) in [
             ("all-zero", ED25519_ALL_ZERO_PUBLIC_KEY),
             ("small-order", ED25519_SMALL_ORDER_POINT),
+            ("noncanonical", ED25519_NON_CANONICAL_IDENTITY),
         ] {
             let mut canonical = AccountAddress::from_account_id(&account)
                 .expect("encode")

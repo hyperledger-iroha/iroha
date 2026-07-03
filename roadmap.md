@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-02
+Last updated: 2026-07-03
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -17,19 +17,157 @@ SCCP source-template hash denial is now a required production-corridor
 evidence gate: the shared active-lane denylist pytest is part of the
 evidence-scripts phase, and both release-readiness and strict release-bundle
 transcript inventories require that test before certification evidence can
-pass.
+pass. Rust source-adapter deployment builders, matchers, and standalone
+descriptor gates now apply the same built-in template/placeholder denylist to
+descriptor-only hashes, including deployment receipts, adapter verifier
+commitments, and Solana/TON audit verifier roles, so template material cannot be
+relabelled as governed deployment evidence. Deployment-bound source-verifier
+evidence common-shape validation now shares that denylist before OpenVerify
+wrapper validation, so rebuilt wrappers cannot recover public adapter verifier
+commitments for template role or deployment-receipt replays. Source-verifier
+material and source-adapter deployment hashes in public cryptographic-evidence
+rows also remain role-separated across readiness JSON, bundle pre-rendering, and
+strict bundle verification. Release-bundle pre-render validation also keeps
+top-level public crypto hash-role replay blockers visible when
+`source_adapter_gate_audit_hashes` is malformed, so a bad audit map cannot hide
+destination, route, source, or top-level source-gate hash role reuse before
+artifacts are written. Malformed public user-prover, crypto, or input
+provenance list rows also cannot hide missing required lane/domain coverage or
+safe-path provenance drift while copied row contents are redacted. Source-verifier
+material constructors also fail closed on non-zero built-in placeholder hashes
+before deployed role, source-state, or source bridge code hashes can be
+relabelled as live verifier material, and the lower-level Solana/TON
+full-light-client audit gate hash helpers apply the same denylist before audit
+hashes are transcript-bound. Solana governed source-adapter readiness now also
+fails closed for request-bound audit statement hash replays and audited-role
+verifier hash drift before proof matching. BSC mainnet destination binding now
+accepts only the mainnet chain-id word, and BSC placeholder material-only
+openings must bind the decoded OpenVerify verifier key, schema, public-input
+columns, and FastPQ public I/O hash. BSC material-only source material no
+longer satisfies production source-proof or local-admission gates without
+governed deployment evidence.
 
 TON source-adapter readiness now stays aligned with the governed
 full-light-client audit policy: readiness-positive test fixtures use the
 governed audit hash tuple, request-bound audit hash replays fail closed at the
 production-readiness gate, and the focused `iroha_sccp` TON suite is green.
+TON source-chain proof verification must remain free of testnet placeholder
+escape hatches: old placeholder consensus/inclusion byte prefixes are retained
+only as adversarial test input and cannot satisfy material, deployment, or
+domain-facade verification through environment variables.
+SCCP production policy and route-manifest overlays are deterministic rather than
+environment-controlled: launch mode is the typed default unless an explicit API
+passes another policy value, and configured route manifests can seed state only
+before committed route-manifest state exists.
+The stale `sccp_allow_unready_transparent_proofs` runtime/config surface has
+been removed: Core rejects diagnostic TAIRA/TRON transparent proofs through
+normal production source-adapter checks, Torii hides unready route manifests,
+and Torii's direct message-bundle proof builder no longer constructs the
+diagnostic transparent artifact. The diagnostic TAIRA/TRON proof builder is
+fixture-only, the governance CLI diagnostic command has been removed, BSC/TRON
+route-config rendering rejects the removed `--allow-unready` option, and
+release/readiness inventory rejects any reintroduced config field, environment
+override, or CLI production surface. Current release-verifier diagnostics also
+name that guard as a removed-surface inventory instead of preserving the older
+config-only framing.
 
-Outbound SCCP record admission is now canonical-only, outbound replay identity
-is lane-independent, and inbound proof replay keys bind the proof-derived
-payload hash before receipt or settlement effects. Remaining SCCP launch work is
-focused on completing the remaining Torii focused validation, keeping the
-five-network production-corridor evidence current, and retiring any leftover
-pre-release client or script payload-alias assumptions outside production.
+Outbound SCCP record admission is now canonical-only, SORA-origin outbound
+route binding requires canonical route-local asset keys rather than scoped
+asset spelling aliases, outbound replay identity is lane-independent, and
+inbound proof replay keys bind the proof-derived payload hash before receipt
+or settlement effects. The current Torii SCCP route/API focused validation is
+green against the five-network launch scope.
+Remaining SCCP launch work is focused on keeping the five-network
+production-corridor evidence current and retiring any leftover pre-release
+client or script payload-alias assumptions outside production. JavaScript
+TAIRA XOR BSC-source and TON-source settlement bindings now have adversarial
+coverage for pre-release payload/route/default aliases, the TON-source binder is
+now pinned by a required inbound adversarial source-inventory gate, strict
+release-bundle verification now aggregates the TON route-manifest CLI
+source-inventory gate, the remaining `allow_unready` transparent-proof manifest
+and source-proof proof-builder, proof-job, submission-package, and verifier
+admission bypasses are cfg-gated to tests/fixture builds rather than production
+binaries, Torii's private SCCP route/proof `allow_unready` helper paths are
+test-only, the
+`iroha_sccp/test-fixtures` feature stays out of production SCCP dependencies
+and release/corridor Rust commands, and Rust SCCP TRON proof admission,
+Python/JavaScript/Kotlin/Java/Swift SCCP helpers,
+and TRON live-evidence scripts now require raw java-tron `0..=3`
+recoverable-signature recovery ids and reject Ethereum-style `27..=30`
+aliases. TRON live source-event transaction readiness now also requires the
+computed witness seal hash to match an expected governed witness-seal hash
+before `source_event_transaction_production_ready` can become true, and copied
+source-event replay metadata must already be exact public strings before replay
+arguments can be generated. TRON route-canary replay/full-TOML copied metadata
+now follows the same exact-string boundary for route, destination, transcript,
+and signature hashes, and generated full-TOML/offline arguments now require
+source bridge, source-record input, destination verifier, route, and canary
+metadata to pass exact public-string parsing before required flags are emitted;
+TRON Torii destination query parameters now apply the same exact parsing before
+publishing copied destination verifier metadata, and TRON source-record
+preflight now parses copied source bridge domains, owner/address, network id,
+and config hash exactly before constructing governed source hashes. TRON
+full-TOML metadata annotations now use exact parsed comment values for source
+bridge, destination verifier, and route-canary copied metadata before rendering,
+and route-canary collection helpers parse copied destination verifier metadata
+exactly before event matching or used-message-proof checks. TRON optional live
+hex namespace helpers now also reject non-string route, witness-seal, and
+receipt-proof argument values before parser dispatch, keeping fixture/runtime
+callers inside the same no-stringification boundary as copied metadata. Inline
+TRON witness-schedule payload inputs now use the same exact hex parser boundary
+before active-schedule proof construction; file-backed payloads stay explicit
+text reads with whitespace normalization. TRON source-inclusion branch inputs
+now also require an actual repeated hex32 list before entry parsing, preventing
+scalar or hostile-object values from being interpreted as proof branches.
+Witness-seal signature and witness-schedule transition runtime arguments now
+share that repeated-input shape gate before parsing signature hex or JSON
+transition entries. EVM destination-live runtime namespace inputs now also
+validate optional bytes32 hashes and route-canary integer pins before RPC, so
+direct callers cannot smuggle non-bytes or hostile objects into expected
+network, destination-binding, route-allowlist, source-record, or route-canary
+evidence arguments. EVM source-live runtime namespace inputs now mirror that
+pre-RPC bytes32 validation for expected source bridge code hashes, deployment
+transaction pins, source component hashes, adapter verifier keys, deployment
+receipt hashes, and expected source-record hashes. EVM receipt-proof direct
+collector inputs now validate transaction hashes, source bridge addresses,
+receipt-only mode, and explicit expected chain ids before RPC, so malformed
+namespace values cannot trigger provider calls or be stringified into receipt
+proof evidence. Solana live RPC commitment values now also require exact
+`finalized` or `confirmed` text before collection or imported summary
+validation, so hostile scalar equality/hash hooks cannot affect live snapshot
+admission. Solana live expected pins now also normalize destination-binding
+hashes, verifier-code hashes, and ProgramData addresses before summary
+comparison, so hostile scalar equality hooks cannot mark live evidence ready or
+leak into drift diagnostics. TON live expected pins now mirror that boundary for
+destination-binding, verifier-code, and account-state hashes before summary
+comparison or TOML readiness can open.
+ETH/BSC source-bridge expected source verifier material and source-adapter
+deployment record hashes now normalize before summary comparison and TOML
+readiness, so hostile equality hooks cannot mark direct source records ready.
+Solana/TON source-state expected material, deployment, and full-light-client
+gate hashes now use the same normalized non-zero bytes32 boundary before
+readiness comparisons can run.
+TRON source-bridge expected config, source-record, source-gate,
+destination-binding, and route-allowlist hashes now share that boundary before
+readiness comparisons can run.
+EVM/Solana/TON destination expected binding hashes now normalize through the
+same non-zero bytes32 boundary before JSON, TOML, or CLI readiness comparisons.
+Python and JavaScript SDK Solana route-canary transcripts now reject duplicate
+camel/snake aliases for governed route hashes and ProgramData metadata before
+canonical bytes are hashed, keeping those SDK boundaries aligned with the
+stricter TON/TRON route-canary helpers.
+The JavaScript source-adapter verifier VK helper now rejects duplicate
+`sourceDomain`/`source_domain` aliases at its public object-input boundary, so
+UI tooling cannot derive lane commitments from a different source domain than
+the one displayed to the caller.
+The JavaScript Solana proof-result wrapper now also rejects duplicate
+`mainnetGenesisHash`/`mainnet_genesis_hash` request aliases before production
+proofs are wrapped, closing the raw-request path that bypassed the canonical
+witness builder's alias checks.
+Python and JavaScript source-adapter deployment binding normalizers now reject
+duplicate source/target-domain and deployment-hash aliases before canonical
+binding hashes are derived. JavaScript native destination binding helpers also
+reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 
 ## Release and Stabilization
 
@@ -40,16 +178,28 @@ pre-release client or script payload-alias assumptions outside production.
   `transfer_asset` uses scoped syscall `0x2C` with `DataSpaceId` and the
   five-argument dataspace form for balance movement, `transfer_batch` stays on
   the `0x24` batch syscall path, the ledger host queues scoped private-IS
-  transfers, V1 ABI hash/docs/goldens remain regenerated together, and
-  Torii/CLI contract operations emit normalized public `operation_receipt`
-  objects without private keys, raw payloads, or root compatibility fields.
-  Before release, finish focused ABI hash/syscall golden, host, Torii, CLI, and
-  Kotodama compiler validation for this surface.
+  transfers, and the checked syscall spec/generator now documents
+  `TRANSFER_V1`/`TRANSFER_ASSET_SCOPED` without the retired
+  `SYSCALL_TRANSFER_ASSET` alias. Host validation now pins scoped `r14`
+  `DataSpaceId` admission plus the adjacent legacy `TRANSFER_V1` and FASTPQ
+  batch paths, and Kotodama compiler validation now pins standalone
+  `TRANSFER_ASSET_SCOPED` emission plus FASTPQ batch apply/boundary/lowering
+  coverage. V1 ABI hash/docs/goldens must continue to be regenerated together,
+  and Torii/CLI contract operation validation now pins normalized public
+  `operation_receipt` objects without private keys, raw payloads, or root
+  compatibility fields.
 
 - Continue the crypto-boundary audit after the completed signature decoder
   hardening: `Signature` JSON and Norito admission now rejects empty/all-zero
   payloads centrally, `BlockSignature` wire decoding routes through the checked
-  path, explicit `BlockSignatureWire` conversion is now fallible and checked,
+  path, data-model block-signature codec fixtures use checked nonzero payload
+  construction, DA ingest, SM Norito, query/transaction tampered-signature,
+  alias attestation, offline-note bridge/Core ZK/offline deterministic
+  certificate and note, Offline v1/v2 vector, confidential-wallet,
+  snapshot signature sidecar, identifier/ISI/Torii receipt, Connect bridge
+  identifier sample, and Core transaction/gossiper tampered-signature fixtures
+  use checked admission, explicit `BlockSignatureWire` conversion is now
+  fallible and checked,
   direct BLS signature parsers reject all-zero signature bytes before backend
   parsing, Torii offline issuer/operator WebAuthn/ISO20022 P-256
   verifier paths reject zero-coordinate SEC1 public-key material before backend
@@ -62,35 +212,99 @@ pre-release client or script payload-alias assumptions outside production.
   all-zero public-key and signature buffers before k256 parsing,
   ML-DSA aggregate wrapper coverage now pins valid inputs plus tampered,
   all-zero-signature, all-zero-public-key, and mismatched-length rejection,
+  SoraFS governance log and PoTR Dilithium3 signature verification now preflight
+  ML-DSA-65 public-key and detached-signature material before opaque signature
+  wrapping, shared `iroha_crypto::mldsa65_parse_signature` and Connect
+  identifier receipt parsing now preflight ML-DSA-65 detached signatures before
+  opaque signature storage, and Torii operator-auth ML-DSA header signatures now
+  use the same shared parser before request verification,
   ML-DSA public-key recovery from a typed secret rejects all-zero secret-key
-  material before unsafe unpacking,
+  material before unsafe unpacking, and SoraNet signed-ticket
+  sign/decode/direct-verify paths reject unsupported versions,
+  unrepresentable expiries, all-zero ML-DSA relay public-key material, and
+  all-zero ML-DSA signing secret-key material before backend work, while
+  SoraNet admission-token minting rejects all-zero ML-DSA signing secrets and
+  issuer fingerprints that do not match the public key reconstructed from the
+  signing secret before RNG or signing work, and SoraNet directory issuer
+  fingerprint helpers reject malformed Ed25519 issuer public keys plus
+  malformed or all-zero ML-DSA-65 issuer public keys before hashing, with
+  SoraFS orchestrator guard-directory negatives pinned to fail before
+  invalid-key fingerprint derivation,
+  streaming `KeyUpdate` admission rejects all-zero, small-order, and
+  noncanonical Ed25519 remote identity bytes plus small-order/noncanonical
+  signature `R` encodings before transport-key or suite state changes,
   BLS/GOST/secp256k1/SM2/hybrid/blinding raw imports now reject inert all-zero
-  material, hybrid ML-KEM public-key, secret-key, and ciphertext constructors
-  reject all-zero component bytes before backend validation, BLS normal/small
+  material, the Rust SDK SM2 wrapper now pins all-zero seed/private-scalar
+  rejection at its public constructors, hybrid ML-KEM public-key, secret-key,
+  and ciphertext constructors reject all-zero component bytes before backend
+  validation, BLS normal/small
   public-key parsers and aggregate verifier admission reject all-zero
   public-key bytes before backend parsing across both
   w3f and blstrs backends, VRF normal/small proof parsing rejects all-zero
   compressed proof bytes before `blstrs` decompression, IVM VRF verify syscalls
   reject all-zero, identity, and non-canonical G1/G2 public-key/proof encodings
-  before pairing, IVM Ed25519 helper,
-  VM, CUDA/Metal, and Halo2 verifier paths reject inert public-key material
+  before pairing, IVM Ed25519 helper single/batch coverage now pins
+  small-order and noncanonical signature `R` rejection, VM, CUDA/Metal, and
+  Halo2 verifier paths reject inert public-key material
   before Dalek parsing, and the Halo2 Ed25519 circuit verifier now rejects
   malformed signature `R` encodings before Dalek signature decoding,
-  CUDA single/stub admission also fails closed on malformed or weak Ed25519
-  public-key bytes,
-  the IVM SM2 syscall pins all-zero signature rejection through the typed SM2
-  parser, shared SM2 SEC1 public-key
-  parsing rejects uncompressed all-zero coordinate material before backend
-  parsing, central Ed25519 public-key parsing rejects all-zero material before
-  curve decompression, the shared Ed25519 single verifier rejects noncanonical
+  CUDA single/stub and public-helper admission also fails closed on malformed or
+  weak Ed25519 public-key bytes and small-order/noncanonical signature `R`
+  encodings, Sumeragi VRF commit/reveal admission now routes externally supplied
+  Ed25519 signatures through the same small-order/noncanonical `R` preflight,
+  BFV full-bootstrap release-audit signoff validation routes reviewer Ed25519
+  signatures through the same all-zero, short, and malformed-`R` admission
+  before backend verification, Taikai signing-manifest validation routes embedded publisher
+  Ed25519 signatures through the same malformed-`R` admission before
+  segment-manifest verification,
+  the IVM SM2 syscall and Rust SDK SM2 verify wrapper pin all-zero and
+  zero-scalar signature rejection through the typed SM2 parser, shared SM2 SEC1
+  public-key parsing rejects uncompressed all-zero coordinate material before
+  backend parsing, central Ed25519 public-key parsing rejects all-zero,
+  small-order,
+  and noncanonical material before curve decompression, JS-host and Python
+  crypto verification and public-key multihash helpers pin the same Ed25519
+  public-key admission, the shared Ed25519 single verifier rejects noncanonical
   or small-order signature `R` encodings before dalek `verify_strict`, generic
   `Signature::verify` and typed `SignatureOf<T>::verify` coverage now pin the
   same malformed-`R` rejection for opaque Ed25519 signatures constructed from
-  bytes, RAM-LFE signed receipt and output-opening coverage now pins
-  small-order and noncanonical Ed25519 `R` rejection before signature
-  verification, identifier resolution receipt and SoraNet VPN usage-voucher
-  coverage now pin the same malformed-`R` pair for externally supplied Ed25519
-  signatures, SoraNet
+  bytes, checked raw and typed signature hex, JSON, Norito-framed, bare binary,
+  query/transaction wrapper decode, and signed-query/signed-transaction
+  container decode admission now explicitly reject empty or all-zero external
+  payloads, IVM syscall/opcode/batch TLV coverage now pins
+  the same small-order and noncanonical signature `R` rejection before backend
+  verification, RAM-LFE
+  signed receipt and output-opening coverage now pins
+  all-zero, short, small-order-`R`, and noncanonical-`R` Ed25519 rejection before signature
+  verification, identifier resolution receipt, SoraNet ticket body+commitment
+  signatures, SoraNet relay bandwidth proof signatures, and SoraNet VPN
+  usage-voucher coverage now pin the same malformed-`R` pair for externally
+  supplied Ed25519 signatures, core snapshot sidecars, fraud-assessment
+  attestations, RBC
+  ready/deliver messages, vote verification, direct vote-signature parsing,
+  Core consensus-preimage and peer-trust gossip fixtures, Sumeragi vNext
+  rechain/view-change and local commit-vote fixtures, merge-committee
+  signature helper, oracle observation, SoraDNS,
+  offline-note certificate, Soracloud provenance, and contract-manifest
+  provenance tests now cover both malformed-`R` encodings from valid
+  signatures, Torii DA receipt-log,
+  transaction-batch deterministic precheck, signed-query routing, Soracloud
+  provenance, and repair-worker authentication
+  tests pin the same pre-backend admission boundary, Connect bridge native and
+  Java detached verification plus `_with_alg` envelope/control encoders and
+  algorithm-explicit identifier receipt signed attestations now pin both
+  malformed-`R` encodings before accepting Ed25519 signature bytes, the
+  Connect bridge native and Java detached verification helpers also reject
+  all-zero, small-order, and noncanonical Ed25519 public-key material at parse
+  time, and Connect identifier receipts keep nested RAM-LFE output openings
+  outer-valid while
+  rejecting malformed opening Ed25519 `R` at signer-context verification, and
+  Torii offline v1/v2 JSON/base64 signature ingress and RAM-LFE
+  identifier-resolution output-opening admission now pin the same malformed-`R`
+  rejection for externally supplied Ed25519 signatures, and SoraFS orchestrator
+  Taikai cache admission envelopes and gossip messages now pin small-order and
+  noncanonical `R` rejection before custom protocol signature verification,
+  SoraNet
   SRCv2 certificate verification now routes Ed25519 signatures through that
 		  strict `R` parser before backend verification, SoraFS manifest Ed25519
 			  verifier helpers reject noncanonical or small-order signature `R` material
@@ -101,7 +315,8 @@ pre-release client or script payload-alias assumptions outside production.
 					  signatures through the same malformed-`R` preflight, gateway GAR compact-JWS
 					  signatures use the same preflight, alias-proof council signatures reject
 					  inert all-zero payloads and malformed `R` encodings before bundle
-					  verification, Connect wallet Ed25519 signature helpers route raw bytes through
+					  verification, alias-proof council fixture signatures use checked
+					  opaque admission before digest verification, Connect wallet Ed25519 signature helpers route raw bytes through
 					  the central malformed-`R` parser before storing opaque signatures, and
 					  Connect FFI `_with_alg` encoders and native/Java detached verification helpers
 					  reuse that Ed25519 admission path before frame/envelope encoding or signature
@@ -109,16 +324,20 @@ pre-release client or script payload-alias assumptions outside production.
 					  SoraFS stream-token verification now rejects small-order verifier keys before
 					  Dalek strict verification,
 					  SoraFS CLI manifest signature verification rejects
-					  noncanonical/small-order signature `R` and public-key encodings before
+					  noncanonical/small-order signature `R` and public-key encodings through the
+					  central Ed25519 admission helper before
 			  Dalek verification, CAR manifest-stub and chunker vector-exporter
-			  signature-file verification pin the same malformed `R` rejection for
+			  signature-file verification pin the same malformed `R` rejection and chunker
+			  manifest signature fixtures use checked opaque admission for
 			  council signatures, SoraFS proof-token minting parses its nonzero
   scratch signature through the strict `R` helper before attaching the real
-  Ed25519 token signature, proof-token binary decode routes frame
-  signatures through the strict `R` parser, direct proof-token signature
-  verification re-parses stored signatures through the strict `R` parser
-  before Dalek strict verification, and proof-token raw-byte verification
-  routes public keys through central Ed25519 admission, Torii
+  Ed25519 token signature, structural proof-token decode and `try_encode`
+  fixtures reuse that checked nonzero placeholder instead of inert all-zero
+  filler, proof-token binary decode routes frame signatures through the strict
+  `R` parser, direct proof-token signature verification re-parses stored
+  signatures through the strict `R` parser before Dalek strict verification,
+  and proof-token raw-byte verification routes public keys through central
+  Ed25519 admission, Torii
   proof-token verify requests route supplied `verifying_key_hex` through the
   same central Ed25519 admission path, SoraFS CAR proof-token verifier raw-byte
   construction routes supplied Ed25519 keys through that admission path,
@@ -127,10 +346,11 @@ pre-release client or script payload-alias assumptions outside production.
   central admission before relay certificate verification, xtask SoraNet
   gateway PQ readiness parses SRCv2 identity keys through central Ed25519
   admission, Torii
-  SoraFS manifest-envelope validation rejects noncanonical or small-order
-  envelope signature `R` encodings through the same verifier path,
-	  SCCP EVM/BSC recoverable-signature codecs require canonical recovery ids plus
-	  nonzero in-range `r` and low nonzero `s` before secp256k1 recovery, SCCP
+  SoraFS manifest-envelope validation rejects all-zero, noncanonical, or
+  small-order envelope signer keys plus noncanonical or small-order envelope
+  signature `R` encodings through the same verifier path,
+	  SCCP EVM/BSC recoverable-signature codecs require Ethereum-style `27`/`28`
+	  recovery ids plus nonzero in-range `r` and low nonzero `s` before secp256k1 recovery, SCCP
 	  Solana vote-proof and TON validator-signature structural preflight rejects
 	  all-zero 64-byte signature payloads before source-adapter admission, and
 	  TON validator-signature transcripts reject the same inert payloads before
@@ -142,7 +362,9 @@ pre-release client or script payload-alias assumptions outside production.
   typed signature admission, Swift, Kotlin/JVM, Java Android, JavaScript, and
   Python Torii request builders mirror exact standard-base64 `signature_b64`
   encoding for contract, multisig, bridge-proof submit, and bridge-message
-  submit requests, JavaScript standalone multisig instruction-builder DTO
+  submit requests, Iroha client operator-panel signature fixtures parse decoded
+  header material through checked opaque-signature admission before verification,
+  JavaScript standalone multisig instruction-builder DTO
   helpers, native Norito multisig DTO encoders, and JavaScript/Python SCCP
   bridge-proof submit helpers reject the same whitespace, missing-padding, and
   pad-bit aliases before preserving detached signatures, Torii app-auth
@@ -151,10 +373,13 @@ pre-release client or script payload-alias assumptions outside production.
   material through that same parser before backend verification, Torii operator
   signature headers apply the same Ed25519 `R` preflight after parsing the
   operator public-key algorithm, Torii operator WebAuthn Ed25519 assertions
-  use the same malformed-`R` admission before assertion verification, Offline
+  use the same malformed-`R` admission and now pin small-order/noncanonical
+  public-key rejection before assertion verification, Offline
   Notes V1/V2 legacy helper and issuer JSON/base64 signature paths route raw
   Ed25519 buffers through the central malformed-`R` parser before verification
-  or signature wrapping, and Offline Notes V1 body-proof, attestation receipt,
+  or signature wrapping; the legacy helper also pins small-order/noncanonical
+  Ed25519 public-key rejection before verification, and Offline Notes V1
+  body-proof, attestation receipt,
   and lineage issuer base64 fields now preserve raw JSON text through exact
   standard-base64 admission instead of trimming before verification, alias
   storage emits a checked nonzero placeholder
@@ -163,14 +388,25 @@ pre-release client or script payload-alias assumptions outside production.
   `QuerySignature`/`SignedQuery` admission instead of infallible decode
   expectations, DA receipt signing preimages use a checked nonzero operator
   signature placeholder before attaching the real receipt signature, Offline
-  Notes V1/V2 key-certificate builders, the shared data-model attestation
-  registration certificate constructor, and the V1/V2 Offline vector generators
-  use checked nonzero transient issuer signature placeholders before attaching
-  the real issuer signature, Torii Shared Connect examples and approve-control
-  fixtures use checked nonzero wallet-signature placeholders, SoraDNS resolver
-  positive RAD fixtures use checked nonzero operator/governance-signature
-  material, xtask DA reconciliation and SoraNet relay positive fixtures use
-  checked nonzero signature material, xtask OpenAPI manifest, rANS table,
+  Notes V1/V2 key-certificate builders, Offline ISI key-certificate registry
+  fixtures, data-model identifier receipt negative/tamper fixtures, the shared
+  data-model attestation registration certificate constructor, and the V1/V2
+  Offline vector generators use checked nonzero transient issuer signature
+  placeholders before attaching the real issuer signature, Torii Shared Connect
+  examples and approve-control fixtures use checked nonzero wallet-signature
+  placeholders, SoraDNS resolver positive RAD fixtures use checked nonzero
+  operator/governance-signature
+  material, Iroha DA ingest receipt fixtures, data-model DA commitment and
+  block DA-bundle fixtures, core DA commitment/receipt/proof/store fixtures,
+  Torii DA commitment/request fixtures, `iroha` client DA commitment request
+  fixtures, CLI DA smoke receipt fixtures, Torii Connect approval fixtures,
+  SoraDNS directory-record fixtures, JDG SDN commitment fixtures, xtask DA
+  reconciliation, SoraNet relay positive and bandwidth-proof fixtures,
+  core block validation DA sidecar fixtures, core state DA index and
+  lane-lifecycle fixtures, Sumeragi block-created and main-loop DA
+  spool/proposal/payload fixtures, telemetry DA fixtures, and SoraNet ticket
+  envelope roundtrip fixtures use checked nonzero
+  signature material, xtask OpenAPI manifest, rANS table,
   SoraFS, SoraNet rollout/testnet, FastPQ, Ministry tool verifier paths, the
   Norito fixture exporter, and the SoraFS DA reconstruction fixture
   regenerator route decoded or generated signature material through checked
@@ -178,16 +414,20 @@ pre-release client or script payload-alias assumptions outside production.
   examples now verify generated signatures through checked admission, Python
   native crypto verify, Connect wallet signatures, and wallet-provided
   transaction finalization now reject malformed Ed25519 `R` material before
-  backend verification or typed storage, xtask OpenAPI manifest, rANS table,
+  backend verification or typed storage, the follow-up core DA/autoscale sweep
+  closes the scale-in cleanup, unknown-lane hydration replay, and duplicate DA
+  receipt proposal blockers under focused reruns, xtask OpenAPI manifest,
+  rANS table,
   SoraFS manifest/gateway fixture, and I3 proof-handler verification route
   Ed25519 signatures through the same malformed-`R` admission, JS host native
   crypto verification and P2P handshake hello verification route remote
   Ed25519 signatures through the same
   malformed-`R` admission before backend verification, peer-trust gossip
   records now pin malformed Ed25519 `R` rejection before trust-state updates,
-  DeFi oracle attestations route
-  Ed25519 signatures through the same malformed-`R` admission before generic
-  verification, JDG simple-threshold attestations route Ed25519 signer
+  DeFi oracle attestations route Ed25519 signatures through the same
+  malformed-`R` admission and reject all-zero, small-order, or noncanonical
+  signer public-key encodings before generic verification, JDG
+  simple-threshold attestations route Ed25519 signer
   signatures through the same malformed-`R` admission before threshold
   verification, Oracle observation typed signatures route provider-resolved
   Ed25519 material through the same malformed-`R` admission before
@@ -212,8 +452,9 @@ pre-release client or script payload-alias assumptions outside production.
   uploaded-model, decryption/query, rollout, agent, HF, and model-host request
   paths,
   Offline note issuer key-certificate signatures route signer-resolved
-  Ed25519 material through the same malformed-`R` admission before certificate
-  authorization,
+  Ed25519 material through the same malformed-`R` admission and certificate
+  public keys reject all-zero, small-order, or noncanonical Ed25519 encodings
+  before certificate authorization,
   SoraDNS resolver-directory builder signatures route signer-resolved Ed25519
   material through the same malformed-`R` admission before draft or publish
   verification,
@@ -241,14 +482,17 @@ pre-release client or script payload-alias assumptions outside production.
   SoraFS node gateway PoR proof signatures route Ed25519 material through the
   same malformed-`R` admission before proof-digest verification,
   Core SoraFS council-envelope approval signatures route Ed25519 material
-  through malformed-`R` admission before manifest approval verification,
+  through malformed-`R` admission and council signer keys reject all-zero,
+  small-order, and noncanonical Ed25519 public-key encodings before manifest
+  approval verification,
   Connect wallet-signature, Nexus wallet finalization, and wallet-provided
 	  transaction finalization paths now check external signature buffers before
 		  storage or backend verification, data-model signed transaction, sealed
 		  commitment, and multisig member signatures route signer-resolved Ed25519
 			  material through malformed-`R` admission before typed payload verification,
 			  transaction submission receipts route signer-resolved Ed25519 material
-			  through malformed-`R` admission before receipt signing-bytes verification,
+			  through all-zero, short, and malformed-`R` admission before receipt
+			  signing-bytes verification,
 					  SignedQuery Norito and JSON wrapper conversion paths route
 					  signer-resolved Ed25519 material through malformed-`R` admission before
 					  query payload verification,
@@ -275,12 +519,14 @@ pre-release client or script payload-alias assumptions outside production.
   SoraNet relay PoW expiry-overflow errors map to the clock-error telemetry
   bucket instead of leaving the failure-reason classifier non-exhaustive,
   SoraNet relay guard-directory loading, directory tooling, and handshake
-  certificate config parsing now reject all-zero or small-order issuer Ed25519 public-key material
-  before verifier-key construction, SoraNet VPN helper-ticket parsing plus
-  `sora-vpn-helper` metadata decoding now pin all-zero and small-order Ed25519
-  metering public-key rejection before ticket acceptance, data-model
-  account-address canonical single-key and multisig decode now pin all-zero or
-  small-order Ed25519 controller-key rejection, and
+  certificate config parsing now reject all-zero or small-order issuer Ed25519
+  public-key material before verifier-key construction, SoraNet VPN
+  helper-ticket parsing plus `sora-vpn-helper` metadata decoding now pin
+  all-zero, small-order, and noncanonical Ed25519 metering public-key rejection
+  before ticket acceptance, Torii VPN quote/session metering-key parsing now
+  pins all-zero, small-order, and noncanonical Ed25519 public-key rejection,
+  data-model account-address canonical single-key and multisig decode now pin
+  all-zero, small-order, and noncanonical Ed25519 controller-key rejection, and
   Offline Notes V2 issuer plus core smart-contract P-256 assertion-key
   validators reject all-zero coordinate material before backend parsing.
   The follow-up raw constructor inventory now also covers
@@ -288,10 +534,20 @@ pre-release client or script payload-alias assumptions outside production.
   and direct Dalek `Signature::from_bytes` sites; remaining hits are
   test/fixture mutation helpers, non-Ed25519 paths, placeholders, or locally
   preflighted decode-to-verify paths.
-  Remaining work is to inspect
-  custom protocol codecs that intentionally bypass `Signature`/`SignatureOf<T>`
-  and either prove local prevalidation or route them through checked
-  constructors before release.
+  The 2026-07-03 SoraNet continuation rechecked the current
+  `Signature::try_from_bytes` inventory after the ticket and relay
+  bandwidth-proof hardening and found no additional production Ed25519 verifier
+  gap in that raw-parser set. The direct custom-codec follow-up also inspected
+  the IVM verifier family, SoraNet certificate parsing, SoraFS proof-token and
+  manifest helpers, and CAR/stub manifest-signature helpers; those paths already
+  use `ed25519_parse_signature` or local checked helpers where externally
+  supplied Ed25519 bytes reach backend verification. The continuation
+  validation also rechecked SoraFS governance/PoTR, RAM-LFE, Torii app-auth,
+  signed-query, SoraFS proof-token, and CLI manifest-verification surfaces
+  without finding a new production verifier gap. Remaining work is to keep that
+  classification current as new custom protocol codecs are added and route any
+  future external Ed25519 verifier bytes through checked constructors before
+  release.
 
 - Keep mobile Kagemusha offline payload and issuer-refill entrypoints
   fail-closed for first release: Swift external certificate JSON and
@@ -345,65 +601,66 @@ pre-release client or script payload-alias assumptions outside production.
   Swift, Kotlin/JVM, and Java Android Nearby pairing challenges must preserve
   and validate exact first-release asset names instead of trimming padded
   challenge strings;
-  Swift direct transfer text payload decoders and payload-kind classification
-  must require exact prefixes plus exact non-empty unpadded base64url bodies
-  with canonical pad bits instead of trimming whole envelopes, accepting
-  noncanonical aliases, or classifying by prefix only;
+  Swift direct transfer text payload normalization, native compact-payment
+  decoding/classification, and payload-kind classification now require exact
+  prefixes plus exact non-empty unpadded base64url bodies with canonical pad
+  bits instead of trimming whole envelopes, accepting noncanonical aliases, or
+  classifying by prefix only;
   Swift, Kotlin/JVM, and Java Android QR stream text decoders must require
   exact `iroha:qr:` text, canonical standard-base64 frame payloads, and reject
   whitespace-wrapped frame strings before prefix or base64 payload validation;
-  Swift, Kotlin/JVM, and Java Android Offline Note explorer reconciliation must
-  accept only exact `Committed`/`Rejected` statuses and exact instruction kind
+  Swift, Kotlin/JVM, and Java Android Offline Note explorer reconciliation now
+  accepts only exact `Committed`/`Rejected` statuses and exact instruction kind
   names instead of case-insensitive matching;
-  Swift, Kotlin/JVM, and Java Android Torii Offline Note outcome providers must
+  Swift, Kotlin/JVM, and Java Android Torii Offline Note outcome providers now
   decode explorer `encoded` instruction fields only from exact non-empty
   lowercase even-length hex text, rejecting whitespace, `0x` prefixes,
   uppercase, odd-length, or non-hex payloads instead of normalizing them;
   Swift native and retired JSON payment-token output-commitment lookup helpers
-  plus Kotlin/JVM payment-token output-commitment lookup helpers must reject
+  plus Kotlin/JVM payment-token output-commitment lookup helpers now reject
   whitespace, `0x` prefixes, uppercase hex, and
   non-32-byte commitment text instead of normalizing it before matching claims;
-  mobile QR stream tests must describe the rejected `iroha:qr-old:` prefix as a
+  mobile QR stream tests now describe the rejected `iroha:qr-old:` prefix as a
   retired versioned prefix, and mobile route/scheme comments and diagnostics
-  must use retired terminology;
-  Swift and Kotlin/JVM retired recursive proof JSON must carry exact
+  use retired terminology;
+  Swift and Kotlin/JVM retired recursive proof JSON now carries exact
   `verifier_key_backend`, string-only `verifier_key_id`, exact
   `proof_backend`, exact lowercase 32-byte `public_inputs_hash_hex` values,
   and canonical non-empty standard base64 `proof_bytes_base64`, without
   object-shaped or `backend:name` verifier-key aliases; Swift payload text
-	  amounts, including nested payment-token input claims decoded from JSON, must
+	  amounts, including nested payment-token input claims decoded from JSON, now
 	  reject malformed amount strings instead of preserving them, and input-claim
-	  `claim_hash` values must match the canonical issued-claim hash; direct
-	  Swift, Kotlin/JVM, and Java Android Offline Note receive requests must reject
+	  `claim_hash` values match the canonical issued-claim hash; direct
+	  Swift, Kotlin/JVM, and Java Android Offline Note receive requests now reject
 	  non-canonical positive amount spellings and non-canonical asset ids while
 	  wallet-local load/receive paths canonicalize user input before persistence;
 	  Swift and
-	  Kotlin/JVM compact certificates must reject retired assertion-key aliases
+	  Kotlin/JVM compact certificates now reject retired assertion-key aliases
 	  such as `app_attest_public_key_base64` and require canonical
 	  `assertion_public_key`; Kotlin/JVM wallet device-binding JSON plus Swift,
-	  Kotlin/JVM, and Java Android raw Torii issuer-device-binding inputs must
+	  Kotlin/JVM, and Java Android raw Torii issuer-device-binding inputs now
 	  reject retired `device_public_key` and `app_attest_public_key_base64`
 	  assertion-key aliases and reject whitespace-normalized `device_id`,
 	  `offline_public_key`, and `attestation_key_id` fields before preserving
 	  wallet state or building refill request bodies; Kotlin/JVM wallet
 	  attestation receipt and device-proof JSON
-	  must reject passive platform/profile, usage-limit, lowercase 32-byte hash,
+	  now reject passive platform/profile, usage-limit, lowercase 32-byte hash,
 	  canonical base64, signature-length, and counter drift before preserving state;
 	  Kotlin/JVM signed wallet authorization, server-anchor, revocation, asset-limit,
-	  and transfer-receipt payloads must reject malformed amount strings,
+	  and transfer-receipt payloads now reject malformed amount strings,
 	  non-monotonic validity windows, non-lowercase 32-byte state hashes,
 	  non-canonical 64-byte signatures, and passive transfer direction/version drift;
-	  Kotlin/JVM wallet state collections must reject malformed local-state
+	  Kotlin/JVM wallet state collections now reject malformed local-state
 	  hashes, source nullifiers, asset usage windows, note secret and native
 	  token base64, one-use key-pool counters, pending outbox/audit records, and
 	  exact identifier comparison drift instead of trimming, lowercasing, or
 	  dropping malformed entries;
-  key-refill requests must use only
-  `attestation_key_id` and must strip retired `X-Iroha-*` canonical-auth
+  key-refill requests now use only
+  `attestation_key_id` and strip retired `X-Iroha-*` canonical-auth
   headers before body signing, with Swift issuer tests using retired
   canonical-auth header wording; Swift Offline Cash issuer-route constants and
-  key-refill tests must pin retired route and retired attestation-alias wording;
-  device-attestation registration must expose `keyCertificatePayload()` instead
+  key-refill tests now pin retired route and retired attestation-alias wording;
+  device-attestation registration now exposes `keyCertificatePayload()` instead
   of synthesizing unsigned all-zero-signature certificates, and the SDK parity
   guard's
 	  `--negative-control-swift-offline-note-payload-certificate-fail-closed`
@@ -9297,7 +9554,7 @@ pre-release client or script payload-alias assumptions outside production.
   so that adversarial coverage cannot disappear while the broader
   source-material gate remains present. That regression now includes the BSC
   governed config-bound source-bridge network, owner, and config placeholders,
-  separate from BSC's material-only envelope profile. Rust source-adapter
+  while BSC's material-only envelope profile stays fail-closed. Rust source-adapter
   readiness now also
   tests material-only admission across every active remote launch lane, so
   deployed source material for ETH, BSC, Solana, TON, or TRON can be recognized
@@ -9310,10 +9567,11 @@ pre-release client or script payload-alias assumptions outside production.
   constructor and reject coherent source-bridge network/owner replay before
   deployment-bound admission can pass. The generic
   source-adapter deployment builder and matcher now require non-placeholder
-  material, so the BSC material-only envelope profile cannot mint or match a
-  governed deployment descriptor while it remains available for signed
-  source-proof admission. Release-readiness and strict-bundle source inventories
-  must pin those all-lane and BSC config-bound readiness markers before
+  material, and production/local-admission paths require deployment evidence,
+  so the BSC material-only envelope profile cannot pass production source-proof
+  admission or mint/match a governed deployment descriptor. Release-readiness
+  and strict-bundle source inventories must pin those all-lane and BSC
+  fail-closed/config-bound readiness markers before
   production evidence can pass. ETH, BSC, Solana, TON, and TRON source
   bridge/state evidence must also keep wrong
   source/target lane-domain diagnostics tied to named `SCCP_DOMAIN_*` and
@@ -9493,10 +9751,10 @@ pre-release client or script payload-alias assumptions outside production.
   uppercase hex-byte aliases before account, transaction, or code hashes are
   normalized into rollout evidence, while preserving canonical base64/base64url
   and lowercase hex forms used by public TON APIs.
-  Core SCCP recorded-payload collection now keeps its ASCII-hex fallback on
-  exact lowercase canonical hex only, with an optional lowercase `0x` prefix;
-  padded, uppercase, `0X`, odd-length, or non-hex payload aliases are ignored
-  before commitment roots are derived.
+  Core SCCP recorded-payload collection and committed-block validation are now
+  canonical-only: bare lowercase hex, lowercase `0x`, padded, uppercase, `0X`,
+  odd-length, and non-hex record-payload aliases are rejected before they can
+  contribute SCCP messages or commitment roots.
   Common source-verifier evidence shape must also reject nonzero role-hash reuse
   before OpenVerify wrapper rebuilds or material/deployment matching can run,
   and the role-validation inventory pins the Rust guard plus explicit
@@ -12112,6 +12370,10 @@ pre-release client or script payload-alias assumptions outside production.
   `sdk_results` maps, or SDK result rows must fail before row values are
   trusted, so row-level shape drift is rejected before release evidence can
   pass.
+  Native EVM cross-SDK parity fixtures use only the production
+  `sccp-ethereum-mainnet-native-evm-cross-sdk-parity-v1` schema; JavaScript
+  package exports and TypeScript declarations must not reintroduce legacy
+  `*_PARITY_FIXTURE_SCHEMA_V1` schema constants or union acceptance.
   Fixture root objects and SDK result rows also reject malformed unknown field
   names with structured blockers, so control characters, whitespace,
   Markdown-unsafe characters, and non-ASCII/confusable keys are never echoed in
@@ -12140,6 +12402,13 @@ pre-release client or script payload-alias assumptions outside production.
   gate cannot degrade to sampled marker coverage. Strict release-bundle verifier
   inventory now also pins the native canonical-SDK and no-WASM sparse guard
   tests directly.
+  The JavaScript SCCP package public surface must stay production-only for
+  source-chain proof helpers: `buildBscSourceChainProofEnvelope` remains the
+  exported BSC constructor and must require explicit source validator private
+  keys plus real `blockReceipts`, while placeholder/testnet source-chain proof
+  builders, deterministic placeholder validator-secret derivation, synthetic
+  receipt-root fallback, and `Placeholder` declaration names stay out of shipped
+  runtime code, root exports, and subpath exports.
   BSC Groth16 material `productionBlockers` must stay public-safe across
   generated material manifests, proof-self-test, preflight report validation,
   attestation handoff/request summaries, and finalization/materialization
@@ -12965,13 +13234,13 @@ pre-release client or script payload-alias assumptions outside production.
   unpinned SCCP message records as non-SORA source-chain envelopes.
   Live Ethereum evidence scripts and all-lanes imports now keep finalized
 	  block-tag metadata under the same strict release-bundle verification, and
-	  the diagnostic unready transparent-proof bypass stays config-owned with the
-	  production Taira config pinned false and case-variant, split-token, or
-	  source-escaped forms of the old environment override rejected by the release
-	  verifier. Production-ready BSC/TRON route-config
-  renderers must also reject explicit `--allow-unready true` and malformed
-  truthy/coerced option values, so governed runtime overlays cannot re-enable
-  diagnostic transparent-proof admission while claiming production readiness.
+	  the diagnostic unready transparent-proof bypass surface is removed from
+	  runtime config and case-variant, split-token, or source-escaped forms of
+	  the old environment override are rejected by the release verifier.
+  Production-ready BSC/TRON route-config renderers must reject any
+  `--allow-unready` option and non-production route manifests, so governed
+  runtime overlays cannot re-enable diagnostic transparent-proof admission
+  while claiming production readiness.
   Command-level BSC/TRON route-config paths must leave pre-existing TOML
   artifacts untouched when malformed `--allow-unready` values are supplied.
   BSC route-config full-config evidence generation must reject
@@ -12992,9 +13261,10 @@ pre-release client or script payload-alias assumptions outside production.
   raw Torii pipeline HTTP rejections, including bounded public response
   previews, before any JSON fallback that depends on a local native decoder.
   Release-readiness and strict release-bundle source inventory must pin the
-  direct, merged, and malformed-option route-config rejection tests, plus the
-  default `sccp_allow_unready_transparent_proofs = false` overlay assertion,
-  before this gate can pass. Readiness and strict-bundle sparse tests must
+  direct, merged, removed-option, stale-key stripping, and non-production
+  route-config rejection tests, plus the absence of the deleted
+  `sccp_allow_unready_transparent_proofs` config/schema surface, before this
+  gate can pass. Readiness and strict-bundle sparse tests must
 	  remove every uniquely detectable unready transparent-proof config marker from
 	  each inventory row, and must separately assert the forbidden environment
 	  override scan, including lowercase, mixed-case, source-literal-split, or
@@ -13518,13 +13788,12 @@ pre-release client or script payload-alias assumptions outside production.
   failure, `MessageProofAccepted` payload fields, and replayed `messageId`
   rejection before verifier execution. Ethereum mainnet cannot be advertised
   as ready unless those smoke markers remain present.
-	  The diagnostic `sccp_allow_unready_transparent_proofs` bypass is now
-	  config-only, with the old runtime environment override removed from
-	  `iroha_config` and Taira launch units, and release inventory rejects
-	  case-variant, split-token, or source-escaped attempts to reintroduce that
-	  override. Production-ready BSC/TRON route-config
-  renderers reject explicit `--allow-unready true` and malformed
-  truthy/coerced option values before writing runtime overlays.
+	  The diagnostic `sccp_allow_unready_transparent_proofs` bypass surface is
+	  removed from `iroha_config`, Taira launch units, and route-config output,
+	  and release inventory rejects case-variant, split-token, or source-escaped
+	  attempts to reintroduce the old environment override. Production-ready
+  BSC/TRON route-config renderers reject any `--allow-unready` option and
+  non-production manifests before writing runtime overlays.
   The offline EVM destination evidence helper now applies the same mainnet
   network-id guard when deriving destination binding keys, so TOML/JSON evidence
   cannot carry a hash checked against one network id and a key rendered from
@@ -15229,16 +15498,17 @@ pre-release client or script payload-alias assumptions outside production.
   signature headers, Torii operator WebAuthn ES256/Ed25519 assertion
   signatures and Ed25519 public keys, Torii offline issuer Ed25519 helper
   public keys plus Offline V1/V2 issuer signature-base64 decoding, SoraFS
-  manifest-envelope validation, app API detached transaction signature submit
-  flows, data-model `QuerySignature` JSON payloads, Torii ISO20022 XMLDSIG
+  manifest-envelope validation, app API detached transaction signature and
+  Ed25519 public-key submit flows, data-model `QuerySignature` JSON payloads,
+  Torii ISO20022 XMLDSIG
   P-256 `SignatureValue` payloads, Torii ISO20022 OCSP/X.509/CRL P-256 DER
   signatures, Nexus app wallet transaction signatures, core snapshot signature
   sidecars, SCCP Nexus finality commit-QC BLS aggregates, core fraud-assessment
   attestation envelopes, data-model JDG SDN commitment seals,
   `connect_norito_bridge` identifier receipt signed-attestation parser plus
   generic Connect approve/sign-result envelope signatures, Connect C/Java detached
-  verifier signatures, JS host `cryptoVerify` signatures, SM2 SEC1 verifier
-  public keys, secp256k1 recoverable
+  verifier signatures and Ed25519 public keys, JS host `cryptoVerify` signatures,
+  SM2 SEC1 verifier public keys, secp256k1 recoverable
   prehash signatures, IVM Ed25519 raw public-key material for CPU, CUDA, Metal,
   Halo2, and VM opcode verification paths, and `sorafs_manifest`
   Ed25519 verifier public keys plus GAR, PoTR, alias-proof, provider-admission,
@@ -15494,8 +15764,9 @@ pre-release client or script payload-alias assumptions outside production.
   SoraNet signed-ticket signing now preflights ML-DSA-44 secret-key lengths,
   and signed-ticket decode/direct verification now reject ML-DSA-44 verifier
   public-key and signature vectors whose lengths disagree with the suite
-  metadata, and all-zero signed-ticket signature material, before signing
-  payloads, accepting tokens, or entering backend verification, while
+  metadata, all-zero verifier public-key material, and all-zero signed-ticket
+  signature material, before signing payloads, accepting tokens, or entering
+  backend verification, while
   signed-ticket relay/transcript binding checks now run
   before signature work in the full verifier, and signed-ticket policy metadata
   now rejects unsupported versions, difficulty mismatches, expiry, and TTL
@@ -17441,8 +17712,507 @@ digest-bound pending-XSD source probe summaries for reviewed
   `262` ignored) after the retained-summary evidence hardening and
   default-feature STARK-only fixture gating.
 - Keep extending the Sumeragi formal corridor with independent TLC
-  cross-checks; the current local TLC slice covers the top-level commit-path
-  fast model under the fairness-backed `Spec`, including finality and
+  cross-checks. After the 2026-07-03 parse-order repair, the monolithic central
+  `deep` Apalache bundle still exhausts heap up to `64 GiB`, and the top-level
+  TLC fast run did not reach progress output in the local 19-minute smoke; split
+  probes for selected root obligations, including the end-to-end safety root,
+  also exhausted heap at length 1. The top-level model now has direct-commit and
+  delivered-first proof-corridor action relations for narrower tuning, but
+  aggregate state-root, all-state-invariant, consensus/finality state-group,
+  and single-property `EventuallyCommit` probes still exhausted a `16 GiB`
+  Apalache heap, while top-level TLC corridor probes stayed silent in local
+  smoke windows. The finite `direct-delivered-first-corridor-fast` gate now
+  gives bounded Apalache/TLC evidence for the delivered-first direct commit
+  path (`NoError` to length `1`; TLC `29` generated, `15` distinct, depth `2`),
+  and its `12` `direct-delivered-first-corridor-bug-*` artifact mutations are
+  now expected-failure checked by Apalache and routable through TLC. The
+  TLC-only `direct-delivered-first-corridor-progress` mode now proves fair
+  eventual installation of the delivered-first finality stack over the ordered
+  `15`-state path, with `direct-delivered-first-corridor-progress-bug-*`
+  modes confirming that missing any delivered-first finality-stack component is
+  rejected by the progress-mode safety/progress surface. Its clean and
+  mutation progress CFGs now also
+  check `DirectDeliveredFirstProgressSafetyEnvelope`, tying temporal eventual
+  finality to `TypeInvariant` and `DirectDeliveredFirstCorridorExactness` while
+  the formal coverage guard pins the aggregate and CFG contract. The
+  complementary `direct-vote-first-corridor-fast` gate now gives the same
+  bounded positive Apalache/TLC evidence for the buffered vote/stake quorum
+  before delivery path, and its `14` `direct-vote-first-corridor-bug-*`
+  artifact mutations are expected-failure checked by Apalache and routable
+  through TLC. The TLC-only `direct-vote-first-corridor-progress` mode now
+  proves fair eventual installation of the vote-first finality stack over the
+  ordered `15`-state path, with `direct-vote-first-corridor-progress-bug-*`
+  modes confirming the same safety/progress finality-stack boundary. Its clean
+  and mutation progress CFGs now also check
+  `DirectVoteFirstProgressSafetyEnvelope`, tying temporal eventual finality to
+  `TypeInvariant` and `DirectVoteFirstCorridorExactness`; the formal coverage
+  guard pins the aggregate and CFG contract. These ordered path progress modes
+  are kept out of Apalache PR CI because Apalache ignores weak-fairness
+  clauses.
+  The finite `direct-commit-interleaving-fast` transition-system
+  gate now checks both orderings plus mixed RBC/vote interleavings in one graph
+  (`NoError` to length `14`; TLC `87` generated, `50` distinct, depth `14`),
+  and its `15` `direct-commit-interleaving-bug-*` mutations are
+  expected-failure checked by Apalache and routable through TLC. The formal
+  coverage guard now pins the direct delivered-first, vote-first, and
+  interleaving exactness aggregate bodies, plus their correctness and
+  progress-safety envelopes, so clean progress checks cannot keep naming an
+  aggregate whose safety content has drifted. It also requires every source
+  safety mutation CFG to keep the same `TypeInvariant`, model exactness, and
+  correctness-envelope surface as its clean fast CFG. The TLC-only
+  `direct-commit-interleaving-progress` mode now proves fair eventual
+  installation of the committed phase, delivered RBC state, READY quorum,
+  complete chunks, header/digest seed, quorum vote/stake counters, and
+  commit-certificate evidence over that no-fault `50`-state interleaving graph,
+  with `DirectCommitProgressSafetyEnvelope` now checked in the clean and
+  mutation progress CFGs so temporal eventual finality remains tied to
+  `TypeInvariant` and `DirectCommitInterleavingExactness`. The formal coverage
+  guard pins that source progress-safety aggregate and its CFG check surface.
+  `direct-commit-interleaving-progress-bug-finality-not-latched`,
+  `direct-commit-interleaving-progress-bug-phase-not-committed`,
+  `direct-commit-interleaving-progress-bug-commit-evidence-votes-missing`, and
+  `direct-commit-interleaving-progress-bug-commit-evidence-stake-missing`
+  confirming that missing any finality-stack commit component is a temporal
+  progress failure before the Byzantine extension. The
+  `direct-commit-interleaving-progress-bug-propose-skips-rbc`,
+  `direct-commit-interleaving-progress-bug-header-not-seeded`,
+  `direct-commit-interleaving-progress-bug-digest-not-seeded`,
+  `direct-commit-interleaving-progress-bug-drop-second-chunk`,
+  `direct-commit-interleaving-progress-bug-ready-quorum-under-counted`, and
+  `direct-commit-interleaving-progress-bug-skip-deliver-state` modes extend the
+  same temporal evidence to the direct RBC path; this is kept out of Apalache
+  PR CI because Apalache ignores weak-fairness clauses. The
+  `byzantine-commit-interleaving-fast` gate now adds bounded mixed
+  honest/Byzantine evidence for the same corridor with `F = 1`,
+  Byzantine-vote budget, weighted stake, and `CommitQuorum - F` honest support
+  (`NoError` to length `14`; TLC `160` generated, `78` distinct, depth `15`),
+  and its `17` `byzantine-commit-interleaving-bug-*` mutations are
+  expected-failure checked by Apalache and routable through TLC. The TLC-only
+  `byzantine-commit-interleaving-progress` mode now proves fair eventual
+  installation of the committed phase, delivered RBC state, quorum vote/stake
+  counters, `CommitQuorum - F` honest support, and commit-certificate evidence
+  over that source `78`-state interleaving graph, with
+  `ByzantineCommitProgressSafetyEnvelope` now checked in the clean and
+  mutation progress CFGs so temporal eventual finality remains tied to
+  `TypeInvariant` and `ByzantineCommitInterleavingExactness`. The formal
+  coverage guard pins that source progress-safety aggregate and its CFG
+  check surface, independently pins every source progress safety envelope to
+  `TypeInvariant` plus its model-specific exactness predicate, and requires
+  `ByzantineCommitInterleavingExactness` to extend the direct interleaving core
+  with `ProposedRoundInitializesRbc`. This keeps the temporal proofs from
+  drifting away from their safety baselines or dropping no-fault
+  RBC/vote/certificate obligations under the Byzantine source layer. The
+  `byzantine-commit-interleaving-progress-bug-finality-not-latched`,
+  `byzantine-commit-interleaving-progress-bug-phase-not-committed`,
+  `byzantine-commit-interleaving-progress-bug-commit-evidence-votes-missing`,
+  `byzantine-commit-interleaving-progress-bug-commit-evidence-stake-missing`,
+  and `byzantine-commit-interleaving-progress-bug-commit-without-honest-support`
+  confirming that missing any Byzantine finality-stack commit component is a
+  temporal progress failure before projection. The
+  `byzantine-commit-interleaving-progress-bug-propose-skips-rbc`,
+  `byzantine-commit-interleaving-progress-bug-header-not-seeded`,
+  `byzantine-commit-interleaving-progress-bug-digest-not-seeded`,
+  `byzantine-commit-interleaving-progress-bug-drop-second-chunk`,
+  `byzantine-commit-interleaving-progress-bug-ready-quorum-under-counted`, and
+  `byzantine-commit-interleaving-progress-bug-skip-deliver-state` modes extend
+  the same temporal evidence to the source RBC path before projection; this is
+  kept out of Apalache PR CI because Apalache ignores weak-fairness clauses. The
+  `byzantine-delivered-first-top-fast` mode now typechecks a top-level
+  delivered-first Byzantine direct-commit corridor in `Sumeragi.tla` and is
+  explicitly tracked as Apalache-only because local TLC probes over that
+  central corridor did not reach initial-state completion in bounded smoke
+  windows. The complementary `byzantine-vote-first-top-fast` mode now
+  typechecks the top-level vote-first Byzantine direct-commit corridor where
+  buffered prepare/commit votes wait for RBC delivery to install finality. The
+  `byzantine-direct-top-fast` mode now typechecks the combined top-level
+  Byzantine direct-commit corridor for mixed RBC/commit-vote interleavings and
+  its ordered-corridor coverage bridge back to the delivered-first and
+  vote-first exactness envelopes. The formal coverage guard now also pins the
+  three top-level Byzantine CFG check surfaces plus the direct
+  conjunct/implication contracts for those `Sumeragi.tla` aggregate bridge
+  operators. The
+  `byzantine-commit-projection-fast` mode now checks named projection
+  envelopes for the delivered-first, vote-first, and combined top-level
+  Byzantine direct-commit evidence obligations (`NoError` to length `14`; TLC
+  `160` generated, `78` distinct, depth `15`). It also now carries the full
+  source interleaving exactness aggregate through the projection bridge, tying
+  projected top obligations back to RBC evidence shape, proposal/RBC
+  initialization, vote handoff, commit-certificate shape, and buffered-vote
+  delivery semantics. Its `17`
+  `byzantine-commit-projection-bug-*` mutations now match the source
+  Byzantine interleaving mutation set: finality/accounting faults plus the
+  proposal/RBC seeding, prepare-quorum, honest-stake, chunk/READY, and delivery
+  state faults that were previously only projected through temporal progress
+  mutations. All projection safety mutations check the same full bridge before
+  expected rejection, and are expected-failure checked by Apalache and routable
+  through TLC. The formal coverage guard now pins the `TypeInvariant`,
+  projected direct-top exactness/correctness, ordered-top bridge, and
+  interleaving bridge invariants in every projection mutation CFG, and pins the
+  projection gate aggregate conjunct contracts, including bridge implication
+  antecedents. It also compares the
+  source/projection Byzantine mutation suffix families: projection safety must
+  match source Byzantine interleaving safety, projection progress must match
+  source Byzantine interleaving progress, and progress modes may omit only the
+  documented safety-only Byzantine faults. It also pins the direct
+  safety/progress mutation suffix families: delivered-first progress must match
+  delivered-first safety, vote-first progress may omit only the documented
+  pre-delivery safety faults, and direct interleaving progress may omit only
+  the documented direct safety-only quorum/stake/pre-delivery faults. It also
+  pins the clean projection fast/progress CFG check surfaces. The guard now
+  also pins the internal top-corridor family split:
+  `ByzantineDeliveredFirstTopExactness` remains the
+  common direct-commit core, while `ByzantineVoteFirstTopExactness` and
+  `ByzantineDirectTopExactness` remain that common core plus the
+  delivered-without-finality wait obligations. The guard now also requires
+  that the top/projection Byzantine direct-commit contracts stay aligned, so
+  projected delivered-first, vote-first, combined top-corridor, and
+  ordered-bridge implication obligations cannot drift from their central
+  `Sumeragi.tla` counterparts. The guard now also requires
+  `ProjectionBridgeMatchesInterleavingCore` to mirror
+  `ByzantineCommitInterleavingExactness`, keeping the projected bridge core
+  tied to the source Byzantine interleaving proof surface. The guard also
+  requires that the projection bridge interleaving exactness composes projected
+  direct-top and source core obligations, deriving the full bridge surface from
+  `ProjectedByzantineDirectTopExactness` plus
+  `ProjectionBridgeMatchesInterleavingCore` instead of trusting a separate
+  manual list. The TLC-only
+  `byzantine-commit-projection-progress` mode now proves fair eventual
+  installation of the projected finality stack over the same `78`-state
+  projection graph. Its clean progress config now carries
+  `ProjectedCommitProgressSafetyEnvelope`, tying the fair eventual-finality run
+  to the ordered top-corridor bridge and full source/projection exactness
+  envelope. The
+  `byzantine-commit-projection-progress-bug-finality-not-latched`,
+  `byzantine-commit-projection-progress-bug-phase-not-committed`,
+  `byzantine-commit-projection-progress-bug-commit-evidence-votes-missing`,
+  `byzantine-commit-projection-progress-bug-commit-evidence-stake-missing`,
+  and `byzantine-commit-projection-progress-bug-commit-without-honest-support`
+  TLC modes reject missing projected finality-stack commit components, including
+  honest support, under the safety/progress surface. The
+  `byzantine-commit-projection-progress-bug-propose-skips-rbc`,
+  `byzantine-commit-projection-progress-bug-header-not-seeded`,
+  `byzantine-commit-projection-progress-bug-digest-not-seeded`,
+  `byzantine-commit-projection-progress-bug-drop-second-chunk`,
+  `byzantine-commit-projection-progress-bug-ready-quorum-under-counted`, and
+  `byzantine-commit-projection-progress-bug-skip-deliver-state` modes extend
+  the same expected-rejection evidence to the RBC stack components. Every
+  projection progress mutation CFG now also carries `TypeInvariant` and
+  `ProjectedCommitProgressSafetyEnvelope`, and the formal coverage guard pins
+  that type/safety/property surface. The guard also pins
+  `ProjectedCommitProgressSafetyEnvelope` itself to
+  `ProjectionBridgeCoversOrderedTopCorridors` plus
+  `ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope`, so the
+  temporal progress run cannot drift away from the bridge composition it
+  depends on. The guard also pins that the projection progress spec composes
+  the named fairness aggregate, keeps direct `[][Next]_vars` transition
+  closure, and uses exactly the proposal, prepare, honest/Byzantine commit
+  vote, RBC chunk, RBC READY, and RBC deliver fairness actions.
+  The guard also requires that source progress specs compose their named
+  fairness aggregates and keep their family-specific transition closure and
+  fair action sets, so the source temporal proof specs cannot silently fall
+  back to stale raw `WF_vars(...)` lists.
+  The guard also requires that top-level Sumeragi specs compose their named
+  fairness aggregates and keep the documented top-level commit, direct-commit,
+  delivered-first, and vote-first transition closures and fair action sets.
+  It also pins temporal CFG behavior bindings: clean and mutation progress
+  modes must load their named `SPECIFICATION` operators, top-level Byzantine
+  corridor CFGs must keep `INIT Init` with the family-specific `NEXT` operator,
+  and the root fast/deep/TLC-fast CFGs must keep their documented
+  `INIT`/`NEXT` versus `SPECIFICATION Spec` split, so a CFG cannot keep the
+  right checks while model-checking a stale transition surface. It also pins
+  the root fast, deep, and TLC-fast quorum/fault constant envelopes, so those
+  top-level proofs cannot silently become evidence for a different validator,
+  quorum, stake, view, or RBC chunk bound. The top-level Byzantine
+  delivered-first, vote-first, and combined direct corridor CFGs now carry the
+  same pinned fast quorum/fault envelope. It also pins
+  that temporal CFGs keep `CHECK_DEADLOCK FALSE` for the root TLC-fast and
+  source/projection progress proof configs, so weak-fairness liveness runs
+  cannot drift to a different TLC deadlock obligation. Clean temporal progress
+  configs must also keep `Bug = "none"`, so positive liveness runs cannot
+  accidentally check a mutation surface. Progress mutation configs must bind
+  `Bug` to their filename suffix, so expected-failure liveness runs cannot
+  silently check a different injected fault. Source safety and projection
+  bridge mutation configs follow the same suffix rule, so bounded
+  expected-failure safety runs cannot drift to a different fault either. Those
+  safety mutation configs must also keep `INIT Init` / `NEXT Next`, so the
+  expected-failure safety checks cannot run against a stale transition surface.
+  Clean source/projection fast configs must keep `Bug = "none"` plus
+  `INIT Init` / `NEXT Next` for the same reason: positive bounded safety checks
+  should not silently become mutation checks or stale-transition checks.
+  The fast
+  sentinel CFG also must keep `TypeInvariant` and
+  `SumeragiConsensusCoreFastCorrectnessEnvelope` as top-level invariants, so it
+  cannot swap the documented fast correctness envelope for a narrower exactness
+  aggregate.
+  This is kept out of Apalache PR CI because Apalache ignores
+  weak-fairness clauses. The central
+  top-level bundle still needs more splitting or tuning before direct
+  deep/TLC evidence can count again. Fresh `quorum-fast`,
+  `rbc-fast`, `rbc-causality-fast`, and the
+  timeout/view-change helper slice (`timeout-derivation-fast`,
+  `cached-slot-timeout-fast`, `pending-fast-path-timeout-fast`,
+  `stalled-pending-timeout-fast`, `stalled-pending-frontier-timeout-fast`)
+  plus the pure-engine aggregate transition slice (`engine-proposal-fast`,
+  `engine-prepare-fast`, `engine-commit-fast`, `engine-new-view-fast`,
+  `engine-payload-fast`, `engine-validation-result-fast`, `engine-tick-fast`,
+  `engine-committed-block-fast`) and auxiliary engine boundary slice
+  (`engine-handle-*`, `engine-certificate-*`, `engine-qc-ref-*`,
+  `engine-highest-qc-record-fast`, `engine-reconfiguration-*`,
+  `engine-validation-*`, plus initial/read/state-preservation helpers) now give
+  current Apalache/TLC parity for all `52` pure-engine fast modes. These passes
+  plus the refreshed lock/fork-safety slice (`block-known-for-lock-fast`,
+  `missing-locked-qc-recovery-fast`, `active-lock-reject-recovery-fast`,
+  `locked-qc-helper-fast`, `precommit-qc-extends-locked-fast`,
+  `drop-precommit-vote-for-lock-fast`, `same-height-vote-lock-fast`,
+  `lock-rejected-sink-fast`, `committed-edge-conflict-fast`,
+  `block-sync-locked-qc-fast`, `block-sync-commit-conflict-fast`) and commit/QC
+  finality slice (`commit-roots-fast`, `commit-pipeline-recovery-fast`,
+  `known-block-commit-qc-recovery-fast`, `stale-view-commit-qc-fetch-fast`,
+  `commit-anchor-qc-fast`, `committed-height-qc-fast`,
+  `commit-pipeline-scheduling-fast`, `precommit-vote-count-fast`,
+  `commit-result-drain-fast`, `commit-drain-summary-fast`,
+  `commit-pipeline-sample-fast`, `commit-pipeline-status-fast`,
+  `commit-quorum-signers-fast`, `commit-qc-lookup-fast`,
+  `precommit-signer-record-fast`, `prevalidated-commit-artifact-fast`) and
+  proposal/admission slice (`vote-admission-fast`,
+  `invalid-proposal-evidence-fast`, `proposal-mismatch-fast`,
+  `proposal-cache-fast`, `proposal-hint-fast`,
+  `stale-proposal-hint-repair-fast`, `stale-rbc-hint-repair-fast`,
+  `proposal-admission-fast`, `block-created-admission-fast`,
+  `proposal-budget-fast`, `non-rbc-payload-budget-fast`,
+  `proposal-backpressure-fast`, `proposal-defer-warning-fast`,
+  `proposal-batch-fast`, `idle-view-proposal-budget-fast`,
+  `proposal-liveness-fast`, `actionable-vote-backed-proposal-fast`,
+  `slot-proposal-evidence-fast`) and proposal/support/topology helper slice
+  (`peer-admin-detection-fast`, `qc-signers-fast`,
+  `missing-request-clear-fast`, `missing-block-clear-fast`,
+  `lane-interleave-fast`, `commitment-snapshot-builder-fast`,
+  `collector-selection-fast`, `topology-mutation-fast`,
+  `prf-leader-shuffle-fast`) and roster/topology slice
+  (`collector-plan-fast`, `topology-fanout-fast`,
+  `topology-role-filter-fast`, `active-topology-selection-fast`,
+  `p2p-topology-trusted-fast`, `p2p-topology-refresh-fast`,
+  `build-signers-bitmap-fast`, `requester-roster-proof-fast`,
+  `roster-validation-memo-fast`, `roster-validation-cached-fast`,
+  `roster-validation-core-fast`, `roster-artifact-selection-fast`,
+  `block-roster-caches-fast`, `block-sync-roster-evidence-fast`,
+  `block-sync-history-roster-fast`, `persisted-roster-selection-fast`,
+  `block-sync-update-roster-fast`, `roster-index-projection-fast`,
+  `live-vote-roster-fast`, `canonical-round-roster-fast`,
+  `vote-roster-selection-fast`, `vote-roster-cache-fast`,
+  `roster-recovery-fsm-fast`) and pacemaker/new-view/retransmit slice
+  (`post-commit-pacemaker-kick-fast`, `pacemaker-core-fast`,
+  `pacemaker-evaluation-fast`, `pacing-governor-fast`,
+  `pacing-backpressure-fast`, `pacemaker-backpressure-tracker-fast`,
+  `missing-qc-timing-fast`, `new-view-stats-fast`,
+  `new-view-tracker-fast`, `new-view-highest-qc-votes-fast`,
+  `late-new-view-emission-fast`, `near-quorum-new-view-rebroadcast-fast`,
+  `quorum-retransmit-fast`, `retransmit-backpressure-fast`,
+  `paced-retransmit-targets-fast`, `quorum-reschedule-backoff-fast`,
+  `rbc-availability-reschedule-fast`, `vote-backed-reassembly-stall-fast`,
+  `completed-quorum-view-advance-fast`, `quorum-rebroadcast-dispatch-fast`,
+  `isolated-vote-backed-handoff-fast`,
+  `preemptive-vote-backed-retransmit-fast`,
+  `near-quorum-preemptive-escalation-fast`,
+  `manifest-gate-reschedule-fast`) and worker/control slice
+  (`worker-tick-gap-fast`, `commit-worker-config-fast`,
+  `vote-verify-worker-config-fast`, `qc-verify-worker-config-fast`,
+  `worker-drain-fast`, `actor-gate-fast`, `worker-budget-fast`,
+  `worker-ingress-fast`, `worker-loop-stage-fast`,
+  `worker-queue-status-fast`) and protocol-boundary slice
+  (`fork-fast`, `admission-fast`, `highest-fast`,
+  `block-sync-recovery-fast`, `handshake-fast`,
+  `consensus-handshake-caps-fast`, `effective-mode-fast`,
+  `effective-timing-fast`, `consensus-params-ingress-fast`,
+  `distinct-vote-epochs-fast`, `autoscale-transition-fast`,
+  `commit-quorum-status-fast`, `commit-inflight-status-fast`) and
+  commit/pending/Kura lifecycle slice (`commit-job-dispatch-fast`,
+  `commit-stage-timing-threshold-fast`, `commit-inflight-timeout-fast`,
+  `commit-evidence-replay-fast`, `commit-topology-state-fast`,
+  `post-commit-cleanup-fast`, `kura-commit-fast`, `kura-retry-fast`,
+  `pending-progress-fast`, `pending-block-lifecycle-fast`,
+  `pending-block-marker-fast`, `requeue-transactions-fast`) and frontier
+  slot/live-owner slice (`frontier-new-view-catch-up-fast`,
+  `frontier-proposal-grace-fast`, `frontier-slot-helpers-fast`,
+  `frontier-slot-tracker-fast`, `slot-tracker-state-fast`,
+  `round-view-helpers-fast`, `phase-tracker-fast`,
+  `tick-deadline-helpers-fast`, `idle-backlog-signals-fast`,
+  `frontier-live-owner-work-fast`, `keep-frontier-pending-active-fast`,
+  `superseded-frontier-payload-retention-fast`) and configuration/membership/
+  signature-index slice (`da-gate-fast`, `manifest-guard-fast`,
+  `mode-flip-fast`, `membership-view-hash-fast`, `membership-advert-fast`,
+  `membership-mismatch-ingress-fast`, `tip-extension-helpers-fast`,
+  `verify-cache-key-fast`, `signature-index-recovery-fast`,
+  `signer-index-normalization-fast`, `voting-signer-count-fast`,
+  `highest-optional-fast`) and proposal/precommit/vote/QC slice
+  (`proposal-fast`, `precommit-fast`, `precommit-qc-view-change-fast`,
+  `precommit-signer-history-fast`, `vote-backed-evidence-fast`,
+  `vote-payload-actionable-fast`, `same-height-vote-conflict-fast`,
+  `same-height-vote-recovery-gap-fast`, `qc-round-compatibility-fast`,
+  `qc-signer-count-fast`, `qc-status-fast`, `vote-verify-async-fast`,
+  `qc-verify-async-fast`) and reconfiguration/recovery/election/timing/
+  frontier/proposal-edge slice (`reconfig-fast`, `recovery-fast`,
+  `view-change-fast`, `npos-vrf-fast`, `validator-election-fast`,
+  `stake-snapshot-fast`, `timing-monitor-fast`,
+  `counter-backpressure-cooldown-fast`, `round-liveness-fast`,
+  `fast-finality-inline-validation-fast`,
+  `observer-signature-recovery-fast`, `ingress-dedup-cache-fast`,
+  `kura-store-status-fast`, `proposal-parent-resolution-fast`,
+  `proposal-stale-vote-fast`, `proposal-sccp-root-fast`,
+  `frontier-gap-realign-fast`) and validation/QC evidence slice
+  (`evidence-horizon-fast`, `evidence-canonicalization-fast`,
+  `evidence-validation-fast`, `double-vote-recording-fast`,
+  `invalid-qc-shape-fast`, `qc-validation-evidence-fast`,
+  `qc-validation-reason-fast`, `validation-evidence-qc-fast`,
+  `validation-fast`, `validation-priority-fast`,
+  `validation-failure-finalize-fast`, `validation-reject-reason-label-fast`,
+  `validation-reject-status-fast`, `validation-stall-redrive-fast`,
+  `validation-redrive-label-fast`, `validation-ownership-cleanup-fast`,
+  `validation-worker-config-fast`, `vnext-validation-fast`) and vNext
+  control/rechain/signing slice (`vnext-chain-order-fast`,
+  `vnext-stake-weight-fast`, `vnext-rechain-fast`,
+  `vnext-rechain-error-label-fast`, `vnext-signature-fast`,
+  `vnext-signing-preimage-fast`, `vnext-control-ingress-fast`,
+  `vnext-slot-lifecycle-fast`, `vnext-deadline-protection-fast`,
+  `vnext-performance-config-fast`) and BlockSync/QC
+  recovery slice (`block-sync-qc-fallback-fast`,
+  `block-sync-qc-status-fast`, `known-block-qc-enqueue-fast`,
+  `known-block-qc-work-fast`, `known-block-qc-drain-fast`,
+  `signed-quorum-fetch-fallback-fast`,
+  `commit-qc-only-fetch-response-fast`, `block-sync-update-targets-fast`,
+  `apply-cached-qcs-fast`, `block-sync-selected-signatures-fast`,
+  `block-sync-selected-qc-fast`, `block-sync-selected-quorum-fast`,
+  `block-sync-recovery-mode-fast`, `block-sync-selected-apply-fast`,
+  `block-sync-selected-qc-prefilter-fast`,
+  `block-sync-selected-qc-process-fast`,
+  `block-sync-selected-qc-cache-fast`, `block-sync-future-window-fast`,
+  `fetch-response-deferral-fast`) and RBC emission/rebroadcast/status slice
+  (`rbc-ready-emission-fast`, `rbc-deliver-emission-fast`,
+  `rbc-delivered-rebroadcast-fast`, `rbc-rebroadcast-cursor-fast`,
+  `rbc-rebroadcast-action-fast`, `rbc-next-due-fast`,
+  `pending-rbc-status-fast`, `rbc-status-lookup-fast`,
+  `rbc-status-retention-fast`, `rbc-status-persistence-fast`,
+  `rbc-status-handle-fast`, `rbc-backlog-status-fast`) and RBC chunk/session
+  slice (`rbc-deliver-acceptance-fast`, `rbc-commit-processing-fast`,
+  `rbc-chunk-target-fast`, `rbc-chunk-payload-cap-fast`,
+  `rbc-rebroadcast-selection-fast`, `rbc-chunk-allocation-fast`,
+  `rbc-payload-chunking-fast`, `rbc-payload-layout-fast`,
+  `rbc-session-chunk-ingest-fast`, `rbc-session-ready-deliver-fast`,
+  `rbc-delivered-payload-bytes-fast`, `rbc-rs16-initial-fanout-fast`,
+  `rbc-chunk-broadcast-order-fast`, `pending-rbc-stash-fast`) and RBC
+  repair/store/recovery slice (`rbc-abort-status-fast`,
+  `rbc-mismatch-status-fast`, `rbc-progress-stage-fast`,
+  `rbc-hot-repair-fast`, `rbc-repair-request-fast`,
+  `rbc-targeted-repair-fast`, `rbc-outbound-flush-fast`,
+  `rbc-chunk-post-debug-fast`, `rbc-deferral-throttle-fast`,
+  `rbc-missing-init-rebroadcast-fast`, `rbc-sampling-fast`,
+  `rbc-store-fast`, `rbc-store-status-fast`,
+  `rbc-store-pressure-log-fast`, `round-gap-status-fast`,
+  `rbc-recovery-helper-fast`, `rbc-payload-hydration-fast`,
+  `rbc-missing-block-recovery-fast`, `rbc-unverified-roster-fast`,
+  `rbc-preimage-fast`) and signing/penalty/execution-witness slice
+  (`classic-preimage-fast`, `vrf-material-derivation-fast`,
+  `vrf-penalties-report-fast`, `classic-signature-fast`,
+  `invalid-signature-labels-fast`, `invalid-signature-throttle-fast`,
+  `vote-validation-drop-status-fast`, `penalty-offender-selection-fast`,
+  `consensus-penalty-action-fast`, `penalty-status-fast`,
+  `local-peer-removed-status-fast`, `exec-witness-roots-fast`,
+  `exec-witness-recorder-fast`, `exec-witness-access-key-fast`,
+  `smt-path-hash-fast`) and status/observability slice
+  (`ingress-status-counters-fast`, `consensus-message-labels-fast`,
+  `phase-latency-status-fast`, `telemetry-status-fast`,
+  `lane-detail-status-fast`, `settlement-status-fast`,
+  `nexus-economics-status-fast`, `npos-repair-coverage-status-fast`,
+  `mode-status-fast`, `consensus-caps-status-fast`,
+  `effective-timing-status-fast`, `tx-queue-backpressure-status-fast`,
+  `history-status-fast`, `online-validator-relay-counters-fast`,
+  `membership-mismatch-status-fast`, `round-trace-status-fast`,
+  `da-gate-status-fast`, `hotspot-log-summary-fast`,
+  `adaptive-observability-fast`, `peer-key-policy-status-fast`,
+  `view-change-cause-status-fast`, `view-change-proof-status-fast`) and
+  block-message/frontier recovery slice
+  (`block-message-rbc-compact-fast`, `block-message-priority-fast`,
+  `block-message-height-view-fast`, `block-message-kind-fast`,
+  `kura-replica-advert-fast`, `message-projection-fast`,
+  `pipeline-event-emission-fast`, `block-message-wire-fast`,
+  `block-created-frontier-wire-fast`,
+  `block-payload-canonicalization-fast`, `cached-proposal-rebroadcast-fast`,
+  `frontier-block-sync-hint-fast`, `frontier-same-slot-activity-fast`,
+  `frontier-reassembly-activity-fast`,
+  `frontier-quorum-owner-actionable-fast`,
+  `frontier-sidecar-retarget-fast`,
+  `frontier-sidecar-expected-hash-fast`,
+  `contiguous-frontier-payload-hint-fast`,
+  `frontier-parent-qc-hint-retarget-fast`,
+  `live-frontier-idle-missing-qc-fast`,
+  `missing-qc-reacquire-admission-fast`,
+  `missing-qc-reacquire-action-fast`,
+  `missing-commit-qc-actionable-fast`, `missing-qc-height-stall-fast`,
+  `missing-qc-stall-range-pull-fast`,
+  `missing-payload-fetch-window-fast`,
+  `canonical-frontier-reanchor-fast`, `frontier-repair-view-change-fast`,
+  `frontier-recovery-advance-fast`,
+  `same-height-no-proposal-storm-fast`) and payload/fetch/recovery helper slice
+  (`certified-fetch-fast`, `missing-block-ingress-fetch-fast`,
+  `payload-progress-availability-fast`,
+  `highest-qc-fetch-body-known-fast`, `local-payload-availability-fast`,
+  `block-known-locally-fast`, `local-signed-block-lookup-fast`,
+  `authoritative-payload-progress-fast`,
+  `authoritative-block-payload-fast`,
+  `pending-block-active-for-tip-fast`, `pending-fast-unblock-fast`,
+  `blocking-pending-blocks-fast`, `quorum-recovery-vote-drain-fast`,
+  `frontier-body-gap-payload-drain-fast`,
+  `rbc-authoritative-payload-progress-fast`,
+  `slot-authoritative-payload-fast`, `missing-block-fetch-fast`,
+  `recovery-fsm-reason-fast`) and recovery-prune/cleanup helper slice
+  (`empty-block-qc-drop-fast`, `failure-recovery-helpers-fast`,
+  `highest-qc-dependency-deferral-fast`, `missing-block-hard-cap-fast`,
+  `missing-block-hard-cap-cleanup-fast`, `missing-block-view-change-fast`,
+  `restart-replay-fast`, `consensus-recovery-prune-fast`,
+  `stale-view-pending-prune-fast`,
+  `stale-missing-block-request-prune-fast`,
+  `stale-missing-commit-qc-prune-fast`,
+  `stale-rbc-session-prune-fast`,
+  `highest-qc-defer-marker-prune-fast`) and Native AMX helper slice
+  (`native-amx-attestation-fast`, `native-amx-journal-fast`,
+  `native-amx-routing-plan-fast`, `native-amx-receipt-fast`,
+  `native-amx-ingress-fast`) and recovery/status-counter helper slice
+  (`recovery-status-counters-fast`, `qc-rebuild-status-fast`,
+  `qc-rebuild-quorum-fast`, `collector-targeting-status-fast`,
+  `deferred-recovery-status-fast`, `missing-qc-liveness-status-fast`,
+  `sidecar-no-proposal-status-fast`,
+  `deterministic-committee-status-fast`, `timing-status-counters-fast`,
+  `roster-recovery-status-fast`, `range-pull-recovery-fast`,
+  `range-pull-status-fast`, `round-recovery-bundle-window-fast`) and
+  VRF/vote/embedded-QC slice
+  (`vrf-admission-fast`, `vrf-epoch-window-fast`,
+  `vrf-epoch-boundary-fast`, `vrf-epoch-restore-fast`,
+  `vrf-local-state-fast`, `vote-duplicate-key-fast`,
+  `embedded-qc-roster-fast`) and BlockSync roster/recovery slice
+  (`block-sync-roster-fast`, `block-sync-roster-status-fast`,
+  `block-sync-vote-deferral-fast`, `block-sync-known-hintless-fast`,
+  `block-sync-implicit-recovery-fast`,
+  `block-sync-vote-placeholder-fast`, `block-sync-snapshot-hint-fast`,
+  `block-sync-snapshot-roster-fast`, `block-sync-no-roster-fast`,
+  `block-sync-known-roster-fast`,
+  `block-sync-known-selected-roster-fast`) and fetch/background/block-body slice
+  (`block-sync-stale-view-fast`, `block-sync-warning-throttle-fast`,
+  `qc-insufficient-warning-fast`, `fetch-block-body-handle-fast`,
+  `background-frame-cap-fast`, `background-dispatch-fast`,
+  `background-bypass-fast`, `background-fallback-fast`,
+  `fetch-pending-response-send-fast`, `fetch-pending-responses-batch-fast`,
+  `pending-response-flush-fast`, `deferred-block-sync-helper-fast`,
+  `deferred-block-sync-cache-fast`, `deferred-block-sync-replay-fast`,
+  `block-body-repair-fast`, `block-body-request-stash-fast`,
+  `same-height-block-body-repair-fast`, `block-body-repair-epoch-fast`,
+  `direct-commit-qc-for-block-fast`, `materialize-qc-fast`,
+  `block-body-direct-commit-qc-fast`,
+  `block-body-detached-commit-qc-fast`,
+  `block-body-response-dispatch-fast`) confirm the current tractable path is
+  decomposed helper-mode parity, not direct top-level obligation selection.
+  The existing
+  local TLC slices cover the top-level commit-path fast model under the
+  fairness-backed `Spec`, including finality and
   finality latch/phase equivalence, commit-certificate finality equivalence,
   live commit-gate finality equivalence, NPoS stake-quorum fork-safety
   correctness envelope via
@@ -22804,11 +23574,11 @@ operator-provided rollout bundles.
   message hash, recovers secp256k1 signers to TRON addresses, checks the
   configured witness-schedule trust anchor, and enforces strict `> 2/3` signed
   witness weight. TRON header and witness recoverable secp256k1 signatures now
-  accept java-tron's raw recovery ids plus normalized `27..=30` fixture ids,
-  reject invalid `r` scalars, high-S malleable encodings, and out-of-range
-  recovery ids before proof acceptance, and require solid-block header proof
-  hashes to recover both child and parent signatures to their declared TRON
-  witnesses. Witness schedule
+  accept only java-tron's raw `0..=3` recovery ids, reject Ethereum-style
+  `27..=30` aliases, invalid `r` scalars, high-S malleable encodings, and
+  out-of-range recovery ids before proof acceptance, and require solid-block
+  header proof hashes to recover both child and parent signatures to their
+  declared TRON witnesses. Witness schedule
   rosters are capped at 64 unique addresses in
   the verifier and SDK payload helpers, and canonical schedule payload builders
   reject non-zero per-witness weights whose sum cannot fit the `u64`
@@ -23001,9 +23771,9 @@ operator-provided rollout bundles.
   `unready_transparent_proof_config_gate`, backed by the same strict source
   marker scans as public release-bundle verification, so the active launch-policy
   constants, supported launch-domain set, launch-scope no-support note,
-  exact specific no-support sentence, active-tree scan, and config-owned
-  diagnostic transparent-proof toggle must remain present before production
-  reports can pass. The launch-scope constant, retired-network, and unready
+  exact specific no-support sentence, active-tree scan, and removed
+  diagnostic transparent-proof runtime/config surface must remain pinned before
+  production reports can pass. The launch-scope constant, retired-network, and unready
   transparent-proof config gates' sparse tests must remove every uniquely
   detectable marker from each inventory row rather than sampling one marker per
   file. Public native EVM SDK

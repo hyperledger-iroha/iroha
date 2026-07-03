@@ -1396,7 +1396,8 @@ mod tests {
         let mut tampered_signature = certificate.model.issuer_signature.payload().to_vec();
         tampered_signature[0] ^= 0x01;
         assert!(
-            Signature::from_bytes(&tampered_signature)
+            Signature::try_from_bytes(&tampered_signature)
+                .expect("tampered offline v2 certificate signature remains structurally admissible")
                 .verify(issuer_key_pair.public_key(), &signing_bytes)
                 .is_err(),
             "tampered issuer signature must fail verification"

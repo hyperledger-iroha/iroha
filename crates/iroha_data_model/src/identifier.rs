@@ -450,9 +450,10 @@ mod tests {
         let signature = checked_signature(&signer, &payload);
         let receipt = IdentifierResolutionReceipt {
             payload: payload.clone(),
-            attestation: RamLfeReceiptAttestation::Signed(iroha_crypto::Signature::from_bytes(
-                signature.payload(),
-            )),
+            attestation: RamLfeReceiptAttestation::Signed(
+                iroha_crypto::Signature::try_from_bytes(signature.payload())
+                    .expect("checked identifier receipt fixture signature passes admission"),
+            ),
         };
 
         assert_eq!(receipt.payload_bytes(), payload.encode());
@@ -573,9 +574,10 @@ mod tests {
         let signature = checked_signature(&signer, &payload);
         let mut receipt = IdentifierResolutionReceipt {
             payload: payload.clone(),
-            attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(
-                signature.payload(),
-            )),
+            attestation: RamLfeReceiptAttestation::Signed(
+                Signature::try_from_bytes(signature.payload())
+                    .expect("checked identifier receipt fixture signature passes admission"),
+            ),
         };
 
         payload.opening.payload.opened_output_hash = Hash::new(b"tampered-opened-output");
@@ -595,9 +597,10 @@ mod tests {
                 let signature = checked_signature(&signer, &payload);
                 let mut receipt = IdentifierResolutionReceipt {
                     payload,
-                    attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(
-                        signature.payload(),
-                    )),
+                    attestation: RamLfeReceiptAttestation::Signed(
+                        Signature::try_from_bytes(signature.payload())
+                            .expect("checked identifier receipt fixture signature passes admission"),
+                    ),
                 };
                 let $payload = &mut receipt.payload;
                 $body
@@ -661,9 +664,10 @@ mod tests {
         let wrong_signer = checked_random_keypair();
         let receipt = IdentifierResolutionReceipt {
             payload: payload.clone(),
-            attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(
-                checked_signature(&signer, &payload).payload(),
-            )),
+            attestation: RamLfeReceiptAttestation::Signed(
+                Signature::try_from_bytes(checked_signature(&signer, &payload).payload())
+                    .expect("checked identifier receipt fixture signature passes admission"),
+            ),
         };
 
         receipt
@@ -689,7 +693,8 @@ mod tests {
     fn identifier_resolution_receipt_rejects_malformed_ed25519_signature_r() {
         let payload = live_identifier_resolution_payload_fixture();
         let signer = checked_seed_keypair(0x42);
-        let signature = Signature::from_bytes(checked_signature(&signer, &payload).payload());
+        let signature = Signature::try_from_bytes(checked_signature(&signer, &payload).payload())
+            .expect("checked identifier receipt fixture signature passes admission");
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
             ("noncanonical", NONCANONICAL_ED25519_R),
@@ -730,7 +735,7 @@ mod tests {
         IdentifierResolutionReceipt {
             payload: live_identifier_resolution_payload_fixture(),
             attestation: RamLfeReceiptAttestation::Signed(
-                Signature::from_hex(
+                Signature::try_from_hex(
                     "4B26BF33F721C551C13F102D4D7F483CB8DD8A13FD6BF4ED26C845E2B69D5D0124B8CFA05493772F6748A42408EEE4542C470B284AB87F686B423F9DF87C8D00",
                 )
                 .expect("valid signature"),
@@ -889,8 +894,8 @@ mod tests {
             execution: execution_from_fixture(fixture_object(payload, "execution")),
             opening: RamLfeOutputOpening {
                 payload: opening_payload_from_fixture(fixture_object(opening, "payload")),
-                signature: Signature::from_hex(fixture_str(opening, "signature"))
-                    .expect("valid opening signature hex"),
+                signature: Signature::try_from_hex(fixture_str(opening, "signature"))
+                    .expect("valid checked opening signature hex"),
             },
             opaque_id: OpaqueAccountId::from_str(fixture_str(payload, "opaque_id"))
                 .expect("valid opaque id"),
@@ -939,8 +944,8 @@ mod tests {
     fn attestation_from_fixture(attestation: &norito::json::Value) -> RamLfeReceiptAttestation {
         match fixture_str(attestation, "kind") {
             "signed" => RamLfeReceiptAttestation::Signed(
-                Signature::from_hex(fixture_str(attestation, "signature"))
-                    .expect("valid receipt signature hex"),
+                Signature::try_from_hex(fixture_str(attestation, "signature"))
+                    .expect("valid checked receipt signature hex"),
             ),
             "proof" => RamLfeReceiptAttestation::Proof(crate::proof::ProofBox::new(
                 fixture_str(attestation, "proof_backend").into(),

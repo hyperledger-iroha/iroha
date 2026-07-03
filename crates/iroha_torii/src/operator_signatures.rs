@@ -99,6 +99,8 @@ fn parse_operator_signature_for_public_key(
     match algorithm {
         Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(signature_bytes)
             .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE)),
+        Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(signature_bytes)
+            .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE)),
         _ => Signature::try_from_bytes(signature_bytes)
             .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE)),
     }
@@ -620,6 +622,11 @@ mod tests {
             .expect("generate checked operator signature fixture keypair")
     }
 
+    fn checked_mldsa_keypair() -> KeyPair {
+        KeyPair::try_from_seed(b"torii-operator-signature-mldsa".to_vec(), Algorithm::MlDsa)
+            .expect("generate checked ML-DSA operator signature fixture keypair")
+    }
+
     const ED25519_SMALL_ORDER_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -723,6 +730,33 @@ mod tests {
     }
 
     #[test]
+    fn operator_signatures_accepts_valid_mldsa_signature() {
+        let key_pair = checked_mldsa_keypair();
+        let cfg = ToriiOperatorSignatures {
+            enabled: true,
+            allow_node_key: false,
+            allowed_public_keys: vec![key_pair.public_key().clone()],
+            max_clock_skew: Duration::from_secs(60),
+            nonce_ttl: Duration::from_secs(300),
+            replay_cache_capacity: NonZeroUsize::new(64).unwrap(),
+        };
+        let auth = OperatorSignatures::new(
+            cfg,
+            checked_ed25519_keypair().public_key().clone(),
+            1024,
+            crate::routing::MaybeTelemetry::disabled(),
+        );
+
+        let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
+        let body = b"{\"foo\":1}";
+        let headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body)
+            .expect("ML-DSA operator signature headers");
+
+        auth.authorize_bytes(&headers, &crate::Method::POST, &uri, body)
+            .expect("valid ML-DSA signature");
+    }
+
+    #[test]
     fn operator_signatures_reject_all_zero_signature_header() {
         let key_pair = checked_ed25519_keypair();
         let cfg = ToriiOperatorSignatures {
@@ -808,6 +842,65 @@ mod tests {
             assert_eq!(
                 error.code, "operator_signature_invalid",
                 "{label} signature R must fail at header admission"
+            );
+        }
+    }
+
+    #[test]
+    fn operator_signatures_reject_malformed_mldsa_signature_lengths() {
+        let key_pair = checked_mldsa_keypair();
+        let cfg = ToriiOperatorSignatures {
+            enabled: true,
+            allow_node_key: false,
+            allowed_public_keys: vec![key_pair.public_key().clone()],
+            max_clock_skew: Duration::from_secs(60),
+            nonce_ttl: Duration::from_secs(300),
+            replay_cache_capacity: NonZeroUsize::new(64).unwrap(),
+        };
+        let auth = OperatorSignatures::new(
+            cfg,
+            checked_ed25519_keypair().public_key().clone(),
+            1024,
+            crate::routing::MaybeTelemetry::disabled(),
+        );
+        let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
+        let body = b"{\"foo\":1}";
+
+        for label in ["short", "overlong"] {
+            let mut headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body)
+                .expect("ML-DSA operator signature headers");
+            let signature_str = headers
+                .get(HEADER_OPERATOR_SIGNATURE)
+                .expect("signature header")
+                .to_str()
+                .expect("signature header is text");
+            let mut signature_bytes = BASE64_STANDARD
+                .decode(signature_str)
+                .expect("decode generated ML-DSA signature");
+            match label {
+                "short" => {
+                    signature_bytes
+                        .pop()
+                        .expect("ML-DSA fixture signature is non-empty");
+                }
+                "overlong" => signature_bytes.push(0xA5),
+                _ => unreachable!("covered labels"),
+            }
+            headers.insert(
+                HEADER_OPERATOR_SIGNATURE,
+                BASE64_STANDARD
+                    .encode(signature_bytes)
+                    .parse()
+                    .expect("malformed ML-DSA signature header"),
+            );
+
+            let error = auth
+                .authorize_bytes(&headers, &crate::Method::POST, &uri, body)
+                .expect_err("malformed ML-DSA operator signature header must fail");
+
+            assert_eq!(
+                error.code, "operator_signature_invalid",
+                "{label} ML-DSA signature length must fail at header admission"
             );
         }
     }

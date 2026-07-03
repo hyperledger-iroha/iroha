@@ -1283,7 +1283,8 @@ mod tests {
 
         assert_eq!(signed.len(), 1);
         assert_eq!(signed[0].info.peer_id, infos[0].peer_id);
-        Signature::from_bytes(&signed[0].signature)
+        Signature::try_from_bytes(&signed[0].signature)
+            .expect("checked peer-trust signature fixture")
             .verify(
                 signer.public_key(),
                 &PeersGossiper::trust_payload(&signed[0].info),

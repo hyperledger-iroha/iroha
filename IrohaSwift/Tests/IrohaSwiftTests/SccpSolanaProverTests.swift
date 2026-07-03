@@ -32,6 +32,27 @@ final class SccpSolanaProverTests: XCTestCase {
         return bitmap
     }
 
+    private static func hexData(_ value: String) -> Data {
+        let body = value.hasPrefix("0x") ? String(value.dropFirst(2)) : value
+        return Data(hexString: body)!
+    }
+
+    private static func tronHeaderSignature(_ recoveryId: UInt8) -> Data {
+        var signature = Data(repeating: 0xaa, count: 65)
+        signature.replaceSubrange(32..<64, with: Data(repeating: 0x01, count: 32))
+        signature[signature.index(signature.startIndex, offsetBy: 64)] = recoveryId
+        return signature
+    }
+
+    private static func tronSignatureHexWithRecoveryId(_ signatureHex: String, _ recoveryId: UInt8) -> String {
+        let prefix = signatureHex.hasPrefix("0x") ? "0x" : ""
+        let body = signatureHex.hasPrefix("0x") ? String(signatureHex.dropFirst(2)) : signatureHex
+        var raw = Data(hexString: body)!
+        precondition(raw.count == 65)
+        raw[raw.index(raw.startIndex, offsetBy: 64)] = recoveryId
+        return prefix + raw.hexEncodedString()
+    }
+
     private static func sampleEthereumSyncCommitteePayload(publicKeyByte: UInt8 = 0x33,
                                                            popByte: UInt8 = 0xcc) throws -> Data {
         try canonicalEthSyncCommitteePayloadBytes(
@@ -51,6 +72,71 @@ final class SccpSolanaProverTests: XCTestCase {
     private static let solanaZeroProgram = String(repeating: "1", count: 32)
     private static let solanaMainnetGenesisPublicInput =
         "0x8dbaadfbc441ded0257a4700cd26d814b5a196be44b963454cff8dd9543f13b5"
+    private static let tronWitnessSchedulePayloadHex =
+        "010200000041" + String(repeating: "11", count: 20) + "0100000000000000" +
+        "41" + String(repeating: "22", count: 20) + "0200000000000000"
+    private static let expectedTronWitnessSchedulePayloadHash =
+        "0xd6087d6ea6a1b58b17523587f28e457d84d5d2214298f93a09dbb509ea2cf429"
+    private static let tronWitnessScheduleHash =
+        "0x0c5eca6f96572fe939e640d8951abd126d2e966ffc4e3d0d087dbff6052577be"
+    private static let tronParentRawHeaderHex =
+        "08b8b096ffbc311220" + String(repeating: "cc", count: 32) +
+        "1a20" + String(repeating: "bb", count: 32) +
+        "38b8604a1541" + String(repeating: "11", count: 20) +
+        "5001" + "5a20" + String(repeating: "aa", count: 32)
+    private static let tronRawHeaderHex =
+        "08b9b096ffbc311220" + String(repeating: "dd", count: 32) +
+        "1a200000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4" +
+        "38b9604a1541" + String(repeating: "11", count: 20) +
+        "5001" + "5a20" + String(repeating: "ee", count: 32)
+    private static let tronParentRawHeaderHash =
+        "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4"
+    private static let tronRawHeaderHash =
+        "0x614a09275b6d0fffb6bc08fb34f737c093d9dd2adefccb04344715e2619c8286"
+    private static let tronParentBlockId =
+        "0x0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4"
+    private static let tronBlockId =
+        "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286"
+    private static let expectedTronSolidBlockHeaderProofHash =
+        "0x362579d1667137b9dac3fc20772de7b0b4adb3888d4508bb5d75e53596d43771"
+    private static let tronSourceEventTransactionIdVector =
+        "be9223cdfd6728fd2512f270a44f928fbd58df98f8e9e5fe13c4dc73503192e4"
+    private static let tronSourceEventSignatureVector =
+        "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798" +
+        "38508a4cf743e4a97ab3550672d69d980545ff8d776f6e9bade4ff4196f3693b" +
+        "00"
+    private static let tronTestOwnerAddress = "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf"
+    private static let expectedTronWitnessSealHash =
+        "0x4266cf4de71c96e4fde925b686abbd50e67026f63ad90e0cf4899d4925d45849"
+    private static let tronParentWitnessSchedulePayloadHex =
+        "0101000000417e5f4552091a69125d5dfcb7b8c2659029395bdf0100000000000000"
+    private static let tronParentWitnessScheduleHash =
+        "0x87174bbfde1c4b8473a6be18df37b60979c7609ebf1788ce8cf97604311474b6"
+    private static let tronWitnessScheduleTransitionMessageHash =
+        "0x6e53d3f7d1253223a70a163a02544a8df27b74171cb0c76c8f42d71419fabd43"
+    private static let tronWitnessScheduleTransitionSignature =
+        "0xc6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5" +
+        "65d3d639f676a837945854abb3f59c4b93355bb55a789e31a25aee261500932d01"
+    private static let expectedTronWitnessScheduleTransitionSealHash =
+        "0xbb3b7ef87bd3efb77d9b7f0a4dba8e7398827621d59039c694c285a7e2deacce"
+    private static let tronTransactionSourceBytesHex =
+        "0x0af3010a02123418b9602208565656565656565640959aef3a5acf01081f12ca" +
+        "010a31747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e" +
+        "54726967676572536d617274436f6e74726163741294010a15417e5f4552091a" +
+        "69125d5dfcb7b8c2659029395bdf121541454545454545454545454545454545" +
+        "4545454545226406841e30000000000000000000000000000000000000000000" +
+        "0000000000000000000005000000000000000000000000000000000000000000" +
+        "0000000000000000000000343434343434343434343434343434343434343434" +
+        "34343434343434343434347090e5ee3a900180e1eb171241cc58d7ac52c91117" +
+        "92495fee682b53cab96ff4229043c5b8b90c31447f5934553d8854ab35de3437" +
+        "2c13331bf3ef5cefd8f2cc5ad026faf223da83969fe8973c012a0410001801"
+    private static let tronTransactionSourceSignatureHex =
+        "cc58d7ac52c9111792495fee682b53cab96ff4229043c5b8b90c31447f593455" +
+        "3d8854ab35de34372c13331bf3ef5cefd8f2cc5ad026faf223da83969fe8973c01"
+    private static let tronTransactionSourceRoot =
+        "0x1751c62dce36d5d642e48480b45d48ed16dd1b9b40ce216bc2f15c1b1ccf300b"
+    private static let tronTransactionSourceProofHash =
+        "0xfc98a09ae9e7f63ccd383b2f3e104efce0d2c291dc7900ffd49e4f391e6016b6"
 
     func testSolanaRouteCanaryEvidenceBindsProgramdataSnapshot() throws {
         let evidence = try Self.sampleSolanaRouteCanaryEvidence()
@@ -211,6 +297,311 @@ final class SccpSolanaProverTests: XCTestCase {
         ] {
             XCTAssertThrowsError(try tronSccpRouteCanaryEvidenceHash(replay)) { error in
                 XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("routeCanaryGovernedHashes"))
+            }
+        }
+    }
+
+    func testRejectsLegacyTronRecoveryIdAliasesForUiTooling() throws {
+        let sourceEventDigest = "0x" + String(repeating: "34", count: 32)
+        let transactionBytes = Self.hexData(Self.tronTransactionSourceBytesHex)
+        let receiptRoot = "0x" + String(repeating: "bb", count: 32)
+        let inclusionBranch = [Self.hexData("0x" + String(repeating: "aa", count: 32))]
+
+        XCTAssertEqual(
+            try canonicalTronSccpTransactionSourceProofBytes(
+                sourceEventDigest: sourceEventDigest,
+                receiptRoot: receiptRoot,
+                transactionRoot: Self.tronTransactionSourceRoot,
+                transactionIndex: 0,
+                transactionCount: 1,
+                transactionBytes: transactionBytes,
+                transactionMerkleBranch: [],
+                inclusionBranch: inclusionBranch
+            ).count,
+            476
+        )
+        XCTAssertEqual(
+            try tronSccpTransactionSourceProofHash(
+                sourceEventDigest: sourceEventDigest,
+                receiptRoot: receiptRoot,
+                transactionRoot: Self.tronTransactionSourceRoot,
+                transactionIndex: 0,
+                transactionCount: 1,
+                transactionBytes: transactionBytes,
+                transactionMerkleBranch: [],
+                inclusionBranch: inclusionBranch
+            ),
+            Self.tronTransactionSourceProofHash
+        )
+
+        let witnessSignature = Self.hexData("0x" + Self.tronSourceEventSignatureVector)
+        XCTAssertEqual(
+            try canonicalTronWitnessSealBytes(
+                totalWeight: 1,
+                signedWeight: 1,
+                solidBlockMessageHash: "0x" + Self.tronSourceEventTransactionIdVector,
+                witnessAddresses: [Self.tronTestOwnerAddress],
+                witnessWeights: [1],
+                signersBitmap: Data([0x01]),
+                signatures: [witnessSignature]
+            ).count,
+            200
+        )
+        XCTAssertEqual(
+            try tronWitnessSealHash(
+                totalWeight: 1,
+                signedWeight: 1,
+                solidBlockMessageHash: "0x" + Self.tronSourceEventTransactionIdVector,
+                witnessAddresses: [Self.tronTestOwnerAddress],
+                witnessWeights: [1],
+                signersBitmap: Data([0x01]),
+                signatures: [witnessSignature]
+            ),
+            Self.expectedTronWitnessSealHash
+        )
+
+        let parentWitnessSchedulePayload = Self.hexData(Self.tronParentWitnessSchedulePayloadHex)
+        let nextWitnessSchedulePayload = Self.hexData(Self.tronWitnessSchedulePayloadHex)
+        XCTAssertEqual(
+            try tronWitnessScheduleHashFromPayload(payload: parentWitnessSchedulePayload),
+            Self.tronParentWitnessScheduleHash
+        )
+        XCTAssertEqual(
+            try tronWitnessScheduleHashFromPayload(payload: nextWitnessSchedulePayload),
+            Self.tronWitnessScheduleHash
+        )
+        XCTAssertEqual(
+            try tronWitnessSchedulePayloadHash(payload: nextWitnessSchedulePayload),
+            Self.expectedTronWitnessSchedulePayloadHash
+        )
+        let transitionSignature = Self.hexData(Self.tronWitnessScheduleTransitionSignature)
+        XCTAssertEqual(
+            try canonicalTronWitnessScheduleTransitionSealBytes(
+                sourceDomain: sccpDomainTron,
+                fromWitnessScheduleEpoch: 7,
+                toWitnessScheduleEpoch: 8,
+                transitionBlockNumber: 12345,
+                transitionBlockHash: Self.tronBlockId,
+                parentWitnessScheduleHash: Self.tronParentWitnessScheduleHash,
+                nextWitnessScheduleHash: Self.tronWitnessScheduleHash,
+                nextWitnessSchedulePayload: nextWitnessSchedulePayload,
+                transitionMessageHash: Self.tronWitnessScheduleTransitionMessageHash,
+                totalWeight: 1,
+                signedWeight: 1,
+                witnessAddresses: [Self.tronTestOwnerAddress],
+                witnessWeights: [1],
+                signersBitmap: Data([0x01]),
+                signatures: [transitionSignature]
+            ).count,
+            456
+        )
+        XCTAssertEqual(
+            try tronWitnessScheduleTransitionSealHash(
+                sourceDomain: sccpDomainTron,
+                fromWitnessScheduleEpoch: 7,
+                toWitnessScheduleEpoch: 8,
+                transitionBlockNumber: 12345,
+                transitionBlockHash: Self.tronBlockId,
+                parentWitnessScheduleHash: Self.tronParentWitnessScheduleHash,
+                nextWitnessScheduleHash: Self.tronWitnessScheduleHash,
+                nextWitnessSchedulePayload: nextWitnessSchedulePayload,
+                transitionMessageHash: Self.tronWitnessScheduleTransitionMessageHash,
+                totalWeight: 1,
+                signedWeight: 1,
+                witnessAddresses: [Self.tronTestOwnerAddress],
+                witnessWeights: [1],
+                signersBitmap: Data([0x01]),
+                signatures: [transitionSignature]
+            ),
+            Self.expectedTronWitnessScheduleTransitionSealHash
+        )
+
+        let rawHeader = Self.hexData(Self.tronRawHeaderHex)
+        let parentRawHeader = Self.hexData(Self.tronParentRawHeaderHex)
+        XCTAssertEqual(
+            try canonicalTronSolidBlockHeaderProofBytes(
+                rawData: rawHeader,
+                witnessSignature: Self.tronHeaderSignature(0),
+                parentRawData: parentRawHeader,
+                parentWitnessSignature: Self.tronHeaderSignature(1),
+                rawDataHash: Self.tronRawHeaderHash,
+                parentRawDataHash: Self.tronParentRawHeaderHash,
+                blockId: Self.tronBlockId,
+                txTrieRoot: "0x" + String(repeating: "dd", count: 32),
+                accountStateRoot: "0x" + String(repeating: "ee", count: 32),
+                parentBlockId: Self.tronParentBlockId,
+                witnessAddress: "0x41" + String(repeating: "11", count: 20),
+                timestampMs: 1_700_000_012_345,
+                headerVersion: 1
+            ).count,
+            650
+        )
+        XCTAssertEqual(
+            try tronSolidBlockHeaderProofHash(
+                rawData: rawHeader,
+                witnessSignature: Self.tronHeaderSignature(0),
+                parentRawData: parentRawHeader,
+                parentWitnessSignature: Self.tronHeaderSignature(1),
+                rawDataHash: Self.tronRawHeaderHash,
+                parentRawDataHash: Self.tronParentRawHeaderHash,
+                blockId: Self.tronBlockId,
+                txTrieRoot: "0x" + String(repeating: "dd", count: 32),
+                accountStateRoot: "0x" + String(repeating: "ee", count: 32),
+                parentBlockId: Self.tronParentBlockId,
+                witnessAddress: "0x41" + String(repeating: "11", count: 20),
+                timestampMs: 1_700_000_012_345,
+                headerVersion: 1
+            ),
+            Self.expectedTronSolidBlockHeaderProofHash
+        )
+
+        for legacyRecoveryId in 27...30 {
+            let recoveryId = UInt8(legacyRecoveryId)
+            let legacyTransactionHex = Self.tronTransactionSourceBytesHex.replacingOccurrences(
+                of: Self.tronTransactionSourceSignatureHex,
+                with: Self.tronSignatureHexWithRecoveryId(
+                    Self.tronTransactionSourceSignatureHex,
+                    recoveryId
+                )
+            )
+            XCTAssertNotEqual(legacyTransactionHex, Self.tronTransactionSourceBytesHex)
+            XCTAssertThrowsError(try canonicalTronSccpTransactionSourceProofBytes(
+                sourceEventDigest: sourceEventDigest,
+                receiptRoot: receiptRoot,
+                transactionRoot: Self.tronTransactionSourceRoot,
+                transactionIndex: 0,
+                transactionCount: 1,
+                transactionBytes: Self.hexData(legacyTransactionHex),
+                transactionMerkleBranch: [],
+                inclusionBranch: inclusionBranch
+            )) { error in
+                XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("transactionBytes"))
+            }
+
+            XCTAssertThrowsError(try canonicalTronWitnessSealBytes(
+                totalWeight: 1,
+                signedWeight: 1,
+                solidBlockMessageHash: "0x" + Self.tronSourceEventTransactionIdVector,
+                witnessAddresses: [Self.tronTestOwnerAddress],
+                witnessWeights: [1],
+                signersBitmap: Data([0x01]),
+                signatures: [
+                    Self.hexData(Self.tronSignatureHexWithRecoveryId(
+                        "0x" + Self.tronSourceEventSignatureVector,
+                        recoveryId
+                    )),
+                ]
+            )) { error in
+                XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("signatures[0]"))
+            }
+
+            XCTAssertThrowsError(try canonicalTronWitnessScheduleTransitionSealBytes(
+                sourceDomain: sccpDomainTron,
+                fromWitnessScheduleEpoch: 7,
+                toWitnessScheduleEpoch: 8,
+                transitionBlockNumber: 12345,
+                transitionBlockHash: Self.tronBlockId,
+                parentWitnessScheduleHash: Self.tronParentWitnessScheduleHash,
+                nextWitnessScheduleHash: Self.tronWitnessScheduleHash,
+                nextWitnessSchedulePayload: nextWitnessSchedulePayload,
+                transitionMessageHash: Self.tronWitnessScheduleTransitionMessageHash,
+                totalWeight: 1,
+                signedWeight: 1,
+                witnessAddresses: [Self.tronTestOwnerAddress],
+                witnessWeights: [1],
+                signersBitmap: Data([0x01]),
+                signatures: [
+                    Self.hexData(Self.tronSignatureHexWithRecoveryId(
+                        Self.tronWitnessScheduleTransitionSignature,
+                        recoveryId
+                    )),
+                ]
+            )) { error in
+                XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("signatures[0]"))
+            }
+
+            XCTAssertThrowsError(try canonicalTronSolidBlockHeaderProofBytes(
+                rawData: rawHeader,
+                witnessSignature: Self.tronHeaderSignature(recoveryId),
+                parentRawData: parentRawHeader,
+                parentWitnessSignature: Self.tronHeaderSignature(1),
+                rawDataHash: Self.tronRawHeaderHash,
+                parentRawDataHash: Self.tronParentRawHeaderHash,
+                blockId: Self.tronBlockId,
+                txTrieRoot: "0x" + String(repeating: "dd", count: 32),
+                accountStateRoot: "0x" + String(repeating: "ee", count: 32),
+                parentBlockId: Self.tronParentBlockId,
+                witnessAddress: "0x41" + String(repeating: "11", count: 20),
+                timestampMs: 1_700_000_012_345,
+                headerVersion: 1
+            )) { error in
+                XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("solidBlockHeaderProof"))
+            }
+            XCTAssertThrowsError(try canonicalTronSolidBlockHeaderProofBytes(
+                rawData: rawHeader,
+                witnessSignature: Self.tronHeaderSignature(0),
+                parentRawData: parentRawHeader,
+                parentWitnessSignature: Self.tronHeaderSignature(recoveryId),
+                rawDataHash: Self.tronRawHeaderHash,
+                parentRawDataHash: Self.tronParentRawHeaderHash,
+                blockId: Self.tronBlockId,
+                txTrieRoot: "0x" + String(repeating: "dd", count: 32),
+                accountStateRoot: "0x" + String(repeating: "ee", count: 32),
+                parentBlockId: Self.tronParentBlockId,
+                witnessAddress: "0x41" + String(repeating: "11", count: 20),
+                timestampMs: 1_700_000_012_345,
+                headerVersion: 1
+            )) { error in
+                XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("solidBlockHeaderProof"))
+            }
+        }
+    }
+
+    func testBscCommitSealRequiresEthereumRecoveryIdsForUiTooling() throws {
+        let validatorPublicKeys = [
+            Self.hexData("0x0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"),
+            Self.hexData("0x02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"),
+            Self.hexData("0x02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"),
+            Self.hexData("0x02e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13")
+        ]
+        let validatorSetHash = "0xc5152802f6ca9ec72a4249646aca7476496f00b71ab5b1482c881a31fb42dd8c"
+        let commitMessageHash = "0x5832165d1a87ed49a323f2ecaecbef973489aed1a42e7eab369244e7abec43c7"
+        let signatures = [
+            Self.hexData("0x1b8802069b82c3d4cb6d7bec82323853f36d965c1e71647560084e7c7a0de9c17c85fcc3c6222f905cbbc4ba5b5f3f005f07d144304184181be67b3d02d1ba9f1b"),
+            Self.hexData("0x921d39c29fb793c496f96cf647128232d228024ed2f3e68cc6a52aa4cf64facf6bbd9dfcf7d703165f7880e7e1310f34d1b0fb8ca6dd8f506bf289ba012387f01c"),
+            Self.hexData("0xcfa11aa1ec214278afdb4ef7f3c40af97a2784e0336afb5ebef345c0d2eaa9ef629ad2d25cf9709eb9b842fb2fb3f749ce365af97af6e7064771614312d361961b")
+        ]
+        let seal = BscCommitSealProof(
+            totalPower: 4,
+            signedPower: 3,
+            commitMessageHash: commitMessageHash,
+            validatorPublicKeys: validatorPublicKeys,
+            validatorPowers: [1, 1, 1, 1],
+            signersBitmap: Self.hexData("0x07"),
+            signatures: signatures,
+            validatorSetHash: validatorSetHash
+        )
+
+        XCTAssertEqual(try canonicalBscCommitSealBytes(seal).count, 297)
+        XCTAssertEqual(
+            try bscCommitSealHash(seal),
+            "0x14659b4643d3a7961f7f86f46319992444617392c8e84967a3bb2a5ad7bc72fb"
+        )
+        for rejectedRecoveryId in [UInt8(0), 1, 29, 30] {
+            var rejectedSignature = signatures[0]
+            rejectedSignature[rejectedSignature.index(rejectedSignature.startIndex, offsetBy: 64)] = rejectedRecoveryId
+            let rejectedSeal = BscCommitSealProof(
+                totalPower: 4,
+                signedPower: 3,
+                commitMessageHash: commitMessageHash,
+                validatorPublicKeys: validatorPublicKeys,
+                validatorPowers: [1, 1, 1, 1],
+                signersBitmap: Self.hexData("0x07"),
+                signatures: [rejectedSignature, signatures[1], signatures[2]],
+                validatorSetHash: validatorSetHash
+            )
+            XCTAssertThrowsError(try canonicalBscCommitSealBytes(rejectedSeal)) { error in
+                XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("signatures[0]"))
             }
         }
     }
@@ -9598,6 +9989,16 @@ final class SccpSolanaProverTests: XCTestCase {
             parityFixture.sdkResults["swift"]?.toriiSubmitPayloadHash,
             parityFixture.toriiSubmitPayloadHash
         )
+        let legacySchemaParityFixture = parityJson.replacingOccurrences(
+            of: "\"schema\": \"\(sccpEthNativeEvmProverParityFixtureSchemaV1)\"",
+            with: "\"schema\": \"sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1\""
+        )
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverParityFixture(
+            jsonString: legacySchemaParityFixture,
+            nativeProverBundle: nativeProverBundle
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("nativeProverParityFixture.schema"))
+        }
         let driftedParityFixture = Self.sampleEthereumNativeEvmProverParityFixtureJson(
             nativeProverBundle: nativeProverBundle,
             swiftCalldataHash: "0x" + String(repeating: "96", count: 32)

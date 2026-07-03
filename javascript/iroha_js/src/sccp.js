@@ -39,24 +39,18 @@ export const SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1 =
   "sccp-native-evm-groth16-prover-bundle-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1 =
   "sccp-ethereum-mainnet-native-evm-cross-sdk-parity-v1";
-export const SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 =
-  "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1 =
   "sccp-ethereum-mainnet-native-evm-prover-self-test-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1 =
   "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1 =
   "sccp-bsc-testnet-native-evm-cross-sdk-parity-v1";
-export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 =
-  "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1 =
   "sccp-bsc-testnet-native-evm-prover-self-test-v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 =
   "sccp:bsc:native-evm-groth16-prover:bsc-testnet:v1";
 export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1 =
   "sccp-bsc-mainnet-native-evm-cross-sdk-parity-v1";
-export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 =
-  "sccp-bsc-mainnet-native-evm-cross-sdk-fixture-parity-v1";
 export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1 =
   "sccp-bsc-mainnet-native-evm-prover-self-test-v1";
 export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 =
@@ -10688,7 +10682,6 @@ const nativeEvmProverBundleProfiles = Object.freeze({
     chain: "eth",
     bundleId: SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
     paritySchema: SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
-    parityFixtureSchema: SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
     selfTestFixtureSchema: SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
     destinationBinding: ethereumMainnetSccpDestinationBinding,
     unavailableCode: "ERR_SCCP_ETH_NATIVE_PROVER_ARTIFACTS_UNAVAILABLE",
@@ -10706,8 +10699,6 @@ const nativeEvmProverBundleProfiles = Object.freeze({
     networkIdHex: SCCP_BSC_TESTNET_NETWORK_ID,
     bundleId: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
     paritySchema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
-    parityFixtureSchema:
-      SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
     selfTestFixtureSchema:
       SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
     destinationBinding: bscTestnetSccpDestinationBinding,
@@ -10725,8 +10716,6 @@ const nativeEvmProverBundleProfiles = Object.freeze({
     networkIdHex: SCCP_BSC_MAINNET_NETWORK_ID,
     bundleId: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
     paritySchema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
-    parityFixtureSchema:
-      SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
     selfTestFixtureSchema:
       SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
     destinationBinding: bscMainnetSccpDestinationBinding,
@@ -11479,13 +11468,8 @@ const validateNativeEvmProverParityFixture = (
     "schema",
     "schema",
   );
-  if (
-    schemaInput !== profile.paritySchema &&
-    schemaInput !== profile.parityFixtureSchema
-  ) {
-    throw new TypeError(
-      `schema must be ${profile.paritySchema} or legacy ${profile.parityFixtureSchema}`,
-    );
+  if (schemaInput !== profile.paritySchema) {
+    throw new TypeError(`schema must be ${profile.paritySchema}`);
   }
   const schema = schemaInput;
   const domain = normalizeSccpDomainId(
@@ -11705,7 +11689,7 @@ function assertProductionNativeEvmProverParitySchema(parityReport, profile) {
         ? "crossSdkParityBytes"
         : "crossSdkFixtureParityBytes";
     throw new TypeError(
-      `${parityBytesLabel} schema must be ${profile.paritySchema}; legacy fixture schema ${profile.parityFixtureSchema} is not valid for verified production native EVM prover artifacts`,
+      `${parityBytesLabel} schema must be ${profile.paritySchema}`,
     );
   }
 }
@@ -22622,7 +22606,7 @@ const normalizeSccpDomainId = (value, label, fallback) => {
 };
 
 const normalizeOptionalSccpDomainId = (input, label, fallback, ...names) => {
-  const domainInput = optionalResultField(input, ...names);
+  const domainInput = strictOptionalResultField(input, label, ...names);
   if (domainInput === SCCP_OPTIONAL_FIELD_MISSING) {
     return normalizeSccpDomainId(fallback, label);
   }
@@ -24319,13 +24303,13 @@ export function canonicalBscCommitSealBytes(input) {
   const signatures = [];
   signaturesInput.forEach((signatureInput, signatureIndex) => {
     const signature = toBytes(signatureInput, `signatures[${signatureIndex}]`);
-    if (!tronRecoverableSignatureIsCanonical(signature)) {
+    if (!bscRecoverableSignatureIsCanonical(signature)) {
       throw new RangeError(
         `signatures[${signatureIndex}] must be a canonical recoverable secp256k1 signature`,
       );
     }
     const signerIndex = signerIndices[signatureIndex];
-    const recoveredAddress = tronRecoveredSignerAddress20(
+    const recoveredAddress = bscRecoveredSignerAddress20(
       commitMessageHash,
       signature,
     );
@@ -30033,17 +30017,8 @@ const compareBytesLexicographically = (left, right) => {
   return 0;
 };
 
-const tronRecoverableSignatureIsCanonical = (signature) => {
+const recoverableSignatureScalarsAreCanonical = (signature) => {
   if (signature.length !== 65) return false;
-  const recoveryId = signature[64];
-  if (
-    !(
-      (recoveryId >= 0 && recoveryId <= 3) ||
-      (recoveryId >= 27 && recoveryId <= 30)
-    )
-  ) {
-    return false;
-  }
   const r = signature.slice(0, 32);
   const s = signature.slice(32, 64);
   return (
@@ -30054,13 +30029,31 @@ const tronRecoverableSignatureIsCanonical = (signature) => {
   );
 };
 
-const tronRecoveredSignerAddress20 = (messageHash, signature) => {
-  if (
-    messageHash.length !== 32 ||
-    !tronRecoverableSignatureIsCanonical(signature)
-  )
-    return null;
-  const recoveryId = signature[64] >= 27 ? signature[64] - 27 : signature[64];
+const tronRecoverableSignatureIsCanonical = (signature) => {
+  if (signature.length !== 65) return false;
+  const recoveryId = signature[64];
+  return (
+    recoveryId >= 0 &&
+    recoveryId <= 3 &&
+    recoverableSignatureScalarsAreCanonical(signature)
+  );
+};
+
+const bscRecoverableSignatureIsCanonical = (signature) => {
+  if (signature.length !== 65) return false;
+  const recoveryId = signature[64];
+  return (
+    (recoveryId === 27 || recoveryId === 28) &&
+    recoverableSignatureScalarsAreCanonical(signature)
+  );
+};
+
+const recoverSignerAddress20WithRecoveryId = (
+  messageHash,
+  signature,
+  recoveryId,
+) => {
+  if (messageHash.length !== 32 || signature.length !== 65) return null;
   try {
     const publicKey = secp256k1.Signature.fromCompact(signature.slice(0, 64))
       .addRecoveryBit(recoveryId)
@@ -30070,6 +30063,24 @@ const tronRecoveredSignerAddress20 = (messageHash, signature) => {
   } catch {
     return null;
   }
+};
+
+const tronRecoveredSignerAddress20 = (messageHash, signature) => {
+  if (
+    messageHash.length !== 32 ||
+    !tronRecoverableSignatureIsCanonical(signature)
+  )
+    return null;
+  return recoverSignerAddress20WithRecoveryId(messageHash, signature, signature[64]);
+};
+
+const bscRecoveredSignerAddress20 = (messageHash, signature) => {
+  if (
+    messageHash.length !== 32 ||
+    !bscRecoverableSignatureIsCanonical(signature)
+  )
+    return null;
+  return recoverSignerAddress20WithRecoveryId(messageHash, signature, signature[64] - 27);
 };
 
 export function canonicalSolanaSccpAccountInclusionNodeBytes(left, right) {
@@ -36893,28 +36904,6 @@ const bscTemplateSourceVerifierMaterial = (input = {}) => {
   });
 };
 
-const bscPlaceholderValidatorPrivateKey = ({
-  sourceEventDigest,
-  finalityBlockHash,
-  receiptsRoot,
-}) => {
-  let seed = prefixedKeccak(
-    "sccp:bsc:placeholder-validator-secret:v1",
-    concatBytes(
-      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
-      hexToBytes(finalityBlockHash, "finalityBlockHash", 32),
-      hexToBytes(receiptsRoot, "receiptsRoot", 32),
-    ),
-  );
-  for (let attempt = 0; attempt < 16; attempt += 1) {
-    if (secp256k1.utils.isValidPrivateKey(seed)) {
-      return seed;
-    }
-    seed = keccak_256(seed);
-  }
-  throw new TypeError("failed to derive a valid BSC placeholder validator key");
-};
-
 const bscRecoverableSignature = (messageHash, privateKey) => {
   const signature = secp256k1.sign(
     hexToBytes(messageHash, "commitMessageHash", 32),
@@ -37107,19 +37096,15 @@ export function buildBscSourceChainProofEnvelope(input) {
     throw new TypeError("BSC source-chain proof input must be an object");
   }
   const privateKeys = readBscSourceValidatorPrivateKeys(input, true);
-  return buildBscPlaceholderSourceChainProofEnvelope({
+  return buildBscSourceChainProofEnvelopeWithValidators({
     ...input,
     sourceValidatorPrivateKeys: privateKeys,
   });
 }
 
-/*
- * Compatibility builder for tests and legacy diagnostics. Supplying
- * sourceValidatorPrivateKeys switches it to the production signing path.
- */
-export function buildBscPlaceholderSourceChainProofEnvelope(input) {
+function buildBscSourceChainProofEnvelopeWithValidators(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new TypeError("BSC placeholder source-chain proof input must be an object");
+    throw new TypeError("BSC source-chain proof input must be an object");
   }
   const optionalInput = (label, ...names) => {
     const selected = strictOptionalResultField(input, label, ...names);
@@ -37154,7 +37139,7 @@ export function buildBscPlaceholderSourceChainProofEnvelope(input) {
   const sourceEventDigest = observedSourceEventDigest;
   const sourceEventLeafHash = sccpSourceEventLeafHash(sourceEventDigest);
   const branchSeed = prefixedBlake2b(
-    "sccp:bsc:placeholder-source-branch:v1",
+    "sccp:bsc:source-branch:v1",
     concatBytes(
       hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
       hexToBytes(commitmentRoot, "commitmentRoot", 32),
@@ -37227,34 +37212,24 @@ export function buildBscPlaceholderSourceChainProofEnvelope(input) {
   if (validatorEpoch === 0n) {
     throw new TypeError("BSC finalityHeight must fall inside a nonzero Parlia epoch");
   }
-  const sourceValidatorPrivateKeys = readBscSourceValidatorPrivateKeys(input);
-  const usesSuppliedValidators = sourceValidatorPrivateKeys !== null;
-  const privateKeys =
-    sourceValidatorPrivateKeys ??
-    Object.freeze([
-      bscPlaceholderValidatorPrivateKey({
-        sourceEventDigest,
-        observedSourceEventDigest,
-        finalityBlockHash,
-        receiptsRoot: receiptProof.receiptsRoot,
-      }),
-    ]);
+  if (receiptProof.syntheticRootMarker) {
+    throw new TypeError("BSC source-chain proof requires blockReceipts");
+  }
+  const privateKeys = readBscSourceValidatorPrivateKeys(input, true);
   const validatorPowers = readBscSourceValidatorPowers(
     input,
     privateKeys.length,
-    usesSuppliedValidators ? 1n : 3n,
+    1n,
   );
   const validatorSet = bscValidatorSetFromPrivateKeys(
     privateKeys,
     validatorPowers,
   );
-  material = usesSuppliedValidators
-    ? bscMaterialWithValidatorSetHash(
-        material,
-        validatorSet.validatorSetHash,
-        bscSourceProofHasTrustAnchorHash(input),
-      )
-    : material;
+  material = bscMaterialWithValidatorSetHash(
+    material,
+    validatorSet.validatorSetHash,
+    bscSourceProofHasTrustAnchorHash(input),
+  );
   const validatorSetHash = validatorSet.validatorSetHash;
   const commitMessageHash = bscCommitMessageHash({
     validatorEpoch,
@@ -37356,7 +37331,7 @@ export function buildBscPlaceholderSourceChainProofEnvelope(input) {
     proofFamily: SCCP_STARK_FRI_PROOF_FAMILY_V1,
     circuitId: SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
     proofBytes: prefixedBlake2b(
-      "sccp:bsc:placeholder-source-adapter-opening:v1",
+      "sccp:bsc:source-adapter-opening:v1",
       hexToBytes(adapterTranscriptHash, "adapterTranscriptHash", 32),
     ),
   });
@@ -37414,157 +37389,6 @@ export function buildBscPlaceholderSourceChainProofEnvelope(input) {
     validatorSetHash,
     receiptRootIndex: receiptRootIndex.toString(),
     syntheticRootMarker: receiptProof.syntheticRootMarker,
-  });
-}
-
-/*
- * TAIRA testnet compatibility builder for TON -> SORA live demos. This is a
- * source-chain proof envelope with the same outer binding as production TON
- * proofs, but with explicit placeholder consensus/inclusion bytes. Iroha nodes
- * must opt in with IROHA_SCCP_ALLOW_TON_TESTNET_SOURCE_PLACEHOLDER=1 before
- * accepting it.
- */
-export function buildTonTestnetPlaceholderSourceChainProofEnvelope(input) {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new TypeError("TON testnet placeholder source-chain proof input must be an object");
-  }
-  const optionalInput = (label, ...names) => {
-    const selected = strictOptionalResultField(input, label, ...names);
-    return selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected;
-  };
-  const messageId = normalizeNonZeroHex32(
-    strictResultField(input, "messageId", "messageId", "message_id"),
-    "messageId",
-  );
-  const payloadHash = normalizeNonZeroHex32(
-    strictResultField(input, "payloadHash", "payloadHash", "payload_hash"),
-    "payloadHash",
-  );
-  const commitmentRoot = normalizeNonZeroHex32(
-    strictResultField(
-      input,
-      "commitmentRoot",
-      "commitmentRoot",
-      "commitment_root",
-    ),
-    "commitmentRoot",
-  );
-  const sourceEventDigest = sccpSourceEventDigest(
-    SCCP_DOMAIN_TON,
-    SCCP_DOMAIN_SORA,
-    messageId,
-    payloadHash,
-  );
-  const sourceEventLeafHash = sccpSourceEventLeafHash(sourceEventDigest);
-  const branchSeed = prefixedBlake2b(
-    "sccp:ton:testnet-placeholder-source-branch:v1",
-    concatBytes(
-      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
-      hexToBytes(commitmentRoot, "commitmentRoot", 32),
-    ),
-  );
-  const inclusionBranch = Object.freeze([bytesToHex(branchSeed)]);
-  const receiptOrMessageRoot = sccpSourceMessageRootFromBranch(
-    sourceEventLeafHash,
-    0,
-    inclusionBranch,
-  );
-  const txIdInput =
-    optionalInput(
-      "txId",
-      "txId",
-      "txID",
-      "transactionHash",
-      "transaction_hash",
-      "transactionId",
-      "transaction_id",
-    ) ?? messageId;
-  const txId = normalizeNonZeroHex32(txIdInput, "txId");
-  const finalityHeight = normalizeUnsignedBigIntMax(
-    optionalInput("finalityHeight", "finalityHeight", "finality_height") ??
-      new DataView(
-        hexToBytes(txId, "txId", 32).buffer,
-        0,
-        8,
-      ).getBigUint64(0, false),
-    "finalityHeight",
-    SCCP_U64_MAX,
-    "u64",
-  );
-  if (finalityHeight === 0n) {
-    throw new TypeError("finalityHeight must not be zero");
-  }
-  const finalityBlockHash =
-    optionalInput(
-      "finalityBlockHash",
-      "finalityBlockHash",
-      "finality_block_hash",
-      "blockHash",
-      "block_hash",
-    ) ??
-    bytesToHex(
-      prefixedBlake2b(
-        "sccp:ton:testnet-placeholder-finality-block:v1",
-        concatBytes(
-          hexToBytes(txId, "txId", 32),
-          hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
-        ),
-      ),
-    );
-  const normalizedFinalityBlockHash = normalizeNonZeroHex32(
-    finalityBlockHash,
-    "finalityBlockHash",
-  );
-  const finalizedHeaderHash = sccpSourceFinalizedHeaderHash({
-    sourceDomain: SCCP_DOMAIN_TON,
-    finalityModelCanonical: 4,
-    finalityHeight,
-    finalityBlockHash: normalizedFinalityBlockHash,
-    receiptOrMessageRoot,
-  });
-  const consensusProof = concatBytes(
-    textEncoder.encode("sccp:ton:testnet-placeholder-consensus:v1"),
-    hexToBytes(txId, "txId", 32),
-    hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
-  );
-  const messageInclusionProof = concatBytes(
-    textEncoder.encode("sccp:ton:testnet-placeholder-inclusion:v1"),
-    hexToBytes(sourceEventLeafHash, "sourceEventLeafHash", 32),
-    hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
-  );
-  const sourceProofBytes = noritoFrame(
-    noritoStructValue([
-      noritoU8(1),
-      noritoU32Value(SCCP_DOMAIN_TON),
-      noritoU32Value(SCCP_DOMAIN_SORA),
-      noritoStringValue("ton", false, "sourceChain"),
-      noritoU32Value(4),
-      noritoU32Value(3),
-      hexToBytes(messageId, "messageId", 32),
-      hexToBytes(payloadHash, "payloadHash", 32),
-      hexToBytes(sourceEventDigest, "sourceEventDigest", 32),
-      hexToBytes(commitmentRoot, "commitmentRoot", 32),
-      noritoU64Value(finalityHeight),
-      hexToBytes(normalizedFinalityBlockHash, "finalityBlockHash", 32),
-      hexToBytes(finalizedHeaderHash, "finalizedHeaderHash", 32),
-      hexToBytes(receiptOrMessageRoot, "receiptOrMessageRoot", 32),
-      noritoRawByteVecValue(consensusProof, "consensusProof"),
-      noritoRawByteVecValue(messageInclusionProof, "messageInclusionProof"),
-      noritoByteVecSequenceValue(inclusionBranch, "inclusionBranch"),
-    ]),
-    SCCP_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA_HASH_HEX,
-  );
-  decodeSccpSourceChainProofSummary(sourceProofBytes, "sourceProofBytes");
-  return Object.freeze({
-    sourceProofHex: bytesToHex(sourceProofBytes),
-    sourceProofBytes: copyBytes(sourceProofBytes),
-    sourceEventDigest,
-    sourceEventLeafHash,
-    receiptOrMessageRoot,
-    finalityHeight: finalityHeight.toString(),
-    finalityBlockHash: normalizedFinalityBlockHash,
-    finalizedHeaderHash,
-    txId,
   });
 }
 
@@ -39278,7 +39102,7 @@ export function canonicalTronSolidBlockHeaderProofBytes(input) {
     !tronRecoverableSignatureIsCanonical(parentWitnessSignature)
   ) {
     throw new RangeError(
-      "TRON header signatures must be canonical low-S with recovery id 0..3 or 27..30",
+      "TRON header signatures must be canonical low-S with recovery id 0..3",
     );
   }
   const witnessAddress = hexToBytes(
@@ -40802,16 +40626,30 @@ export function normalizeSccpSourceAdapterDeploymentBinding(input = {}) {
   if (targetDomain !== SCCP_DOMAIN_SORA) {
     throw new TypeError("sourceAdapterDeploymentBinding.targetDomain must be SORA");
   }
+  const deploymentHashInput = strictOptionalResultField(
+    input,
+    "sourceAdapterDeploymentHash",
+    "sourceAdapterDeploymentHash",
+    "source_adapter_deployment_hash",
+  );
   const sourceAdapterDeploymentHash = normalizeHex32(
-    input.sourceAdapterDeploymentHash ??
-      input.source_adapter_deployment_hash ??
-      SCCP_ZERO_HASH_V1,
+    deploymentHashInput === SCCP_OPTIONAL_FIELD_MISSING ||
+      deploymentHashInput == null
+      ? SCCP_ZERO_HASH_V1
+      : deploymentHashInput,
     "sourceAdapterDeploymentHash",
   );
+  const deploymentReceiptHashInput = strictOptionalResultField(
+    input,
+    "sourceAdapterDeploymentReceiptHash",
+    "sourceAdapterDeploymentReceiptHash",
+    "source_adapter_deployment_receipt_hash",
+  );
   const sourceAdapterDeploymentReceiptHash = normalizeHex32(
-    input.sourceAdapterDeploymentReceiptHash ??
-      input.source_adapter_deployment_receipt_hash ??
-      SCCP_ZERO_HASH_V1,
+    deploymentReceiptHashInput === SCCP_OPTIONAL_FIELD_MISSING ||
+      deploymentReceiptHashInput == null
+      ? SCCP_ZERO_HASH_V1
+      : deploymentReceiptHashInput,
     "sourceAdapterDeploymentReceiptHash",
   );
   const deploymentIsZero = sourceAdapterDeploymentHash === SCCP_ZERO_HASH_V1;
@@ -40861,7 +40699,13 @@ const sourceAdapterVerifierProfile = (sourceDomain) => {
 const destinationBindingTargetDomain = (input) => {
   const value =
     typeof input === "object" && input !== null
-      ? (input.targetDomain ?? input.target_domain ?? input.domain)
+      ? strictResultField(
+          input,
+          "targetDomain",
+          "targetDomain",
+          "target_domain",
+          "domain",
+        )
       : input;
   return normalizeSccpDomainId(value, "targetDomain");
 };
@@ -40975,18 +40819,26 @@ const normalizeSolanaDestinationProgramDataEvidence = (input) => {
     );
   }
   const verifierProgram = decodeSolanaBase58Fixed(
-    input.verifierIdentity ??
-      input.verifier_identity ??
-      input.verifierProgramId ??
-      input.verifier_program_id,
+    strictResultField(
+      input,
+      "verifierIdentity",
+      "verifierIdentity",
+      "verifier_identity",
+      "verifierProgramId",
+      "verifier_program_id",
+    ),
     "verifierIdentity",
     SCCP_SOLANA_PROGRAM_ID_BYTES,
   );
   const programdataAddress = decodeSolanaBase58Fixed(
-    input.solanaProgramdataAddress ??
-      input.solana_programdata_address ??
-      input.programdataAddress ??
-      input.programdata_address,
+    strictResultField(
+      input,
+      "solanaProgramdataAddress",
+      "solanaProgramdataAddress",
+      "solana_programdata_address",
+      "programdataAddress",
+      "programdata_address",
+    ),
     "solanaProgramdataAddress",
     SCCP_SOLANA_PROGRAM_ID_BYTES,
   );
@@ -40996,17 +40848,25 @@ const normalizeSolanaDestinationProgramDataEvidence = (input) => {
     );
   }
   const programdataSlot = canonicalPositiveU64Text(
-    input.solanaProgramdataSlot ??
-      input.solana_programdata_slot ??
-      input.programdataSlot ??
-      input.programdata_slot,
+    strictResultField(
+      input,
+      "solanaProgramdataSlot",
+      "solanaProgramdataSlot",
+      "solana_programdata_slot",
+      "programdataSlot",
+      "programdata_slot",
+    ),
     "solanaProgramdataSlot",
   );
   const expectedProgramdataSlot = canonicalPositiveU64Text(
-    input.solanaExpectedProgramdataSlot ??
-      input.solana_expected_programdata_slot ??
-      input.expectedProgramdataSlot ??
-      input.expected_programdata_slot,
+    strictResultField(
+      input,
+      "solanaExpectedProgramdataSlot",
+      "solanaExpectedProgramdataSlot",
+      "solana_expected_programdata_slot",
+      "expectedProgramdataSlot",
+      "expected_programdata_slot",
+    ),
     "solanaExpectedProgramdataSlot",
   );
   if (programdataSlot !== expectedProgramdataSlot) {
@@ -41015,17 +40875,25 @@ const normalizeSolanaDestinationProgramDataEvidence = (input) => {
     );
   }
   const programAccountContextSlot = canonicalPositiveU64Text(
-    input.solanaProgramAccountContextSlot ??
-      input.solana_program_account_context_slot ??
-      input.programAccountContextSlot ??
-      input.program_account_context_slot,
+    strictResultField(
+      input,
+      "solanaProgramAccountContextSlot",
+      "solanaProgramAccountContextSlot",
+      "solana_program_account_context_slot",
+      "programAccountContextSlot",
+      "program_account_context_slot",
+    ),
     "solanaProgramAccountContextSlot",
   );
   const programdataAccountContextSlot = canonicalPositiveU64Text(
-    input.solanaProgramdataAccountContextSlot ??
-      input.solana_programdata_account_context_slot ??
-      input.programdataAccountContextSlot ??
-      input.programdata_account_context_slot,
+    strictResultField(
+      input,
+      "solanaProgramdataAccountContextSlot",
+      "solanaProgramdataAccountContextSlot",
+      "solana_programdata_account_context_slot",
+      "programdataAccountContextSlot",
+      "programdata_account_context_slot",
+    ),
     "solanaProgramdataAccountContextSlot",
   );
   if (
@@ -41037,27 +40905,39 @@ const normalizeSolanaDestinationProgramDataEvidence = (input) => {
     );
   }
   const rpcCommitment = normalizeNonEmptyString(
-    input.solanaRpcCommitment ??
-      input.solana_rpc_commitment ??
-      input.rpcCommitment ??
-      input.rpc_commitment,
+    strictResultField(
+      input,
+      "solanaRpcCommitment",
+      "solanaRpcCommitment",
+      "solana_rpc_commitment",
+      "rpcCommitment",
+      "rpc_commitment",
+    ),
     "solanaRpcCommitment",
   );
   if (rpcCommitment !== "finalized") {
     throw new TypeError("solanaRpcCommitment must be finalized");
   }
   const programOwner = normalizeNonEmptyString(
-    input.solanaProgramOwner ??
-      input.solana_program_owner ??
-      input.programOwner ??
-      input.program_owner,
+    strictResultField(
+      input,
+      "solanaProgramOwner",
+      "solanaProgramOwner",
+      "solana_program_owner",
+      "programOwner",
+      "program_owner",
+    ),
     "solanaProgramOwner",
   );
   const programdataOwner = normalizeNonEmptyString(
-    input.solanaProgramdataOwner ??
-      input.solana_programdata_owner ??
-      input.programdataOwner ??
-      input.programdata_owner,
+    strictResultField(
+      input,
+      "solanaProgramdataOwner",
+      "solanaProgramdataOwner",
+      "solana_programdata_owner",
+      "programdataOwner",
+      "programdata_owner",
+    ),
     "solanaProgramdataOwner",
   );
   if (programOwner !== SCCP_SOLANA_UPGRADEABLE_LOADER_ID) {
@@ -41071,17 +40951,25 @@ const normalizeSolanaDestinationProgramDataEvidence = (input) => {
     );
   }
   requireStrictBoolean(
-    input.solanaProgramImmutable ??
-      input.solana_program_immutable ??
-      input.programImmutable ??
-      input.program_immutable,
+    strictResultField(
+      input,
+      "solanaProgramImmutable",
+      "solanaProgramImmutable",
+      "solana_program_immutable",
+      "programImmutable",
+      "program_immutable",
+    ),
     "solanaProgramImmutable",
   );
   const programAccountData = base64ToBytesStrict(
-    input.solanaProgramAccountDataBase64 ??
-      input.solana_program_account_data_base64 ??
-      input.programAccountDataBase64 ??
-      input.program_account_data_base64,
+    strictResultField(
+      input,
+      "solanaProgramAccountDataBase64",
+      "solanaProgramAccountDataBase64",
+      "solana_program_account_data_base64",
+      "programAccountDataBase64",
+      "program_account_data_base64",
+    ),
     "solanaProgramAccountDataBase64",
   );
   const expectedProgramAccountData =
@@ -41092,10 +40980,14 @@ const normalizeSolanaDestinationProgramDataEvidence = (input) => {
     );
   }
   const programdataMetadata = base64ToBytesStrict(
-    input.solanaProgramdataMetadataBase64 ??
-      input.solana_programdata_metadata_base64 ??
-      input.programdataMetadataBase64 ??
-      input.programdata_metadata_base64,
+    strictResultField(
+      input,
+      "solanaProgramdataMetadataBase64",
+      "solanaProgramdataMetadataBase64",
+      "solana_programdata_metadata_base64",
+      "programdataMetadataBase64",
+      "programdata_metadata_base64",
+    ),
     "solanaProgramdataMetadataBase64",
   );
   if (
@@ -41112,10 +41004,14 @@ const normalizeSolanaDestinationProgramDataEvidence = (input) => {
   const metadataHash = bytesToHex(blake2b(programdataMetadata, { dkLen: 32 }));
   if (
     normalizeNonZeroHex32(
-      input.solanaProgramdataMetadataBlake2b256 ??
-        input.solana_programdata_metadata_blake2b256 ??
-        input.programdataMetadataBlake2b256 ??
-        input.programdata_metadata_blake2b256,
+      strictResultField(
+        input,
+        "solanaProgramdataMetadataBlake2b256",
+        "solanaProgramdataMetadataBlake2b256",
+        "solana_programdata_metadata_blake2b256",
+        "programdataMetadataBlake2b256",
+        "programdata_metadata_blake2b256",
+      ),
       "solanaProgramdataMetadataBlake2b256",
     ) !== metadataHash
   ) {
@@ -41124,19 +41020,27 @@ const normalizeSolanaDestinationProgramDataEvidence = (input) => {
     );
   }
   const programdataExecutable = base64ToBytesStrict(
-    input.solanaProgramdataExecutableBase64 ??
-      input.solana_programdata_executable_base64 ??
-      input.programdataExecutableBase64 ??
-      input.programdata_executable_base64,
+    strictResultField(
+      input,
+      "solanaProgramdataExecutableBase64",
+      "solanaProgramdataExecutableBase64",
+      "solana_programdata_executable_base64",
+      "programdataExecutableBase64",
+      "programdata_executable_base64",
+    ),
     "solanaProgramdataExecutableBase64",
   );
   const executableHash = solanaVerifierProgramCodeHash(programdataExecutable);
   if (
     normalizeNonZeroHex32(
-      input.solanaProgramdataExecutableBlake2b256 ??
-        input.solana_programdata_executable_blake2b256 ??
-        input.programdataExecutableBlake2b256 ??
-        input.programdata_executable_blake2b256,
+      strictResultField(
+        input,
+        "solanaProgramdataExecutableBlake2b256",
+        "solanaProgramdataExecutableBlake2b256",
+        "solana_programdata_executable_blake2b256",
+        "programdataExecutableBlake2b256",
+        "programdata_executable_blake2b256",
+      ),
       "solanaProgramdataExecutableBlake2b256",
     ) !== executableHash
   ) {
@@ -41146,7 +41050,12 @@ const normalizeSolanaDestinationProgramDataEvidence = (input) => {
   }
   if (
     normalizeNonZeroHex32(
-      input.verifierCodeHash ?? input.verifier_code_hash,
+      strictResultField(
+        input,
+        "verifierCodeHash",
+        "verifierCodeHash",
+        "verifier_code_hash",
+      ),
       "verifierCodeHash",
     ) !== executableHash
   ) {
@@ -41188,19 +41097,36 @@ const requireSccpHashRolesDistinct = (context, fields) => {
 export function canonicalSolanaSccpRouteCanaryEvidenceBytes(input) {
   const value = input && typeof input === "object" ? input : {};
   const routeAllowlistHash = nonZeroHex32Bytes(
-    value.routeAllowlistHash ?? value.route_allowlist_hash,
+    strictResultField(
+      value,
+      "routeAllowlistHash",
+      "routeAllowlistHash",
+      "route_allowlist_hash",
+    ),
     "routeAllowlistHash",
   );
   const destinationBindingHash = nonZeroHex32Bytes(
-    value.destinationBindingHash ?? value.destination_binding_hash,
+    strictResultField(
+      value,
+      "destinationBindingHash",
+      "destinationBindingHash",
+      "destination_binding_hash",
+    ),
     "destinationBindingHash",
   );
   const canonicalSolanaDestinationBindingHash =
     sccpDestinationBindingHash(SCCP_DOMAIN_SOL);
+  const expectedDestinationBindingHashInput = strictOptionalResultField(
+    value,
+    "expectedDestinationBindingHash",
+    "expectedDestinationBindingHash",
+    "expected_destination_binding_hash",
+  );
   const expectedDestinationBindingHash = normalizeNonZeroHex32(
-    value.expectedDestinationBindingHash ??
-      value.expected_destination_binding_hash ??
-      canonicalSolanaDestinationBindingHash,
+    expectedDestinationBindingHashInput === SCCP_OPTIONAL_FIELD_MISSING ||
+      expectedDestinationBindingHashInput == null
+      ? canonicalSolanaDestinationBindingHash
+      : expectedDestinationBindingHashInput,
     "expectedDestinationBindingHash",
   );
   if (
@@ -41218,12 +41144,21 @@ export function canonicalSolanaSccpRouteCanaryEvidenceBytes(input) {
     );
   }
   const sourceVerifierMaterialHash = nonZeroHex32Bytes(
-    value.sourceVerifierMaterialHash ?? value.source_verifier_material_hash,
+    strictResultField(
+      value,
+      "sourceVerifierMaterialHash",
+      "sourceVerifierMaterialHash",
+      "source_verifier_material_hash",
+    ),
     "sourceVerifierMaterialHash",
   );
   const sourceAdapterEngineDeploymentHash = nonZeroHex32Bytes(
-    value.sourceAdapterEngineDeploymentHash ??
-      value.source_adapter_engine_deployment_hash,
+    strictResultField(
+      value,
+      "sourceAdapterEngineDeploymentHash",
+      "sourceAdapterEngineDeploymentHash",
+      "source_adapter_engine_deployment_hash",
+    ),
     "sourceAdapterEngineDeploymentHash",
   );
   requireSccpHashRolesDistinct("Solana route canary governed hashes", [
@@ -46706,7 +46641,7 @@ export function sccpSourceAdapterVerifierVkHash(input) {
       ? input
       : { sourceDomain: input };
   const sourceDomain = normalizeSccpDomainId(
-    value.sourceDomain ?? value.source_domain,
+    strictResultField(value, "sourceDomain", "sourceDomain", "source_domain"),
     "sourceDomain",
   );
   const targetDomain = normalizeOptionalSccpDomainId(
@@ -47243,11 +47178,22 @@ const requireProductionSolanaProofRequest = (request) => {
   ) {
     throw new TypeError("Solana SCCP production proofs must target SORA");
   }
-  const requestGenesisHash =
-    request.mainnetGenesisHash ?? request.mainnet_genesis_hash;
-  const witnessGenesisHash =
-    request.witness?.mainnetGenesisHash ??
-    request.witness?.mainnet_genesis_hash;
+  const requestGenesisHash = strictResultField(
+    request,
+    "mainnetGenesisHash",
+    "mainnetGenesisHash",
+    "mainnet_genesis_hash",
+  );
+  const witness =
+    request.witness && typeof request.witness === "object"
+      ? request.witness
+      : {};
+  const witnessGenesisHash = strictResultField(
+    witness,
+    "witness.mainnetGenesisHash",
+    "mainnetGenesisHash",
+    "mainnet_genesis_hash",
+  );
   if (
     requestGenesisHash !== SCCP_SOLANA_MAINNET_GENESIS_HASH ||
     witnessGenesisHash !== SCCP_SOLANA_MAINNET_GENESIS_HASH

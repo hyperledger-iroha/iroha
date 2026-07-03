@@ -866,6 +866,9 @@ final class OfflineNoteTests: XCTestCase {
             )
         )
         XCTAssertTrue(OfflineNativePaymentTextPayloadCodec.isCompactPaymentToken(compact))
+        XCTAssertFalse(OfflineNativePaymentTextPayloadCodec.isCompactPaymentToken(" \(compact)"))
+        XCTAssertThrowsError(try OfflineNativePaymentTextPayloadCodec.decodePaymentToken(" \(compact)"))
+        XCTAssertThrowsError(try OfflineNativePaymentTextPayloadCodec.decodePaymentToken("\(compact)\n"))
         XCTAssertLessThan(compact.utf8.count, raw.utf8.count)
 
         let decoded = try OfflineNativePaymentTextPayloadCodec.decodePaymentToken(compact)
@@ -2483,6 +2486,18 @@ final class OfflineNoteTests: XCTestCase {
             ),
             validReceiveText
         )
+        XCTAssertThrowsError(
+            try OfflineNoteTransferHandoff.normalizeTextTransportPayload(
+                " \(validReceiveText)",
+                expectedKind: .receiveRequest
+            )
+        )
+        XCTAssertThrowsError(
+            try OfflineNoteTransferHandoff.normalizeDeviceToDeviceTextPayload(
+                "\(validReceiveText)\n",
+                expectedKind: .receiveRequest
+            )
+        )
         XCTAssertEqual(
             try OfflineNoteTransferHandoff.normalizeDeviceToDeviceTextPayload(
                 validAckText,
@@ -3716,12 +3731,14 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertFalse(nativeToken.containsOutputNoteCommitment(hex: derivation.changeOutputCommitment.uppercased()))
         XCTAssertNil(nativeToken.outputClaim(matchingNoteCommitmentHex: "0x\(derivation.changeOutputCommitment)"))
         XCTAssertNil(nativeToken.outputClaim(matchingNoteCommitmentHex: "\(derivation.changeOutputCommitment) "))
+        XCTAssertNil(nativeToken.outputClaim(matchingNoteCommitmentHex: String(repeating: "ab", count: 31)))
         XCTAssertEqual(
             nativeToken.outputClaim(matchingNoteCommitment: try Self.hex(derivation.changeOutputCommitment))?.amount,
             changeOutput.amount
         )
         XCTAssertFalse(nativeToken.containsOutputNoteCommitment(Data(repeating: 0xFF, count: 32)))
         XCTAssertFalse(nativeToken.containsOutputNoteCommitment(hex: "not-hex"))
+        XCTAssertFalse(nativeToken.containsOutputNoteCommitment(hex: String(repeating: "ab", count: 31)))
 
         let senderCompact = OfflineCompactKeyCertificate(
             certificate: try Self.certificate(fixture.paymentToken.senderKeyCertificate)
@@ -3780,11 +3797,13 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertFalse(canonicalToken.containsOutputNoteCommitment(derivation.changeOutputCommitment.uppercased()))
         XCTAssertNil(canonicalToken.outputClaim(matchingNoteCommitment: "0x\(derivation.changeOutputCommitment)"))
         XCTAssertNil(canonicalToken.outputClaim(matchingNoteCommitment: "\(derivation.changeOutputCommitment) "))
+        XCTAssertNil(canonicalToken.outputClaim(matchingNoteCommitment: String(repeating: "ab", count: 31)))
         XCTAssertEqual(
             canonicalToken.outputClaim(matchingNoteCommitment: derivation.changeOutputCommitment)?.amount,
             changeOutput.amount
         )
         XCTAssertFalse(canonicalToken.containsOutputNoteCommitment(String(repeating: "f", count: 64)))
+        XCTAssertFalse(canonicalToken.containsOutputNoteCommitment(String(repeating: "ab", count: 31)))
     }
 
     func testOfflineNotePayloadRejectsInvalidAmountStrings() throws {

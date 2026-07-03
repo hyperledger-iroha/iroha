@@ -1713,6 +1713,104 @@ def test_evm_source_live_rejects_noncanonical_expected_rpc_chain_id_before_rpc()
         raise AssertionError("noncanonical explicit source RPC chain id was accepted")
 
 
+def test_evm_source_live_namespace_args_reject_non_bytes_without_stringifying():
+    module = load_live_module()
+
+    byte_cases = (
+        "expected_source_bridge_code_hash",
+        "deployment_transaction_hash",
+        "source_trust_anchor_hash",
+        "consensus_verifier_hash",
+        "message_inclusion_verifier_hash",
+        "finality_policy_hash",
+        "adapter_verifier_vk_hash",
+        "deployment_receipt_hash",
+        "expected_source_verifier_material_hash",
+        "expected_source_adapter_engine_deployment_hash",
+    )
+    for name in byte_cases:
+        try:
+            module._optional_namespace_bytes32_arg(
+                SimpleNamespace(**{name: HostileImportedScalar()}),
+                name,
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == f"--{name.replace('_', '-')} must be bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                f"non-bytes EVM source namespace hash {name} was accepted"
+            )
+
+
+def test_evm_source_live_collect_rejects_namespace_args_before_rpc():
+    module = load_live_module()
+
+    def no_rpc_opener(_request, timeout):
+        del timeout
+        raise AssertionError("EVM source RPC was called before namespace validation")
+
+    base = {
+        "rpc_url": "https://ethereum.example",
+        "domain": module.SCCP_DOMAIN_ETH,
+        "bridge_address": "0x" + "11" * 20,
+        "expected_rpc_chain_id": None,
+        "expected_source_bridge_code_hash": None,
+        "deployment_transaction_hash": None,
+        "source_trust_anchor_hash": None,
+        "consensus_verifier_hash": None,
+        "message_inclusion_verifier_hash": None,
+        "finality_policy_hash": None,
+        "adapter_verifier_vk_hash": None,
+        "deployment_receipt_hash": None,
+        "expected_source_verifier_material_hash": None,
+        "expected_source_adapter_engine_deployment_hash": None,
+        "block_tag": "latest",
+        "timeout": 1.0,
+    }
+    cases = (
+        (
+            {"expected_rpc_chain_id": HostileImportedScalar()},
+            "--expected-rpc-chain-id must be a positive u64 integer",
+        ),
+        (
+            {"expected_source_bridge_code_hash": HostileImportedScalar()},
+            "--expected-source-bridge-code-hash must be bytes",
+        ),
+        (
+            {"deployment_transaction_hash": HostileImportedScalar()},
+            "--deployment-transaction-hash must be bytes",
+        ),
+        (
+            {"source_trust_anchor_hash": HostileImportedScalar()},
+            "--source-trust-anchor-hash must be bytes",
+        ),
+        (
+            {"expected_source_verifier_material_hash": HostileImportedScalar()},
+            "--expected-source-verifier-material-hash must be bytes",
+        ),
+    )
+    for overrides, expected_message in cases:
+        values = dict(base)
+        values.update(overrides)
+        try:
+            module.collect_live_evidence(
+                SimpleNamespace(**values),
+                opener=no_rpc_opener,
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                f"invalid EVM source namespace args were accepted: {overrides!r}"
+            )
+
+
 def test_evm_source_live_toml_requires_deployment_receipt_evidence():
     module = load_live_module()
     fake = fake_opener_for(module)

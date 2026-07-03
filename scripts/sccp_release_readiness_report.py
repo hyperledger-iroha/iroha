@@ -445,7 +445,7 @@ NATIVE_EVM_PROVER_REQUIRED_AUDIT_HASHES = (
     "no_wasm_no_remote_scan",
 )
 NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA = (
-    "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1"
+    "sccp-ethereum-mainnet-native-evm-cross-sdk-parity-v1"
 )
 NATIVE_EVM_PROVER_PARITY_FIXTURE_REQUIRED_KEYS = {
     "schema",
@@ -1207,6 +1207,27 @@ def _bsc_inbound_adversarial_gate_inventory_errors(
         ]
 
 
+def _ton_inbound_adversarial_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for TON inbound adversarial guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_ton_inbound_adversarial_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
+        return [
+            "TON mainnet inbound adversarial source inventory "
+            "cannot run release-bundle verifier helper"
+        ]
+
+
 def _tron_inbound_adversarial_gate_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -1789,8 +1810,12 @@ def _ethereum_sync_committee_roster_gate_inventory_errors(
 def _sccp_unready_transparent_proof_config_gate_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
     forbidden_paths: tuple[str | Path, ...] | None = None,
+    forbidden_surface_paths: tuple[str | Path, ...] | None = None,
+    forbidden_config_paths: tuple[str | Path, ...] | None = None,
+    cargo_manifest_paths: tuple[str | Path, ...] | None = None,
+    release_command_paths: tuple[str | Path, ...] | None = None,
 ) -> list[str]:
-    """Return source-inventory errors for config-owned unready proof toggles."""
+    """Return source-inventory errors for removed unready proof surfaces."""
 
     try:
         verifier = _load_release_bundle_verify_helpers()
@@ -1798,12 +1823,28 @@ def _sccp_unready_transparent_proof_config_gate_inventory_errors(
             verifier,
             "_sccp_unready_transparent_proof_config_inventory_errors",
         )
-        if inventory is None and forbidden_paths is None:
+        if (
+            inventory is None
+            and forbidden_paths is None
+            and forbidden_surface_paths is None
+            and forbidden_config_paths is None
+            and cargo_manifest_paths is None
+            and release_command_paths is None
+        ):
             return list(helper())
-        return list(helper(inventory, forbidden_paths))
+        return list(
+            helper(
+                inventory,
+                forbidden_paths,
+                forbidden_surface_paths,
+                forbidden_config_paths,
+                cargo_manifest_paths,
+                release_command_paths,
+            )
+        )
     except (Exception, SystemExit):  # pragma: no cover - exercised through blocker text.
         return [
-            "SCCP unready transparent-proof config-only source inventory "
+            "SCCP unready transparent-proof removed-surface source inventory "
             "cannot run release-bundle verifier helper"
         ]
 
@@ -3445,6 +3486,30 @@ def _public_cryptographic_source_record_template_hash_errors(
             "not built-in template material"
         )
     return errors
+
+
+def _public_cryptographic_source_record_hash_role_errors(
+    row_label: str,
+    row: dict[str, Any],
+) -> list[str]:
+    """Return public-row blockers when source-record hash roles are reused."""
+
+    source_verifier_material_hash = row.get("source_verifier_material_hash")
+    source_adapter_engine_deployment_hash = row.get(
+        "source_adapter_engine_deployment_hash"
+    )
+    if (
+        _is_nonzero_hex32(source_verifier_material_hash)
+        and _is_nonzero_hex32(source_adapter_engine_deployment_hash)
+        and source_verifier_material_hash == source_adapter_engine_deployment_hash
+    ):
+        # Source-inventory marker: public crypto source-record hash roles must remain distinct
+        # Source-inventory marker: source_adapter_engine_deployment_hash must not reuse source_verifier_material_hash
+        return [
+            f"{row_label} source_adapter_engine_deployment_hash must not reuse "
+            "source_verifier_material_hash"
+        ]
+    return []
 
 
 def _public_cryptographic_route_canary_template_hash_errors(
@@ -8659,6 +8724,9 @@ def _build_report(
     bsc_inbound_adversarial_gate_blockers = (
         _bsc_inbound_adversarial_gate_inventory_errors()
     )
+    ton_inbound_adversarial_gate_blockers = (
+        _ton_inbound_adversarial_gate_inventory_errors()
+    )
     tron_inbound_adversarial_gate_blockers = (
         _tron_inbound_adversarial_gate_inventory_errors()
     )
@@ -8864,6 +8932,12 @@ def _build_report(
                 "passed" if not bsc_inbound_adversarial_gate_blockers else "blocked"
             ),
             "validation_blockers": bsc_inbound_adversarial_gate_blockers,
+        },
+        "ton_inbound_adversarial_gate": {
+            "validation_status": (
+                "passed" if not ton_inbound_adversarial_gate_blockers else "blocked"
+            ),
+            "validation_blockers": ton_inbound_adversarial_gate_blockers,
         },
         "tron_inbound_adversarial_gate": {
             "validation_status": (
@@ -9421,6 +9495,7 @@ def _build_report(
         and not ethereum_data_collection_no_proxy_gate_blockers
         and not ethereum_inbound_adversarial_gate_blockers
         and not bsc_inbound_adversarial_gate_blockers
+        and not ton_inbound_adversarial_gate_blockers
         and not tron_inbound_adversarial_gate_blockers
         and not bsc_route_config_canonical_manifest_gate_blockers
         and not tron_route_config_canonical_manifest_gate_blockers
@@ -9504,6 +9579,7 @@ def _build_report(
     blockers.extend(ethereum_data_collection_no_proxy_gate_blockers)
     blockers.extend(ethereum_inbound_adversarial_gate_blockers)
     blockers.extend(bsc_inbound_adversarial_gate_blockers)
+    blockers.extend(ton_inbound_adversarial_gate_blockers)
     blockers.extend(tron_inbound_adversarial_gate_blockers)
     blockers.extend(bsc_route_config_canonical_manifest_gate_blockers)
     blockers.extend(tron_route_config_canonical_manifest_gate_blockers)
@@ -10781,7 +10857,9 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping; normalization is only used to classify malformed summary-shaped lines.",
             "- TRX `UnitTestResult` outcome values must be present and literal `Passed`; missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence.",
             "- Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`; truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence.",
-            "- TRX XML metadata percent decoding is bounded and fail-closed: sensitive metadata hidden behind nested percent encoding and values still percent-decodable after eight rounds remain forged evidence.",
+            "- TRX XML metadata percent decoding is bounded and fail-closed.",
+            "- sensitive metadata hidden behind nested percent encoding remains forged evidence.",
+            "- values still percent-decodable after eight rounds remain forged evidence.",
             "- Direct `.NET` TRX XML section children must stay canonical: `Results` contains only direct `UnitTestResult` rows whose rows are leaf elements, `TestDefinitions` contains only direct `UnitTest` definitions, each `UnitTest` contains only direct leaf `Execution` and `TestMethod` children, and extra or nested XML children remain forged evidence.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
             f"- {SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE}",
@@ -10794,8 +10872,9 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- BSC Groth16 material evidence guard source inventory must pin closed review/audit evidence schemas, alias-conflict rejection, safe relative evidence path validation, non-symlink report/transcript reads, bounded public evidence files, required review/audit evidence flags, and adversarial tests before public bundle readiness can pass.",
             "- SCCP Ethereum no-proxy data-collection source inventory must pin app-owned execution/Beacon provider reads and reject Torii proxy or embedded HTTP-client fallbacks across public SDKs.",
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
-            "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
-            "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
+            "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, missing source-event validation, settlement payload/route alias rejection, and EVM-style recoverable-signature recovery-id enforcement before BSC inbound source proofs can be accepted.",
+            "- SCCP TON inbound adversarial source inventory must pin JavaScript TON settlement payload/route alias rejection and TON source-event digest binding before TON inbound source proofs can be accepted.",
+            "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection plus runtime and Python/JavaScript/Kotlin/Java/Swift SDK legacy recoverable-signature recovery-id alias rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
             "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, raw publish HTTP-error preservation, public-DNS BSC RPC, Torii, CLI/runtime traversal-safe browser-module URL rejection, browser-prover sidecar/reference duplicate-or-malformed-alias rejection, accessor-backed scalar alias suppression, handoff-placeholder, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, duplicate-alias, accessor-backed alias suppression, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TON route-manifest CLI source inventory must pin redacted duplicate-option rejection, explicit option-value requirements, valued-help rejection, exact burn-record VK names, non-empty input/output path preflight, unknown-command and unknown-option rejection, redacted unexpected positional arguments, exact publish booleans, submit-only option rejection, gas metadata preflight before manifest reads, canonical I105 authorities, submit metadata preflight before private-key lookup, bounded private-key env names, public-DNS HTTPS-or-loopback Torii URLs, top-level and post-deploy public DNS explorer plus traversal-safe browser-module URL validation, output path collision rejection, and exact string-only nanoTON decimal manifest ingestion before governed TAIRA TON XOR route-manifest artifacts can satisfy production readiness.",
@@ -10858,7 +10937,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP release public cryptographic-evidence binding source inventory must pin production-domain inventory, row-key and audit-key classification, lane-field binding, canonical row recomputation, Markdown row-domain/audit-key suppression, and active route-canary binding rejection before published bundle readiness can pass.",
             "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
             "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
-            "- SCCP unready transparent-proof source inventory must pin the diagnostic `allow_unready` toggle as config-owned, reject case-variant, split-token, and source-escaped environment override names on config-owned paths, and reject production-ready BSC/TRON route configs that force the unready toggle back on.",
+            "- SCCP unready transparent-proof source inventory must pin the removed runtime/config surface, keep the `allow_unready` manifest and source-proof bypasses effective only under `cfg(any(test, feature = \"test-fixtures\"))`, keep Torii route/proof `allow_unready` bypasses effective only under `cfg(test)`, keep `test-fixtures` out of production SCCP dependencies and release/corridor Rust commands, reject case-variant, split-token, and source-escaped environment override names, reject reintroduced runtime config fields, and require BSC/TRON route configs to reject the removed `--allow-unready` option while stripping stale merged config keys.",
             "- SCCP TRON deploy operator boolean source inventory must pin malformed operator-boolean and public-DNS endpoint rejection before TRON deploy helper evidence can satisfy production readiness.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
@@ -11212,6 +11291,47 @@ def _public_input_artifact_duplicate_path_errors(value: Any) -> list[str]:
             )
         seen_paths.add(artifact_path)
     return errors
+
+
+def _public_report_input_path_for_salvage(item: Any) -> str | None:
+    """Return a canonical public input path safe to compare in redacted errors."""
+
+    if (
+        not isinstance(item, str)
+        or not item
+        or _public_blocker_text_issue(item) is not None
+        or not _native_evm_markdown_path_is_safe(item)
+    ):
+        return None
+    return item
+
+
+def _public_input_provenance_mismatch_errors(
+    inputs: Any,
+    input_artifacts: Any,
+) -> list[str]:
+    """Return redacted input/artifact mismatch blockers from inspectable paths."""
+
+    if not isinstance(inputs, list) or not isinstance(input_artifacts, list):
+        return []
+    input_paths = [
+        path
+        for path in (_public_report_input_path_for_salvage(item) for item in inputs)
+        if path is not None
+    ]
+    artifact_paths: list[str] = []
+    for artifact in input_artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        path = _public_report_input_path_for_salvage(artifact.get("path"))
+        if path is not None:
+            artifact_paths.append(path)
+    if input_paths == artifact_paths:
+        return []
+    return [
+        "readiness report inputs do not match copied input_artifacts",
+        "readiness report input_artifacts do not match inputs",
+    ]
 
 
 def _public_input_artifact_errors(value: Any) -> list[str]:
@@ -12244,7 +12364,7 @@ def _public_user_prover_submission_surface_errors(value: Any) -> list[str]:
 
 
 def _public_user_prover_duplicate_lane_errors(value: Any) -> list[str]:
-    """Return duplicate-lane blockers from inspectable user-prover rows."""
+    """Return lane-coverage blockers from inspectable user-prover rows."""
 
     if not isinstance(value, list):
         return []
@@ -12263,6 +12383,12 @@ def _public_user_prover_duplicate_lane_errors(value: Any) -> list[str]:
             )
         else:
             seen_lanes.add(lanes)
+    for lanes in (surface["lanes"] for surface in USER_PROVER_SUBMISSION_SURFACES):
+        if lanes not in seen_lanes:
+            errors.append(
+                "readiness report user_prover_submission_surfaces missing "
+                f"lane set {lanes}"
+            )
     return errors
 
 
@@ -12790,6 +12916,12 @@ def _public_cryptographic_evidence_errors(value: Any) -> list[str]:
             )
         )
         errors.extend(
+            _public_cryptographic_source_record_hash_role_errors(
+                row_label,
+                row,
+            )
+        )
+        errors.extend(
             _public_cryptographic_source_record_template_hash_errors(
                 row_label,
                 domain,
@@ -12897,7 +13029,7 @@ def _public_cryptographic_evidence_errors(value: Any) -> list[str]:
 
 
 def _public_cryptographic_evidence_duplicate_domain_errors(value: Any) -> list[str]:
-    """Return duplicate-domain blockers from inspectable crypto evidence rows."""
+    """Return domain-coverage blockers from inspectable crypto evidence rows."""
 
     if not isinstance(value, list):
         return []
@@ -12916,6 +13048,11 @@ def _public_cryptographic_evidence_duplicate_domain_errors(value: Any) -> list[s
             )
         else:
             seen_domains.add(domain)
+    for domain in ALL_LANES_REQUIRED_DOMAINS:
+        if domain not in seen_domains:
+            errors.append(
+                f"readiness report cryptographic_evidence missing required domain: {domain}"
+            )
     return errors
 
 
@@ -12942,6 +13079,13 @@ def _public_cryptographic_source_adapter_gate_hash_role_errors(
         (field, row.get(field))
         for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
     )
+    gate_hash = row.get("source_adapter_gate_hash")
+    semantic_audit_hash_values = {
+        value for value in semantic_audit_hashes.values() if _is_nonzero_hex32(value)
+    }
+    if _is_nonzero_hex32(gate_hash) and gate_hash not in semantic_audit_hash_values:
+        # Source-inventory marker: public source_adapter_gate_hash must not reuse source, destination, route, or canary roles when audit hashes are malformed
+        fields.append(("source_adapter_gate_hash", gate_hash))
     fields.extend(
         (f"source_adapter_gate_audit_hashes.{field}", value)
         for field, value in sorted(
@@ -13097,6 +13241,22 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
             elif field == "user_prover_submission_surfaces":
                 blockers.extend(_public_user_prover_duplicate_lane_errors(value))
             root_errors[field] = message
+    if (
+        ("inputs" in root_errors or "input_artifacts" in root_errors)
+        and "inputs" in report
+        and "input_artifacts" in report
+    ):
+        provenance_errors = _public_input_provenance_mismatch_errors(
+            report.get("inputs"),
+            report.get("input_artifacts"),
+        )
+        if provenance_errors:
+            root_errors.setdefault("inputs", provenance_errors[0])
+            root_errors.setdefault("input_artifacts", provenance_errors[1])
+            root_error_values = set(root_errors.values())
+            blockers.extend(
+                error for error in provenance_errors if error not in root_error_values
+            )
     native_bundle = report.get("native_evm_prover_bundle")
     if "native_evm_prover_bundle" in report and not isinstance(native_bundle, dict):
         root_errors["native_evm_prover_bundle"] = (

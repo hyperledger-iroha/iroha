@@ -622,7 +622,8 @@ mod tests {
             proof_manifest_cid: IpfsPath::from_str("/ipfs/bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
                 .expect("cid"),
             builder_public_key: builder_keys.public_key().clone(),
-            builder_signature: Signature::from_bytes(&[0; 64]),
+            builder_signature: Signature::try_from_bytes(&[0x42; 64])
+                .expect("nonzero SoraDNS directory signature fixture"),
         }
     }
 
@@ -650,9 +651,18 @@ mod tests {
         0, 0,
     ];
 
-    fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_with_malformed_ed25519_r(
+        signature: &Signature,
+        replacement_r: &[u8; 32],
+    ) -> Signature {
         let mut payload = signature.payload().to_vec();
-        payload[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&payload)
     }
 
@@ -735,17 +745,28 @@ mod tests {
 
     #[test]
     fn directory_builder_signature_rejects_malformed_ed25519_signature_r() {
-        let (mut record, _) = signed_record();
-        record.builder_signature = signature_with_malformed_ed25519_r(&record.builder_signature);
+        let (record, _) = signed_record();
 
-        let err = verify_builder_signature(&record)
-            .expect_err("malformed builder signature R must be rejected");
-        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            message,
-        )) = err
-        else {
-            panic!("malformed builder signature should fail as an invalid parameter: {err:?}");
-        };
-        assert!(message.contains("builder signature verification failed"));
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut invalid_record = record.clone();
+            invalid_record.builder_signature =
+                signature_with_malformed_ed25519_r(&record.builder_signature, &replacement_r);
+
+            let err = verify_builder_signature(&invalid_record)
+                .expect_err("malformed builder signature R must be rejected");
+            let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) = err
+            else {
+                panic!("malformed builder signature should fail as an invalid parameter: {err:?}");
+            };
+            assert!(
+                message.contains("builder signature verification failed"),
+                "{label} builder signature R produced unexpected error: {message}"
+            );
+        }
     }
 }

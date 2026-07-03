@@ -18035,11 +18035,18 @@ mod tests {
         0, 0,
     ];
 
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn signature_with_malformed_ed25519_r(
         signature: &iroha_crypto::Signature,
+        replacement_r: &[u8; 32],
     ) -> iroha_crypto::Signature {
         let mut payload = signature.payload().to_vec();
-        payload[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
         iroha_crypto::Signature::from_bytes(&payload)
     }
 
@@ -18049,12 +18056,20 @@ mod tests {
             .expect("derive checked Soracloud Ed25519 provenance keypair");
         let payload = b"soracloud-provenance-ed25519-admission";
         let signature = checked_signature(key_pair.private_key(), payload);
-        let signature = signature_with_malformed_ed25519_r(&signature);
 
-        assert!(
-            verify_signature_for_signer(&signature, key_pair.public_key(), payload).is_err(),
-            "Soracloud provenance Ed25519 admission must reject malformed R before backend verification"
-        );
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let malformed_signature =
+                signature_with_malformed_ed25519_r(&signature, &replacement_r);
+
+            assert!(
+                verify_signature_for_signer(&malformed_signature, key_pair.public_key(), payload)
+                    .is_err(),
+                "{label} Soracloud provenance Ed25519 admission must reject malformed R before backend verification"
+            );
+        }
     }
 
     #[track_caller]

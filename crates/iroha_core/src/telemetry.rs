@@ -15076,7 +15076,8 @@ mod tests {
             Some(Hash::prehashed([0x55; 32])),
             RetentionPolicy::default(),
             StorageTicketId::new([0x66; 32]),
-            Signature::from_bytes(&[0x77; 64]),
+            Signature::try_from_bytes(&[0x77; 64])
+                .expect("checked telemetry DA acknowledgement signature fixture"),
         );
         let bundle = DaCommitmentBundle::new(vec![record]);
         block.set_da_commitments(Some(bundle));

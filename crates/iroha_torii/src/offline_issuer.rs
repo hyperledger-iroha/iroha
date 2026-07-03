@@ -2043,6 +2043,35 @@ mod tests {
     }
 
     #[test]
+    fn legacy_ed25519_signature_helper_rejects_weak_or_noncanonical_public_key_material() {
+        const SMALL_ORDER_PUBLIC_KEY: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_PUBLIC_KEY: [u8; 32] = [
+            0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x31; 32]);
+        let payload = b"offline-helper";
+        let signature = signing_key.sign(payload).to_bytes();
+
+        for (label, public_key) in [
+            ("small-order", SMALL_ORDER_PUBLIC_KEY),
+            ("noncanonical", NONCANONICAL_PUBLIC_KEY),
+        ] {
+            let err = verify_ed25519_signature(&public_key, payload, &signature)
+                .expect_err("malformed Ed25519 helper public keys must fail closed");
+
+            assert_eq!(
+                err, "ed25519_public_key_invalid",
+                "{label} public key must fail at public-key admission"
+            );
+        }
+    }
+
+    #[test]
     fn key_certificate_placeholder_signature_is_checked_nonzero() {
         let signature = offline_key_certificate_signature_placeholder();
         let payload = signature.payload();
@@ -2334,6 +2363,57 @@ mod tests {
                 )),
                 "OFFLINE_REVOCATION_SIGNATURE_INVALID",
                 "{label} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_json_signature_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let key_pair = checked_seed_keypair(0x42);
+        let payload = json_object(vec![(
+            "kind",
+            string_value("offline-json-ed25519-r-admission"),
+        )]);
+        let payload_bytes = json::to_vec(&payload).expect("offline JSON signing payload");
+        let valid_signature = checked_signature(&key_pair, &payload_bytes);
+        verify_json_signature(
+            key_pair.public_key(),
+            &payload,
+            &BASE64_STANDARD.encode(valid_signature.payload()),
+            "offline_json_signature_test",
+            "OFFLINE_SIGNATURE_INVALID",
+            "invalid signature",
+        )
+        .expect("valid offline JSON signature verifies before mutation");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = valid_signature.payload().to_vec();
+            malformed[..replacement_r.len()].copy_from_slice(&replacement_r);
+
+            assert_eq!(
+                validation_code(verify_json_signature(
+                    key_pair.public_key(),
+                    &payload,
+                    &BASE64_STANDARD.encode(malformed),
+                    "offline_json_signature_test",
+                    "OFFLINE_SIGNATURE_INVALID",
+                    "invalid signature",
+                )),
+                "OFFLINE_SIGNATURE_INVALID",
+                "{label} Ed25519 signature R must fail closed"
             );
         }
     }

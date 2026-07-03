@@ -42,6 +42,28 @@ def load_evidence_module():
     return module
 
 
+class HostileExpectedDestinationBindingHash:
+    def __str__(self):
+        raise AssertionError(
+            "secret-token TON destination expected binding hash was stringified"
+        )
+
+    def __repr__(self):
+        raise AssertionError(
+            "secret-token TON destination expected binding hash was repr'd"
+        )
+
+    def __eq__(self, _other):
+        raise AssertionError(
+            "secret-token TON destination expected binding hash was compared"
+        )
+
+    def __ne__(self, _other):
+        raise AssertionError(
+            "secret-token TON destination expected binding hash was compared"
+        )
+
+
 def test_ton_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
@@ -171,6 +193,86 @@ def ton_args(module):
         last_transaction_lt="123456",
         last_transaction_hash=bytes.fromhex("66" * 32),
     )
+
+
+def test_ton_destination_rejects_hostile_expected_binding_hash_without_hooks(
+    monkeypatch,
+):
+    module = load_evidence_module()
+    destination_binding_hash = bytes.fromhex(TON_DESTINATION_BINDING_VECTOR)
+
+    class FakeParser:
+        prog = "sccp-ton-destination-evidence-test"
+
+        def __init__(self, args):
+            self.args = args
+
+        def parse_args(self, _argv):
+            return self.args
+
+        def exit(self, code, message=None):
+            raise SystemExit((code, message or ""))
+
+    cli_args = [
+        "--verifier-contract-address",
+        TON_VERIFIER_CONTRACT_ADDRESS,
+        "--verifier-code-hash",
+        "0x" + TON_CODE_BOC_ROOT_HASH,
+        "--verifier-code-boc-hex",
+        "0x" + TON_CODE_BOC_HEX,
+        "--expected-destination-binding-hash",
+        "0x" + TON_DESTINATION_BINDING_VECTOR,
+    ]
+    malformed_cases = (
+        (
+            HostileExpectedDestinationBindingHash,
+            "--expected-destination-binding-hash must be 32 bytes",
+        ),
+        (
+            lambda: bytes(32),
+            "--expected-destination-binding-hash must not be zero",
+        ),
+        (
+            lambda: b"\x11" * 31,
+            "--expected-destination-binding-hash must be 32 bytes",
+        ),
+    )
+
+    for make_value, expected_error in malformed_cases:
+        for direct_call in (
+            lambda args: module.render_toml(args, destination_binding_hash),
+            lambda args: module._json_summary(args, destination_binding_hash, False),
+        ):
+            direct_args = ton_args(module)
+            direct_args.expected_destination_binding_hash = make_value()
+            try:
+                direct_call(direct_args)
+            except ValueError as exc:
+                message = str(exc)
+                assert expected_error in message
+                assert "secret-token" not in message
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    "direct TON destination accepted malformed expected binding"
+                )
+
+        main_args = module.build_parser().parse_args(cli_args)
+        main_args.expected_destination_binding_hash = make_value()
+        fake_parser = FakeParser(main_args)
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "build_parser", lambda: fake_parser)
+            try:
+                module.main([])
+            except SystemExit as exc:
+                code, message = exc.code
+                assert code == 2
+                assert expected_error in message
+                assert "secret-token" not in message
+            else:
+                raise AssertionError(
+                    "TON destination main accepted malformed expected binding"
+                )
 
 
 def test_ton_destination_json_summary_rejects_non_boolean_metadata_readiness(

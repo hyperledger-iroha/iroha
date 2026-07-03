@@ -13867,7 +13867,9 @@ Temporal properties:
 - `SumeragiConsensusCoreFastCorrectnessEnvelope` composes `TypeInvariant` with
   `SumeragiConsensusCoreAlwaysMatchesExactness`; the Apalache `fast` runner
   typechecks that direct envelope while decomposed helper fast modes carry the
-  bounded-check workload.
+  bounded-check workload. Sumeragi_fast.cfg pins the fast correctness envelope
+  directly, so the sentinel cannot silently switch to a weaker aggregate while
+  keeping a valid CFG shape.
 
 Frontier recovery invariants:
 - `TypeInvariant`
@@ -16656,10 +16658,41 @@ separate TLC runner branch for `Sumeragi_fast.cfg` as a quick state-safety
 smoke without first publishing a passing bounded runtime; it traverses the
 top-level Sumeragi state graph rather than a decomposed helper model.
 
+`byzantine-delivered-first-top-fast` is a focused top-level `Sumeragi.tla`
+corridor. Apalache typechecks the central delivered-first Byzantine direct
+commit action surface over `ByzantineDeliveredFirstCommitNext`, which keeps
+proposal, prepare, honest commit, Byzantine commit, and delivered-first RBC
+actions while excluding timeout/view-change and RBC fault actions. This mode is
+Apalache-only because local TLC probes over the top-level `Sumeragi.tla`
+corridor did not reach initial-state completion in a bounded smoke window; use
+the standalone `byzantine-commit-interleaving-fast` gate for TLC-backed
+Byzantine commit/RBC state-space evidence.
+
+`byzantine-vote-first-top-fast` is a focused top-level `Sumeragi.tla` corridor.
+Apalache typechecks the central vote-first Byzantine direct commit action
+surface over `ByzantineVoteFirstCommitNext`, where prepare and commit votes
+buffer before delivered RBC evidence installs finality. This mode is
+Apalache-only for the same reason as the delivered-first bridge.
+
+`byzantine-direct-top-fast` is a focused top-level `Sumeragi.tla` corridor.
+Apalache typechecks the combined Byzantine direct commit action surface over
+`ByzantineDirectCommitNext`, allowing RBC and commit votes to interleave across
+the same central invariants used by the standalone mixed interleaving gate. It
+also typechecks the top-level bridge tying the combined direct exactness
+envelope back to the delivered-first and vote-first ordered exactness
+envelopes. This mode is Apalache-only for the same top-level TLC tractability
+reason. The guard pins the three top-level Byzantine CFG check surfaces.
+It also pins the direct conjunct/implication contracts of their `Sumeragi.tla`
+aggregate bridge operators, so the typecheck-only corridor cannot silently
+drift away from the intended bridge surface.
+
 ```bash
 bash scripts/formal/sumeragi_apalache.sh fast
 bash scripts/formal/sumeragi_apalache.sh deep
 bash scripts/formal/sumeragi_tlc.sh fast
+bash scripts/formal/sumeragi_apalache.sh byzantine-delivered-first-top-fast
+bash scripts/formal/sumeragi_apalache.sh byzantine-vote-first-top-fast
+bash scripts/formal/sumeragi_apalache.sh byzantine-direct-top-fast
 bash scripts/formal/sumeragi_apalache.sh fork-fast
 bash scripts/formal/sumeragi_apalache.sh fork-npos
 bash scripts/formal/sumeragi_apalache.sh quorum-fast
@@ -16960,6 +16993,11 @@ bash scripts/formal/sumeragi_apalache.sh failure-recovery-helpers-fast
 bash scripts/formal/sumeragi_apalache.sh requeue-transactions-fast
 bash scripts/formal/sumeragi_apalache.sh tick-deadline-helpers-fast
 bash scripts/formal/sumeragi_apalache.sh worker-tick-gap-fast
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-fast
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-fast
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-fast
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-fast
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-parent-resolution-fast
 bash scripts/formal/sumeragi_apalache.sh highest-qc-dependency-deferral-fast
 bash scripts/formal/sumeragi_apalache.sh precommit-qc-view-change-fast
@@ -17208,6 +17246,71 @@ bash scripts/formal/sumeragi_tlc.sh round-trace-status-fast
 bash scripts/formal/sumeragi_tlc.sh failure-recovery-helpers-fast
 bash scripts/formal/sumeragi_tlc.sh requeue-transactions-fast
 bash scripts/formal/sumeragi_tlc.sh tick-deadline-helpers-fast
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-fast
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-progress
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-progress-bug-finality-not-latched
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-progress-bug-commit-without-committed-phase
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-progress-bug-skip-deliver-state
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-progress-bug-drop-second-chunk
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-progress-bug-ready-quorum-under-counted
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-progress-bug-prepare-quorum-under-counted
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-progress-bug-commit-final-under-counted
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-progress-bug-stake-not-recorded
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-progress-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-progress-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-progress-bug-header-not-seeded
+bash scripts/formal/sumeragi_tlc.sh direct-delivered-first-corridor-progress-bug-digest-not-seeded
+bash scripts/formal/sumeragi_tlc.sh direct-vote-first-corridor-fast
+bash scripts/formal/sumeragi_tlc.sh direct-vote-first-corridor-progress
+bash scripts/formal/sumeragi_tlc.sh direct-vote-first-corridor-progress-bug-finality-not-latched
+bash scripts/formal/sumeragi_tlc.sh direct-vote-first-corridor-progress-bug-skip-deliver-state
+bash scripts/formal/sumeragi_tlc.sh direct-vote-first-corridor-progress-bug-deliver-without-chunks
+bash scripts/formal/sumeragi_tlc.sh direct-vote-first-corridor-progress-bug-deliver-without-ready-quorum
+bash scripts/formal/sumeragi_tlc.sh direct-vote-first-corridor-progress-bug-prepare-quorum-under-counted
+bash scripts/formal/sumeragi_tlc.sh direct-vote-first-corridor-progress-bug-buffered-commit-under-counted
+bash scripts/formal/sumeragi_tlc.sh direct-vote-first-corridor-progress-bug-buffered-stake-not-recorded
+bash scripts/formal/sumeragi_tlc.sh direct-vote-first-corridor-progress-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_tlc.sh direct-vote-first-corridor-progress-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_tlc.sh direct-vote-first-corridor-progress-bug-header-not-seeded
+bash scripts/formal/sumeragi_tlc.sh direct-vote-first-corridor-progress-bug-digest-not-seeded
+bash scripts/formal/sumeragi_tlc.sh direct-commit-interleaving-fast
+bash scripts/formal/sumeragi_tlc.sh direct-commit-interleaving-progress
+bash scripts/formal/sumeragi_tlc.sh direct-commit-interleaving-progress-bug-finality-not-latched
+bash scripts/formal/sumeragi_tlc.sh direct-commit-interleaving-progress-bug-phase-not-committed
+bash scripts/formal/sumeragi_tlc.sh direct-commit-interleaving-progress-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_tlc.sh direct-commit-interleaving-progress-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_tlc.sh direct-commit-interleaving-progress-bug-propose-skips-rbc
+bash scripts/formal/sumeragi_tlc.sh direct-commit-interleaving-progress-bug-header-not-seeded
+bash scripts/formal/sumeragi_tlc.sh direct-commit-interleaving-progress-bug-digest-not-seeded
+bash scripts/formal/sumeragi_tlc.sh direct-commit-interleaving-progress-bug-drop-second-chunk
+bash scripts/formal/sumeragi_tlc.sh direct-commit-interleaving-progress-bug-ready-quorum-under-counted
+bash scripts/formal/sumeragi_tlc.sh direct-commit-interleaving-progress-bug-skip-deliver-state
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-interleaving-fast
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-interleaving-progress
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-interleaving-progress-bug-finality-not-latched
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-interleaving-progress-bug-phase-not-committed
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-interleaving-progress-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-interleaving-progress-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-interleaving-progress-bug-commit-without-honest-support
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-interleaving-progress-bug-propose-skips-rbc
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-interleaving-progress-bug-header-not-seeded
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-interleaving-progress-bug-digest-not-seeded
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-interleaving-progress-bug-drop-second-chunk
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-interleaving-progress-bug-ready-quorum-under-counted
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-interleaving-progress-bug-skip-deliver-state
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-projection-fast
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-projection-progress
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-projection-progress-bug-finality-not-latched
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-projection-progress-bug-phase-not-committed
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-projection-progress-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-projection-progress-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-projection-progress-bug-commit-without-honest-support
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-projection-progress-bug-propose-skips-rbc
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-projection-progress-bug-header-not-seeded
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-projection-progress-bug-digest-not-seeded
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-projection-progress-bug-drop-second-chunk
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-projection-progress-bug-ready-quorum-under-counted
+bash scripts/formal/sumeragi_tlc.sh byzantine-commit-projection-progress-bug-skip-deliver-state
 bash scripts/formal/sumeragi_tlc.sh proposal-parent-resolution-fast
 bash scripts/formal/sumeragi_tlc.sh highest-qc-dependency-deferral-fast
 bash scripts/formal/sumeragi_tlc.sh precommit-qc-view-change-fast
@@ -17675,6 +17778,9 @@ The runner sets an explicit Apalache `--length` for each mode:
 | --- | ---: | --- |
 | `fast` | 10 | Monolithic commit-path typecheck smoke; safety sentinel cfg is retained |
 | `deep` | 10 | Larger commit-path check |
+| `byzantine-delivered-first-top-fast` | 14 | CI Apalache-only top-level Byzantine delivered-first commit corridor typecheck |
+| `byzantine-vote-first-top-fast` | 14 | CI Apalache-only top-level Byzantine vote-first commit corridor typecheck |
+| `byzantine-direct-top-fast` | 14 | CI Apalache-only top-level Byzantine mixed direct-commit corridor typecheck |
 | `fork-fast` | 9 | CI permissioned fork-safety correctness-envelope check |
 | `fork-npos` | 9 | CI NPoS stake-quorum fork-safety correctness-envelope check |
 | `quorum-fast` | 2 | CI quorum-policy arithmetic correctness-envelope check |
@@ -17975,6 +18081,11 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `requeue-transactions-fast` | 1 | CI direct transaction requeue branch helper correctness-envelope check |
 | `tick-deadline-helpers-fast` | 1 | CI tick/deadline scheduling helper correctness-envelope check |
 | `worker-tick-gap-fast` | 1 | CI worker tick-gap correctness-envelope check |
+| `direct-delivered-first-corridor-fast` | 1 | CI direct delivered-first commit corridor correctness-envelope check |
+| `direct-vote-first-corridor-fast` | 1 | CI direct vote-first commit corridor correctness-envelope check |
+| `direct-commit-interleaving-fast` | 14 | CI direct commit interleaving correctness-envelope check |
+| `byzantine-commit-interleaving-fast` | 14 | CI Byzantine commit interleaving correctness-envelope check |
+| `byzantine-commit-projection-fast` | 14 | CI checked bridge from finite Byzantine interleaving state to top-level direct-commit evidence obligations |
 | `proposal-parent-resolution-fast` | 1 | CI proposal parent resolution and inline backup transport correctness-envelope check |
 | `highest-qc-dependency-deferral-fast` | 1 | CI highest-QC dependency deferral correctness-envelope check |
 | `precommit-qc-view-change-fast` | 1 | CI precommit-QC view-change selector correctness-envelope check |
@@ -18194,7 +18305,10 @@ bounded fast/deep/wide frontier proof.
 `deep` is intentionally Apalache-only in PR CI: it widens the top-level
 commit-path constants (`N = 7`, `F = 2`, `MaxView = 5`) beyond the finite TLC
 `fast` cross-check (`N = 4`, `F = 1`, `MaxView = 4`).
-Every other PR baseline mode must have both a TLC runner case and README command.
+`byzantine-delivered-first-top-fast` is Apalache-only in PR CI because it typechecks a top-level `Sumeragi.tla` corridor whose local TLC probes did not reach initial-state completion in a bounded smoke window.
+`byzantine-vote-first-top-fast` is Apalache-only in PR CI because it typechecks the complementary top-level vote-first `Sumeragi.tla` corridor under the same TLC limitation.
+`byzantine-direct-top-fast` is Apalache-only in PR CI because it typechecks the combined top-level mixed direct-commit `Sumeragi.tla` corridor under the same TLC limitation.
+Every non-allowlisted PR baseline mode must have both a TLC runner case and README command.
 `scripts/formal/sumeragi_tlc.sh frontier-small` remains the small exhaustive TLC
 cross-check using the same module and TLC-friendly weak-fairness specification.
 The TLC runner also accepts `frontier-bug-*` modes so the documented frontier
@@ -18352,6 +18466,247 @@ active-round height derivation, new-view target derivation, quorum-timeout
 view bump state updates, and round-phase priority exactness together, plus
 `RoundViewHelpersCorrectnessEnvelope`, which composes that aggregate with the
 type invariant.
+`direct-delivered-first-corridor-fast` and
+`direct-delivered-first-corridor-bug-*` cross-check the finite no-fault
+delivered-first direct commit corridor: proposal metadata, RBC chunk and READY
+delivery evidence, prepare quorum, commit-vote stake, commit evidence, and
+finality latching. The fast check uses the aggregate
+`DirectDeliveredFirstCorridorExactness` invariant tying the corridor state to
+the expected phase/RBC/vote/finality projection, plus
+`DirectDeliveredFirstCorridorCorrectnessEnvelope`, which composes that
+aggregate with the type invariant.
+`direct-delivered-first-corridor-progress` is a TLC-only temporal check over an
+ordered delivered-first path inside the same finite model. It uses weak
+fairness for the path-advance action to prove eventual installation of the
+delivered-first finality stack across the complete `15`-state path graph:
+finality latch, committed phase, delivered RBC state, complete chunks, READY
+quorum, header/digest seed, prepare/commit vote quorum, stake quorum, and
+commit-certificate evidence. This mode is not wired through Apalache because
+Apalache currently ignores the fairness constraint that makes the temporal
+claim meaningful. The `direct-delivered-first-corridor-progress-bug-*` TLC
+modes keep the same ordered path and confirm that missing any delivered-first
+finality-stack component is rejected by the progress-mode safety/progress
+surface. The clean progress CFG now also checks
+`DirectDeliveredFirstProgressSafetyEnvelope`, tying temporal eventual finality
+to `TypeInvariant` and
+`DirectDeliveredFirstCorridorExactness` throughout the fair ordered path. The
+formal coverage guard pins that aggregate's direct conjuncts and requires the
+clean and mutation progress CFGs to keep both the safety envelope and the
+eventual-finality property.
+`direct-vote-first-corridor-fast` and `direct-vote-first-corridor-bug-*`
+cross-check the complementary finite no-fault direct commit corridor where
+prepare and commit votes reach quorum before RBC delivery. The fast check uses
+the aggregate `DirectVoteFirstCorridorExactness` invariant tying buffered
+vote/stake quorum, absent pre-delivery certificate witnesses, later delivered
+RBC evidence, and delivery-installed finality together, plus
+`DirectVoteFirstCorridorCorrectnessEnvelope`, which composes that aggregate with
+the type invariant.
+`direct-vote-first-corridor-progress` is a TLC-only temporal check over an
+ordered vote-first path inside the same finite model. It uses weak fairness for
+the path-advance action to prove eventual installation of the vote-first
+finality stack across the complete `15`-state path graph: finality latch,
+committed phase, delivered RBC state, complete chunks, READY quorum,
+header/digest seed, buffered prepare/commit vote quorum, stake quorum, and
+commit-certificate evidence. This mode is not wired through Apalache because
+Apalache currently ignores the fairness constraint that makes the temporal
+claim meaningful. The `direct-vote-first-corridor-progress-bug-*` TLC modes
+keep the same ordered path and confirm that missing any vote-first
+finality-stack component is rejected by the progress-mode safety/progress
+surface. The clean progress CFG now also checks
+`DirectVoteFirstProgressSafetyEnvelope`, tying temporal eventual finality to
+`TypeInvariant` and `DirectVoteFirstCorridorExactness`
+throughout the fair ordered path. The formal coverage guard pins that
+aggregate's direct conjuncts and requires the clean and mutation progress CFGs
+to keep both the safety envelope and the eventual-finality property.
+`direct-commit-interleaving-fast` and `direct-commit-interleaving-bug-*`
+cross-check the combined finite no-fault direct commit corridor with prepare
+votes, commit votes, RBC chunks, READY votes, and delivery freely interleaved.
+The fast check uses the aggregate `DirectCommitInterleavingExactness` invariant
+tying RBC evidence shape, prepare/commit vote handoff, vote/stake accounting,
+pre-delivery buffered-quorum certificate absence, and delivery-or-vote
+finality installation together, plus
+`DirectCommitInterleavingCorrectnessEnvelope`, which composes that aggregate
+with the type invariant. The formal coverage guard now pins the direct
+delivered-first, vote-first, and interleaving exactness aggregate bodies, plus
+their correctness and progress-safety envelopes, so clean progress checks
+cannot keep naming an aggregate whose safety content has drifted. It also
+requires every source safety mutation CFG to keep the same `TypeInvariant`,
+model exactness, and correctness-envelope surface as its clean fast CFG. The
+guard also requires that source progress specs compose their named fairness aggregates
+and keep their family-specific transition closure and fair action sets, so
+temporal source proofs cannot silently fall back to stale raw `WF_vars(...)`
+lists. The guard also requires that top-level Sumeragi specs compose their named fairness aggregates
+and keep the documented top-level commit, direct-commit, delivered-first, and
+vote-first transition closures and fair action sets.
+`direct-commit-interleaving-progress` is a TLC-only temporal check over the
+same finite no-fault interleaving graph. It uses weak fairness for proposal,
+prepare, commit votes, RBC chunk, RBC READY, and RBC deliver actions to prove
+eventual installation of the full finality stack (committed phase, delivered
+RBC state, READY quorum, complete chunks, header/digest seed, quorum vote/stake
+counters, and commit-certificate evidence) across the complete `50`-state
+graph. This mode is not wired through Apalache because Apalache currently
+ignores the fairness constraints that make the temporal claim meaningful. The
+clean progress CFG now also checks `DirectCommitProgressSafetyEnvelope`, tying
+temporal eventual finality to `TypeInvariant` and
+`DirectCommitInterleavingExactness` throughout the fair source graph. The
+formal coverage guard pins that aggregate's direct conjuncts and requires the
+clean and mutation progress CFGs to keep both the safety envelope and the
+eventual-finality property. The
+`direct-commit-interleaving-progress-bug-finality-not-latched`,
+`direct-commit-interleaving-progress-bug-phase-not-committed`,
+`direct-commit-interleaving-progress-bug-commit-evidence-votes-missing`, and
+`direct-commit-interleaving-progress-bug-commit-evidence-stake-missing` TLC
+modes keep the same fairness assumptions and confirm that missing any commit
+part of the finality stack is a temporal eventual-commit violation in the
+no-fault source graph. The
+`direct-commit-interleaving-progress-bug-propose-skips-rbc`,
+`direct-commit-interleaving-progress-bug-header-not-seeded`,
+`direct-commit-interleaving-progress-bug-digest-not-seeded`,
+`direct-commit-interleaving-progress-bug-drop-second-chunk`,
+`direct-commit-interleaving-progress-bug-ready-quorum-under-counted`, and
+`direct-commit-interleaving-progress-bug-skip-deliver-state` modes apply the
+same temporal property to the direct RBC path and reject missing RBC
+initialization, header/digest seeding, chunk completion, READY quorum, or
+delivery-state latching before the Byzantine extension.
+`byzantine-commit-interleaving-fast` and
+`byzantine-commit-interleaving-bug-*` cross-check the combined finite direct
+commit corridor with one Byzantine commit voter. The fast check uses the
+aggregate `ByzantineCommitInterleavingExactness` invariant tying RBC evidence
+shape, prepare/commit vote handoff, weighted honest/Byzantine stake
+accounting, the `CommitQuorum - F` honest-support threshold, pre-delivery
+certificate absence, and delivery-or-vote finality installation together, plus
+`ByzantineCommitInterleavingCorrectnessEnvelope`, which composes that aggregate
+with the type invariant. The guard also requires
+`ByzantineCommitInterleavingExactness` to extend the direct interleaving core
+with `ProposedRoundInitializesRbc`, so the Byzantine source proof cannot drop
+no-fault RBC/vote/certificate obligations while preserving only its
+Byzantine-specific checks.
+`byzantine-commit-interleaving-progress` is a TLC-only temporal check over the
+same finite Byzantine interleaving graph. It uses weak fairness for proposal,
+prepare, honest/Byzantine commit votes, RBC chunk, RBC READY, and RBC deliver
+actions to prove eventual installation of the Byzantine finality stack across
+the complete `78`-state graph: committed phase, delivered RBC state, quorum
+vote/stake counters, `CommitQuorum - F` honest support, and
+commit-certificate evidence matching the vote counters. This mode is not wired
+through Apalache because Apalache currently ignores the fairness constraints
+that make the temporal claim meaningful. The clean progress CFG now also checks
+`ByzantineCommitProgressSafetyEnvelope`, tying temporal eventual finality to
+`TypeInvariant` and `ByzantineCommitInterleavingExactness` throughout the fair
+source graph. The formal coverage guard pins that aggregate's direct conjuncts
+and requires the clean and mutation progress CFGs to keep both the safety
+envelope and the eventual-finality property. Across the source progress
+families, the guard also independently pins every progress safety envelope to
+`TypeInvariant` plus its model-specific exactness predicate, so the temporal
+proofs cannot drift from their safety baselines by changing the contract map
+and TLA body together. The
+`byzantine-commit-interleaving-progress-bug-finality-not-latched`,
+`byzantine-commit-interleaving-progress-bug-phase-not-committed`,
+`byzantine-commit-interleaving-progress-bug-commit-evidence-votes-missing`,
+`byzantine-commit-interleaving-progress-bug-commit-evidence-stake-missing`, and
+`byzantine-commit-interleaving-progress-bug-commit-without-honest-support` TLC
+modes keep the same fairness assumptions and confirm that missing any finality
+stack commit component, including honest support, is a temporal eventual-commit
+violation in the source interleaving graph. The
+`byzantine-commit-interleaving-progress-bug-propose-skips-rbc`,
+`byzantine-commit-interleaving-progress-bug-header-not-seeded`,
+`byzantine-commit-interleaving-progress-bug-digest-not-seeded`,
+`byzantine-commit-interleaving-progress-bug-drop-second-chunk`,
+`byzantine-commit-interleaving-progress-bug-ready-quorum-under-counted`, and
+`byzantine-commit-interleaving-progress-bug-skip-deliver-state` modes apply the
+same temporal property to the source RBC path and reject missing RBC
+initialization, header/digest seeding, chunk completion, READY quorum, or
+delivery-state latching before projection.
+`byzantine-commit-projection-fast` and
+`byzantine-commit-projection-bug-*` cross-check that the tractable finite
+Byzantine interleaving state satisfies the ordered delivered-first,
+vote-first, and combined direct-commit evidence obligations used by the
+top-level `ByzantineDeliveredFirstTopExactness`,
+`ByzantineVoteFirstTopExactness`, and `ByzantineDirectTopExactness` corridors.
+The projection fixes `view`, `commitView`, `newViewVotes`, and
+`viewEvidenceVotes` to the direct-commit corridor values and checks the
+projected finality stack, Byzantine commit-vote gate, RBC-deliver gate,
+vote/stake accounting, and delivered-without-finality wait obligations under
+Apalache and TLC.
+The projection bridge also carries the full source interleaving exactness
+aggregate, so the same finite run ties projected top obligations back to RBC
+evidence shape, proposal/RBC initialization, vote-handoff shape, commit
+certificate shape, and buffered-vote delivery semantics from
+`SumeragiByzantineCommitInterleavingGate.tla`. The
+`byzantine-commit-projection-bug-*` safety mutation configs check that same full
+bridge, so expected-failure coverage cannot pass by exercising only the older
+direct-top/core projection subset. They now cover the full `17` source
+Byzantine interleaving mutation set, including the previously progress-only
+proposal/RBC seeding, prepare-quorum, honest-stake, chunk/READY, and delivery
+state faults, under the projection safety bridge. The formal coverage guard
+also pins the `TypeInvariant`, projected direct-top exactness/correctness,
+ordered-top bridge, and interleaving bridge invariants in every projection
+mutation CFG, and pins the projection gate aggregate conjunct contracts,
+including the bridge implication antecedents.
+It also compares the source/projection Byzantine mutation suffix families:
+projection safety must match source Byzantine interleaving safety, projection
+progress must match source Byzantine interleaving progress, and progress modes
+may omit only the documented safety-only Byzantine faults. The guard also pins
+the direct safety/progress mutation suffix families: delivered-first progress
+must match delivered-first safety, vote-first progress may omit only the
+documented pre-delivery safety faults, and direct interleaving progress may omit
+only the documented direct safety-only quorum/stake/pre-delivery faults. The
+guard also pins the top-level Byzantine corridor aggregate contracts, the Apalache-only
+top-level CFG check surfaces, and the clean projection fast/progress CFG check
+surfaces so those baseline modes continue to load the full bridge and progress
+obligations. The guard also pins the internal top-corridor family split:
+`ByzantineDeliveredFirstTopExactness` remains the common direct-commit core,
+while `ByzantineVoteFirstTopExactness` and `ByzantineDirectTopExactness` remain
+that common core plus the delivered-without-finality wait obligations. The
+formal guard also requires that the top/projection Byzantine direct-commit contracts stay aligned: every projected delivered-first,
+vote-first, and combined top-corridor aggregate must remain the projected
+counterpart of its central `Sumeragi.tla` contract, including the ordered
+corridor bridge implication antecedent. The guard also requires
+`ProjectionBridgeMatchesInterleavingCore` to mirror
+`ByzantineCommitInterleavingExactness`, keeping the projected bridge core tied
+to the source Byzantine interleaving proof surface. The projection bridge interleaving exactness composes projected direct-top and source core obligations, and the guard derives that full bridge surface from
+`ProjectedByzantineDirectTopExactness` plus
+`ProjectionBridgeMatchesInterleavingCore` so either side cannot drift out of
+the checked bridge contract.
+`byzantine-commit-projection-progress` is a TLC-only temporal check over the
+same finite projection. It uses weak fairness for proposal, prepare,
+honest/Byzantine commit votes, RBC chunk, RBC READY, and RBC deliver actions to
+prove eventual installation of the projected finality stack across the complete
+`78`-state graph: the committed latch, committed phase, honest-support floor,
+prepare/commit quorum, commit evidence vote/stake counters, delivered RBC
+state, READY quorum, complete chunks, header seed, and digest validity. This
+clean progress config also checks `ProjectedCommitProgressSafetyEnvelope`, so
+the eventual-finality proof carries the ordered top-corridor bridge and the full
+source/projection exactness envelope throughout the fair run. This
+mode is not wired through Apalache because Apalache currently ignores the
+fairness constraints that make the temporal claim meaningful. The
+`byzantine-commit-projection-progress-bug-finality-not-latched`,
+`byzantine-commit-projection-progress-bug-phase-not-committed`,
+`byzantine-commit-projection-progress-bug-commit-evidence-votes-missing`,
+`byzantine-commit-projection-progress-bug-commit-evidence-stake-missing`, and
+`byzantine-commit-projection-progress-bug-commit-without-honest-support` TLC
+modes keep the same fairness assumptions and confirm that missing any projected
+finality-stack commit component, including honest support, is rejected under the
+safety/progress surface. The paired
+`byzantine-commit-projection-progress-bug-propose-skips-rbc`,
+`byzantine-commit-projection-progress-bug-header-not-seeded`,
+`byzantine-commit-projection-progress-bug-digest-not-seeded`,
+`byzantine-commit-projection-progress-bug-drop-second-chunk`,
+`byzantine-commit-projection-progress-bug-ready-quorum-under-counted`, and
+`byzantine-commit-projection-progress-bug-skip-deliver-state` modes apply the
+same temporal property to the RBC side of the stack and reject missing RBC
+initialization, header/digest seeding, chunk completion, READY quorum, or
+delivery-state latching under that same surface. Every projection progress
+mutation CFG now also checks
+`TypeInvariant` and `ProjectedCommitProgressSafetyEnvelope`, and the formal
+coverage guard pins that type/safety/property surface. The guard also pins
+`ProjectedCommitProgressSafetyEnvelope` itself to
+`ProjectionBridgeCoversOrderedTopCorridors` plus
+`ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope`, so the
+temporal progress run cannot drift away from the bridge composition it depends
+on. The guard also requires that the projection progress spec composes the named fairness aggregate,
+keeps the direct `[][Next]_vars` transition closure, and keeps the fair action
+set to proposal, prepare, honest/Byzantine commit votes, RBC chunk, RBC READY,
+and RBC deliver.
 `proposal-parent-resolution-fast` and `proposal-parent-resolution-bug-*`
 cross-check proposal parent lookup, Kura precedence, pending fallback,
 parent-missing deferral, overflow diagnostics, inline backup transport seeding,
@@ -27098,6 +27453,81 @@ bash scripts/formal/sumeragi_apalache.sh worker-tick-gap-bug-wait-before-none
 bash scripts/formal/sumeragi_apalache.sh worker-tick-gap-bug-wait-before-uses-gap
 bash scripts/formal/sumeragi_apalache.sh worker-tick-gap-bug-wait-future-underflows
 bash scripts/formal/sumeragi_apalache.sh worker-tick-gap-bug-wait-zero-gap-some
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-commit-without-committed-phase
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-skip-deliver-state
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-drop-second-chunk
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-ready-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-prepare-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-commit-final-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-stake-not-recorded
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-finality-not-latched
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-header-not-seeded
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-digest-not-seeded
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-phase-committed-before-delivery
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-skip-deliver-state
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-deliver-without-chunks
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-deliver-without-ready-quorum
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-prepare-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-buffered-commit-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-buffered-stake-not-recorded
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-commit-before-delivery
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-finality-not-latched
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-commit-evidence-before-delivery
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-header-not-seeded
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-digest-not-seeded
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-propose-skips-rbc
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-header-not-seeded
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-digest-not-seeded
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-prepare-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-commit-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-stake-not-recorded
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-drop-second-chunk
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-ready-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-skip-deliver-state
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-commit-before-delivery
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-commit-evidence-before-delivery
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-phase-not-committed
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-finality-not-latched
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-propose-skips-rbc
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-header-not-seeded
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-digest-not-seeded
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-prepare-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-honest-stake-not-recorded
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-byzantine-stake-over-counted
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-byzantine-vote-over-budget
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-drop-second-chunk
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-ready-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-skip-deliver-state
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-commit-before-delivery
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-commit-without-honest-support
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-commit-evidence-before-delivery
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-phase-not-committed
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-finality-not-latched
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-byzantine-stake-over-counted
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-byzantine-vote-over-budget
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-commit-before-delivery
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-commit-evidence-before-delivery
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-commit-without-honest-support
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-digest-not-seeded
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-drop-second-chunk
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-finality-not-latched
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-header-not-seeded
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-honest-stake-not-recorded
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-phase-not-committed
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-prepare-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-propose-skips-rbc
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-ready-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-skip-deliver-state
 bash scripts/formal/sumeragi_apalache.sh proposal-parent-resolution-bug-return-parent-at-height-zero
 bash scripts/formal/sumeragi_apalache.sh proposal-parent-resolution-bug-return-parent-at-height-one
 bash scripts/formal/sumeragi_apalache.sh proposal-parent-resolution-bug-skip-kura-parent
@@ -30793,8 +31223,10 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   matching top-level definition with the same arity, so declarations alone
   cannot satisfy CFG proof-target reachability. TLA dependency declarations must
   be duplicate-free, use non-reserved static module identifiers (`EXTENDS`
-  lists and `INSTANCE` statements), be top-level, appear before declarations and definitions,
-  and be written without `WITH` substitutions. Malformed `EXTENDS`/`INSTANCE` starts are rejected.
+  lists and `INSTANCE` statements), be top-level, and be written without `WITH` substitutions.
+  EXTENDS entries must appear before declarations and definitions.
+  INSTANCE entries must appear before operator definitions, which allows named
+  instances that bind local constant and variable declarations. Malformed `EXTENDS`/`INSTANCE` starts are rejected.
   No-separator `EXTENDS`/`INSTANCE` starts are rejected.
   INSTANCE declarations must be non-LOCAL.
   They must use non-reserved static
@@ -30818,7 +31250,27 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   continuation line and cannot be empty. Behavior directives, static
   `CONSTRAINT` directives, and invariant/property check entries must not be
   duplicated, and the same operator name must not be reused across behavior,
-  constraint, and proof-check roles. Non-bug `_fast.cfg` configs must check a
+  constraint, and proof-check roles. The formal guard also pins that temporal CFGs bind their documented behavior operators: root fast/deep CFGs must use
+  `INIT Init` with `NEXT Next`, root TLC fast must use `SPECIFICATION Spec`,
+  TLC progress CFGs must use their named `SPECIFICATION`, and the top-level
+  Byzantine corridor CFGs must use `INIT Init` with the corridor-specific
+  `NEXT`. The same guard requires that temporal CFGs keep CHECK_DEADLOCK FALSE
+  for the root TLC-fast and source/projection progress proof configs, so
+  fairness/liveness runs do not silently switch to a different TLC deadlock
+  obligation. It also requires that top-level Sumeragi CFG constants pin quorum and fault envelopes for the root fast, deep, and TLC-fast coverage configs.
+  The same guard requires that top-level Byzantine CFG constants pin quorum and fault envelopes for the delivered-first, vote-first, and combined direct top corridors.
+  It also requires that clean temporal progress CFGs bind Bug = "none",
+  so clean liveness runs cannot accidentally load a mutation constant.
+  Expected-failure progress mutation CFGs have the complementary rule:
+  progress mutation CFGs bind Bug to their file suffix, so each mutation mode
+  checks the fault named by its CFG filename. The safety mutation CFGs bind Bug to their file suffix under the same rule for source safety and projection bridge
+  mutation modes. The safety mutation CFGs bind INIT Init and NEXT Next so
+  bounded expected-failure safety modes cannot keep the right checks while
+  running a stale transition surface. The clean safety CFGs bind Bug = "none"
+  and the clean safety CFGs bind INIT Init and NEXT Next for the same source and
+  projection fast corridors, so positive bounded safety checks cannot silently
+  run a mutation or stale transition relation.
+  Non-bug `_fast.cfg` configs must check a
   model-specific `*CorrectnessEnvelope` invariant or property, so PR-fast
   corridors cannot regress to generic `NoBugInvariant`, `Safety`, or
   `SafetyFast` aliases;

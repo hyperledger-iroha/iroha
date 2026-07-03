@@ -14181,6 +14181,42 @@ seiyaku RecordFromPayload {
     }
 
     #[test]
+    fn transfer_asset_scoped_syscall_rejects_non_dataspace_r14() {
+        let authority: AccountId = fixture_account("alice");
+        let destination: AccountId = fixture_account("bob");
+        let asset_def = AssetDefinitionId::new(fixture_domain_id(), "rose".parse().unwrap());
+        let state = scoped_transfer_state(
+            &authority,
+            &destination,
+            asset_def.clone(),
+            AssetBalancePolicy::DataspaceRestricted,
+        );
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        let mut vm = IVM::new(1_000);
+        let amount = Numeric::new(5_u32, 0);
+
+        prepare_scoped_transfer_syscall(
+            &mut vm,
+            &authority,
+            &destination,
+            &asset_def,
+            &amount,
+            DataSpaceId::new(7),
+        );
+        let wrong_dataspace_ptr = store_tlv(&mut vm, PointerType::Name, b"not-a-dataspace");
+        vm.set_register(14, wrong_dataspace_ptr);
+
+        let err = host
+            .syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
+            .expect_err("wrong r14 pointer type should reject before queueing");
+
+        assert!(matches!(err, ivm::VMError::NoritoInvalid));
+        assert!(host.queued.is_empty());
+    }
+
+    #[test]
     fn fastpq_batch_apply_syscall_returns_batch_gas() {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());

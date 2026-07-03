@@ -8311,9 +8311,6 @@ pub struct Zk {
         default = "defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS"
     )]
     pub bridge_proof_max_future_drift_blocks: u64,
-    /// Allow SCCP transparent proof consumption for lanes whose destination verifiers are not production-ready.
-    #[config(default = "false")]
-    pub sccp_allow_unready_transparent_proofs: bool,
     /// SCCP source-chain verifier material that can enable non-SORA source lanes.
     #[config(default = "Vec::new()")]
     pub sccp_source_verifier_materials: Vec<SccpSourceVerifierMaterial>,
@@ -8361,7 +8358,6 @@ impl Zk {
             bridge_proof_max_range_len: self.bridge_proof_max_range_len,
             bridge_proof_max_past_age_blocks: self.bridge_proof_max_past_age_blocks,
             bridge_proof_max_future_drift_blocks: self.bridge_proof_max_future_drift_blocks,
-            sccp_allow_unready_transparent_proofs: self.sccp_allow_unready_transparent_proofs,
             sccp_source_verifier_materials: self
                 .sccp_source_verifier_materials
                 .into_iter()

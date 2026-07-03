@@ -1238,12 +1238,22 @@ mod tests {
         0, 0,
     ];
 
-    fn signature_payload_with_malformed_ed25519_r(keypair: &KeyPair, preimage: &[u8]) -> Vec<u8> {
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_payload_with_malformed_ed25519_r(
+        keypair: &KeyPair,
+        preimage: &[u8],
+        replacement_r: &[u8; 32],
+    ) -> Vec<u8> {
         let mut signature = iroha_crypto::Signature::try_new(keypair.private_key(), preimage)
             .expect("fixture payload must sign")
             .payload()
             .to_vec();
-        signature[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+        signature[..replacement_r.len()].copy_from_slice(replacement_r);
         signature
     }
 
@@ -1335,14 +1345,19 @@ mod tests {
             signature: Vec::new(),
         };
         let preimage = rbc_ready_preimage(&chain, PERMISSIONED_TAG, &ready);
-        ready.signature = signature_payload_with_malformed_ed25519_r(&keypair, &preimage);
 
-        assert!(!rbc_ready_signature_valid(
-            &ready,
-            &topology,
-            &chain,
-            PERMISSIONED_TAG
-        ));
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            ready.signature =
+                signature_payload_with_malformed_ed25519_r(&keypair, &preimage, &replacement_r);
+
+            assert!(
+                !rbc_ready_signature_valid(&ready, &topology, &chain, PERMISSIONED_TAG),
+                "{label} RBC ready signature R was not rejected"
+            );
+        }
     }
 
     #[test]
@@ -1395,14 +1410,19 @@ mod tests {
             ready_signatures: Vec::new(),
         };
         let preimage = rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver);
-        deliver.signature = signature_payload_with_malformed_ed25519_r(&keypair, &preimage);
 
-        assert!(!rbc_deliver_signature_valid(
-            &deliver,
-            &topology,
-            &chain,
-            PERMISSIONED_TAG
-        ));
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            deliver.signature =
+                signature_payload_with_malformed_ed25519_r(&keypair, &preimage, &replacement_r);
+
+            assert!(
+                !rbc_deliver_signature_valid(&deliver, &topology, &chain, PERMISSIONED_TAG),
+                "{label} RBC deliver signature R was not rejected"
+            );
+        }
     }
 
     #[test]

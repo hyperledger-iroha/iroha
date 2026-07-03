@@ -14219,10 +14219,18 @@ mod tests {
         0, 0,
     ];
 
-    fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_with_malformed_ed25519_r(
+        signature: &Signature,
+        replacement_r: &[u8; 32],
+    ) -> Signature {
         let mut payload = signature.payload().to_vec();
-        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
-            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&payload)
     }
 
@@ -14243,12 +14251,19 @@ mod tests {
         verify_signature_for_signer(&signature, keypair.public_key(), payload)
             .expect("valid Soracloud provenance signature should verify");
 
-        let signature = signature_with_malformed_ed25519_r(&signature);
-        assert_eq!(
-            verify_signature_for_signer(&signature, keypair.public_key(), payload)
-                .expect_err("malformed Soracloud provenance signature R must fail admission"),
-            iroha_crypto::Error::BadSignature
-        );
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            let malformed_signature =
+                signature_with_malformed_ed25519_r(&signature, &replacement_r);
+            assert_eq!(
+                verify_signature_for_signer(&malformed_signature, keypair.public_key(), payload)
+                    .expect_err("malformed Soracloud provenance signature R must fail admission"),
+                iroha_crypto::Error::BadSignature,
+                "{label} Soracloud provenance signature R was not rejected"
+            );
+        }
     }
 
     struct TestHfRuntimeHandle {

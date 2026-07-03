@@ -1592,6 +1592,10 @@ pub fn crypto_verify(
             Ok(signature) => signature,
             Err(_) => return Ok(false),
         },
+        Algorithm::MlDsa => match iroha_crypto::mldsa65_parse_signature(signature.as_ref()) {
+            Ok(signature) => signature,
+            Err(_) => return Ok(false),
+        },
         _ => match Signature::try_from_bytes(signature.as_ref()) {
             Ok(signature) => signature,
             Err(_) => return Ok(false),
@@ -18937,6 +18941,77 @@ mod tests {
     }
 
     #[test]
+    fn crypto_verify_rejects_malformed_ed25519_public_key_material() {
+        const SMALL_ORDER_PUBLIC_KEY: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_PUBLIC_KEY: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let seed = vec![0x33; 32];
+        let message = b"js-host-crypto-public-key-admission";
+        let keypair =
+            KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect("checked seed keypair");
+        let signature = Signature::try_new(keypair.private_key(), message)
+            .expect("checked Ed25519 JS host fixture signature");
+
+        for (label, public_key, expected) in [
+            ("all-zero", [0_u8; 32], "all zero"),
+            ("small-order", SMALL_ORDER_PUBLIC_KEY, "small-order"),
+            ("noncanonical", NONCANONICAL_PUBLIC_KEY, "canonical"),
+        ] {
+            let err = crypto_verify(
+                "ed25519".to_owned(),
+                Uint8Array::from(public_key.to_vec()),
+                Uint8Array::from(message.to_vec()),
+                Uint8Array::from(signature.payload().to_vec()),
+            )
+            .expect_err("malformed Ed25519 public key must fail admission");
+            let message = err.to_string();
+
+            assert!(
+                message.contains(expected),
+                "{label} public key produced unexpected error: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn crypto_public_key_multihash_rejects_malformed_ed25519_public_key_material() {
+        const SMALL_ORDER_PUBLIC_KEY: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_PUBLIC_KEY: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        for (label, public_key, expected) in [
+            ("all-zero", [0_u8; 32], "all zero"),
+            ("small-order", SMALL_ORDER_PUBLIC_KEY, "small-order"),
+            ("noncanonical", NONCANONICAL_PUBLIC_KEY, "canonical"),
+        ] {
+            let err = crypto_public_key_multihash(
+                "ed25519".to_owned(),
+                Uint8Array::from(public_key.to_vec()),
+            )
+            .expect_err("malformed Ed25519 public key must fail multihash admission");
+            let message = err.to_string();
+
+            assert!(
+                message.contains(expected),
+                "{label} public key produced unexpected multihash error: {message}"
+            );
+        }
+    }
+
+    #[test]
     fn crypto_multihash_helpers_use_checked_formatters() {
         let seed = vec![0x5A; 32];
         let keypair =
@@ -22130,7 +22205,6 @@ mod tests {
             lineage_verifier_record: None,
             lineage_verifier_records: Vec::new(),
             block_height: None,
-            lineage_verifier_records: Vec::new(),
         }
     }
 

@@ -42,10 +42,31 @@ fn cuda_helpers_fall_back_when_disabled() {
     assert!(ivm::vxor_cuda(&[1u32, 2], &[3u32, 4]).is_none());
     assert!(ivm::vor_cuda(&[1u32, 2], &[3u32, 4]).is_none());
 
-    // BN254 and Ed25519 helpers fall back gracefully.
+    // BN254 helpers fall back gracefully. Ed25519 helpers still perform cheap
+    // admission preflight without CUDA so invalid cryptographic material fails
+    // closed as `false`; valid-looking work returns `None` because no backend
+    // is available.
     assert!(ivm::bn254_add_cuda([0; 4], [0; 4]).is_none());
     assert!(ivm::bn254_sub_cuda([0; 4], [0; 4]).is_none());
     assert!(ivm::bn254_mul_cuda([0; 4], [0; 4]).is_none());
-    assert!(ivm::ed25519_verify_cuda(&[], &[0; 64], &[0; 32]).is_none());
-    assert!(ivm::ed25519_verify_batch_cuda(&[], &[], &[]).is_none());
+    assert_eq!(
+        ivm::ed25519_verify_cuda(&[], &[0; 64], &[0; 32]),
+        Some(false)
+    );
+    assert_eq!(
+        ivm::ed25519_verify_batch_cuda(&[[0; 64]], &[[0; 32]], &[[0; 32]]),
+        Some(vec![false])
+    );
+    assert_eq!(
+        ivm::ed25519_verify_batch_cuda(&[], &[], &[]),
+        Some(Vec::new())
+    );
+
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x53; 32]);
+    let message = b"cuda fallback ed25519 valid work";
+    let signature = ed25519_dalek::Signer::sign(&signing_key, message).to_bytes();
+    let public_key = signing_key.verifying_key().to_bytes();
+    let hram = [0xA5; 32];
+    assert!(ivm::ed25519_verify_cuda(message, &signature, &public_key).is_none());
+    assert!(ivm::ed25519_verify_batch_cuda(&[signature], &[public_key], &[hram]).is_none());
 }

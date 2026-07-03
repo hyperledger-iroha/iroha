@@ -28,7 +28,7 @@ public final class EvmSccpProver {
   public static final String NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1 =
       "sccp-native-evm-groth16-prover-bundle-v1";
   public static final String ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 =
-      "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1";
+      "sccp-ethereum-mainnet-native-evm-cross-sdk-parity-v1";
   public static final String ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1 =
       "sccp-ethereum-mainnet-native-evm-prover-self-test-v1";
   public static final String ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1 =

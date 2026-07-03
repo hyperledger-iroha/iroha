@@ -233,6 +233,19 @@ def _require_fixed_bytes(
     return raw
 
 
+def _optional_expected_destination_binding_hash(
+    args: argparse.Namespace,
+) -> bytes | None:
+    value = getattr(args, "expected_destination_binding_hash", None)
+    if value is None:
+        return None
+    return _require_fixed_bytes(
+        value,
+        label="--expected-destination-binding-hash",
+        byte_length=32,
+    )
+
+
 def _require_verifier_code_hash_role_separation(
     *,
     verifier_code_hash: bytes,
@@ -1101,7 +1114,7 @@ def render_toml(
     apply_verifier_program_code_hash(args)
     _require_destination_evidence(args)
     expected_hash = solana_destination_binding_hash()
-    expected_pin = getattr(args, "expected_destination_binding_hash", None)
+    expected_pin = _optional_expected_destination_binding_hash(args)
     if expected_pin is None:
         raise ValueError(
             "--expected-destination-binding-hash is required before rendering production TOML"
@@ -1113,7 +1126,7 @@ def render_toml(
             f"got {_hex(expected_hash)}"
         )
     if destination_binding_hash is None:
-        destination_binding_hash = expected_pin
+        destination_binding_hash = expected_hash
     elif destination_binding_hash != expected_hash:
         raise ValueError(
             "destination_binding_hash must match the canonical "
@@ -1217,7 +1230,7 @@ def _json_summary(
             f"SORA -> Solana binding: expected {_hex(expected_hash)}, "
             f"got {_hex(destination_binding_hash)}"
         )
-    expected_pin = getattr(args, "expected_destination_binding_hash", None)
+    expected_pin = _optional_expected_destination_binding_hash(args)
     if expected_pin is not None and expected_pin != expected_hash:
         raise ValueError(
             "expected destination binding hash does not match the canonical "
@@ -1562,13 +1575,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         apply_verifier_program_code_hash(args)
         destination_binding_hash = solana_destination_binding_hash()
+        expected_pin = _optional_expected_destination_binding_hash(args)
         expected_matches = False
-        if args.expected_destination_binding_hash is not None:
-            if args.expected_destination_binding_hash != destination_binding_hash:
+        if expected_pin is not None:
+            if expected_pin != destination_binding_hash:
                 raise ValueError(
                     "expected destination binding hash does not match the canonical "
                     "SORA -> Solana binding: "
-                    f"expected {_hex(args.expected_destination_binding_hash)}, "
+                    f"expected {_hex(expected_pin)}, "
                     f"got {_hex(destination_binding_hash)}"
                 )
             expected_matches = True

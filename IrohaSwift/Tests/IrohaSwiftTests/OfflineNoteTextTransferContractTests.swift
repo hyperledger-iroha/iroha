@@ -10,13 +10,17 @@ final class OfflineNoteTextTransferContractTests: XCTestCase {
             payload
         )
         XCTAssertEqual(
-            try OfflineNoteTextTransferContract.normalizeTextTransportEnvelope(" \t\(payload)\r\n"),
+            try OfflineNoteTextTransferContract.normalizeTextTransportEnvelope(payload),
             payload
         )
         XCTAssertTrue(OfflineNoteTextTransferContract.hasOnlyTextTransportCharacters(payload))
 
         for candidate in [
             "",
+            " \(payload)",
+            "\(payload) ",
+            "\t\(payload)",
+            "\(payload)\n",
             "wallet-offline-bearer-cash-payment:abc DEF",
             "wallet-offline-bearer-cash-payment:abc\tDEF",
             "wallet-offline-bearer-cash-payment:abc\nDEF",

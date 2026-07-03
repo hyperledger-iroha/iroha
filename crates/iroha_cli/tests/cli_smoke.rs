@@ -3745,7 +3745,8 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         },
         queued_at_unix: 1_701_800_123,
         rent_quote: DaRentQuote::default(),
-        operator_signature: Signature::from_bytes(&[0x11; 64]),
+        operator_signature: Signature::try_from_bytes(&[0x11; 64])
+            .expect("checked CLI DA receipt operator signature fixture"),
     };
     let pdp_bytes = norito::to_bytes(&pdp_commitment).expect("encode commitment");
     let pdp_header = BASE64.encode(&pdp_bytes);

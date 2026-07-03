@@ -38,10 +38,11 @@ Canonical syscall table (subset)| Hex | အမည် | အကြောင်း�
 | 0x1A | SET_ACCOUNT_DETAIL | `&AccountId`, `&Name`, `&Json` | `u64=0` | `G_set_detail + bytes(val)` | အကောင့် | အတွက်အသေးစိတ်ရေးပါ။
 | 0x22 | MINT_ASSET | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_mint` | အကောင့်သို့ပိုင်ဆိုင်မှု၏ `amount` ကို Mints
 | 0x23 | BURN_ASSET | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_burn` | အကောင့် | မှ `amount` ကိုလောင်ကျွမ်းသည်။
-| 0x24 | TRANSFER_ASSET | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | `amount` အကောင့်များအကြား လွှဲပြောင်းမှုများ |
+| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
 | 0x29 | TRANSFER_V1_BATCH_BEGIN | – | `u64=0` | `G_transfer` | FASTPQ လွှဲပြောင်းမှုအသုတ်နယ်ပယ် | စတင်ပါ။
 | 0x2A | TRANSFER_V1_BATCH_END | – | `u64=0` | `G_transfer` | စုဆောင်းထားသော FASTPQ လွှဲပြောင်းအသုတ် |
 | 0x2B | TRANSFER_V1_BATCH_APPLY | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | syscall တစ်ခုတည်းတွင် Norito-encoded batch တစ်ခုကို အသုံးပြုပါ |
+| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
 | 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | NFT | အသစ်တစ်ခုကို မှတ်ပုံတင်ပါ။
 | 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | NFT | ပိုင်ဆိုင်မှုကို လွှဲပြောင်းပေးသည်။
 | 0x27 | NFT_SET_METADATA | `&NftId`, `&Name`, `&Json` | `u64=0` | `G_nft_set_metadata` | NFT မက်တာဒေတာကို အပ်ဒိတ်များ |

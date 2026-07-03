@@ -5382,7 +5382,8 @@ pub mod isi {
                 let offset = u8::try_from(idx).expect("index fits into u8");
                 *byte = seed.wrapping_add(offset);
             }
-            Signature::from_bytes(&payload)
+            Signature::try_from_bytes(&payload)
+                .expect("offline note fixture signature passes admission")
         }
 
         fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
@@ -5394,9 +5395,18 @@ pub mod isi {
             0, 0, 0,
         ];
 
-        fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+        const NONCANONICAL_ED25519_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        fn signature_with_malformed_ed25519_r(
+            signature: &Signature,
+            replacement_r: &[u8; 32],
+        ) -> Signature {
             let mut payload = signature.payload().to_vec();
-            payload[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+            payload[..replacement_r.len()].copy_from_slice(replacement_r);
             Signature::from_bytes(&payload)
         }
 
@@ -6760,14 +6770,27 @@ pub mod isi {
         fn offline_note_certificate_signature_rejects_malformed_ed25519_signature_r() {
             let issuer = fixture_key_pair(0x45);
             let issuer_account = AccountId::new(issuer.public_key().clone());
-            let mut certificate =
+            let certificate =
                 signed_sample_certificate(&issuer, sample_account(0x02), 0xAB, "malformed-r");
-            certificate.issuer_signature =
-                signature_with_malformed_ed25519_r(&certificate.issuer_signature);
 
-            let err = ensure_offline_note_certificate_signature(&certificate, &issuer_account)
+            for (label, replacement_r) in [
+                ("small-order", SMALL_ORDER_ED25519_R),
+                ("noncanonical", NONCANONICAL_ED25519_R),
+            ] {
+                let mut invalid_certificate = certificate.clone();
+                invalid_certificate.issuer_signature = signature_with_malformed_ed25519_r(
+                    &certificate.issuer_signature,
+                    &replacement_r,
+                );
+
+                let err = ensure_offline_note_certificate_signature(
+                    &invalid_certificate,
+                    &issuer_account,
+                )
                 .expect_err("malformed certificate signature R must be rejected");
-            assert_offline_rejection(err, "invalid_issuer_cert", "signature");
+                assert_offline_rejection(err, "invalid_issuer_cert", "signature");
+                let _ = label;
+            }
         }
 
         fn attestation_registration(
@@ -9128,6 +9151,23 @@ pub mod isi {
 
             certificate.public_key.clear();
             assert!(validate_offline_note_key_certificate(&certificate).is_err());
+        }
+
+        #[test]
+        fn key_certificate_rejects_inert_or_malformed_ed25519_public_key() {
+            for (label, public_key) in [
+                ("all-zero", [0_u8; 32]),
+                ("small-order", SMALL_ORDER_ED25519_R),
+                ("noncanonical", NONCANONICAL_ED25519_R),
+            ] {
+                let mut certificate = sample_certificate();
+                certificate.public_key = public_key.to_vec();
+
+                let err = validate_offline_note_key_certificate(&certificate)
+                    .expect_err("malformed certificate public key must reject");
+                assert_offline_rejection(err.into(), "invalid_issuer_cert", "Ed25519 public key");
+                let _ = label;
+            }
         }
 
         #[test]

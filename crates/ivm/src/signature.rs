@@ -480,41 +480,60 @@ mod tests {
     }
 
     #[test]
-    fn ed25519_verifiers_reject_small_order_signature_r() {
+    fn ed25519_verifiers_reject_malformed_signature_r() {
         let key = SigningKey::from_bytes(&[0x32; 32]);
-        let message = b"ivm-ed25519-small-order-r";
-        let mut signature = key.sign(message).to_bytes();
-        signature[..32].copy_from_slice(&[
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0,
-        ]);
+        let message = b"ivm-ed25519-malformed-r";
         let public_key = key.verifying_key().to_bytes();
 
-        assert!(!verify_signature(
-            SignatureScheme::Ed25519,
-            message,
-            &signature,
-            &public_key
-        ));
+        for (label, replacement_r) in [
+            (
+                "small-order",
+                [
+                    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0,
+                ],
+            ),
+            (
+                "noncanonical",
+                [
+                    0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                    0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+                ],
+            ),
+        ] {
+            let mut signature = key.sign(message).to_bytes();
+            signature[..replacement_r.len()].copy_from_slice(&replacement_r);
 
-        let request = Ed25519BatchRequest {
-            seed: [0x5A; 32],
-            entries: vec![Ed25519BatchEntry {
-                message: message.to_vec(),
-                signature: signature.to_vec(),
-                public_key: public_key.to_vec(),
-            }],
-        };
-        assert_eq!(
-            verify_ed25519_batch(&request, 1),
-            Err(Ed25519BatchError::SignatureFailed { index: 0 })
-        );
+            assert!(
+                !verify_signature(SignatureScheme::Ed25519, message, &signature, &public_key),
+                "{label} signature R must reject in single verification"
+            );
 
-        let items = [Ed25519BatchItem {
-            message,
-            signature,
-            public_key,
-        }];
-        assert_eq!(verify_ed25519_batch_items(&items), vec![false]);
+            let request = Ed25519BatchRequest {
+                seed: [0x5A; 32],
+                entries: vec![Ed25519BatchEntry {
+                    message: message.to_vec(),
+                    signature: signature.to_vec(),
+                    public_key: public_key.to_vec(),
+                }],
+            };
+            assert_eq!(
+                verify_ed25519_batch(&request, 1),
+                Err(Ed25519BatchError::SignatureFailed { index: 0 }),
+                "{label} signature R must reject in Norito batch verification"
+            );
+
+            let items = [Ed25519BatchItem {
+                message,
+                signature,
+                public_key,
+            }];
+            assert_eq!(
+                verify_ed25519_batch_items(&items),
+                vec![false],
+                "{label} signature R must reject in item batch verification"
+            );
+        }
     }
 }

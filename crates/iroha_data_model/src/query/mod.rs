@@ -124,6 +124,25 @@ mod signature_tests {
     }
 
     #[test]
+    fn query_signature_try_deserialize_rejects_empty_signature_material() {
+        let query_signature = QuerySignature(iroha_crypto::SignatureOf::from_signature(
+            iroha_crypto::Signature::from_bytes(&[]),
+        ));
+        let encoded = norito::to_bytes(&query_signature).expect("encode invalid query signature");
+        let archived = norito::from_bytes::<QuerySignature>(&encoded)
+            .expect("archive invalid query signature");
+
+        let err =
+            <QuerySignature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived)
+                .expect_err("empty query signature must fail closed");
+        let message = err.to_string();
+        assert!(
+            message.contains("empty"),
+            "unexpected query signature decode error: {message}"
+        );
+    }
+
+    #[test]
     fn query_signature_try_deserialize_rejects_all_zero_signature_material() {
         let query_signature = QuerySignature(iroha_crypto::SignatureOf::from_signature(
             iroha_crypto::Signature::from_bytes(&[0_u8; 64]),
@@ -174,6 +193,24 @@ mod signature_tests {
         signature
             .verify(key_pair.public_key(), &fallible.payload)
             .expect("query signature should verify");
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn query_signature_json_rejects_empty_signature_material() {
+        let encoded = json_wrappers::base64_encode(&[]);
+        let err = norito::json::from_value::<QuerySignature>(norito::json::Value::from(encoded))
+            .expect_err("empty query signature JSON must fail closed");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("QuerySignature"),
+            "unexpected query signature JSON error: {message}"
+        );
+        assert!(
+            message.contains("empty"),
+            "unexpected empty query signature JSON error: {message}"
+        );
     }
 
     #[cfg(feature = "json")]
@@ -2564,7 +2601,8 @@ mod candidate {
             let mut sig_bytes = candidate.signature.0.payload().to_vec();
             let idx = sig_bytes.len() - 1;
             sig_bytes[idx] = sig_bytes[idx].wrapping_add(1);
-            *candidate.signature.0 = iroha_crypto::Signature::from_bytes(&sig_bytes);
+            *candidate.signature.0 = iroha_crypto::Signature::try_from_bytes(&sig_bytes)
+                .expect("tampered query signature remains structurally admissible");
 
             let err = candidate
                 .validate()
@@ -2774,9 +2812,10 @@ mod json_roundtrip_tests {
             .expect("test signature payload is non-empty");
         *last ^= 0xFF;
         let invalid = SignedQuery {
-            signature: QuerySignature(SignatureOf::from_signature(Signature::from_bytes(
-                &signature,
-            ))),
+            signature: QuerySignature(SignatureOf::from_signature(
+                Signature::try_from_bytes(&signature)
+                    .expect("tampered signed query signature remains structurally admissible"),
+            )),
             payload: signed.payload,
         };
 
@@ -2832,6 +2871,45 @@ mod json_roundtrip_tests {
                 "{label} signed query signature R was not rejected"
             );
         }
+    }
+
+    #[test]
+    fn signed_query_decode_rejects_empty_signature_without_decode_panic() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+        let invalid = SignedQuery {
+            signature: QuerySignature(SignatureOf::from_signature(Signature::from_bytes(&[]))),
+            payload: signed.payload,
+        };
+        let encoded = norito::to_bytes(&invalid).expect("encode invalid signed query fixture");
+        let archived =
+            norito::from_bytes::<SignedQuery>(&encoded).expect("archive invalid signed query");
+
+        let err =
+            match <SignedQuery as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived) {
+                Ok(_) => panic!("empty signed query signature must fail closed"),
+                Err(err) => err,
+            };
+        let message = err.to_string();
+        assert!(
+            message.contains("empty") || message.contains("length mismatch"),
+            "unexpected signed query decode error: {message}"
+        );
+
+        let err = match SignedQuery::decode_all_versioned(&invalid.encode_versioned()) {
+            Ok(_) => panic!("empty signed query signature must be rejected"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("empty") || message.contains("length mismatch"),
+            "unexpected versioned signed query decode error: {message}"
+        );
+        assert!(
+            !message.contains("panic during decode"),
+            "empty signatures should not surface as decode panics: {message}"
+        );
     }
 
     #[test]

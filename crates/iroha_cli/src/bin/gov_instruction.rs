@@ -183,17 +183,6 @@ enum Command {
         #[arg(long)]
         route_id: String,
     },
-    /// Build a TAIRA testnet TRON->SORA XOR diagnostic SCCP message bundle.
-    BuildTairaTronXorDiagnosticMessageBundle {
-        #[arg(long)]
-        nonce: u64,
-        #[arg(long, default_value_t = 7)]
-        amount: u128,
-        #[arg(long, default_value = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8")]
-        sender: String,
-        #[arg(long)]
-        recipient: String,
-    },
     /// Publish an on-chain SCCP route manifest from a route upsert JSON artifact.
     PublishSccpRouteManifest {
         #[arg(long)]
@@ -864,85 +853,6 @@ fn record_sccp_transfer_payload_bytes(
     Ok((message_id, payload_bytes))
 }
 
-fn build_taira_tron_xor_diagnostic_message_bundle(
-    nonce: u64,
-    amount: u128,
-    sender: String,
-    recipient: String,
-) -> Result<()> {
-    let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
-        version: 1,
-        source_domain: iroha_sccp::SCCP_DOMAIN_TRON,
-        dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-        nonce,
-        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-        asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-        asset_id: iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes().to_vec(),
-        amount,
-        sender_codec: iroha_sccp::SCCP_CODEC_TRON_BASE58CHECK,
-        sender: sender.into_bytes(),
-        recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-        recipient: recipient.into_bytes(),
-        route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-        route_id: iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1
-            .as_bytes()
-            .to_vec(),
-    });
-    if !verify_sccp_payload_structure(&payload) {
-        return Err(eyre!(
-            "TAIRA/TRON XOR diagnostic SCCP payload failed structural verification"
-        ));
-    }
-    let commitment = iroha_sccp::hub_commitment_from_sccp_payload(&payload);
-    let merkle_proof = iroha_sccp::SccpMerkleProofV1 { steps: Vec::new() };
-    let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
-    let bundle = iroha_sccp::NexusSccpMessageProofV1 {
-        version: 1,
-        commitment_root,
-        commitment,
-        merkle_proof,
-        payload,
-        finality_proof: b"tron-nile-diagnostic-source-finality".to_vec(),
-    };
-    iroha_sccp::build_sccp_taira_tron_xor_diagnostic_transparent_proof(&bundle)
-        .ok_or_else(|| eyre!("failed to build TAIRA/TRON XOR diagnostic transparent proof"))?;
-
-    let mut selected = norito::json::Map::new();
-    selected.insert("kind".to_owned(), "transfer".into());
-    selected.insert(
-        "message_id_hex".to_owned(),
-        hex::encode(bundle.commitment.message_id).into(),
-    );
-    selected.insert(
-        "route_id".to_owned(),
-        iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.into(),
-    );
-    selected.insert(
-        "source_domain".to_owned(),
-        iroha_sccp::SCCP_DOMAIN_TRON.into(),
-    );
-    selected.insert(
-        "target_domain".to_owned(),
-        iroha_sccp::SCCP_DOMAIN_SORA.into(),
-    );
-
-    let mut output = norito::json::Map::new();
-    output.insert(
-        "message_id".to_owned(),
-        hex::encode(bundle.commitment.message_id).into(),
-    );
-    output.insert(
-        "route".to_owned(),
-        iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.into(),
-    );
-    output.insert("bundle".to_owned(), norito::json::to_value(&bundle)?);
-    output.insert(
-        "selected_recent_item".to_owned(),
-        norito::json::Value::Object(selected),
-    );
-    print_json_value(&norito::json::Value::Object(output))
-}
-
 #[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     let args = Args::parse();
@@ -1107,12 +1017,6 @@ fn main() -> Result<()> {
             route_id_codec,
             route_id,
         )?,
-        Command::BuildTairaTronXorDiagnosticMessageBundle {
-            nonce,
-            amount,
-            sender,
-            recipient,
-        } => build_taira_tron_xor_diagnostic_message_bundle(nonce, amount, sender, recipient)?,
         Command::PublishSccpRouteManifest {
             config,
             manifest,

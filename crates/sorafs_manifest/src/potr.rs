@@ -2,6 +2,7 @@
 
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use soranet_pq::MlDsaSuite;
 use thiserror::Error;
 
 use crate::proof_stream::ProofStreamTier;
@@ -88,6 +89,15 @@ impl PotrSignatureV1 {
                     return Err(PotrReceiptValidationError::InvalidSignature {
                         context,
                         reason: "dilithium3 public key and signature material must not be all zero",
+                    });
+                }
+                let suite = MlDsaSuite::MlDsa65;
+                if self.public_key.len() != suite.public_key_len()
+                    || self.signature.len() != suite.signature_len()
+                {
+                    return Err(PotrReceiptValidationError::InvalidSignature {
+                        context,
+                        reason: "dilithium3 signatures require ML-DSA-65 public key and signature lengths",
                     });
                 }
             }
@@ -395,6 +405,24 @@ mod tests {
         }
     }
 
+    fn sign_receipt_mldsa(receipt: &PotrReceiptV1, seed: &[u8]) -> PotrSignatureV1 {
+        let payload = receipt.signing_payload_bytes().expect("payload bytes");
+        let key_pair = iroha_crypto::KeyPair::try_from_seed(seed.to_vec(), Algorithm::MlDsa)
+            .expect("generate ML-DSA PoTR fixture keypair");
+        let signature = Signature::try_new(key_pair.private_key(), &payload)
+            .expect("sign PoTR payload with ML-DSA key");
+        let (algorithm, public_key) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("encode ML-DSA public key");
+        assert_eq!(algorithm, Algorithm::MlDsa);
+        PotrSignatureV1 {
+            algorithm: PotrSignatureAlgorithm::Dilithium3,
+            public_key: public_key.to_vec(),
+            signature: signature.payload().to_vec(),
+        }
+    }
+
     #[test]
     fn receipt_validates() {
         let receipt = base_receipt();
@@ -480,6 +508,13 @@ mod tests {
     }
 
     #[test]
+    fn gateway_signature_verifies_dilithium3() {
+        let mut receipt = base_receipt();
+        receipt.gateway_signature = Some(sign_receipt_mldsa(&receipt, &[0x31; 32]));
+        assert_eq!(receipt.validate(), Ok(()));
+    }
+
+    #[test]
     fn gateway_signature_rejects_invalid_signature() {
         let mut receipt = base_receipt();
         let signing_key = SigningKey::from_bytes(&[0x22; 32]);
@@ -493,6 +528,45 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn gateway_signature_rejects_malformed_dilithium3_lengths() {
+        for label in ["short-public-key", "short-signature", "overlong-signature"] {
+            let mut receipt = base_receipt();
+            let mut signature = sign_receipt_mldsa(&receipt, &[0x32; 32]);
+            match label {
+                "short-public-key" => {
+                    signature
+                        .public_key
+                        .pop()
+                        .expect("fixture public key is non-empty");
+                }
+                "short-signature" => {
+                    signature
+                        .signature
+                        .pop()
+                        .expect("fixture signature is non-empty");
+                }
+                "overlong-signature" => signature.signature.push(0xA5),
+                _ => unreachable!("covered labels"),
+            }
+            receipt.gateway_signature = Some(signature);
+
+            let Err(err) = receipt.validate() else {
+                panic!("{label} ML-DSA signature material must fail validation");
+            };
+            assert!(
+                matches!(
+                    &err,
+                    PotrReceiptValidationError::InvalidSignature {
+                        context: "gateway",
+                        reason: "dilithium3 signatures require ML-DSA-65 public key and signature lengths",
+                    }
+                ),
+                "{label} ML-DSA signature material produced unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

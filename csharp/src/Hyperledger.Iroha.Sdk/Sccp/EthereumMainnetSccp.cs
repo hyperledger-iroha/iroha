@@ -23,7 +23,7 @@ public static class EthereumMainnetSccp
     public const string NativeEvmProverBundleSchemaV1 =
         "sccp-native-evm-groth16-prover-bundle-v1";
     public const string EthNativeEvmProverParityFixtureSchemaV1 =
-        "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1";
+        "sccp-ethereum-mainnet-native-evm-cross-sdk-parity-v1";
     public const string EthNativeEvmProverSelfTestSchemaV1 =
         "sccp-ethereum-mainnet-native-evm-prover-self-test-v1";
     public const string EthNativeEvmProverBundleIdV1 =

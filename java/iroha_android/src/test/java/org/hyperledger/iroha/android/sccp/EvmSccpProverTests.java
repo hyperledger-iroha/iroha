@@ -1770,6 +1770,20 @@ public final class EvmSccpProverTests {
     threw = false;
     try {
       EvmSccpProver.EthereumMainnetNativeEvmProverParityFixture.fromJson(
+          sampleEthereumNativeEvmProverParityFixtureJson(nativeProverBundle)
+              .replace(
+                  "\"schema\":\""
+                      + EvmSccpProver.ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1
+                      + "\"",
+                  "\"schema\":\"sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1\""),
+          nativeProverBundle);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("nativeProverParityFixture.schema");
+    }
+    assert threw : "Ethereum native prover parity fixture must reject legacy schema";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverParityFixture.fromJson(
           sampleEthereumNativeEvmProverParityFixtureJson(
               nativeProverBundle, "0x" + repeat("96", 32)),
           nativeProverBundle);

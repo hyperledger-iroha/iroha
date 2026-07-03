@@ -8,6 +8,9 @@ python3 scripts/formal/check_sumeragi_formal_coverage.py
 
 bash scripts/formal/sumeragi_apalache.sh fast
 bash scripts/formal/sumeragi_apalache.sh deep
+bash scripts/formal/sumeragi_apalache.sh byzantine-delivered-first-top-fast
+bash scripts/formal/sumeragi_apalache.sh byzantine-vote-first-top-fast
+bash scripts/formal/sumeragi_apalache.sh byzantine-direct-top-fast
 bash scripts/formal/sumeragi_apalache.sh fork-fast
 bash scripts/formal/sumeragi_apalache.sh fork-npos
 bash scripts/formal/sumeragi_apalache.sh quorum-fast
@@ -308,6 +311,11 @@ bash scripts/formal/sumeragi_apalache.sh failure-recovery-helpers-fast
 bash scripts/formal/sumeragi_apalache.sh requeue-transactions-fast
 bash scripts/formal/sumeragi_apalache.sh tick-deadline-helpers-fast
 bash scripts/formal/sumeragi_apalache.sh worker-tick-gap-fast
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-fast
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-fast
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-fast
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-fast
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-fast
 bash scripts/formal/sumeragi_apalache.sh proposal-parent-resolution-fast
 bash scripts/formal/sumeragi_apalache.sh highest-qc-dependency-deferral-fast
 bash scripts/formal/sumeragi_apalache.sh precommit-qc-view-change-fast

@@ -17105,6 +17105,7 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_v1(
         )));
     }
     validate_bfv_full_bootstrap_release_audit_signoff_payload_v1(&signoff.payload)?;
+    validate_bfv_full_bootstrap_release_audit_signoff_signature_v1(signoff)?;
     signoff
         .signature
         .verify(&signoff.payload.reviewer_public_key, &signoff.payload)
@@ -17113,6 +17114,17 @@ pub fn validate_bfv_full_bootstrap_release_audit_signoff_v1(
                 "BFV full-bootstrap release audit signoff signature verification failed: {err}"
             ))
         })
+}
+
+fn validate_bfv_full_bootstrap_release_audit_signoff_signature_v1(
+    signoff: &BfvFullBootstrapReleaseAuditSignoffV1,
+) -> Result<(), BfvError> {
+    crate::ed25519_parse_signature(signoff.signature.payload()).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap release audit signoff reviewer signature failed admission: {err}"
+        ))
+    })?;
+    Ok(())
 }
 
 /// Validate a signed BFV full-bootstrap release audit signoff against evidence.
@@ -46870,6 +46882,103 @@ mod tests {
             "placeholder",
             "standalone release audit signoff payloads must reject placeholder generated circuit body digests before canonical mismatch",
         );
+    }
+
+    #[test]
+    fn release_audit_signoff_rejects_malformed_ed25519_signature_before_backend() {
+        const NONCANONICAL_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let reviewer_key_pair =
+            crate::KeyPair::try_from_seed(vec![0xB4; 32], crate::Algorithm::Ed25519)
+                .expect("fixture seed derives reviewer Ed25519 keypair");
+        let generated_circuit_body =
+            bfv_full_bootstrap_native_generated_circuit_body_v1(BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1)
+                .expect("canonical generated circuit body");
+        let native_prover_payload =
+            encode_bfv_full_bootstrap_native_stark_fri_transparent_prover_payload_v1(
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            )
+            .expect("canonical native prover payload");
+        let native_verifier_payload =
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            )
+            .expect("canonical native verifier payload");
+        let payload = BfvFullBootstrapReleaseAuditSignoffPayloadV1 {
+            version: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_VERSION_V1,
+            field_count: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_PAYLOAD_FIELD_COUNT_V1,
+            circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
+            release_audit_evidence_digest: Hash::new(
+                b"malformed signature R release audit evidence digest",
+            ),
+            centered_scale_round_source_chain_digest:
+                canonical_bfv_full_bootstrap_centered_scale_round_source_chain_digest_v1()
+                    .expect("canonical centered source-chain digest"),
+            artifact_bundle_digest: Hash::new(b"malformed signature R artifact bundle digest"),
+            evaluator_artifact_set_digest: Hash::new(
+                b"malformed signature R evaluator artifact set digest",
+            ),
+            proof_key_pair_commitment: Hash::new(
+                b"malformed signature R proof key pair commitment",
+            ),
+            prover_key_digest: Hash::new(b"malformed signature R prover key digest"),
+            verifier_key_digest: Hash::new(b"malformed signature R verifier key digest"),
+            prover_native_payload_digest: Hash::prehashed(sha256(&native_prover_payload)),
+            verifier_native_payload_digest: Hash::prehashed(sha256(&native_verifier_payload)),
+            native_circuit_fingerprint: bfv_full_bootstrap_native_proof_circuit_fingerprint_v1(
+                BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
+            )
+            .expect("canonical native circuit fingerprint"),
+            generated_circuit_body_digest: Hash::prehashed(sha256(&generated_circuit_body)),
+            audit_report_digest: Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_REPORT_HEADER_V1,
+                b"malformed signature R release audit report",
+            ]),
+            audit_evidence_archive_digest: Hash::new_from_chunks(&[
+                BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_ARCHIVE_HEADER_V1,
+                b"malformed signature R release audit archive",
+            ]),
+            reviewer_id: "sora-zk-audit-wg-2026".to_owned(),
+            reviewer_public_key: reviewer_key_pair.public_key().clone(),
+        };
+        let signature = SignatureOf::try_new(reviewer_key_pair.private_key(), &payload)
+            .expect("checked reviewer signs release audit signoff");
+        let signoff = BfvFullBootstrapReleaseAuditSignoffV1 {
+            version: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_VERSION_V1,
+            field_count: BFV_FULL_BOOTSTRAP_RELEASE_AUDIT_SIGNOFF_FIELD_COUNT_V1,
+            payload,
+            signature,
+        };
+        validate_bfv_full_bootstrap_release_audit_signoff_v1(&signoff)
+            .expect("valid release audit signoff should verify");
+
+        let mut small_order_r = [0_u8; 32];
+        small_order_r[0] = 1;
+        let mut small_order_signature = signoff.signature.payload().to_vec();
+        small_order_signature[..small_order_r.len()].copy_from_slice(&small_order_r);
+        let mut noncanonical_signature = signoff.signature.payload().to_vec();
+        noncanonical_signature[..NONCANONICAL_R.len()].copy_from_slice(&NONCANONICAL_R);
+        for (label, signature_payload) in [
+            ("all-zero", vec![0_u8; 64]),
+            ("short", vec![0x42_u8; 32]),
+            ("small-order", small_order_signature),
+            ("noncanonical", noncanonical_signature),
+        ] {
+            let mut malformed = signoff.clone();
+            malformed.signature =
+                SignatureOf::from_signature(crate::Signature::from_bytes(&signature_payload));
+            assert_error_contains(
+                validate_bfv_full_bootstrap_release_audit_signoff_v1(&malformed),
+                "failed admission",
+                &format!(
+                    "{label} release audit signoff signature must fail before backend verification"
+                ),
+            );
+        }
     }
 
     fn bounded_noise_packed_params() -> BfvParameters {

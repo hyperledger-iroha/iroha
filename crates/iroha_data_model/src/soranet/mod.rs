@@ -11,11 +11,28 @@
 
 #![allow(clippy::module_name_repetitions)]
 
+use iroha_crypto::{Algorithm, PublicKey, Signature};
+
 /// Canonical 32-byte digest type used across `SoraNet` payloads.
 pub type Digest32 = [u8; 32];
 
 /// Relay identifier derived from the directory fingerprint.
 pub type RelayId = Digest32;
+
+pub(crate) fn signature_for_public_key_algorithm(
+    public_key: &PublicKey,
+    signature: &Signature,
+) -> Result<Signature, iroha_crypto::Error> {
+    let algorithm = public_key
+        .try_algorithm()
+        .map_err(|_| iroha_crypto::Error::BadSignature)?;
+    match algorithm {
+        Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(signature.payload())
+            .map_err(|_| iroha_crypto::Error::BadSignature),
+        _ => Signature::try_from_bytes(signature.payload())
+            .map_err(|_| iroha_crypto::Error::BadSignature),
+    }
+}
 
 /// Incentive and payout scaffolding for SoraNet relays.
 pub mod incentives;
@@ -31,9 +48,9 @@ pub mod prelude {
     pub use super::{
         Digest32, RelayId,
         incentives::{
-            BandwidthConfidenceV1, RelayBandwidthProofV1, RelayBondLedgerEntryV1,
-            RelayBondPolicyV1, RelayComplianceStatusV1, RelayEpochMetricsV1,
-            RelayRewardInstructionV1,
+            BandwidthConfidenceV1, RelayBandwidthProofPayloadV1, RelayBandwidthProofSignatureError,
+            RelayBandwidthProofV1, RelayBondLedgerEntryV1, RelayBondPolicyV1,
+            RelayComplianceStatusV1, RelayEpochMetricsV1, RelayRewardInstructionV1,
         },
         privacy_metrics::{
             SoranetGarAbuseCountV1, SoranetGarAbuseShareV1, SoranetLatencyPercentileV1,

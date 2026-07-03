@@ -14,6 +14,8 @@ public final class SourceSccpProofsTests {
     derivesSourceMaterialAndDeploymentRecordHashesForUiTooling();
     derivesEthBeaconExecutionPayloadSszRootsFromWitnessMaterial();
     derivesEthereumReceiptRootAndSyncCommitteeGuardsForUiTooling();
+    derivesBscCommitSealHashAndRejectsNonEvmRecoveryIdsForUiTooling();
+    rejectsLegacyTronRecoveryIdAliasesForUiTooling();
   }
 
   private static void derivesSourceAdapterVerifierVkHashesForUiTooling() {
@@ -785,6 +787,288 @@ public final class SourceSccpProofsTests {
         : "Ethereum sync-committee payload must include the complete 512-authority roster";
     assert syncCommitteeSignersBitmap(342).length == 64
         : "Ethereum sync-committee bitmap must cover the complete 512-authority roster";
+  }
+
+  private static void derivesBscCommitSealHashAndRejectsNonEvmRecoveryIdsForUiTooling() {
+    final List<byte[]> validatorPublicKeys =
+        Arrays.asList(
+            hexBytes("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"),
+            hexBytes("02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"),
+            hexBytes("02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"),
+            hexBytes("02e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13"));
+    final String validatorSetHash =
+        "0xc5152802f6ca9ec72a4249646aca7476496f00b71ab5b1482c881a31fb42dd8c";
+    final String commitMessageHash =
+        "0x5832165d1a87ed49a323f2ecaecbef973489aed1a42e7eab369244e7abec43c7";
+    final List<byte[]> signatures =
+        Arrays.asList(
+            hexBytes(
+                "1b8802069b82c3d4cb6d7bec82323853f36d965c1e71647560084e7c7a0de9c17c85fcc3c6222f905cbbc4ba5b5f3f005f07d144304184181be67b3d02d1ba9f1b"),
+            hexBytes(
+                "921d39c29fb793c496f96cf647128232d228024ed2f3e68cc6a52aa4cf64facf6bbd9dfcf7d703165f7880e7e1310f34d1b0fb8ca6dd8f506bf289ba012387f01c"),
+            hexBytes(
+                "cfa11aa1ec214278afdb4ef7f3c40af97a2784e0336afb5ebef345c0d2eaa9ef629ad2d25cf9709eb9b842fb2fb3f749ce365af97af6e7064771614312d361961b"));
+    final SourceSccpProofs.BscCommitSealProof seal =
+        new SourceSccpProofs.BscCommitSealProof(
+            1,
+            "4",
+            "3",
+            commitMessageHash,
+            validatorPublicKeys,
+            Arrays.asList("1", "1", "1", "1"),
+            hexBytes("07"),
+            signatures,
+            validatorSetHash);
+    assert SourceSccpProofs.canonicalBscCommitSealBytes(seal).length == 297
+        : "BSC commit seal bytes must match Rust transcript length";
+    assert SourceSccpProofs.bscCommitSealHash(seal)
+        .equals("0x14659b4643d3a7961f7f86f46319992444617392c8e84967a3bb2a5ad7bc72fb")
+        : "BSC commit seal hash must match Rust";
+
+    for (final int recoveryId : new int[] {0, 1, 29, 30}) {
+      final byte[] rejectedSignature = Arrays.copyOf(signatures.get(0), signatures.get(0).length);
+      rejectedSignature[64] = (byte) recoveryId;
+      expectThrowsMessage(
+          () ->
+              SourceSccpProofs.canonicalBscCommitSealBytes(
+                  new SourceSccpProofs.BscCommitSealProof(
+                      1,
+                      "4",
+                      "3",
+                      commitMessageHash,
+                      validatorPublicKeys,
+                      Arrays.asList("1", "1", "1", "1"),
+                      hexBytes("07"),
+                      Arrays.asList(rejectedSignature, signatures.get(1), signatures.get(2)),
+                      validatorSetHash)),
+          "canonical recoverable");
+    }
+  }
+
+  private static void rejectsLegacyTronRecoveryIdAliasesForUiTooling() {
+    final String sourceEventDigest = repeat("34", 32);
+    final byte[] transactionSourceBytes =
+        hexBytes(
+            "0af3010a02123418b9602208565656565656565640959aef3a5acf01081f12ca"
+                + "010a31747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e"
+                + "54726967676572536d617274436f6e74726163741294010a15417e5f4552091a"
+                + "69125d5dfcb7b8c2659029395bdf121541454545454545454545454545454545"
+                + "4545454545226406841e30000000000000000000000000000000000000000000"
+                + "0000000000000000000005000000000000000000000000000000000000000000"
+                + "0000000000000000000000343434343434343434343434343434343434343434"
+                + "34343434343434343434347090e5ee3a900180e1eb171241cc58d7ac52c91117"
+                + "92495fee682b53cab96ff4229043c5b8b90c31447f5934553d8854ab35de3437"
+                + "2c13331bf3ef5cefd8f2cc5ad026faf223da83969fe8973c012a0410001801");
+    final byte[] transactionSourceSignature =
+        hexBytes(
+            "cc58d7ac52c9111792495fee682b53cab96ff4229043c5b8b90c31447f593455"
+                + "3d8854ab35de34372c13331bf3ef5cefd8f2cc5ad026faf223da83969fe8973c01");
+    final List<byte[]> emptyBranch = Collections.emptyList();
+    final List<byte[]> inclusionBranch = Collections.singletonList(bytes(0xaa));
+    assert SourceSccpProofs
+            .canonicalTronTransactionSourceProofBytes(
+                sourceEventDigest,
+                repeat("bb", 32),
+                "1751c62dce36d5d642e48480b45d48ed16dd1b9b40ce216bc2f15c1b1ccf300b",
+                "0",
+                "1",
+                transactionSourceBytes,
+                emptyBranch,
+                inclusionBranch)
+            .length
+        == 476 : "TRON transaction source proof bytes must match Rust";
+
+    final String tronOwner = "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf";
+    final String tronTransactionId =
+        "be9223cdfd6728fd2512f270a44f928fbd58df98f8e9e5fe13c4dc73503192e4";
+    final byte[] witnessSignature =
+        hexBytes(
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+                + "38508a4cf743e4a97ab3550672d69d980545ff8d776f6e9bade4ff4196f3693b"
+                + "00");
+    assert SourceSccpProofs
+            .tronWitnessSealHash(
+                "1",
+                "1",
+                "0x" + tronTransactionId,
+                Collections.singletonList(tronOwner),
+                Collections.singletonList("1"),
+                new byte[] {0x01},
+                Collections.singletonList(witnessSignature))
+            .equals("0x4266cf4de71c96e4fde925b686abbd50e67026f63ad90e0cf4899d4925d45849")
+        : "TRON witness seal hash must match Rust";
+
+    final String parentScheduleHash =
+        "0x87174bbfde1c4b8473a6be18df37b60979c7609ebf1788ce8cf97604311474b6";
+    final String nextScheduleHash =
+        "0x0c5eca6f96572fe939e640d8951abd126d2e966ffc4e3d0d087dbff6052577be";
+    final byte[] nextSchedulePayload =
+        hexBytes(
+            "010200000041"
+                + repeat("11", 20)
+                + "010000000000000041"
+                + repeat("22", 20)
+                + "0200000000000000");
+    final String transitionMessageHash =
+        "0x6e53d3f7d1253223a70a163a02544a8df27b74171cb0c76c8f42d71419fabd43";
+    final byte[] transitionSignature =
+        hexBytes(
+            "c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5"
+                + "65d3d639f676a837945854abb3f59c4b93355bb55a789e31a25aee261500932d01");
+    assert SourceSccpProofs
+            .tronWitnessScheduleTransitionSealHash(
+                SourceSccpProofs.DOMAIN_TRON,
+                "7",
+                "8",
+                "12345",
+                "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+                parentScheduleHash,
+                nextScheduleHash,
+                nextSchedulePayload,
+                transitionMessageHash,
+                "1",
+                "1",
+                Collections.singletonList(tronOwner),
+                Collections.singletonList("1"),
+                new byte[] {0x01},
+                Collections.singletonList(transitionSignature))
+            .equals("0xbb3b7ef87bd3efb77d9b7f0a4dba8e7398827621d59039c694c285a7e2deacce")
+        : "TRON witness schedule transition seal hash must match Rust";
+
+    final byte[] parentRawHeader =
+        hexBytes(
+            "08b8b096ffbc311220"
+                + repeat("cc", 32)
+                + "1a20"
+                + repeat("bb", 32)
+                + "38b8604a1541"
+                + repeat("11", 20)
+                + "50015a20"
+                + repeat("aa", 32));
+    final byte[] rawHeader =
+        hexBytes(
+            "08b9b096ffbc311220"
+                + repeat("dd", 32)
+                + "1a200000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4"
+                + "38b9604a1541"
+                + repeat("11", 20)
+                + "50015a20"
+                + repeat("ee", 32));
+    final String rawHeaderHash =
+        "0x614a09275b6d0fffb6bc08fb34f737c093d9dd2adefccb04344715e2619c8286";
+    final String parentRawHeaderHash =
+        "0x5647d462e78851c6701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4";
+    final String blockId =
+        "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286";
+    final String parentBlockId =
+        "0x0000000000003038701e5a1cd89912e6118f8aa18222c8b90867fedcca84c4d4";
+    assert SourceSccpProofs
+            .tronSolidBlockHeaderProofHash(
+                rawHeader,
+                tronHeaderSignature(0),
+                parentRawHeader,
+                tronHeaderSignature(1),
+                rawHeaderHash,
+                parentRawHeaderHash,
+                blockId,
+                repeat("dd", 32),
+                repeat("ee", 32),
+                parentBlockId,
+                "41" + repeat("11", 20),
+                "1700000012345",
+                1)
+            .equals("0x362579d1667137b9dac3fc20772de7b0b4adb3888d4508bb5d75e53596d43771")
+        : "TRON solid-block header proof hash must match raw recovery-id fixture";
+
+    for (int legacyRecoveryId = 27; legacyRecoveryId <= 30; legacyRecoveryId++) {
+      final byte[] legacyTransactionSignature = Arrays.copyOf(transactionSourceSignature, 65);
+      legacyTransactionSignature[64] = (byte) legacyRecoveryId;
+      final byte[] legacyTransactionBytes =
+          replaceFirst(transactionSourceBytes, transactionSourceSignature, legacyTransactionSignature);
+      expectThrowsMessage(
+          () ->
+              SourceSccpProofs.canonicalTronTransactionSourceProofBytes(
+                  sourceEventDigest,
+                  repeat("bb", 32),
+                  "1751c62dce36d5d642e48480b45d48ed16dd1b9b40ce216bc2f15c1b1ccf300b",
+                  "0",
+                  "1",
+                  legacyTransactionBytes,
+                  emptyBranch,
+                  inclusionBranch),
+          "successful TRON TriggerSmartContract source call");
+
+      final byte[] legacyWitnessSignature = Arrays.copyOf(witnessSignature, 65);
+      legacyWitnessSignature[64] = (byte) legacyRecoveryId;
+      expectThrowsMessage(
+          () ->
+              SourceSccpProofs.canonicalTronWitnessSealBytes(
+                  "1",
+                  "1",
+                  "0x" + tronTransactionId,
+                  Collections.singletonList(tronOwner),
+                  Collections.singletonList("1"),
+                  new byte[] {0x01},
+                  Collections.singletonList(legacyWitnessSignature)),
+          "canonical low-S 65-byte TRON signature");
+
+      final byte[] legacyTransitionSignature = Arrays.copyOf(transitionSignature, 65);
+      legacyTransitionSignature[64] = (byte) legacyRecoveryId;
+      expectThrowsMessage(
+          () ->
+              SourceSccpProofs.canonicalTronWitnessScheduleTransitionSealBytes(
+                  SourceSccpProofs.DOMAIN_TRON,
+                  "7",
+                  "8",
+                  "12345",
+                  "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+                  parentScheduleHash,
+                  nextScheduleHash,
+                  nextSchedulePayload,
+                  transitionMessageHash,
+                  "1",
+                  "1",
+                  Collections.singletonList(tronOwner),
+                  Collections.singletonList("1"),
+                  new byte[] {0x01},
+                  Collections.singletonList(legacyTransitionSignature)),
+          "canonical low-S 65-byte TRON signature");
+
+      expectThrowsMessage(
+          () ->
+              SourceSccpProofs.canonicalTronSolidBlockHeaderProofBytes(
+                  rawHeader,
+                  tronHeaderSignature(legacyRecoveryId),
+                  parentRawHeader,
+                  tronHeaderSignature(1),
+                  rawHeaderHash,
+                  parentRawHeaderHash,
+                  blockId,
+                  repeat("dd", 32),
+                  repeat("ee", 32),
+                  parentBlockId,
+                  "41" + repeat("11", 20),
+                  "1700000012345",
+                  1),
+          "recovery id 0..3");
+      expectThrowsMessage(
+          () ->
+              SourceSccpProofs.canonicalTronSolidBlockHeaderProofBytes(
+                  rawHeader,
+                  tronHeaderSignature(0),
+                  parentRawHeader,
+                  tronHeaderSignature(legacyRecoveryId),
+                  rawHeaderHash,
+                  parentRawHeaderHash,
+                  blockId,
+                  repeat("dd", 32),
+                  repeat("ee", 32),
+                  parentBlockId,
+                  "41" + repeat("11", 20),
+                  "1700000012345",
+                  1),
+          "recovery id 0..3");
+    }
   }
 
   private static void expectThrows(final Runnable action) {

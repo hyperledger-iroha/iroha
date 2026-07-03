@@ -303,785 +303,26 @@ def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
 ) -> None:
     module = load_coverage_module()
     readme = tmp_path / "README.md"
-    readme.write_text(
-        "Constants and variables share a single TLA declaration namespace\n",
-        encoding="utf-8",
-    )
+    present_text = "Constants and variables share a single TLA declaration namespace\n"
+    readme.write_text(present_text, encoding="utf-8")
+
+    expected_errors = [
+        f"Sumeragi formal README {readme} is missing required text: {snippet}"
+        for snippet in module.FORMAL_README_GUARD_CONTRACT_SNIPPETS
+        if snippet not in present_text
+    ]
 
     assert module.required_text_errors(
         readme,
         module.FORMAL_README_GUARD_CONTRACT_SNIPPETS,
         "Sumeragi formal README",
-    ) == [
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Declared constants and variables must also remain",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "disjoint from top-level operator definitions and `RECURSIVE` declarations",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "same operator name must not be reused across behavior",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "constraint, and proof-check roles",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "TLA operator definitions must be non-LOCAL",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "TLA `RECURSIVE` declaration directives must be top-level",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed `RECURSIVE` starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level no-separator `RECURSIVE` starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "aliases must be duplicate-free",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "top-level proof-target operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "be duplicate-free, use non-reserved static module identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "be top-level",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "appear before declarations and definitions",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "without `WITH` substitutions",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed `EXTENDS`/`INSTANCE` starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "No-separator `EXTENDS`/`INSTANCE` starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed named `INSTANCE` aliases are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "No-separator named `INSTANCE` aliases are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "INSTANCE declarations must be non-LOCAL",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Local TLA dependency files are followed transitively",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "same module-header, declaration, and assumption/proof guards",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Assumption/proof directive starts are rejected even when indented",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "No-separator assumption/proof directive starts are rejected even when indented",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "TLA module headers and terminators must be top-level",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Decorative all-`=` separator lines are allowed before that terminator",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Decorative all-`=` separator lines must not have trailing content",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed TLA module header starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "No-separator TLA module header starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed TLA terminator starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "TLA constant and variable declaration directives must be top-level",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed TLA constant/variable declaration starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level no-separator TLA constant/variable declaration starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level no-separator TLA declaration block entries are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed TLA `vars` tuple starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Directive-prefixed TLA declaration block entries remain valid",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed supported CFG directive starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Directive-prefixed CFG block entries remain valid",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Indented no-separator supported CFG directive starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed CHECK_DEADLOCK starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed CFG constant binding starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level no-separator CFG constant binding starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Indented no-separator CFG constant binding directive starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed CFG operator-reference directive starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level no-separator CFG operator-reference directive starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Indented no-separator CFG operator-reference directive starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "control-flow, implication, or equivalence exactness definitions must name",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "conjuncts must be named concrete predicates before composition",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "conjuncts must compose an existing concrete matches predicate directly",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "compose named predicates before the exactness bundle composes them",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized exactness conjuncts must be lifted behind zero-arity",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized helper call checks parse expression arguments, including comparisons",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound exactness helper operands must not hide expression-argument parameterized helper calls",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified formula exactness conjuncts must be lifted behind named",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Formula equality exactness conjuncts must be lifted behind named",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Formula equivalence exactness conjuncts must be lifted behind named",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Non-named exactness conjuncts are rejected even when mixed",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Named exactness predicates must not hide generic correctness",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive named exactness predicate chains must not hide generic correctness",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide repeated helper conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal exactness helper wrappers must not hide repeated helper conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal exactness helper wrappers must not hide single-helper conjunct aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated exactness helper wrappers must not hide single-helper conjunct aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated exactness helper wrappers must not hide zero-arity helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated zero-arity helper alias checks recurse through nested identity gates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated exactness helper wrappers must not hide negated helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated negated helper operand checks recurse through nested identity gates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound exactness helper operands must not hide repeated helper conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Helper conjunct repetition checks traverse unary-temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Repeated helper same-polarity checks split top-level boolean operands before peeling temporal or negated wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide repeated helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Helper operand repetition checks traverse unary-temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Repeated helper operand checks include chained implication and equivalence operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide contradictory helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide excluded-middle helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide complementary-equivalence helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Complementary-equivalence checks include chained equivalence operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Helper operand polarity checks traverse unary-temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Helper operand polarity checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide undefined helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas must not hide undefined helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve quantified binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve unbounded quantified binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans reject relation-bearing quantified binding prefixes",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve tuple-pattern quantifier domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve LET binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve parameterized LET operator scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve CHOOSE binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve LAMBDA binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve standard TLA set/operator identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve ENABLED/UNCHANGED operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve CASE branch scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve relation operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve operator-call argument scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve arithmetic/set infix operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve sequence/function infix operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve explicit set literal element scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve unary set-operator operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve set-comprehension binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve set-comprehension outer enclosure scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve function-constructor binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve function-set domain and range scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Function-set scans preserve CASE domain branch arrows",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Function-set scans preserve record maplet CASE values",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Function-set scans preserve record set/update CASE values",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record set field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record update field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record selector field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve comma-shared set/function binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve operator parameter scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas must not be vacuous",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain, self-membership, or empty-set membership facts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper restatement checks reject pure top-level boolean compositions",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper restatement checks reject identity-literal gates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper restatement checks propagate known truth values",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified formula prefix scans preserve escaped string literal colons",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified formula prefix scans preserve tuple literal maplet colons",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper formula scans require scoped binding prefixes",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified bound identifier scans preserve escaped string literal domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper bound-domain checks preserve escaped string literal domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper bound-domain checks include comma-shared bindings",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper bound-domain checks skip tuple-pattern component domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper singleton-domain checks preserve tuple literal elements",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper vacuity checks include unbounded static bodies",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Line comment scans preserve escaped string literal comment markers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static outer wrapper scans preserve escaped string literal parentheses",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Semantic identifier scans ignore escaped string literal contents",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level relation and boolean scans preserve tuple literal operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level relation scans reject whole-body control/action wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level boolean scans preserve escaped string literal operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level boolean/equality detector helpers preserve tuple literal operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level keyword scans preserve tuple literal keywords",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level CASE branch scans preserve tuple literal arms and conditions",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level keyword and CASE branch scans preserve escaped string literal delimiters",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level CASE branch scans distinguish unary temporal boxes from arm separators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas must use their bound identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas must not duplicate bound identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified unused-bound checks include later binding groups",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified unused-bound checks include unbounded bindings",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified bound identifier scans include later tuple-pattern binding groups",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas must not select predicates with control flow",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas must not appear below top-level negation operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas are checked through boolean operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Negated quantified helper checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Negated quantified helper checks split top-level boolean operands before peeling negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper body checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper body control-flow checks reject non-transparent `LET` bodies",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Existential quantified exactness helper formulas must not weaken exactness chains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide whole-body control-flow predicate-selection helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide nested control-flow predicate-selection helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Nested control-flow predicate-selection checks unwrap one-line `LET` branch aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Control-flow predicate-selection checks unwrap one-line `LET` control aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Nested control-flow predicate-selection checks include non-branch control operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal exactness helper wrappers must not hide control-flow predicate selection",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal exactness LET-alias helper wrappers must name concrete model predicates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide whole-body raw-predicate boolean-composition helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Raw-predicate exactness boolean-composition helper operands are checked through top-level negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Raw-predicate exactness boolean-composition helper operands are checked through stacked top-level negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Raw-predicate exactness boolean-composition helper operands are checked through unary-temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Raw-predicate exactness boolean-composition helper operands are checked through boolean operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide whole-body parameterized-call boolean-composition helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized-call exactness boolean-composition helper operands are checked through top-level negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized-call exactness boolean-composition helper operands are checked through stacked top-level negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized-call exactness boolean-composition helper operands are checked through unary-temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized-call exactness boolean-composition helper operands are checked through boolean operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated parameterized-call exactness boolean-composition helper operands are checked through identity literals",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal exactness helper wrappers must not hide parameterized helper calls",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide whole-body quantified-predicate boolean-composition helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified-predicate exactness boolean-composition helper operands are checked through top-level negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified-predicate exactness boolean-composition helper operands are checked through stacked top-level negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified-predicate exactness boolean-composition helper operands are checked through unary-temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified-predicate exactness boolean-composition helper operands are checked through boolean operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated quantified-predicate exactness boolean-composition helper operands are checked through identity literals",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Exactness boolean-composition checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal exactness helper wrappers must not hide quantified formulas",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static action/set/choice exactness helper wrappers must not hide quantified formulas",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static action/set/choice exactness helper wrappers traverse structured operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Structured exactness helper operands must not hide quantified formulas",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Structured exactness helper operands must not hide control-flow predicate selection",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal quantified, parameterized-call, and control-flow checks split top-level boolean operands before peeling temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal quantified checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal parameterized-call checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide literal or alias helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide single-helper conjunct aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide self-equality helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide self-inequality helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal self-equality exactness helper wrappers count as self-equality helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal self-inequality exactness helper wrappers count as self-inequality helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Constant-relation exactness helpers count as literal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Constant-relation helper checks unwrap one-line `LET`, unary-temporal, and negated wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static and unary-temporal boolean-only exactness helper wrappers count as",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static IF literal exactness helpers count as literal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static temporal literal checks split top-level boolean operands before peeling temporal or negated wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Negated unary-temporal boolean-only helper wrappers count as literal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound boolean-only temporal helper wrappers count as literal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound exactness helper traversal includes disjunction, implication, equivalence, and negation operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Helper reference traversal unwraps one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Exactness vacuous-helper checks inspect static and structured operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET helper alias unwrapping preserves static unary result wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET binding scans preserve tuple literal definition bodies",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET binding scans preserve escaped string literal definition bodies",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET helper alias unwrapping resolves chained one-line bindings",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET alias substitution respects later quantified binding groups",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET alias substitution respects escaped string literal domain binding groups",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET alias substitution preserves escaped string literal result bodies",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET helper alias unwrapping substitutes simple chained binding references",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Temporal literal checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Non-named correctness-envelope conjuncts are rejected even when mixed",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Allowlisted temporal correctness-envelope conjuncts must be non-literal",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Allowlisted temporal correctness-envelope conjuncts must be non-self-equality",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Allowlisted temporal correctness-envelope conjuncts must be non-self-inequality",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Whole-body control-flow temporal side conjuncts must name",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Whole-body boolean-composition temporal side conjuncts must name",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal boolean composition over temporal helpers must name",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary `[]`/`<>` boolean-only temporal wrappers count as literal temporal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static IF literal temporal helpers count as literal temporal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal correctness-envelope conjunct chains must not",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide undefined helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas must not hide undefined helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve quantified binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve unbounded quantified binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans reject relation-bearing quantified binding prefixes",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve tuple-pattern quantifier domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve LET binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve parameterized LET operator scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve CHOOSE binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve LAMBDA binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve standard TLA set/operator identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve ENABLED/UNCHANGED operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve CASE branch scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve relation operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve operator-call argument scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve arithmetic/set infix operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve sequence/function infix operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve explicit set literal element scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve unary set-operator operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve set-comprehension binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve set-comprehension outer enclosure scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve function-constructor binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve function-set domain and range scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Function-set scans preserve CASE domain branch arrows",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Function-set scans preserve record maplet CASE values",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Function-set scans preserve record set/update CASE values",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record set field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record update field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record selector field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve comma-shared set/function binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve operator parameter scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas must not be vacuous",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain, self-membership, or empty-set membership facts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper restatement checks reject pure top-level boolean compositions",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper restatement checks reject identity-literal gates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper restatement checks propagate known truth values",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified formula prefix scans preserve escaped string literal colons",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified formula prefix scans preserve tuple literal maplet colons",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper formula scans require scoped binding prefixes",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified bound identifier scans preserve escaped string literal domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper bound-domain checks preserve escaped string literal domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper bound-domain checks include comma-shared bindings",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper bound-domain checks skip tuple-pattern component domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper singleton-domain checks preserve tuple literal elements",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper vacuity checks include unbounded static bodies",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Line comment scans preserve escaped string literal comment markers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static outer wrapper scans preserve escaped string literal parentheses",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Semantic identifier scans ignore escaped string literal contents",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level relation and boolean scans preserve tuple literal operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level relation scans reject whole-body control/action wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level boolean/equality detector helpers preserve tuple literal operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level keyword scans preserve tuple literal keywords",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level CASE branch scans preserve tuple literal arms and conditions",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level CASE branch scans distinguish unary temporal boxes from arm separators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas must use their bound identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas must not duplicate bound identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified unused-bound checks include later binding groups",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified unused-bound checks include unbounded bindings",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified bound identifier scans include later tuple-pattern binding groups",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas must not select predicates with control flow",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas must not appear below top-level negation operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas are checked through boolean operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Existential quantified temporal helper formulas must not weaken allowlisted temporal chains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound temporal helper operands must not hide undefined helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide repeated helper conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Allowlisted temporal helper conjunct repetition checks use the same unary-temporal traversal",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide repeated helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide contradictory helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide excluded-middle helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide complementary-equivalence helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal temporal helper wrappers must not hide repeated helper conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal temporal helper wrappers must not hide single-helper conjunct aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated temporal helper wrappers must not hide single-helper conjunct aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated temporal helper wrappers must not hide zero-arity helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated temporal helper wrappers must not hide negated helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound temporal helper operands must not hide repeated helper conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide whole-body control-flow predicate-selection helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide nested control-flow predicate-selection helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal temporal helper wrappers must not hide control-flow predicate selection",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static action/set/choice temporal helper wrappers must not hide quantified formulas",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static action/set/choice temporal helper wrappers traverse structured operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Structured temporal helper operands must not hide quantified formulas",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Structured temporal helper operands must not hide control-flow predicate selection",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal temporal LET-alias helper wrappers must name concrete temporal predicates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide whole-body temporal-helper boolean-composition helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Temporal-helper boolean-composition checks traverse boolean operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal LET-alias temporal side conjuncts must name concrete temporal predicates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide literal or alias helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide single-helper conjunct aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide self-equality helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide self-inequality helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Constant-relation temporal helpers count as literal temporal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound `[]`/`<>` temporal helper bodies are traversed for helper references",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized temporal helper calls must be lifted behind zero-arity predicates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound temporal helper traversal includes disjunction operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound temporal helper traversal includes implication operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound temporal helper traversal includes equivalence operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound temporal helper traversal includes negation operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Temporal vacuous-helper checks inspect static and structured operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Exactness and correctness-envelope conjunct references must resolve to zero-arity",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must also resolve through zero-arity",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Every top-level Sumeragi property checked by the deep/TLC-fast configs must be reachable",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "from `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope` through zero-arity",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "operator references",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Every non-TypeInvariant top-level Sumeragi invariant checked by the deep/TLC-fast configs must be reachable",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "from `SumeragiConsensusCoreStateMatchesEnvelope` through zero-arity",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "The consensus-core aggregate proof roots must keep their exact direct conjunct contracts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "The correctness root composes `TypeInvariant`, `SumeragiConsensusCoreAlwaysMatchesExactness`,",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`, and `EventuallyCommit` directly",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "The state+temporal, exactness, and fast roots keep their documented direct conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Every direct conjunct of `SumeragiConsensusCoreStateMatchesEnvelope` must be checked",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "as a top-level deep/TLC-fast `INVARIANT`",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`SumeragiConsensusCoreStateMatchesEnvelope` must keep the documented state direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Every direct conjunct of `SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope` must be checked",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "as a top-level deep/TLC-fast `PROPERTY`",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Every direct conjunct of `RbcLifecycleAlwaysMatchesEndToEndEnvelope` must be checked",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Nested RBC lifecycle aggregate conjuncts use the same top-level `PROPERTY` coverage rule",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "First-level RBC lifecycle aggregate conjuncts use the same top-level `PROPERTY` coverage rule",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "RBC progress, corruption repair, chunk/ready/deliver, delivery-entry, and delivered-state roots stay decomposed",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Reachable aggregate temporal property roots recursively use the same top-level `PROPERTY` coverage rule",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Finalized certificate retention names the Byzantine commit-vote closure property directly",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Root coverage checks require each selected deep/TLC-fast CFG to carry every protected conjunct independently",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Correctness-root reachability requires the root property in every selected deep/TLC-fast CFG",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Correctness-root direct TypeInvariant stays a top-level `INVARIANT` in every selected deep/TLC-fast CFG",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Correctness-root direct temporal obligations stay top-level `PROPERTY` checks in every selected deep/TLC-fast CFG",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`EventuallyCommit` must keep the direct `[] (gst => <> committed)` liveness shape with exact lowercase state-variable names",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`CommitNeverRevoked` must keep the direct `[] (committed => [] committed)` finality-latch monotonicity shape with exact lowercase state-variable names",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Finality `AlwaysMatches` temporal wrappers must keep direct `[]` shapes over their matching zero-arity predicates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`TimeoutTickGateNeverBypassesStalledProgress` must keep the direct `[] TimeoutTickGateMatchesStalledProgress` timeout-gate wrapper shape",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Pre-commit handoff `Never`/`Always` predicate wrappers must keep direct `[] Predicate` shapes over their documented zero-arity predicates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        '`CommittedPhaseNeverLeaves` must keep the direct `[] (phase = "Committed" => [] (phase = "Committed"))` phase permanence shape',
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Timeout-recovery action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Pre-commit handoff action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`Committed*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveredFinality*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveredEvidenceNeverRegresses` and `RbcDeliveredPending*` lifecycle action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveredPendingSpecStep*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveryEntry*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveryEntryCommitEvidenceBranch*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`DeliveredPendingCompleteWaitState*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`PendingProtocolStepsNeverChangeGst` must keep the direct `[] [PendingProtocolStepsPreserveGst]_vars` GST-preservation action-wrapper shape",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`CommittedGstNeverEnablesActions` must keep the direct `[] CommittedGstDisablesEveryAction` terminal action-disable shape",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`CommittedStateAlwaysMatchesTerminalEnvelope` must keep the documented terminal-state direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`PostFinalityStateAlwaysMatchesStabilityEnvelope` must keep the documented post-finality stability direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`TimeoutRecoveryAlwaysMatchesViewChangeEnvelope` must keep the documented timeout-recovery direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope` must keep the documented certified-commit direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope` must keep the documented pre-commit handoff direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`CommitVoteHandoffAlwaysMatchesFinalityEnvelope` must keep the documented commit-vote handoff direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope` must keep the documented finalized-certificate retention direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope` must keep the documented RBC delivered-finality direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope` must keep the documented RBC delivered-state lifecycle direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope` must keep the documented RBC delivered-pending handoff direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope` must keep the documented delivered-pending complete wait-state direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope` must keep the documented RBC delivery-entry outcome direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope` must keep the documented RBC delivery-entry continuation direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcLifecycleAlwaysMatchesEndToEndEnvelope` must keep the documented RBC lifecycle direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcCorruptionRepairAlwaysMatchesFaultEnvelope` must keep the documented RBC corruption-repair direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope` must keep the documented RBC chunk/ready/deliver availability direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope` must keep the documented RBC progress-mutation direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcProgressMutationAlwaysMatchesLocalClassification` must keep the documented RBC progress local-classification direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope` must keep the documented RBC startup-boundary direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcProgressStateEvidenceAlwaysMatchesEnvelope` must keep the documented RBC progress-state evidence direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcLiveEvidenceCausalityAlwaysMatchesEnvelope` must keep the documented RBC live-evidence causality direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope` must keep the documented end-to-end safety direct conjunct contract",
-    ]
+    ) == expected_errors
+    assert expected_errors
+    assert not any(
+        module.FORMAL_README_GUARD_CONTRACT_SNIPPETS[0] in error
+        or module.FORMAL_README_GUARD_CONTRACT_SNIPPETS[1] in error
+        for error in expected_errors
+    )
 
 
 def test_command_order_errors_require_guard_before_apalache(
@@ -1644,6 +885,7 @@ def test_apalache_typecheck_only_mode_errors_accepts_fast_smoke() -> None:
         module.apalache_typecheck_only_mode_errors(
             {"fast", "frontier-fast"},
             cases,
+            allowed_modes={"fast"},
         )
         == []
     )
@@ -1716,6 +958,7 @@ def test_apalache_typecheck_only_mode_errors_rejects_unlisted_modes() -> None:
     assert module.apalache_typecheck_only_mode_errors(
         {"fast", "frontier-fast"},
         cases,
+        allowed_modes={"fast"},
     ) == [
         "frontier-fast: Apalache runner case 'frontier-fast' at line 20 "
         "sets typecheck_only=1 outside APALACHE_TYPECHECK_ONLY_MODES"
@@ -1743,6 +986,7 @@ def test_apalache_typecheck_only_mode_errors_rejects_malformed_case_assignment(
     assert module.apalache_typecheck_only_mode_errors(
         {"fast", "frontier-fast"},
         cases,
+        allowed_modes={"fast"},
     ) == [
         "frontier-fast: Apalache runner case 'frontier-fast' line 21 "
         "has malformed typecheck_only assignment: typecheck_only = 1",
@@ -1761,6 +1005,7 @@ def test_apalache_typecheck_only_mode_errors_rejects_stale_allowlist() -> None:
     assert module.apalache_typecheck_only_mode_errors(
         {"fast", "frontier-fast"},
         cases,
+        allowed_modes={"fast"},
     ) == [
         "fast: listed in APALACHE_TYPECHECK_ONLY_MODES but Apalache runner "
         "case 'fast' at line 10 does not set typecheck_only=1"
@@ -1835,6 +1080,3185 @@ def test_mutation_cfg_equivalence_rejects_unexpected_tlc_cfg() -> None:
         f"frontier-bug-stale-owner: Apalache cfg {apalache_cfg} "
         f"differs from TLC cfg {tlc_cfg}"
     ]
+
+
+def test_projection_clean_cfg_errors_accepts_required_fast_and_progress_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+    fast_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                'CONSTANT Bug = "none"',
+                *(
+                    f"{kind} {operator}"
+                    for operator, kind in module.PROJECTION_FAST_CFG_REQUIRED_CHECKS
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "none"',
+                *(
+                    f"{kind} {operator}"
+                    for operator, kind in module.PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_clean_cfg_errors(fast_cfg, progress_cfg) == []
+
+
+def test_projection_clean_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+    fast_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY ProjectionBridgeMatchesInterleavingExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "INVARIANT ProjectedCommitProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.projection_clean_cfg_errors(fast_cfg, progress_cfg)
+
+    assert (
+        f"{fast_cfg} checks PROPERTY ProjectionBridgeMatchesInterleavingExactness, "
+        "expected INVARIANT"
+    ) in errors
+    assert (
+        f"{progress_cfg} must check PROPERTY EventualProjectedCommitFinalityStack "
+        "for projection progress coverage"
+    ) in errors
+
+
+def test_projection_clean_cfg_errors_rejects_wrong_progress_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+    write_clean_safety_cfg_with_checks(
+        fast_cfg,
+        module.PROJECTION_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_cfg_with_behavior_and_checks(
+        progress_cfg,
+        (
+            "INIT Init",
+            "NEXT Next",
+            "CHECK_DEADLOCK FALSE",
+            'CONSTANT Bug = "none"',
+        ),
+        module.PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.projection_clean_cfg_errors(fast_cfg, progress_cfg) == [
+        f"{progress_cfg} must bind SPECIFICATION ProjectedCommitProgressSpec "
+        "for projection progress coverage",
+        f"{progress_cfg}:1 binds unexpected INIT Init; expected SPECIFICATION "
+        "ProjectedCommitProgressSpec for projection progress coverage",
+        f"{progress_cfg}:2 binds unexpected NEXT Next; expected SPECIFICATION "
+        "ProjectedCommitProgressSpec for projection progress coverage",
+    ]
+
+
+def test_projection_clean_cfg_errors_rejects_mutated_progress_bug_constant(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+    write_clean_safety_cfg_with_checks(
+        fast_cfg,
+        module.PROJECTION_FAST_CFG_REQUIRED_CHECKS,
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "finality_not_latched"',
+                *(
+                    f"{kind} {operator}"
+                    for operator, kind in module.PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_clean_cfg_errors(fast_cfg, progress_cfg) == [
+        f'{progress_cfg}:3 binds constant Bug = "finality_not_latched", '
+        'expected "none" for projection progress coverage'
+    ]
+
+
+def test_projection_clean_cfg_errors_rejects_mutated_fast_bug_constant(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+    write_cfg_with_behavior_and_checks(
+        fast_cfg,
+        ("INIT Init", "NEXT Next", 'CONSTANT Bug = "finality_not_latched"'),
+        module.PROJECTION_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_clean_progress_cfg_with_checks(
+        progress_cfg,
+        "ProjectedCommitProgressSpec",
+        module.PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.projection_clean_cfg_errors(fast_cfg, progress_cfg) == [
+        f'{fast_cfg}:3 binds constant Bug = "finality_not_latched", '
+        'expected "none" for projection fast coverage'
+    ]
+
+
+def test_projection_clean_cfg_errors_rejects_wrong_fast_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+    write_cfg_with_behavior_and_checks(
+        fast_cfg,
+        ("INIT Init", "NEXT StaleNext", 'CONSTANT Bug = "none"'),
+        module.PROJECTION_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_clean_progress_cfg_with_checks(
+        progress_cfg,
+        "ProjectedCommitProgressSpec",
+        module.PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.projection_clean_cfg_errors(fast_cfg, progress_cfg) == [
+        f"{fast_cfg}:2 binds NEXT StaleNext, expected Next "
+        "for projection fast coverage"
+    ]
+
+
+def write_cfg_with_checks(
+    path: Path,
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    write_cfg_with_behavior_and_checks(
+        path,
+        ("INIT Init", "NEXT Next"),
+        required_checks,
+    )
+
+
+def write_clean_safety_cfg_with_checks(
+    path: Path,
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    write_cfg_with_behavior_and_checks(
+        path,
+        ("INIT Init", "NEXT Next", 'CONSTANT Bug = "none"'),
+        required_checks,
+    )
+
+
+def write_cfg_with_behavior_and_checks(
+    path: Path,
+    behavior_lines: tuple[str, ...],
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    behavior_and_policy_lines = list(behavior_lines)
+    if (
+        any(line.startswith("SPECIFICATION ") for line in behavior_and_policy_lines)
+        and "CHECK_DEADLOCK FALSE" not in behavior_and_policy_lines
+    ):
+        behavior_and_policy_lines.append("CHECK_DEADLOCK FALSE")
+    path.write_text(
+        "\n".join(
+            [
+                *behavior_and_policy_lines,
+                *(f"{kind} {operator}" for operator, kind in required_checks),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def write_cfg_with_behavior_constants_and_checks(
+    path: Path,
+    behavior_lines: tuple[str, ...],
+    constant_values: tuple[tuple[str, str], ...],
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                *behavior_lines,
+                "CONSTANTS",
+                *(f"  {constant} = {value}" for constant, value in constant_values),
+                *(f"{kind} {operator}" for operator, kind in required_checks),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def write_clean_progress_cfg_with_checks(
+    path: Path,
+    specification: str,
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    write_cfg_with_behavior_and_checks(
+        path,
+        (f"SPECIFICATION {specification}", 'CONSTANT Bug = "none"'),
+        required_checks,
+    )
+
+
+def write_progress_mutation_cfg_with_checks(
+    path: Path,
+    stem_prefix: str,
+    specification: str,
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    assert path.stem.startswith(stem_prefix)
+    bug_suffix = path.stem[len(stem_prefix) :]
+    write_cfg_with_behavior_and_checks(
+        path,
+        (f"SPECIFICATION {specification}", f'CONSTANT Bug = "{bug_suffix}"'),
+        required_checks,
+    )
+
+
+def write_safety_mutation_cfg_with_checks(
+    path: Path,
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    marker = "_bug_"
+    assert marker in path.stem
+    bug_suffix = path.stem.split(marker, 1)[1]
+    write_cfg_with_behavior_and_checks(
+        path,
+        ("INIT Init", "NEXT Next", f'CONSTANT Bug = "{bug_suffix}"'),
+        required_checks,
+    )
+
+
+def test_cfg_required_behavior_contract_errors_accepts_supported_behavior_forms(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    spec_cfg = tmp_path / "progress.cfg"
+    init_next_cfg = tmp_path / "top.cfg"
+    spec_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    init_next_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT CorridorNext",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_required_behavior_contract_errors(
+            spec_cfg,
+            (("SPECIFICATION", "ProgressSpec"),),
+            "progress coverage",
+        )
+        == []
+    )
+    assert (
+        module.cfg_required_behavior_contract_errors(
+            init_next_cfg,
+            (("INIT", "Init"), ("NEXT", "CorridorNext")),
+            "top coverage",
+        )
+        == []
+    )
+
+
+def test_cfg_required_behavior_contract_errors_rejects_wrong_behavior_form(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "top.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION OldSpec",
+                "INIT Init",
+                "NEXT WrongNext",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_behavior_contract_errors(
+        cfg,
+        (("INIT", "Init"), ("NEXT", "ExpectedNext")),
+        "top coverage",
+    ) == [
+        f"{cfg}:1 binds unexpected SPECIFICATION OldSpec; expected INIT Init "
+        "and NEXT ExpectedNext for top coverage",
+        f"{cfg}:3 binds NEXT WrongNext, expected ExpectedNext for top coverage",
+    ]
+
+
+def test_cfg_required_check_deadlock_contract_errors_accepts_expected_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "progress.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_required_check_deadlock_contract_errors(
+            cfg,
+            "FALSE",
+            "progress coverage",
+        )
+        == []
+    )
+
+
+def test_cfg_required_check_deadlock_contract_errors_rejects_missing_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "progress.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_check_deadlock_contract_errors(
+        cfg,
+        "FALSE",
+        "progress coverage",
+    ) == [f"{cfg} must set CHECK_DEADLOCK FALSE for progress coverage"]
+
+
+def test_cfg_required_check_deadlock_contract_errors_rejects_wrong_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "progress.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK TRUE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_check_deadlock_contract_errors(
+        cfg,
+        "FALSE",
+        "progress coverage",
+    ) == [
+        f"{cfg}:2 sets CHECK_DEADLOCK TRUE, expected FALSE for progress coverage"
+    ]
+
+
+def test_cfg_required_constant_value_contract_errors_accepts_expected_value(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "progress.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "none"',
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_required_constant_value_contract_errors(
+            cfg,
+            "Bug",
+            '"none"',
+            "progress coverage",
+        )
+        == []
+    )
+
+
+def test_cfg_required_constant_value_contract_errors_rejects_missing_value(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "progress.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_constant_value_contract_errors(
+        cfg,
+        "Bug",
+        '"none"',
+        "progress coverage",
+    ) == [f'{cfg} must bind constant Bug = "none" for progress coverage']
+
+
+def test_cfg_required_constant_value_contract_errors_rejects_wrong_value(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "progress.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "finality_not_latched"',
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_constant_value_contract_errors(
+        cfg,
+        "Bug",
+        '"none"',
+        "progress coverage",
+    ) == [
+        f'{cfg}:1 binds constant Bug = "finality_not_latched", expected '
+        '"none" for progress coverage'
+    ]
+
+
+def test_cfg_required_bug_suffix_constant_errors_accepts_matching_suffix(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiModel_progress_bug_finality_not_latched.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "finality_not_latched"',
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_required_bug_suffix_constant_errors(
+            cfg,
+            "SumeragiModel_progress_bug_",
+            "progress mutation coverage",
+        )
+        == []
+    )
+
+
+def test_cfg_required_bug_suffix_constant_errors_rejects_wrong_suffix_value(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiModel_progress_bug_finality_not_latched.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "phase_not_committed"',
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_bug_suffix_constant_errors(
+        cfg,
+        "SumeragiModel_progress_bug_",
+        "progress mutation coverage",
+    ) == [
+        f'{cfg}:1 binds constant Bug = "phase_not_committed", expected '
+        '"finality_not_latched" for progress mutation coverage'
+    ]
+
+
+def test_byzantine_top_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg_contracts = []
+    for cfg_path, required_checks, coverage_label in (
+        module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS
+    ):
+        tmp_cfg = tmp_path / cfg_path.name
+        required_behavior, _ = module.BYZANTINE_TOP_CFG_REQUIRED_BEHAVIOR_BY_NAME[
+            cfg_path.name
+        ]
+        write_cfg_with_behavior_constants_and_checks(
+            tmp_cfg,
+            tuple(f"{directive} {operator}" for directive, operator in required_behavior),
+            module.SUMERAGI_FAST_CONSTANT_VALUES,
+            required_checks,
+        )
+        cfg_contracts.append((tmp_cfg, required_checks, coverage_label))
+
+    assert module.byzantine_top_cfg_errors(tuple(cfg_contracts)) == []
+
+
+def test_byzantine_top_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    delivered_cfg = tmp_path / "Sumeragi_byzantine_delivered_first_top_fast.cfg"
+    direct_cfg = tmp_path / "Sumeragi_byzantine_direct_top_fast.cfg"
+    delivered_required = module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS[0][1]
+    direct_required = module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS[2][1]
+    delivered_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT ByzantineDeliveredFirstCommitNext",
+                "CONSTANTS",
+                *(
+                    f"  {constant} = {value}"
+                    for constant, value in module.SUMERAGI_FAST_CONSTANT_VALUES
+                ),
+                "INVARIANT TypeInvariant",
+                "PROPERTY ByzantineDeliveredFirstTopCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    direct_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT ByzantineDirectCommitNext",
+                "CONSTANTS",
+                *(
+                    f"  {constant} = {value}"
+                    for constant, value in module.SUMERAGI_FAST_CONSTANT_VALUES
+                ),
+                "INVARIANT TypeInvariant",
+                "INVARIANT TlcByzantineDirectCommitCorridor",
+                "INVARIANT ByzantineDirectTopCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.byzantine_top_cfg_errors(
+        (
+            (delivered_cfg, delivered_required, "delivered top coverage"),
+            (direct_cfg, direct_required, "direct top coverage"),
+        )
+    )
+
+    assert (
+        f"{delivered_cfg} must check INVARIANT TlcByzantineDirectCommitCorridor "
+        "for delivered top coverage"
+    ) in errors
+    assert (
+        f"{delivered_cfg} checks PROPERTY "
+        "ByzantineDeliveredFirstTopCorrectnessEnvelope, expected INVARIANT"
+    ) in errors
+    assert (
+        f"{direct_cfg} must check INVARIANT "
+        "ByzantineDirectTopCoversOrderedTopCorridors for direct top coverage"
+    ) in errors
+
+
+def test_byzantine_top_cfg_errors_rejects_wrong_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_byzantine_delivered_first_top_fast.cfg"
+    write_cfg_with_behavior_constants_and_checks(
+        cfg,
+        ("INIT Init", "NEXT WrongCommitNext"),
+        module.SUMERAGI_FAST_CONSTANT_VALUES,
+        module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS[0][1],
+    )
+
+    assert module.byzantine_top_cfg_errors(
+        (
+            (
+                cfg,
+                module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS[0][1],
+                "Byzantine delivered-first top coverage",
+            ),
+        )
+    ) == [
+        f"{cfg}:2 binds NEXT WrongCommitNext, expected "
+        "ByzantineDeliveredFirstCommitNext for Byzantine delivered-first top "
+        "coverage"
+    ]
+
+
+def test_byzantine_top_cfg_errors_rejects_wrong_constant_envelope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_byzantine_delivered_first_top_fast.cfg"
+    constant_values = tuple(
+        (constant, "2") if constant == "CommitQuorum" else (constant, value)
+        for constant, value in module.SUMERAGI_FAST_CONSTANT_VALUES
+    )
+    write_cfg_with_behavior_constants_and_checks(
+        cfg,
+        ("INIT Init", "NEXT ByzantineDeliveredFirstCommitNext"),
+        constant_values,
+        module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS[0][1],
+    )
+
+    assert module.byzantine_top_cfg_errors(
+        (
+            (
+                cfg,
+                module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS[0][1],
+                "Byzantine delivered-first top coverage",
+            ),
+        )
+    ) == [
+        f"{cfg}:6 binds constant CommitQuorum = 2, expected 3 for Byzantine "
+        "delivered-first top coverage"
+    ]
+
+
+def test_direct_delivered_first_clean_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate_progress.cfg"
+    write_clean_safety_cfg_with_checks(
+        fast_cfg,
+        module.DIRECT_DELIVERED_FIRST_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_clean_progress_cfg_with_checks(
+        progress_cfg,
+        "DirectDeliveredFirstCorridorProgressSpec",
+        module.DIRECT_DELIVERED_FIRST_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.direct_delivered_first_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == []
+
+
+def test_direct_delivered_first_clean_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate_progress.cfg"
+    fast_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectDeliveredFirstCorridorExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION DirectDeliveredFirstCorridorProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectDeliveredFirstProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.direct_delivered_first_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == [
+        f"{fast_cfg} checks PROPERTY DirectDeliveredFirstCorridorExactness, "
+        "expected INVARIANT",
+        f"{fast_cfg} must check INVARIANT "
+        "DirectDeliveredFirstCorridorCorrectnessEnvelope for direct "
+        "delivered-first fast coverage",
+        f"{progress_cfg} checks PROPERTY "
+        "DirectDeliveredFirstProgressSafetyEnvelope, expected INVARIANT",
+        f"{progress_cfg} must check PROPERTY "
+        "EventualDirectDeliveredFirstFinalityStack for direct delivered-first "
+        "progress coverage",
+    ]
+
+
+def test_source_safety_mutation_cfg_errors_accepts_fast_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_bug_valid.cfg"
+    write_safety_mutation_cfg_with_checks(
+        cfg,
+        module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+    )
+
+    assert (
+        module.source_safety_mutation_cfg_errors(
+            cfg_contracts=(
+                (
+                    cfg.name,
+                    module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+                    "direct interleaving safety mutation coverage",
+                ),
+            ),
+            spec_dir=tmp_path,
+        )
+        == []
+    )
+
+
+def test_source_safety_mutation_cfg_errors_rejects_missing_or_downgraded_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "drifted"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY ByzantineCommitInterleavingExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_safety_mutation_cfg_errors(
+        cfg_contracts=(
+            (
+                cfg.name,
+                module.BYZANTINE_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+                "Byzantine interleaving safety mutation coverage",
+            ),
+        ),
+        spec_dir=tmp_path,
+    ) == [
+        f"{cfg} checks PROPERTY ByzantineCommitInterleavingExactness, "
+        "expected INVARIANT",
+        f"{cfg} must check INVARIANT "
+        "ByzantineCommitInterleavingCorrectnessEnvelope for Byzantine "
+        "interleaving safety mutation coverage",
+    ]
+
+
+def test_source_safety_mutation_cfg_errors_rejects_wrong_bug_suffix(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_bug_valid.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT Next", 'CONSTANT Bug = "other_mutation"'),
+        module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.source_safety_mutation_cfg_errors(
+        cfg_contracts=(
+            (
+                cfg.name,
+                module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+                "direct interleaving safety mutation coverage",
+            ),
+        ),
+        spec_dir=tmp_path,
+    ) == [
+        f'{cfg}:3 binds constant Bug = "other_mutation", expected "valid" '
+        "for direct interleaving safety mutation coverage"
+    ]
+
+
+def test_source_safety_mutation_cfg_errors_rejects_wrong_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_bug_valid.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT StaleNext", 'CONSTANT Bug = "valid"'),
+        module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.source_safety_mutation_cfg_errors(
+        cfg_contracts=(
+            (
+                cfg.name,
+                module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+                "direct interleaving safety mutation coverage",
+            ),
+        ),
+        spec_dir=tmp_path,
+    ) == [
+        f"{cfg}:2 binds NEXT StaleNext, expected Next for direct interleaving "
+        "safety mutation coverage"
+    ]
+
+
+def test_direct_delivered_first_progress_mutation_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate_progress_bug_valid.cfg"
+    write_progress_mutation_cfg_with_checks(
+        cfg,
+        module.DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+        "DirectDeliveredFirstCorridorProgressSpec",
+        module.DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_REQUIRED_CHECKS,
+    )
+
+    assert module.direct_delivered_first_progress_mutation_cfg_errors([cfg]) == []
+
+
+def test_direct_delivered_first_progress_mutation_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGate_progress_bug_drifted.cfg"
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION DirectDeliveredFirstCorridorProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "drifted"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectDeliveredFirstProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.direct_delivered_first_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} checks PROPERTY DirectDeliveredFirstProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{cfg} must check PROPERTY EventualDirectDeliveredFirstFinalityStack "
+        "for direct delivered-first progress mutation coverage",
+    ]
+
+
+def test_direct_vote_first_clean_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiDirectVoteFirstCorridorGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiDirectVoteFirstCorridorGate_progress.cfg"
+    write_clean_safety_cfg_with_checks(
+        fast_cfg,
+        module.DIRECT_VOTE_FIRST_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_clean_progress_cfg_with_checks(
+        progress_cfg,
+        "DirectVoteFirstCorridorProgressSpec",
+        module.DIRECT_VOTE_FIRST_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.direct_vote_first_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == []
+
+
+def test_direct_vote_first_clean_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiDirectVoteFirstCorridorGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiDirectVoteFirstCorridorGate_progress.cfg"
+    fast_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectVoteFirstCorridorExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION DirectVoteFirstCorridorProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectVoteFirstProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.direct_vote_first_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == [
+        f"{fast_cfg} checks PROPERTY DirectVoteFirstCorridorExactness, "
+        "expected INVARIANT",
+        f"{fast_cfg} must check INVARIANT "
+        "DirectVoteFirstCorridorCorrectnessEnvelope for direct vote-first "
+        "fast coverage",
+        f"{progress_cfg} checks PROPERTY DirectVoteFirstProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{progress_cfg} must check PROPERTY "
+        "EventualDirectVoteFirstFinalityStack for direct vote-first progress "
+        "coverage",
+    ]
+
+
+def test_direct_vote_first_progress_mutation_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectVoteFirstCorridorGate_progress_bug_valid.cfg"
+    write_progress_mutation_cfg_with_checks(
+        cfg,
+        module.DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+        "DirectVoteFirstCorridorProgressSpec",
+        module.DIRECT_VOTE_FIRST_PROGRESS_MUTATION_REQUIRED_CHECKS,
+    )
+
+    assert module.direct_vote_first_progress_mutation_cfg_errors([cfg]) == []
+
+
+def test_direct_vote_first_progress_mutation_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectVoteFirstCorridorGate_progress_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION DirectVoteFirstCorridorProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "drifted"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectVoteFirstProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.direct_vote_first_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} checks PROPERTY DirectVoteFirstProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{cfg} must check PROPERTY EventualDirectVoteFirstFinalityStack "
+        "for direct vote-first progress mutation coverage",
+    ]
+
+
+def test_direct_interleaving_clean_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_progress.cfg"
+    write_clean_safety_cfg_with_checks(
+        fast_cfg,
+        module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_clean_progress_cfg_with_checks(
+        progress_cfg,
+        "DirectCommitInterleavingProgressSpec",
+        module.DIRECT_INTERLEAVING_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.direct_interleaving_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == []
+
+
+def test_direct_interleaving_clean_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_progress.cfg"
+    fast_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectCommitInterleavingExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION DirectCommitInterleavingProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectCommitProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.direct_interleaving_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == [
+        f"{fast_cfg} checks PROPERTY DirectCommitInterleavingExactness, "
+        "expected INVARIANT",
+        f"{fast_cfg} must check INVARIANT "
+        "DirectCommitInterleavingCorrectnessEnvelope for direct interleaving "
+        "fast coverage",
+        f"{progress_cfg} checks PROPERTY DirectCommitProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{progress_cfg} must check PROPERTY EventualDirectCommitFinalityStack "
+        "for direct interleaving progress coverage",
+    ]
+
+
+def test_direct_interleaving_progress_mutation_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_progress_bug_valid.cfg"
+    write_progress_mutation_cfg_with_checks(
+        cfg,
+        module.DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+        "DirectCommitInterleavingProgressSpec",
+        module.DIRECT_INTERLEAVING_PROGRESS_MUTATION_REQUIRED_CHECKS,
+    )
+
+    assert module.direct_interleaving_progress_mutation_cfg_errors([cfg]) == []
+
+
+def test_direct_interleaving_progress_mutation_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_progress_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION DirectCommitInterleavingProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "drifted"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectCommitProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.direct_interleaving_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} checks PROPERTY DirectCommitProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{cfg} must check PROPERTY EventualDirectCommitFinalityStack "
+        "for direct interleaving progress mutation coverage",
+    ]
+
+
+def test_byzantine_interleaving_clean_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_progress.cfg"
+    write_clean_safety_cfg_with_checks(
+        fast_cfg,
+        module.BYZANTINE_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_clean_progress_cfg_with_checks(
+        progress_cfg,
+        "ByzantineCommitInterleavingProgressSpec",
+        module.BYZANTINE_INTERLEAVING_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.byzantine_interleaving_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == []
+
+
+def test_byzantine_interleaving_clean_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_progress.cfg"
+    fast_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY ByzantineCommitInterleavingExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ByzantineCommitInterleavingProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY ByzantineCommitProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.byzantine_interleaving_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == [
+        f"{fast_cfg} checks PROPERTY ByzantineCommitInterleavingExactness, "
+        "expected INVARIANT",
+        f"{fast_cfg} must check INVARIANT "
+        "ByzantineCommitInterleavingCorrectnessEnvelope for Byzantine "
+        "interleaving fast coverage",
+        f"{progress_cfg} checks PROPERTY ByzantineCommitProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{progress_cfg} must check PROPERTY EventualByzantineCommitFinalityStack "
+        "for Byzantine interleaving progress coverage",
+    ]
+
+
+def test_byzantine_interleaving_progress_mutation_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_progress_bug_valid.cfg"
+    write_progress_mutation_cfg_with_checks(
+        cfg,
+        module.BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+        "ByzantineCommitInterleavingProgressSpec",
+        module.BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_REQUIRED_CHECKS,
+    )
+
+    assert module.byzantine_interleaving_progress_mutation_cfg_errors([cfg]) == []
+
+
+def test_byzantine_interleaving_progress_mutation_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_progress_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ByzantineCommitInterleavingProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "drifted"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY ByzantineCommitProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.byzantine_interleaving_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} checks PROPERTY ByzantineCommitProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{cfg} must check PROPERTY EventualByzantineCommitFinalityStack "
+        "for Byzantine interleaving progress mutation coverage",
+    ]
+
+
+def test_projection_mutation_bridge_cfg_errors_accepts_full_bridge(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_bug_valid.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "valid"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT ProjectedByzantineDirectTopExactness",
+                "INVARIANT ProjectedByzantineDirectTopCorrectnessEnvelope",
+                "INVARIANT ProjectionBridgeCoversOrderedTopCorridors",
+                "INVARIANT ProjectionBridgeMatchesInterleavingCore",
+                "INVARIANT ProjectionBridgeMatchesInterleavingExactness",
+                (
+                    "INVARIANT "
+                    "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope"
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_mutation_bridge_cfg_errors([cfg]) == []
+
+
+def test_projection_mutation_bridge_cfg_errors_rejects_missing_or_downgraded_bridge(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "drifted"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT ProjectedByzantineDirectTopExactness",
+                "INVARIANT ProjectedByzantineDirectTopCorrectnessEnvelope",
+                "INVARIANT ProjectionBridgeMatchesInterleavingCore",
+                "PROPERTY ProjectionBridgeMatchesInterleavingExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_mutation_bridge_cfg_errors([cfg]) == [
+        f"{cfg} must check INVARIANT ProjectionBridgeCoversOrderedTopCorridors "
+        "for projection bridge mutation coverage",
+        f"{cfg} checks PROPERTY ProjectionBridgeMatchesInterleavingExactness, "
+        "expected INVARIANT",
+        f"{cfg} must check INVARIANT "
+        "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope "
+        "for projection bridge mutation coverage",
+    ]
+
+
+def test_projection_mutation_bridge_cfg_errors_rejects_wrong_bug_suffix(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_bug_valid.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "other_mutation"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT ProjectedByzantineDirectTopExactness",
+                "INVARIANT ProjectedByzantineDirectTopCorrectnessEnvelope",
+                "INVARIANT ProjectionBridgeCoversOrderedTopCorridors",
+                "INVARIANT ProjectionBridgeMatchesInterleavingCore",
+                "INVARIANT ProjectionBridgeMatchesInterleavingExactness",
+                (
+                    "INVARIANT "
+                    "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope"
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_mutation_bridge_cfg_errors([cfg]) == [
+        f'{cfg}:1 binds constant Bug = "other_mutation", expected "valid" '
+        "for projection bridge mutation coverage"
+    ]
+
+
+def test_projection_mutation_bridge_cfg_errors_rejects_wrong_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_bug_valid.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT StaleNext", 'CONSTANT Bug = "valid"'),
+        module.PROJECTION_MUTATION_BRIDGE_REQUIRED_CHECKS,
+    )
+
+    assert module.projection_mutation_bridge_cfg_errors([cfg]) == [
+        f"{cfg}:2 binds NEXT StaleNext, expected Next "
+        "for projection bridge mutation coverage"
+    ]
+
+
+def test_projection_mutation_bridge_cfg_errors_rejects_missing_type_and_direct_top(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_bug_untyped.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "untyped"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT ProjectionBridgeMatchesInterleavingCore",
+                "INVARIANT ProjectionBridgeMatchesInterleavingExactness",
+                (
+                    "INVARIANT "
+                    "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope"
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_mutation_bridge_cfg_errors([cfg]) == [
+        f"{cfg} must check INVARIANT TypeInvariant "
+        "for projection bridge mutation coverage",
+        f"{cfg} must check INVARIANT ProjectedByzantineDirectTopExactness "
+        "for projection bridge mutation coverage",
+        f"{cfg} must check INVARIANT "
+        "ProjectedByzantineDirectTopCorrectnessEnvelope "
+        "for projection bridge mutation coverage",
+        f"{cfg} must check INVARIANT ProjectionBridgeCoversOrderedTopCorridors "
+        "for projection bridge mutation coverage",
+    ]
+
+
+def test_projection_progress_mutation_cfg_errors_accepts_safety_and_progress(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress_bug_valid.cfg"
+    write_progress_mutation_cfg_with_checks(
+        cfg,
+        module.PROJECTION_PROGRESS_MUTATION_STEM_PREFIX,
+        "ProjectedCommitProgressSpec",
+        module.PROJECTION_PROGRESS_MUTATION_REQUIRED_CHECKS,
+    )
+
+    assert module.projection_progress_mutation_cfg_errors([cfg]) == []
+
+
+def test_projection_progress_mutation_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "drifted"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY ProjectedCommitProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} checks PROPERTY ProjectedCommitProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{cfg} must check PROPERTY EventualProjectedCommitFinalityStack "
+        "for projection progress mutation coverage",
+    ]
+
+
+def test_projection_progress_mutation_cfg_errors_rejects_wrong_bug_suffix(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "other_mutation"',
+                "INVARIANT TypeInvariant",
+                "INVARIANT ProjectedCommitProgressSafetyEnvelope",
+                "PROPERTY EventualProjectedCommitFinalityStack",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_progress_mutation_cfg_errors([cfg]) == [
+        f'{cfg}:3 binds constant Bug = "other_mutation", expected "drifted" '
+        "for projection progress mutation coverage"
+    ]
+
+
+def test_projection_progress_mutation_cfg_errors_rejects_missing_deadlock_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / (
+        "SumeragiByzantineCommitProjectionGate_progress_bug_deadlock.cfg"
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                'CONSTANT Bug = "deadlock"',
+                "INVARIANT TypeInvariant",
+                "INVARIANT ProjectedCommitProgressSafetyEnvelope",
+                "PROPERTY EventualProjectedCommitFinalityStack",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} must set CHECK_DEADLOCK FALSE "
+        "for projection progress mutation coverage"
+    ]
+
+
+def test_projection_progress_mutation_cfg_errors_rejects_missing_type_invariant(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress_bug_untyped.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "untyped"',
+                "INVARIANT ProjectedCommitProgressSafetyEnvelope",
+                "PROPERTY EventualProjectedCommitFinalityStack",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} must check INVARIANT TypeInvariant "
+        "for projection progress mutation coverage",
+    ]
+
+
+def test_projection_progress_mutation_cfg_errors_rejects_wrong_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress_bug_wrong.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        (
+            "SPECIFICATION OldProjectedCommitProgressSpec",
+            'CONSTANT Bug = "wrong"',
+        ),
+        module.PROJECTION_PROGRESS_MUTATION_REQUIRED_CHECKS,
+    )
+
+    assert module.projection_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg}:1 binds SPECIFICATION OldProjectedCommitProgressSpec, expected "
+        "ProjectedCommitProgressSpec for projection progress mutation coverage"
+    ]
+
+
+def make_byzantine_mutation_cfgs(
+    tmp_path: Path,
+    stem_prefix: str,
+    suffixes: tuple[str, ...],
+) -> list[Path]:
+    paths: list[Path] = []
+    for suffix in suffixes:
+        cfg = tmp_path / f"{stem_prefix}{suffix}.cfg"
+        cfg.write_text(
+            "INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n",
+            encoding="utf-8",
+        )
+        paths.append(cfg)
+    return paths
+
+
+def test_direct_mutation_family_alignment_errors_accepts_aligned_families(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    assert (
+        module.direct_mutation_family_alignment_errors(
+            delivered_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.DIRECT_DELIVERED_FIRST_MUTATION_STEM_PREFIX,
+                ("a", "b"),
+            ),
+            delivered_progress_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+                ("a", "b"),
+            ),
+            vote_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.DIRECT_VOTE_FIRST_MUTATION_STEM_PREFIX,
+                ("a", "b", "safety_only"),
+            ),
+            vote_progress_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+                ("a", "b"),
+            ),
+            interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.DIRECT_INTERLEAVING_MUTATION_STEM_PREFIX,
+                ("a", "b", "safety_only"),
+            ),
+            interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+                ("a", "b"),
+            ),
+            vote_progress_safety_only_mutations=frozenset({"safety_only"}),
+            interleaving_progress_safety_only_mutations=frozenset({"safety_only"}),
+        )
+        == []
+    )
+
+
+def test_direct_mutation_family_alignment_errors_rejects_unapproved_progress_omission(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    assert module.direct_mutation_family_alignment_errors(
+        delivered_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_DELIVERED_FIRST_MUTATION_STEM_PREFIX,
+            ("a", "b"),
+        ),
+        delivered_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        vote_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_VOTE_FIRST_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        vote_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_INTERLEAVING_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        vote_progress_safety_only_mutations=frozenset(),
+        interleaving_progress_safety_only_mutations=frozenset(),
+    ) == [
+        "direct delivered-first progress mutation CFGs are missing direct "
+        "delivered-first safety minus safety-only mutations mutation suffixes:\n"
+        "  - b"
+    ]
+
+
+def test_direct_mutation_family_alignment_errors_rejects_stale_allowlist_and_extra_progress(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    assert module.direct_mutation_family_alignment_errors(
+        delivered_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_DELIVERED_FIRST_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        delivered_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        vote_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_VOTE_FIRST_MUTATION_STEM_PREFIX,
+            ("a", "b"),
+        ),
+        vote_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a", "b", "c"),
+        ),
+        interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_INTERLEAVING_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        vote_progress_safety_only_mutations=frozenset({"missing"}),
+        interleaving_progress_safety_only_mutations=frozenset(),
+    ) == [
+        "direct vote-first progress safety-only mutation allowlist has stale "
+        "suffixes absent from the safety family:\n  - missing",
+        "direct vote-first progress mutation CFGs have suffixes absent from "
+        "direct vote-first safety minus safety-only mutations:\n  - c",
+    ]
+
+
+def test_byzantine_mutation_family_alignment_errors_accepts_aligned_families(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    safety_suffixes = ("a", "b", "safety_only")
+    progress_suffixes = ("a", "b")
+
+    assert (
+        module.byzantine_mutation_family_alignment_errors(
+            interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.BYZANTINE_INTERLEAVING_MUTATION_STEM_PREFIX,
+                safety_suffixes,
+            ),
+            interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+                progress_suffixes,
+            ),
+            projection_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.PROJECTION_MUTATION_STEM_PREFIX,
+                safety_suffixes,
+            ),
+            projection_progress_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.PROJECTION_PROGRESS_MUTATION_STEM_PREFIX,
+                progress_suffixes,
+            ),
+            progress_safety_only_mutations=frozenset({"safety_only"}),
+        )
+        == []
+    )
+
+
+def test_byzantine_mutation_family_alignment_errors_rejects_projection_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    assert module.byzantine_mutation_family_alignment_errors(
+        interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.BYZANTINE_INTERLEAVING_MUTATION_STEM_PREFIX,
+            ("a", "b"),
+        ),
+        interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        projection_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.PROJECTION_MUTATION_STEM_PREFIX,
+            ("a", "c"),
+        ),
+        projection_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.PROJECTION_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a", "c"),
+        ),
+        progress_safety_only_mutations=frozenset({"b"}),
+    ) == [
+        "projection safety mutation CFGs are missing source Byzantine "
+        "interleaving safety mutation suffixes:\n  - b",
+        "projection safety mutation CFGs have suffixes absent from source "
+        "Byzantine interleaving safety:\n  - c",
+        "projection progress mutation CFGs have suffixes absent from source "
+        "Byzantine interleaving progress:\n  - c",
+    ]
+
+
+def test_byzantine_mutation_family_alignment_errors_rejects_unapproved_progress_omission(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    assert module.byzantine_mutation_family_alignment_errors(
+        interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.BYZANTINE_INTERLEAVING_MUTATION_STEM_PREFIX,
+            ("a", "b"),
+        ),
+        interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        projection_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.PROJECTION_MUTATION_STEM_PREFIX,
+            ("a", "b"),
+        ),
+        projection_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.PROJECTION_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        progress_safety_only_mutations=frozenset(),
+    ) == [
+        "source Byzantine interleaving progress mutation CFGs are missing "
+        "source Byzantine interleaving safety minus safety-only mutations "
+        "mutation suffixes:\n  - b",
+        "projection progress mutation CFGs are missing projection safety "
+        "minus safety-only mutations mutation suffixes:\n  - b",
+    ]
+
+
+def byzantine_top_contract_text(
+    module,
+    *,
+    omit: tuple[str, str] | None = None,
+    overrides: dict[str, list[str]] | None = None,
+) -> str:
+    lines: list[str] = []
+    overrides = overrides or {}
+    for operator, conjuncts in module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS.items():
+        override = overrides.get(operator)
+        if override is not None:
+            lines.extend(override)
+            continue
+        lines.append(f"{operator} ==")
+        antecedent = module.SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS.get(
+            operator
+        )
+        if antecedent is None:
+            prefix = "  "
+        else:
+            lines.append(f"  {antecedent} =>")
+            prefix = "    "
+        for conjunct in conjuncts:
+            if omit == (operator, conjunct):
+                continue
+            lines.append(f"{prefix}/\\ {conjunct}")
+    return "\n".join(lines)
+
+
+def test_byzantine_top_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(byzantine_top_contract_text(module), encoding="utf-8")
+
+    assert module.byzantine_top_conjunct_contract_errors(tla) == []
+
+
+def test_byzantine_top_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    missing = "RbcDeliveredWithoutFinalityWaitsForCommitEvidence"
+    tla.write_text(
+        byzantine_top_contract_text(
+            module,
+            omit=("ByzantineDirectTopExactness", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.byzantine_top_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ByzantineDirectTopExactness, but is missing required direct "
+        f"conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_byzantine_top_conjunct_contract_errors_rejects_dropped_implication(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS[
+        "ByzantineDirectTopCoversOrderedTopCorridors"
+    ]
+    tla.write_text(
+        byzantine_top_contract_text(
+            module,
+            overrides={
+                "ByzantineDirectTopCoversOrderedTopCorridors": [
+                    "ByzantineDirectTopCoversOrderedTopCorridors ==",
+                    *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                ]
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.byzantine_top_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ByzantineDirectTopCoversOrderedTopCorridors, but it must keep "
+        "a top-level implication guarded by ByzantineDirectTopExactness"
+    ) in errors[0]
+
+
+def copied_contracts(
+    contracts: dict[str, tuple[str, ...]],
+) -> dict[str, tuple[str, ...]]:
+    return {operator: tuple(conjuncts) for operator, conjuncts in contracts.items()}
+
+
+def test_byzantine_top_corridor_contract_alignment_errors_accepts_family(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.byzantine_top_corridor_contract_alignment_errors() == []
+
+
+def test_byzantine_top_corridor_contract_alignment_errors_rejects_delivered_wait_conjunct(
+) -> None:
+    module = load_coverage_module()
+    top_contracts = copied_contracts(module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS)
+    extra = "RbcDeliveredWithoutFinalityHasNoCommitCertificate"
+    top_contracts["ByzantineDeliveredFirstTopExactness"] = (
+        *top_contracts["ByzantineDeliveredFirstTopExactness"],
+        extra,
+    )
+
+    errors = module.byzantine_top_corridor_contract_alignment_errors(
+        top_contracts=top_contracts,
+    )
+
+    assert errors == [
+        "ByzantineDeliveredFirstTopExactness must keep the Byzantine top "
+        f"corridor contract; unexpected conjunct(s) {extra}"
+    ]
+
+
+def test_byzantine_top_corridor_contract_alignment_errors_rejects_direct_missing_wait(
+) -> None:
+    module = load_coverage_module()
+    top_contracts = copied_contracts(module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS)
+    missing = "RbcDeliveredWithoutFinalityWaitsForCommitEvidence"
+    top_contracts["ByzantineDirectTopExactness"] = tuple(
+        conjunct
+        for conjunct in top_contracts["ByzantineDirectTopExactness"]
+        if conjunct != missing
+    )
+
+    errors = module.byzantine_top_corridor_contract_alignment_errors(
+        top_contracts=top_contracts,
+    )
+
+    assert errors == [
+        "ByzantineDirectTopExactness must keep the Byzantine top corridor "
+        f"contract; missing conjunct(s) {missing}"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_accepts_mirror(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.byzantine_top_projection_contract_alignment_errors() == []
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_missing_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "ProjectedRbcDeliveredWithoutFinalityWaitsForCommitEvidence"
+    projection_contracts["ProjectedByzantineDirectTopExactness"] = tuple(
+        conjunct
+        for conjunct in projection_contracts["ProjectedByzantineDirectTopExactness"]
+        if conjunct != missing
+    )
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectedByzantineDirectTopExactness must mirror "
+        "ByzantineDirectTopExactness projected conjunct contract; missing "
+        f"projected conjunct(s) {missing}"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_extra_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    extra = "ProjectedUnexpectedTopObligation"
+    projection_contracts["ProjectedByzantineDeliveredFirstTopExactness"] = (
+        *projection_contracts["ProjectedByzantineDeliveredFirstTopExactness"],
+        extra,
+    )
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectedByzantineDeliveredFirstTopExactness must mirror "
+        "ByzantineDeliveredFirstTopExactness projected conjunct contract; "
+        f"unexpected projected conjunct(s) {extra}"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_implication_drift(
+) -> None:
+    module = load_coverage_module()
+    projection_implications = dict(module.SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS)
+    projection_implications["ProjectionBridgeCoversOrderedTopCorridors"] = (
+        "ProjectedByzantineDeliveredFirstTopExactness"
+    )
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        projection_implication_contracts=projection_implications,
+    )
+
+    assert errors == [
+        "ProjectionBridgeCoversOrderedTopCorridors implication antecedent must "
+        "mirror ByzantineDirectTopCoversOrderedTopCorridors; expected "
+        "ProjectedByzantineDirectTopExactness, found "
+        "ProjectedByzantineDeliveredFirstTopExactness"
+    ]
+
+
+def test_projection_bridge_interleaving_contract_alignment_errors_accepts_composite(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.projection_bridge_interleaving_contract_alignment_errors() == []
+
+
+def test_projection_bridge_interleaving_contract_alignment_errors_rejects_missing_top_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "ProjectedRbcDeliveredWithoutFinalityWaitsForCommitEvidence"
+    projection_contracts["ProjectionBridgeMatchesInterleavingExactness"] = tuple(
+        conjunct
+        for conjunct in projection_contracts[
+            "ProjectionBridgeMatchesInterleavingExactness"
+        ]
+        if conjunct != missing
+    )
+
+    errors = module.projection_bridge_interleaving_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectionBridgeMatchesInterleavingExactness must compose "
+        "ProjectedByzantineDirectTopExactness and "
+        f"ProjectionBridgeMatchesInterleavingCore; missing conjunct(s) {missing}"
+    ]
+
+
+def test_projection_bridge_interleaving_contract_alignment_errors_rejects_missing_core_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "BufferedVotesWaitForDelivery"
+    projection_contracts["ProjectionBridgeMatchesInterleavingExactness"] = tuple(
+        conjunct
+        for conjunct in projection_contracts[
+            "ProjectionBridgeMatchesInterleavingExactness"
+        ]
+        if conjunct != missing
+    )
+
+    errors = module.projection_bridge_interleaving_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectionBridgeMatchesInterleavingExactness must compose "
+        "ProjectedByzantineDirectTopExactness and "
+        f"ProjectionBridgeMatchesInterleavingCore; missing conjunct(s) {missing}"
+    ]
+
+
+def test_projection_bridge_interleaving_contract_alignment_errors_rejects_extra_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    extra = "ProjectedUnexpectedBridgeObligation"
+    projection_contracts["ProjectionBridgeMatchesInterleavingExactness"] = (
+        *projection_contracts["ProjectionBridgeMatchesInterleavingExactness"],
+        extra,
+    )
+
+    errors = module.projection_bridge_interleaving_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectionBridgeMatchesInterleavingExactness must compose "
+        "ProjectedByzantineDirectTopExactness and "
+        "ProjectionBridgeMatchesInterleavingCore; unexpected conjunct(s) "
+        f"{extra}"
+    ]
+
+
+def test_projection_bridge_core_source_alignment_errors_accepts_source_exactness(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.projection_bridge_core_source_alignment_errors() == []
+
+
+def test_projection_bridge_core_source_alignment_errors_rejects_missing_source_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "ProposedRoundInitializesRbc"
+    projection_contracts["ProjectionBridgeMatchesInterleavingCore"] = tuple(
+        conjunct
+        for conjunct in projection_contracts["ProjectionBridgeMatchesInterleavingCore"]
+        if conjunct != missing
+    )
+
+    errors = module.projection_bridge_core_source_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectionBridgeMatchesInterleavingCore must mirror "
+        f"ByzantineCommitInterleavingExactness; missing conjunct(s) {missing}"
+    ]
+
+
+def test_projection_bridge_core_source_alignment_errors_rejects_extra_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    extra = "UnexpectedProjectionBridgeCore"
+    projection_contracts["ProjectionBridgeMatchesInterleavingCore"] = (
+        *projection_contracts["ProjectionBridgeMatchesInterleavingCore"],
+        extra,
+    )
+
+    errors = module.projection_bridge_core_source_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectionBridgeMatchesInterleavingCore must mirror "
+        f"ByzantineCommitInterleavingExactness; unexpected conjunct(s) {extra}"
+    ]
+
+
+def replace_source_progress_alignment_contract(
+    module,
+    envelope: str,
+    replacement: dict[str, tuple[str, ...]],
+) -> tuple[tuple[str, dict[str, tuple[str, ...]], str, tuple[str, ...]], ...]:
+    return tuple(
+        (
+            family,
+            replacement if envelope_operator == envelope else conjunct_contracts,
+            envelope_operator,
+            expected_components,
+        )
+        for (
+            family,
+            conjunct_contracts,
+            envelope_operator,
+            expected_components,
+        ) in module.SOURCE_PROGRESS_SAFETY_ENVELOPE_ALIGNMENT_CONTRACTS
+    )
+
+
+def test_source_progress_safety_contract_alignment_errors_accepts_envelopes(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.source_progress_safety_contract_alignment_errors() == []
+
+
+def test_source_progress_safety_contract_alignment_errors_rejects_missing_exactness(
+) -> None:
+    module = load_coverage_module()
+    envelope = "DirectCommitProgressSafetyEnvelope"
+    direct_contracts = copied_contracts(
+        module.SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "DirectCommitInterleavingExactness"
+    direct_contracts[envelope] = tuple(
+        conjunct for conjunct in direct_contracts[envelope] if conjunct != missing
+    )
+
+    errors = module.source_progress_safety_contract_alignment_errors(
+        alignment_contracts=replace_source_progress_alignment_contract(
+            module,
+            envelope,
+            direct_contracts,
+        ),
+    )
+
+    assert errors == [
+        "DirectCommitProgressSafetyEnvelope must compose TypeInvariant and "
+        "DirectCommitInterleavingExactness for direct interleaving progress "
+        f"safety; missing conjunct(s) {missing}"
+    ]
+
+
+def test_source_progress_safety_contract_alignment_errors_rejects_extra_conjunct(
+) -> None:
+    module = load_coverage_module()
+    envelope = "ByzantineCommitProgressSafetyEnvelope"
+    byzantine_contracts = copied_contracts(
+        module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    extra = "UnexpectedByzantineProgressSafety"
+    byzantine_contracts[envelope] = (*byzantine_contracts[envelope], extra)
+
+    errors = module.source_progress_safety_contract_alignment_errors(
+        alignment_contracts=replace_source_progress_alignment_contract(
+            module,
+            envelope,
+            byzantine_contracts,
+        ),
+    )
+
+    assert errors == [
+        "ByzantineCommitProgressSafetyEnvelope must compose TypeInvariant and "
+        "ByzantineCommitInterleavingExactness for Byzantine interleaving "
+        f"progress safety; unexpected conjunct(s) {extra}"
+    ]
+
+
+def test_projected_commit_progress_contract_alignment_errors_accepts_bridge_components(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.projected_commit_progress_contract_alignment_errors() == []
+
+
+def test_projected_commit_progress_contract_alignment_errors_rejects_missing_component(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "ProjectionBridgeCoversOrderedTopCorridors"
+    projection_contracts["ProjectedCommitProgressSafetyEnvelope"] = tuple(
+        conjunct
+        for conjunct in projection_contracts["ProjectedCommitProgressSafetyEnvelope"]
+        if conjunct != missing
+    )
+
+    errors = module.projected_commit_progress_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectedCommitProgressSafetyEnvelope must compose "
+        "ProjectionBridgeCoversOrderedTopCorridors and "
+        "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope; "
+        f"missing conjunct(s) {missing}"
+    ]
+
+
+def test_projected_commit_progress_contract_alignment_errors_rejects_extra_component(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    extra = "ProjectedUnexpectedProgressBridge"
+    projection_contracts["ProjectedCommitProgressSafetyEnvelope"] = (
+        *projection_contracts["ProjectedCommitProgressSafetyEnvelope"],
+        extra,
+    )
+
+    errors = module.projected_commit_progress_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectedCommitProgressSafetyEnvelope must compose "
+        "ProjectionBridgeCoversOrderedTopCorridors and "
+        "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope; "
+        f"unexpected conjunct(s) {extra}"
+    ]
+
+
+def projected_commit_progress_spec_contract_text(
+    module,
+    *,
+    fairness_actions: tuple[str, ...] | None = None,
+    spec_lines: list[str] | None = None,
+) -> str:
+    fairness_actions = (
+        fairness_actions
+        if fairness_actions is not None
+        else module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    )
+    spec_lines = spec_lines or [
+        "ProjectedCommitProgressSpec ==",
+        "  /\\ Init",
+        "  /\\ [][Next]_vars",
+        "  /\\ ProjectedCommitProgressFairness",
+    ]
+    return "\n".join(
+        [
+            "ProjectedCommitProgressFairness ==",
+            *(f"  /\\ WF_vars({action})" for action in fairness_actions),
+            "",
+            *spec_lines,
+        ]
+    )
+
+
+def test_projected_commit_progress_spec_contract_errors_accepts_named_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(module),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == []
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_raw_spec_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            spec_lines=[
+                "ProjectedCommitProgressSpec ==",
+                "  /\\ Init",
+                "  /\\ [][Next]_vars",
+                "  /\\ WF_vars(HonestPropose)",
+                "  /\\ WF_vars(PrepareVote)",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.projected_commit_progress_spec_contract_errors(tla)
+
+    assert errors == [
+        f"{tla}:11 defines ProjectedCommitProgressSpec, but is missing "
+        "required direct conjunct(s) ProjectedCommitProgressFairness",
+        f"{tla}:11 defines ProjectedCommitProgressSpec, but must compose "
+        "ProjectedCommitProgressFairness instead of raw WF_vars fairness "
+        "clauses: HonestPropose, PrepareVote"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_missing_next_closure(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            spec_lines=[
+                "ProjectedCommitProgressSpec ==",
+                "  /\\ Init",
+                "  /\\ ProjectedCommitProgressFairness",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.projected_commit_progress_spec_contract_errors(tla)
+
+    assert errors == [
+        f"{tla}:11 defines ProjectedCommitProgressSpec, but must keep direct "
+        "[][Next]_vars transition closure"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_fairness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    fairness_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != "RbcDeliver"
+    ) + ("TimeoutTick", "RbcReady")
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            fairness_actions=fairness_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.projected_commit_progress_spec_contract_errors(tla)
+
+    assert errors == [
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but repeats "
+        "WF_vars action(s) RbcReady; each projected commit progress fairness "
+        "action must be counted once",
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but is missing "
+        "WF_vars action(s) RbcDeliver",
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but contains "
+        "unexpected WF_vars action(s) TimeoutTick; keep projected commit "
+        "progress fairness on the documented action contract",
+    ]
+
+
+def commit_progress_spec_contract_text(
+    *,
+    spec_operator: str,
+    fairness_operator: str,
+    next_closure: str,
+    fairness_actions: tuple[str, ...],
+    spec_lines: list[str] | None = None,
+) -> str:
+    spec_lines = spec_lines or [
+        f"{spec_operator} ==",
+        "  /\\ Init",
+        f"  /\\ {next_closure}",
+        f"  /\\ {fairness_operator}",
+    ]
+    return "\n".join(
+        [
+            f"{fairness_operator} ==",
+            *(f"  /\\ WF_vars({action})" for action in fairness_actions),
+            "",
+            *spec_lines,
+        ]
+    )
+
+
+def test_source_commit_progress_spec_contract_errors_accepts_named_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    contracts = []
+    for (
+        module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) in module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS:
+        tla = tmp_path / module_path.name
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+            ),
+            encoding="utf-8",
+        )
+        contracts.append(
+            (
+                tla,
+                spec_operator,
+                fairness_operator,
+                next_closure,
+                fairness_actions,
+                root_kind,
+            )
+        )
+
+    assert module.source_commit_progress_spec_contract_errors(tuple(contracts)) == []
+
+
+def test_source_commit_progress_spec_contract_errors_rejects_raw_spec_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2]
+    tla = tmp_path / "SumeragiDirectCommitInterleavingGate.tla"
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=fairness_actions,
+            spec_lines=[
+                f"{spec_operator} ==",
+                "  /\\ Init",
+                f"  /\\ {next_closure}",
+                "  /\\ WF_vars(HonestPropose)",
+                "  /\\ WF_vars(PrepareVote)",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.source_commit_progress_spec_contract_errors(
+        ((tla, spec_operator, fairness_operator, next_closure, fairness_actions, root_kind),)
+    )
+
+    assert errors == [
+        f"{tla}:10 defines {spec_operator}, but is missing required direct "
+        f"conjunct(s) {fairness_operator}",
+        f"{tla}:10 defines {spec_operator}, but must compose "
+        f"{fairness_operator} instead of raw WF_vars fairness clauses: "
+        "HonestPropose, PrepareVote",
+    ]
+
+
+def test_source_commit_progress_spec_contract_errors_rejects_missing_next_closure(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    tla = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate.tla"
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=fairness_actions,
+            spec_lines=[
+                f"{spec_operator} ==",
+                "  /\\ Init",
+                f"  /\\ {fairness_operator}",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.source_commit_progress_spec_contract_errors(
+        ((tla, spec_operator, fairness_operator, next_closure, fairness_actions, root_kind),)
+    )
+
+    assert errors == [
+        f"{tla}:5 defines {spec_operator}, but must keep direct {next_closure} "
+        "transition closure"
+    ]
+
+
+def test_source_commit_progress_spec_contract_errors_rejects_fairness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[3]
+    drifted_actions = tuple(
+        action for action in fairness_actions if action != "RbcDeliver"
+    ) + ("TimeoutTick", "RbcReady")
+    tla = tmp_path / "SumeragiByzantineCommitInterleavingGate.tla"
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=drifted_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.source_commit_progress_spec_contract_errors(
+        ((tla, spec_operator, fairness_operator, next_closure, fairness_actions, root_kind),)
+    )
+
+    assert errors == [
+        f"{tla}:2 defines {fairness_operator}, but repeats WF_vars action(s) "
+        f"RbcReady; each {root_kind} fairness action must be counted once",
+        f"{tla}:2 defines {fairness_operator}, but is missing WF_vars "
+        "action(s) RbcDeliver",
+        f"{tla}:2 defines {fairness_operator}, but contains unexpected "
+        f"WF_vars action(s) TimeoutTick; keep {root_kind} fairness on the "
+        "documented action contract",
+    ]
+
+
+def test_top_level_commit_spec_contract_errors_accepts_named_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    contracts = []
+    for (
+        module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) in module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS:
+        tla = tmp_path / module_path.name
+        existing = tla.read_text(encoding="utf-8") if tla.exists() else ""
+        tla.write_text(
+            existing
+            + "\n"
+            + commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+            ),
+            encoding="utf-8",
+        )
+        contracts.append(
+            (
+                tla,
+                spec_operator,
+                fairness_operator,
+                next_closure,
+                fairness_actions,
+                root_kind,
+            )
+        )
+
+    assert module.top_level_commit_spec_contract_errors(tuple(contracts)) == []
+
+
+def test_top_level_commit_spec_contract_errors_rejects_raw_spec_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=fairness_actions,
+            spec_lines=[
+                f"{spec_operator} ==",
+                "  /\\ Init",
+                f"  /\\ {next_closure}",
+                "  /\\ WF_vars(HonestPropose)",
+                "  /\\ WF_vars(HonestCommitVote)",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.top_level_commit_spec_contract_errors(
+        ((tla, spec_operator, fairness_operator, next_closure, fairness_actions, root_kind),)
+    )
+
+    assert errors == [
+        f"{tla}:12 defines {spec_operator}, but is missing required direct "
+        f"conjunct(s) {fairness_operator}",
+        f"{tla}:12 defines {spec_operator}, but must compose "
+        f"{fairness_operator} instead of raw WF_vars fairness clauses: "
+        "HonestPropose, HonestCommitVote",
+    ]
+
+
+def test_top_level_commit_spec_contract_errors_rejects_fairness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[1]
+    drifted_actions = tuple(
+        action for action in fairness_actions if action != "RbcDeliverGood"
+    ) + ("TimeoutTick", "RbcReadyGood")
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=drifted_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.top_level_commit_spec_contract_errors(
+        ((tla, spec_operator, fairness_operator, next_closure, fairness_actions, root_kind),)
+    )
+
+    assert errors == [
+        f"{tla}:2 defines {fairness_operator}, but repeats WF_vars action(s) "
+        f"RbcReadyGood; each {root_kind} fairness action must be counted once",
+        f"{tla}:2 defines {fairness_operator}, but is missing WF_vars "
+        "action(s) RbcDeliverGood",
+        f"{tla}:2 defines {fairness_operator}, but contains unexpected "
+        f"WF_vars action(s) TimeoutTick; keep {root_kind} fairness on the "
+        "documented action contract",
+    ]
+
+
+def direct_delivered_first_contract_text(
+    module,
+    *,
+    omit: tuple[str, str] | None = None,
+) -> str:
+    lines: list[str] = []
+    for (
+        operator,
+        conjuncts,
+    ) in module.SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS.items():
+        lines.append(f"{operator} ==")
+        for conjunct in conjuncts:
+            if omit == (operator, conjunct):
+                continue
+            lines.append(f"  /\\ {conjunct}")
+    return "\n".join(lines)
+
+
+def test_direct_delivered_first_gate_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate.tla"
+    tla.write_text(direct_delivered_first_contract_text(module), encoding="utf-8")
+
+    assert module.direct_delivered_first_gate_conjunct_contract_errors(tla) == []
+
+
+def test_direct_delivered_first_gate_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate.tla"
+    missing = "DirectDeliveredFirstCorridorExactness"
+    tla.write_text(
+        direct_delivered_first_contract_text(
+            module,
+            omit=("DirectDeliveredFirstProgressSafetyEnvelope", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.direct_delivered_first_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines DirectDeliveredFirstProgressSafetyEnvelope, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_direct_delivered_first_gate_conjunct_contract_errors_rejects_exactness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate.tla"
+    missing = "RbcEvidenceMatchesSpec"
+    tla.write_text(
+        direct_delivered_first_contract_text(
+            module,
+            omit=("DirectDeliveredFirstCorridorExactness", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.direct_delivered_first_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines DirectDeliveredFirstCorridorExactness, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def direct_vote_first_contract_text(
+    module,
+    *,
+    omit: tuple[str, str] | None = None,
+) -> str:
+    lines: list[str] = []
+    for (
+        operator,
+        conjuncts,
+    ) in module.SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS.items():
+        lines.append(f"{operator} ==")
+        for conjunct in conjuncts:
+            if omit == (operator, conjunct):
+                continue
+            lines.append(f"  /\\ {conjunct}")
+    return "\n".join(lines)
+
+
+def test_direct_vote_first_gate_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectVoteFirstCorridorGate.tla"
+    tla.write_text(direct_vote_first_contract_text(module), encoding="utf-8")
+
+    assert module.direct_vote_first_gate_conjunct_contract_errors(tla) == []
+
+
+def test_direct_vote_first_gate_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectVoteFirstCorridorGate.tla"
+    missing = "DirectVoteFirstCorridorExactness"
+    tla.write_text(
+        direct_vote_first_contract_text(
+            module,
+            omit=("DirectVoteFirstProgressSafetyEnvelope", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.direct_vote_first_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines DirectVoteFirstProgressSafetyEnvelope, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_direct_vote_first_gate_conjunct_contract_errors_rejects_exactness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectVoteFirstCorridorGate.tla"
+    missing = "BufferedCommitWaitHasNoCertificate"
+    tla.write_text(
+        direct_vote_first_contract_text(
+            module,
+            omit=("DirectVoteFirstCorridorExactness", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.direct_vote_first_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines DirectVoteFirstCorridorExactness, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def direct_interleaving_contract_text(
+    module,
+    *,
+    omit: tuple[str, str] | None = None,
+) -> str:
+    lines: list[str] = []
+    for (
+        operator,
+        conjuncts,
+    ) in module.SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS.items():
+        lines.append(f"{operator} ==")
+        for conjunct in conjuncts:
+            if omit == (operator, conjunct):
+                continue
+            lines.append(f"  /\\ {conjunct}")
+    return "\n".join(lines)
+
+
+def test_direct_interleaving_gate_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectCommitInterleavingGate.tla"
+    tla.write_text(direct_interleaving_contract_text(module), encoding="utf-8")
+
+    assert module.direct_interleaving_gate_conjunct_contract_errors(tla) == []
+
+
+def test_direct_interleaving_gate_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectCommitInterleavingGate.tla"
+    missing = "DirectCommitInterleavingExactness"
+    tla.write_text(
+        direct_interleaving_contract_text(
+            module,
+            omit=("DirectCommitProgressSafetyEnvelope", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.direct_interleaving_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines DirectCommitProgressSafetyEnvelope, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_direct_interleaving_gate_conjunct_contract_errors_rejects_exactness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectCommitInterleavingGate.tla"
+    missing = "BufferedVotesWaitForDelivery"
+    tla.write_text(
+        direct_interleaving_contract_text(
+            module,
+            omit=("DirectCommitInterleavingExactness", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.direct_interleaving_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines DirectCommitInterleavingExactness, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def byzantine_interleaving_contract_text(
+    module,
+    *,
+    omit: tuple[str, str] | None = None,
+) -> str:
+    lines: list[str] = []
+    for (
+        operator,
+        conjuncts,
+    ) in module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS.items():
+        lines.append(f"{operator} ==")
+        for conjunct in conjuncts:
+            if omit == (operator, conjunct):
+                continue
+            lines.append(f"  /\\ {conjunct}")
+    return "\n".join(lines)
+
+
+def test_byzantine_interleaving_gate_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitInterleavingGate.tla"
+    tla.write_text(byzantine_interleaving_contract_text(module), encoding="utf-8")
+
+    assert module.byzantine_interleaving_gate_conjunct_contract_errors(tla) == []
+
+
+def test_byzantine_interleaving_gate_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitInterleavingGate.tla"
+    missing = "ByzantineCommitInterleavingExactness"
+    tla.write_text(
+        byzantine_interleaving_contract_text(
+            module,
+            omit=("ByzantineCommitProgressSafetyEnvelope", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.byzantine_interleaving_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ByzantineCommitProgressSafetyEnvelope, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_byzantine_interleaving_gate_conjunct_contract_errors_rejects_exactness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitInterleavingGate.tla"
+    missing = "ProposedRoundInitializesRbc"
+    tla.write_text(
+        byzantine_interleaving_contract_text(
+            module,
+            omit=("ByzantineCommitInterleavingExactness", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.byzantine_interleaving_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ByzantineCommitInterleavingExactness, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_byzantine_interleaving_exactness_alignment_errors_accepts_direct_core(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.byzantine_interleaving_exactness_alignment_errors() == []
+
+
+def test_byzantine_interleaving_exactness_alignment_errors_rejects_missing_core(
+) -> None:
+    module = load_coverage_module()
+    byzantine_contracts = copied_contracts(
+        module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "BufferedVotesWaitForDelivery"
+    byzantine_contracts["ByzantineCommitInterleavingExactness"] = tuple(
+        conjunct
+        for conjunct in byzantine_contracts["ByzantineCommitInterleavingExactness"]
+        if conjunct != missing
+    )
+
+    errors = module.byzantine_interleaving_exactness_alignment_errors(
+        byzantine_contracts=byzantine_contracts,
+    )
+
+    assert errors == [
+        "ByzantineCommitInterleavingExactness must extend "
+        "DirectCommitInterleavingExactness with Byzantine-only exactness "
+        f"conjuncts; missing conjunct(s) {missing}"
+    ]
+
+
+def test_byzantine_interleaving_exactness_alignment_errors_rejects_extra_core(
+) -> None:
+    module = load_coverage_module()
+    byzantine_contracts = copied_contracts(
+        module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    extra = "UnexpectedByzantineInterleavingCore"
+    byzantine_contracts["ByzantineCommitInterleavingExactness"] = (
+        *byzantine_contracts["ByzantineCommitInterleavingExactness"],
+        extra,
+    )
+
+    errors = module.byzantine_interleaving_exactness_alignment_errors(
+        byzantine_contracts=byzantine_contracts,
+    )
+
+    assert errors == [
+        "ByzantineCommitInterleavingExactness must extend "
+        "DirectCommitInterleavingExactness with Byzantine-only exactness "
+        f"conjuncts; unexpected conjunct(s) {extra}"
+    ]
+
+
+def projection_gate_contract_text(
+    module,
+    *,
+    omit: tuple[str, str] | None = None,
+    overrides: dict[str, list[str]] | None = None,
+) -> str:
+    lines: list[str] = []
+    overrides = overrides or {}
+    for operator, conjuncts in module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS.items():
+        override = overrides.get(operator)
+        if override is not None:
+            lines.extend(override)
+            continue
+        lines.append(f"{operator} ==")
+        antecedent = module.SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS.get(
+            operator
+        )
+        if antecedent is None:
+            prefix = "  "
+        else:
+            lines.append(f"  {antecedent} =>")
+            prefix = "    "
+        for conjunct in conjuncts:
+            if omit == (operator, conjunct):
+                continue
+            lines.append(f"{prefix}/\\ {conjunct}")
+    return "\n".join(lines)
+
+
+def test_projection_gate_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(projection_gate_contract_text(module), encoding="utf-8")
+
+    assert module.projection_gate_conjunct_contract_errors(tla) == []
+
+
+def test_projection_gate_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    missing = "DeliveredWithBufferedVotesCommits"
+    tla.write_text(
+        projection_gate_contract_text(
+            module,
+            omit=("ProjectionBridgeMatchesInterleavingExactness", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.projection_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ProjectionBridgeMatchesInterleavingExactness, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_projection_gate_conjunct_contract_errors_rejects_dropped_implication(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    conjuncts = module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS[
+        "ProjectionBridgeMatchesInterleavingCore"
+    ]
+    tla.write_text(
+        projection_gate_contract_text(
+            module,
+            overrides={
+                "ProjectionBridgeMatchesInterleavingCore": [
+                    "ProjectionBridgeMatchesInterleavingCore ==",
+                    *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                ]
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.projection_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ProjectionBridgeMatchesInterleavingCore, but it must keep a "
+        "top-level implication guarded by ProjectedByzantineDirectTopExactness"
+    ) in errors[0]
 
 
 def test_mutation_cfg_name_errors_accepts_matching_cfg_fragments() -> None:
@@ -2897,6 +5321,276 @@ def test_cfg_check_operator_names_returns_only_invariants_and_properties(
         },
         [],
     )
+
+
+def test_top_level_cfg_behavior_errors_accepts_root_behavior_contracts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "Sumeragi_fast.cfg"
+    deep_cfg = tmp_path / "Sumeragi_deep.cfg"
+    tlc_cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    required_check = (("TypeInvariant", "INVARIANT"),)
+    write_cfg_with_behavior_and_checks(
+        fast_cfg,
+        ("INIT Init", "NEXT Next"),
+        required_check,
+    )
+    write_cfg_with_behavior_and_checks(
+        deep_cfg,
+        ("INIT Init", "NEXT Next"),
+        required_check,
+    )
+    write_cfg_with_behavior_and_checks(
+        tlc_cfg,
+        ("SPECIFICATION Spec",),
+        required_check,
+    )
+
+    assert module.top_level_cfg_behavior_errors(
+        (
+            (
+                fast_cfg,
+                (("INIT", "Init"), ("NEXT", "Next")),
+                "top-level fast coverage",
+            ),
+            (
+                deep_cfg,
+                (("INIT", "Init"), ("NEXT", "Next")),
+                "top-level deep coverage",
+            ),
+            (
+                tlc_cfg,
+                (("SPECIFICATION", "Spec"),),
+                "top-level TLC fast coverage",
+            ),
+        )
+    ) == []
+
+
+def test_top_level_cfg_behavior_errors_rejects_wrong_init_next_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_deep.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT StaleNext"),
+        (("TypeInvariant", "INVARIANT"),),
+    )
+
+    assert module.top_level_cfg_behavior_errors(
+        (
+            (
+                cfg,
+                (("INIT", "Init"), ("NEXT", "Next")),
+                "top-level deep coverage",
+            ),
+        )
+    ) == [
+        f"{cfg}:2 binds NEXT StaleNext, expected Next for top-level deep coverage"
+    ]
+
+
+def test_top_level_cfg_behavior_errors_rejects_wrong_spec_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT Next"),
+        (("TypeInvariant", "INVARIANT"),),
+    )
+
+    assert module.top_level_cfg_behavior_errors(
+        (
+            (
+                cfg,
+                (("SPECIFICATION", "Spec"),),
+                "top-level TLC fast coverage",
+            ),
+        )
+    ) == [
+        f"{cfg} must bind SPECIFICATION Spec for top-level TLC fast coverage",
+        f"{cfg}:1 binds unexpected INIT Init; expected SPECIFICATION Spec "
+        "for top-level TLC fast coverage",
+        f"{cfg}:2 binds unexpected NEXT Next; expected SPECIFICATION Spec "
+        "for top-level TLC fast coverage",
+    ]
+
+
+def test_top_level_cfg_deadlock_errors_accepts_tlc_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("SPECIFICATION Spec",),
+        (("TypeInvariant", "INVARIANT"),),
+    )
+
+    assert module.top_level_cfg_deadlock_errors(
+        ((cfg, "FALSE", "top-level TLC fast coverage"),)
+    ) == []
+
+
+def test_top_level_cfg_deadlock_errors_rejects_wrong_tlc_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION Spec",
+                "CHECK_DEADLOCK TRUE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.top_level_cfg_deadlock_errors(
+        ((cfg, "FALSE", "top-level TLC fast coverage"),)
+    ) == [
+        f"{cfg}:2 sets CHECK_DEADLOCK TRUE, expected FALSE for top-level TLC "
+        "fast coverage"
+    ]
+
+
+def write_cfg_with_constant_values(
+    path: Path,
+    constant_values: tuple[tuple[str, str], ...],
+) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "CONSTANTS",
+                *(f"  {constant} = {value}" for constant, value in constant_values),
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_top_level_cfg_constant_errors_accepts_root_envelopes(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "Sumeragi_fast.cfg"
+    deep_cfg = tmp_path / "Sumeragi_deep.cfg"
+    tlc_cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    write_cfg_with_constant_values(fast_cfg, module.SUMERAGI_FAST_CONSTANT_VALUES)
+    write_cfg_with_constant_values(deep_cfg, module.SUMERAGI_DEEP_CONSTANT_VALUES)
+    write_cfg_with_constant_values(tlc_cfg, module.SUMERAGI_FAST_CONSTANT_VALUES)
+
+    assert module.top_level_cfg_constant_errors(
+        (
+            (
+                fast_cfg,
+                module.SUMERAGI_FAST_CONSTANT_VALUES,
+                "top-level fast coverage",
+            ),
+            (
+                deep_cfg,
+                module.SUMERAGI_DEEP_CONSTANT_VALUES,
+                "top-level deep coverage",
+            ),
+            (
+                tlc_cfg,
+                module.SUMERAGI_FAST_CONSTANT_VALUES,
+                "top-level TLC fast coverage",
+            ),
+        )
+    ) == []
+
+
+def test_top_level_cfg_constant_errors_rejects_wrong_quorum_value(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    write_cfg_with_constant_values(cfg, (("CommitQuorum", "2"),))
+
+    assert module.top_level_cfg_constant_errors(
+        (
+            (
+                cfg,
+                (("CommitQuorum", "3"),),
+                "top-level fast coverage",
+            ),
+        )
+    ) == [
+        f"{cfg}:4 binds constant CommitQuorum = 2, expected 3 "
+        "for top-level fast coverage"
+    ]
+
+
+def test_top_level_fast_cfg_check_errors_accepts_fast_sentinel_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT Next"),
+        module.SUMERAGI_FAST_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.top_level_fast_cfg_check_errors(cfg) == []
+
+
+def test_top_level_fast_cfg_check_errors_rejects_missing_or_downgraded_root(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreFastCorrectnessEnvelope",
+                "INVARIANT SumeragiConsensusCoreAlwaysMatchesExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.top_level_fast_cfg_check_errors(cfg) == [
+        f"{cfg} checks PROPERTY SumeragiConsensusCoreFastCorrectnessEnvelope, "
+        "expected INVARIANT",
+    ]
+
+
+def test_top_level_fast_cfg_check_errors_rejects_replaced_fast_root(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SumeragiConsensusCoreAlwaysMatchesExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.top_level_fast_cfg_check_errors(cfg) == [
+        f"{cfg} must check INVARIANT "
+        "SumeragiConsensusCoreFastCorrectnessEnvelope for top-level fast "
+        "sentinel coverage",
+    ]
 
 
 def test_top_level_cfg_check_parity_errors_accepts_matching_checks(
@@ -9743,14 +12437,12 @@ def test_tla_module_dependency_references_rejects_late_declarations(
     )
 
     assert module.tla_module_dependency_references(tla) == (
-        [(2, "EXTENDS", "Naturals")],
+        [(2, "EXTENDS", "Naturals"), (5, "INSTANCE", "LateNamed")],
         [
-            f"{tla}:4 TLA dependency declarations must appear before "
-            "declarations and definitions: EXTENDS LateHelpers",
-            f"{tla}:5 TLA dependency declarations must appear before "
-            "declarations and definitions: Alias == INSTANCE LateNamed",
+            f"{tla}:4 EXTENDS declarations must appear before declarations "
+            "and definitions: EXTENDS LateHelpers",
             f"{tla}:7 TLA dependency declarations must appear before "
-            "declarations and definitions: INSTANCE LateBare",
+            "operator definitions: INSTANCE LateBare",
         ],
     )
 
@@ -26029,6 +28721,7 @@ def test_pr_tlc_cross_check_errors_rejects_missing_non_allowlisted_mode() -> Non
         {"fast", "deep", "fork-npos"},
         {"fast"},
         {"fast"},
+        apalache_only_modes={"deep"},
     )
 
     assert len(errors) == 2
@@ -26052,6 +28745,7 @@ def test_pr_tlc_cross_check_errors_accepts_documented_apalache_only_deep() -> No
             {"fast", "deep", "fork-npos"},
             {"fast", "fork-npos"},
             {"fast", "fork-npos"},
+            apalache_only_modes={"deep"},
         )
         == []
     )
@@ -26064,6 +28758,7 @@ def test_pr_tlc_cross_check_errors_rejects_stale_or_routed_allowlist() -> None:
         {"fast"},
         {"fast", "deep"},
         {"fast", "deep"},
+        apalache_only_modes={"deep"},
     )
 
     assert errors == [

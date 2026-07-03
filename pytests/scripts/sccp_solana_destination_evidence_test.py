@@ -35,6 +35,28 @@ def load_evidence_module():
     return module
 
 
+class HostileExpectedDestinationBindingHash:
+    def __str__(self):
+        raise AssertionError(
+            "secret-token Solana destination expected binding hash was stringified"
+        )
+
+    def __repr__(self):
+        raise AssertionError(
+            "secret-token Solana destination expected binding hash was repr'd"
+        )
+
+    def __eq__(self, _other):
+        raise AssertionError(
+            "secret-token Solana destination expected binding hash was compared"
+        )
+
+    def __ne__(self, _other):
+        raise AssertionError(
+            "secret-token Solana destination expected binding hash was compared"
+        )
+
+
 def test_solana_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
@@ -494,6 +516,84 @@ def solana_toml_args(module):
     )
     args.verifier_program_bytes_base64 = SOLANA_VERIFIER_PROGRAM_BYTES
     return args
+
+
+def test_solana_destination_rejects_hostile_expected_binding_hash_without_hooks(
+    monkeypatch,
+):
+    module = load_evidence_module()
+    destination_binding_hash = bytes.fromhex(SOLANA_DESTINATION_BINDING_VECTOR)
+
+    class FakeParser:
+        prog = "sccp-solana-destination-evidence-test"
+
+        def __init__(self, args):
+            self.args = args
+
+        def parse_args(self, _argv):
+            return self.args
+
+        def exit(self, code, message=None):
+            raise SystemExit((code, message or ""))
+
+    cli_args = [
+        "--verifier-program-id",
+        SOLANA_VERIFIER_PROGRAM_ID,
+        "--verifier-code-hash",
+        "0x" + "bb" * 32,
+        "--expected-destination-binding-hash",
+        "0x" + SOLANA_DESTINATION_BINDING_VECTOR,
+    ]
+    malformed_cases = (
+        (
+            HostileExpectedDestinationBindingHash,
+            "--expected-destination-binding-hash must be 32 bytes",
+        ),
+        (
+            lambda: bytes(32),
+            "--expected-destination-binding-hash must not be zero",
+        ),
+        (
+            lambda: b"\x11" * 31,
+            "--expected-destination-binding-hash must be 32 bytes",
+        ),
+    )
+
+    for make_value, expected_error in malformed_cases:
+        for direct_call in (
+            lambda args: module.render_toml(args, destination_binding_hash),
+            lambda args: module._json_summary(args, destination_binding_hash, False),
+        ):
+            direct_args = solana_toml_args(module)
+            direct_args.expected_destination_binding_hash = make_value()
+            try:
+                direct_call(direct_args)
+            except ValueError as exc:
+                message = str(exc)
+                assert expected_error in message
+                assert "secret-token" not in message
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    "direct Solana destination accepted malformed expected binding"
+                )
+
+        main_args = module.build_parser().parse_args(cli_args)
+        main_args.expected_destination_binding_hash = make_value()
+        fake_parser = FakeParser(main_args)
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "build_parser", lambda: fake_parser)
+            try:
+                module.main([])
+            except SystemExit as exc:
+                code, message = exc.code
+                assert code == 2
+                assert expected_error in message
+                assert "secret-token" not in message
+            else:
+                raise AssertionError(
+                    "Solana destination main accepted malformed expected binding"
+                )
 
 
 def test_solana_destination_json_summary_rejects_non_boolean_programdata_readiness(

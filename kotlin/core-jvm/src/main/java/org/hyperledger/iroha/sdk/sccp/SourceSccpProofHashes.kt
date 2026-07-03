@@ -1752,10 +1752,10 @@ object SccpSourceProofs {
         }
         var computedSignedPower = BigInteger.ZERO
         proof.signatures.zip(signerIndices).forEachIndexed { signatureIndex, (signature, signerIndex) ->
-            require(tronRecoverableSignatureIsCanonical(signature)) {
+            require(bscRecoverableSignatureIsCanonical(signature)) {
                 "signatures[$signatureIndex] must be a canonical recoverable secp256k1 signature"
             }
-            val recoveredAddress = tronRecoveredSignerAddress20(commitMessageHash, signature)
+            val recoveredAddress = bscRecoveredSignerAddress20(commitMessageHash, signature)
             require(recoveredAddress != null && recoveredAddress.contentEquals(validatorAddresses[signerIndex])) {
                 "signatures[$signatureIndex] must recover the selected validator address"
             }
@@ -2500,7 +2500,7 @@ object SccpSourceProofs {
             "TRON header signatures must be 65 bytes"
         }
         require(tronRecoverableSignatureIsCanonical(witnessSignature) && tronRecoverableSignatureIsCanonical(parentWitnessSignature)) {
-            "TRON header signatures must be canonical low-S with recovery id 0..3 or 27..30"
+            "TRON header signatures must be canonical low-S with recovery id 0..3"
         }
         val witness = hexBytes(witnessAddress, "witnessAddress", 21)
         require(isNonZeroTronAddress(witness)) { "witnessAddress must be a TRON 0x41-prefixed address" }
@@ -5678,10 +5678,8 @@ object SccpSourceProofs {
 
     private fun sha256(input: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(input)
 
-    private fun tronRecoverableSignatureIsCanonical(signature: ByteArray): Boolean {
+    private fun recoverableSignatureScalarsAreCanonical(signature: ByteArray): Boolean {
         if (signature.size != 65) return false
-        val recoveryId = signature[64].toInt() and 0xff
-        if (recoveryId !in 0..3 && recoveryId !in 27..30) return false
         val rValue = signature.copyOfRange(0, 32)
         val sValue = signature.copyOfRange(32, 64)
         return !isZero(rValue) &&
@@ -5690,10 +5688,24 @@ object SccpSourceProofs {
             compareUnsignedBytes(sValue, SECP256K1_SCALAR_HALF_ORDER_BE) <= 0
     }
 
-    private fun tronRecoveredSignerAddress20(messageHash: ByteArray, signature: ByteArray): ByteArray? {
-        if (messageHash.size != 32 || !tronRecoverableSignatureIsCanonical(signature)) return null
-        val recoveryIdByte = signature[64].toInt() and 0xff
-        val recoveryId = if (recoveryIdByte >= 27) recoveryIdByte - 27 else recoveryIdByte
+    private fun tronRecoverableSignatureIsCanonical(signature: ByteArray): Boolean {
+        if (signature.size != 65) return false
+        val recoveryId = signature[64].toInt() and 0xff
+        return recoveryId in 0..3 && recoverableSignatureScalarsAreCanonical(signature)
+    }
+
+    private fun bscRecoverableSignatureIsCanonical(signature: ByteArray): Boolean {
+        if (signature.size != 65) return false
+        val recoveryId = signature[64].toInt() and 0xff
+        return recoveryId in 27..28 && recoverableSignatureScalarsAreCanonical(signature)
+    }
+
+    private fun secp256k1RecoveredSignerAddress20(
+        messageHash: ByteArray,
+        signature: ByteArray,
+        recoveryId: Int,
+    ): ByteArray? {
+        if (messageHash.size != 32 || signature.size != 65) return null
         val rValue = BigInteger(1, signature.copyOfRange(0, 32))
         val sValue = BigInteger(1, signature.copyOfRange(32, 64))
         val x = rValue.add(SECP256K1_SCALAR_ORDER.multiply(BigInteger.valueOf((recoveryId / 2).toLong())))
@@ -5717,6 +5729,16 @@ object SccpSourceProofs {
         if (publicKey.isInfinity) return null
         val encoded = publicKey.getEncoded(false)
         return keccak256(encoded.copyOfRange(1, encoded.size)).copyOfRange(12, 32)
+    }
+
+    private fun tronRecoveredSignerAddress20(messageHash: ByteArray, signature: ByteArray): ByteArray? {
+        if (!tronRecoverableSignatureIsCanonical(signature)) return null
+        return secp256k1RecoveredSignerAddress20(messageHash, signature, signature[64].toInt() and 0xff)
+    }
+
+    private fun bscRecoveredSignerAddress20(messageHash: ByteArray, signature: ByteArray): ByteArray? {
+        if (!bscRecoverableSignatureIsCanonical(signature)) return null
+        return secp256k1RecoveredSignerAddress20(messageHash, signature, (signature[64].toInt() and 0xff) - 27)
     }
 
     private fun bigIntegerToFixedBytes(value: BigInteger, byteLength: Int): ByteArray {

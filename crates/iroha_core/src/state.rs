@@ -22120,7 +22120,6 @@ impl State {
                     iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
                 bridge_proof_max_future_drift_blocks:
                     iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
-                sccp_allow_unready_transparent_proofs: false,
                 sccp_source_verifier_materials: Vec::new(),
                 sccp_source_adapter_engine_deployments: Vec::new(),
                 sccp_destination_rollouts: Vec::new(),
@@ -27153,23 +27152,14 @@ impl State {
         self.fraud_monitoring = cfg;
     }
 
-    fn sccp_seed_config_route_manifests_enabled() -> bool {
-        std::env::var("IROHA_SCCP_SEED_CONFIG_ROUTE_MANIFESTS")
-            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
-            .unwrap_or(false)
-    }
-
     /// Update zero-knowledge verification settings using loaded configuration.
     pub fn set_zk(&mut self, mut zk: iroha_config::parameters::actual::Zk) {
         crate::gas::configure_confidential_gas(zk.gas.into());
         let configured_route_manifests = core::mem::take(&mut zk.sccp_route_manifests);
-        let force_seed_from_config = Self::sccp_seed_config_route_manifests_enabled();
         let can_seed_from_config = self.committed_height() == 0;
         let route_manifests = {
             let mut route_manifests = self.sccp_route_manifests.write();
-            if can_seed_from_config
-                || (force_seed_from_config && !configured_route_manifests.is_empty())
-            {
+            if can_seed_from_config {
                 *route_manifests = configured_route_manifests;
             }
             route_manifests.clone()
@@ -29235,7 +29225,6 @@ pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
         bridge_proof_max_future_drift_blocks:
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
-        sccp_allow_unready_transparent_proofs: false,
         sccp_source_verifier_materials: Vec::new(),
         sccp_source_adapter_engine_deployments: Vec::new(),
         sccp_destination_rollouts: Vec::new(),
@@ -30990,11 +30979,6 @@ pub fn compute_zk_consensus_policy_hash(
         "bridge_proof_max_future_drift_blocks",
         zk_config.bridge_proof_max_future_drift_blocks,
     );
-    zk_policy_put_bool(
-        &mut h,
-        "sccp_allow_unready_transparent_proofs",
-        zk_config.sccp_allow_unready_transparent_proofs,
-    );
     zk_policy_put_option_u32(&mut h, "poseidon_params_id", zk_config.poseidon_params_id);
     zk_policy_put_option_u32(&mut h, "pedersen_params_id", zk_config.pedersen_params_id);
     zk_policy_put_option_vk_ref(
@@ -32123,14 +32107,7 @@ impl<'state> StateBlock<'state> {
             };
             let world_hold = if commit_error.is_none() {
                 let world_start = Instant::now();
-                let committed_route_manifests = if State::sccp_seed_config_route_manifests_enabled()
-                    && !state_ref.zk.sccp_route_manifests.is_empty()
-                {
-                    state_ref.zk.sccp_route_manifests.clone()
-                } else {
-                    zk.sccp_route_manifests.clone()
-                };
-                *state_ref.sccp_route_manifests.write() = committed_route_manifests;
+                *state_ref.sccp_route_manifests.write() = zk.sccp_route_manifests.clone();
                 // Commit world storage before taking the block-hashes write lock.
                 // Validation workers build `StateBlock`s by acquiring block-hash read snapshots
                 // first and then world storage transactions; committing block hashes first can
@@ -34231,7 +34208,7 @@ mod state_commit_lock_order_tests {
             nonce: 44,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 1,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"sora:bridge".to_vec(),
@@ -34358,7 +34335,7 @@ mod state_commit_lock_order_tests {
             nonce: 47,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 1,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"sora:bridge".to_vec(),
@@ -34426,7 +34403,7 @@ mod state_commit_lock_order_tests {
                 target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
                 nonce: 48,
                 asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                asset_id: b"xor#universal".to_vec(),
+                asset_id: b"xor".to_vec(),
                 route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
                 route_id: b"nexus:bsc:xor".to_vec(),
             });
@@ -34479,7 +34456,7 @@ mod state_commit_lock_order_tests {
     #[should_panic(
         expected = "committed block failed SCCP commitment validation before apply_without_execution"
     )]
-    fn apply_without_execution_rejects_malformed_sccp_asset_scope_before_state_mutation() {
+    fn apply_without_execution_rejects_scoped_sccp_asset_alias_before_state_mutation() {
         let keypair = crate::state::checked_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -34489,7 +34466,7 @@ mod state_commit_lock_order_tests {
             nonce: 49,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal#shadow".to_vec(),
+            asset_id: b"xor#universal".to_vec(),
             amount: 1,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"sora:bridge".to_vec(),
@@ -34502,7 +34479,7 @@ mod state_commit_lock_order_tests {
             iroha_sccp::canonical_sccp_payload_bytes(&payload),
         );
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
-            ChainId::from("apply-sccp-malformed-asset-scope"),
+            ChainId::from("apply-sccp-scoped-asset-alias"),
             authority,
         )
         .with_executable(iroha_data_model::transaction::Executable::IvmProved(
@@ -34557,7 +34534,7 @@ mod state_commit_lock_order_tests {
             nonce: 45,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 1,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"sora:bridge".to_vec(),
@@ -42892,7 +42869,6 @@ pub(crate) mod deserialize {
                 iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
             bridge_proof_max_future_drift_blocks:
                 iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
-            sccp_allow_unready_transparent_proofs: false,
             sccp_source_verifier_materials: Vec::new(),
             sccp_source_adapter_engine_deployments: Vec::new(),
             sccp_destination_rollouts: Vec::new(),
@@ -43299,6 +43275,11 @@ mod tests {
     use crate::smartcontracts::ValidQuery;
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
+
+    fn checked_da_ack_signature(byte: u8) -> Signature {
+        Signature::try_from_bytes(&[byte; 64])
+            .expect("checked state DA acknowledgement signature fixture")
+    }
 
     fn axt_test_digest(domain: &[u8], parts: &[&[u8]]) -> Hash {
         let mut payload = Vec::new();
@@ -45847,6 +45828,13 @@ mod tests {
 
     #[test]
     fn set_zk_preserves_committed_sccp_route_manifest_overlay() {
+        let retired_env_override =
+            ["IROHA", "_SCCP", "_SEED", "_CONFIG", "_ROUTE", "_MANIFESTS"].concat();
+        assert!(
+            !include_str!("state.rs").contains(&retired_env_override),
+            "SCCP route-manifest overlays must not depend on process environment overrides"
+        );
+
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
@@ -52457,6 +52445,14 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        let mut first_state_block = state.block(first.header());
+        let committed_first = ValidBlock::new_unverified_for_tests(first.clone())
+            .commit_unchecked()
+            .unpack(|_| {});
+        let _ = first_state_block.apply_without_execution(&committed_first, Vec::new());
+        first_state_block
+            .commit()
+            .expect("commit previous autoscale block before scale-in cleanup");
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
 
@@ -52464,7 +52460,7 @@ mod tests {
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
-        state_block.maybe_apply_nexus_autoscale(&committed_second);
+        let _ = state_block.apply_without_execution(&committed_second, Vec::new());
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits cleanup");
@@ -62474,7 +62470,7 @@ mod tests {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
-                Signature::from_bytes(&[0x11; 64]),
+                checked_da_ack_signature(0x11),
             );
             commitments.insert(
                 &record,
@@ -62686,7 +62682,7 @@ mod tests {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
-                Signature::from_bytes(&[0x11; 64]),
+                checked_da_ack_signature(0x11),
             );
             commitments.insert(
                 &record,
@@ -64012,7 +64008,7 @@ mod tests {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
-                Signature::from_bytes(&[0x11; 64]),
+                checked_da_ack_signature(0x11),
             );
             commitments.insert(
                 &record,
@@ -66744,7 +66740,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([tag.wrapping_add(3); 32]),
-            Signature::from_bytes(&[tag; 64]),
+            checked_da_ack_signature(tag),
         )
     }
 
@@ -72682,7 +72678,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
-            Signature::from_bytes(&[0x11; 64]),
+            checked_da_ack_signature(0x11),
         );
         let regress = iroha_data_model::da::commitment::DaCommitmentRecord::new(
             LaneId::new(0),
@@ -72696,7 +72692,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xFF; 32]),
-            Signature::from_bytes(&[0x22; 64]),
+            checked_da_ack_signature(0x22),
         );
 
         state
@@ -72743,7 +72739,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
-            Signature::from_bytes(&[0x11; 64]),
+            checked_da_ack_signature(0x11),
         );
         let regress = iroha_data_model::da::commitment::DaCommitmentRecord::new(
             LaneId::new(1),
@@ -72757,7 +72753,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xFF; 32]),
-            Signature::from_bytes(&[0x22; 64]),
+            checked_da_ack_signature(0x22),
         );
 
         state
@@ -72915,7 +72911,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
-            Signature::from_bytes(&[0x11; 64]),
+            checked_da_ack_signature(0x11),
         )]);
         let new_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
@@ -72976,7 +72972,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xD1; 32]),
-            Signature::from_bytes(&[0xE1; 64]),
+            checked_da_ack_signature(0xE1),
         );
         let first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
@@ -73004,7 +73000,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xD2; 32]),
-            Signature::from_bytes(&[0xE2; 64]),
+            checked_da_ack_signature(0xE2),
         );
         let second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&first_block))
@@ -73065,7 +73061,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x41; 32]),
-            Signature::from_bytes(&[0x51; 64]),
+            checked_da_ack_signature(0x51),
         );
         let first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
@@ -73093,7 +73089,7 @@ mod tests {
             None,
             RetentionClass::default(),
             first.storage_ticket,
-            Signature::from_bytes(&[0x52; 64]),
+            checked_da_ack_signature(0x52),
         );
         let second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&first_block))
@@ -73154,7 +73150,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x84; 32]),
-            Signature::from_bytes(&[0x85; 64]),
+            checked_da_ack_signature(0x85),
         );
         let first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
@@ -73182,7 +73178,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x94; 32]),
-            Signature::from_bytes(&[0x95; 64]),
+            checked_da_ack_signature(0x95),
         );
         let second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&first_block))
@@ -73247,7 +73243,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x64; 32]),
-            Signature::from_bytes(&[0x65; 64]),
+            checked_da_ack_signature(0x65),
         );
         let first_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
@@ -73292,7 +73288,7 @@ mod tests {
             None,
             RetentionClass::default(),
             first.storage_ticket,
-            Signature::from_bytes(&[0x74; 64]),
+            checked_da_ack_signature(0x74),
         );
         let second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&first_block))
@@ -73340,7 +73336,7 @@ mod tests {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
-                Signature::from_bytes(&[0x11; 64]),
+                checked_da_ack_signature(0x11),
             )
         };
 
@@ -73421,7 +73417,7 @@ mod tests {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([seed.wrapping_add(3); 32]),
-                Signature::from_bytes(&[seed.wrapping_add(4); 64]),
+                checked_da_ack_signature(seed.wrapping_add(4)),
             )
         };
 
@@ -73468,13 +73464,13 @@ mod tests {
     }
 
     #[test]
-    fn hydrate_da_indexes_rejects_unknown_lane() {
+    fn hydrate_da_indexes_retains_unknown_lane_bundle_without_active_indexes() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
         let keypair = crate::state::checked_keypair();
 
-        let bundle = DaCommitmentBundle::new(vec![DaCommitmentRecord::new(
+        let record = DaCommitmentRecord::new(
             LaneId::new(9),
             0,
             0,
@@ -73486,8 +73482,10 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x05; 32]),
-            Signature::from_bytes(&[0x06; 64]),
-        )]);
+            checked_da_ack_signature(0x06),
+        );
+        let key = DaCommitmentKey::from_record(&record);
+        let bundle = DaCommitmentBundle::new(vec![record.clone()]);
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
             .with_da_commitments(Some(bundle))
@@ -73502,20 +73500,35 @@ mod tests {
             hashes.commit_for_tests();
         }
 
-        let err = state
+        state
             .ensure_da_indexes_hydrated()
-            .expect_err("hydration should fail on unknown lane");
-        match err {
-            DaIndexHydrationError::ShardCursor(DaShardCursorError::UnknownLane {
-                lane_id,
-                block_height,
-                ..
-            }) => {
-                assert_eq!(lane_id, LaneId::new(9));
-                assert_eq!(block_height, signed_block.header().height().get());
-            }
-            other => panic!("unexpected error: {other:?}"),
+            .expect("hydration should retain unknown-lane bundle but skip active indexes");
+        {
+            let commitments = state.da_commitments();
+            let stored_bundle = commitments
+                .bundle_at(signed_block.header().height().get())
+                .expect("committed bundle retained");
+            assert_eq!(stored_bundle.commitments, vec![record.clone()]);
+            assert!(
+                commitments.get_committed_by_key(&key).is_some(),
+                "unknown-lane commitment identity should stay available for committed validation"
+            );
+            assert!(
+                commitments.get_by_lane_epoch_sequence(9, 0, 0).is_none(),
+                "unknown-lane commitment should not be query-visible"
+            );
         }
+        assert!(
+            state.da_shard_cursor_index().is_empty(),
+            "unknown-lane commitment should not advance shard cursors"
+        );
+        assert_eq!(
+            state
+                .da_receipt_cursors()
+                .highest(LaneEpoch::new(LaneId::new(9), 0)),
+            None,
+            "unknown-lane commitment should not advance receipt cursors"
+        );
     }
 
     #[test]
@@ -73586,7 +73599,7 @@ mod tests {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
-                Signature::from_bytes(&[0x11; 64]),
+                checked_da_ack_signature(0x11),
             ),
             DaCommitmentRecord::new(
                 LaneId::new(1),
@@ -73600,7 +73613,7 @@ mod tests {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEF; 32]),
-                Signature::from_bytes(&[0x12; 64]),
+                checked_da_ack_signature(0x12),
             ),
         ]);
         let first_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
@@ -73629,7 +73642,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xF0; 32]),
-            Signature::from_bytes(&[0x13; 64]),
+            checked_da_ack_signature(0x13),
         )]);
         let second_block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&signed_first))
@@ -73689,7 +73702,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
-            Signature::from_bytes(&[0x11; 64]),
+            checked_da_ack_signature(0x11),
         );
         state
             .advance_da_shard_cursors_from_bundle(3, std::slice::from_ref(&advance))
@@ -73734,7 +73747,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEF; 32]),
-            Signature::from_bytes(&[0x12; 64]),
+            checked_da_ack_signature(0x12),
         );
         state
             .advance_da_shard_cursors_from_bundle(4, std::slice::from_ref(&resharded_record))
@@ -73782,7 +73795,7 @@ mod tests {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
-                Signature::from_bytes(&[0x11; 64]),
+                checked_da_ack_signature(0x11),
             )
         };
 
@@ -73907,7 +73920,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
-            Signature::from_bytes(&[0x11; 64]),
+            checked_da_ack_signature(0x11),
         );
         let lane_one_record = DaCommitmentRecord::new(
             LaneId::new(1),
@@ -73921,7 +73934,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x54; 32]),
-            Signature::from_bytes(&[0x65; 64]),
+            checked_da_ack_signature(0x65),
         );
         let bundle =
             DaCommitmentBundle::new(vec![lane_zero_record.clone(), lane_one_record.clone()]);
@@ -74004,7 +74017,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x05; 32]),
-            Signature::from_bytes(&[0x06; 64]),
+            checked_da_ack_signature(0x06),
         );
         let bundle = DaCommitmentBundle::new(vec![committed_record.clone()]);
         let keypair = crate::state::checked_keypair();
@@ -74034,7 +74047,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x50; 32]),
-            Signature::from_bytes(&[0x60; 64]),
+            checked_da_ack_signature(0x60),
         );
         state
             .advance_da_shard_cursors_from_bundle(42, std::slice::from_ref(&stale_record))
@@ -74111,7 +74124,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xE5; 32]),
-            Signature::from_bytes(&[0xF6; 64]),
+            checked_da_ack_signature(0xF6),
         );
         let bundle = DaCommitmentBundle::new(vec![record.clone()]);
         let keypair = crate::state::checked_keypair();
@@ -74226,7 +74239,7 @@ mod tests {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xD0 ^ tag; 32]),
-                Signature::from_bytes(&[0xE0 ^ tag; 64]),
+                checked_da_ack_signature(0xE0 ^ tag),
             )
         };
 
@@ -74344,7 +74357,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
-            Signature::from_bytes(&[0x11; 64]),
+            checked_da_ack_signature(0x11),
         );
 
         state
@@ -74417,7 +74430,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
-            Signature::from_bytes(&[0x11; 64]),
+            checked_da_ack_signature(0x11),
         );
         let bundle = DaCommitmentBundle::new(vec![record.clone()]);
         let keypair = crate::state::checked_keypair();
@@ -75185,7 +75198,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
-            Signature::from_bytes(&[0x11; 64]),
+            checked_da_ack_signature(0x11),
         );
         state
             .advance_da_shard_cursors_from_bundle(5, std::slice::from_ref(&record))
@@ -75276,7 +75289,7 @@ mod tests {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
-                Signature::from_bytes(&[0x11; 64]),
+                checked_da_ack_signature(0x11),
             );
             state
                 .advance_da_shard_cursors_from_bundle(5, std::slice::from_ref(&record))
@@ -76545,7 +76558,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x50; 32]),
-            Signature::from_bytes(&[0x60; 64]),
+            checked_da_ack_signature(0x60),
         );
 
         state
@@ -76623,7 +76636,7 @@ mod tests {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
-                Signature::from_bytes(&[0x11; 64]),
+                checked_da_ack_signature(0x11),
             )
         };
 
@@ -76737,7 +76750,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xE5; 32]),
-            Signature::from_bytes(&[0xF6; 64]),
+            checked_da_ack_signature(0xF6),
         );
         let bundle = DaCommitmentBundle::new(vec![record]);
         let keypair = crate::state::checked_keypair();
@@ -76868,7 +76881,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x05; 32]),
-            Signature::from_bytes(&[0x06; 64]),
+            checked_da_ack_signature(0x06),
         );
         let bundle = DaCommitmentBundle::new(vec![record]);
         let keypair = crate::state::checked_keypair();
@@ -76937,7 +76950,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
-            Signature::from_bytes(&[0x11; 64]),
+            checked_da_ack_signature(0x11),
         );
         state
             .ensure_da_indexes_hydrated()
@@ -77025,7 +77038,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
-            Signature::from_bytes(&[0x11; 64]),
+            checked_da_ack_signature(0x11),
         );
 
         state
@@ -77087,7 +77100,7 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
-            Signature::from_bytes(&[0x11; 64]),
+            checked_da_ack_signature(0x11),
         );
         let bundle = DaCommitmentBundle::new(vec![record.clone()]);
         let keypair = crate::state::checked_keypair();

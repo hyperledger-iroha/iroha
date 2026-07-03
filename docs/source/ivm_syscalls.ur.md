@@ -38,7 +38,7 @@ translator: machine-google-reviewed
 | 0x1a | set_account_detail | `&AccountId` ، `&Name` ، `&Json` | `u64=0` | `G_set_detail + bytes(val)` | اکاؤنٹ کے لئے ایک تفصیل لکھتی ہے |
 | 0x22 | ٹکسال_اسیٹ | `&AccountId` ، `&AssetDefinitionId` ، `&NoritoBytes(Numeric)` | `u64=0` | `G_mint` | اکاؤنٹ میں اثاثہ کے ٹکسال `amount` |
 | 0x23 | برن_اسیٹ | `&AccountId` ، `&AssetDefinitionId` ، `&NoritoBytes(Numeric)` | `u64=0` | `G_burn` | اکاؤنٹ سے `amount` برنز |
-| 0x24 | ٹرانسفر_اسیٹ | `&AccountId(from)` ، `&AccountId(to)` ، `&AssetDefinitionId` ، `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | اکاؤنٹس کے مابین `amount` کی منتقلی |
+| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
 | 0x29 | منتقلی_V1_BATCH_BEGIN | - | `u64=0` | `G_transfer` | فاسپ کیو ٹرانسفر بیچ اسکوپ شروع کریں
 | 0x2a | منتقلی_V1_Batch_end | - | `u64=0` | `G_transfer` | فلش جمع فاسٹ پی کیو ٹرانسفر بیچ |
 | 0x2b | ٹرانسفر_V1_BATCH_APPLE | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | ایک ہی سیسکل میں Norito-انکوڈڈ بیچ کا اطلاق کریں

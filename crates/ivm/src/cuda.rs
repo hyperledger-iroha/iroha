@@ -4105,16 +4105,28 @@ mod tests {
     use super::{ed25519_verify_batch_cuda, ed25519_verify_cuda};
     use ed25519_dalek::{Signer as _, SigningKey};
 
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_with_replacement_r(signature: &[u8; 64], replacement_r: &[u8; 32]) -> [u8; 64] {
+        let mut malformed = *signature;
+        malformed[..replacement_r.len()].copy_from_slice(replacement_r);
+        malformed
+    }
+
     #[test]
     fn ed25519_cuda_stubs_reject_invalid_signature_and_public_key_material() {
         let signing_key = SigningKey::from_bytes(&[0x42; 32]);
         let valid_sig = signing_key.sign(b"message").to_bytes();
         let zero_sig = [0_u8; 64];
-        let mut small_order_r_sig = [0x22_u8; 64];
-        small_order_r_sig[..32].copy_from_slice(&[
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0,
-        ]);
         let public_key = signing_key.verifying_key().to_bytes();
         let zero_public_key = [0_u8; 32];
         let weak_public_key = [
@@ -4144,10 +4156,17 @@ mod tests {
             ed25519_verify_cuda(b"message", &valid_sig, &malformed_public_key),
             Some(false)
         );
-        assert_eq!(
-            ed25519_verify_cuda(b"message", &small_order_r_sig, &public_key),
-            Some(false)
-        );
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let malformed_sig = signature_with_replacement_r(&valid_sig, &replacement_r);
+            assert_eq!(
+                ed25519_verify_cuda(b"message", &malformed_sig, &public_key),
+                Some(false),
+                "{label} signature R must reject in the single stub"
+            );
+        }
         assert_eq!(
             ed25519_verify_batch_cuda(&[zero_sig], &[public_key], &[hram]),
             Some(vec![false])
@@ -4164,9 +4183,16 @@ mod tests {
             ed25519_verify_batch_cuda(&[valid_sig], &[malformed_public_key], &[hram]),
             Some(vec![false])
         );
-        assert_eq!(
-            ed25519_verify_batch_cuda(&[small_order_r_sig], &[public_key], &[hram]),
-            Some(vec![false])
-        );
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let malformed_sig = signature_with_replacement_r(&valid_sig, &replacement_r);
+            assert_eq!(
+                ed25519_verify_batch_cuda(&[malformed_sig], &[public_key], &[hram]),
+                Some(vec![false]),
+                "{label} signature R must reject in the batch stub"
+            );
+        }
     }
 }

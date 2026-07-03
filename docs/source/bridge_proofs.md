@@ -5623,15 +5623,12 @@ as Nexus-origin messages from block-level SCCP records.
     message submission remains permissionless and no human approval is part of
     the per-message validity path.
   - SCCP artifact/job discovery, state-changing SCCP submit endpoints, and
-    on-chain `SubmitBridgeProof` validation ignore
-    `sccp_allow_unready_transparent_proofs`; that flag cannot make disabled
-    lanes consumable. BSC and TRON route-config renderers also reject
-    production-ready manifests that explicitly force `--allow-unready true`, so
-    governed runtime overlays cannot re-enable diagnostic transparent-proof
-    admission while claiming production readiness. Release-readiness and strict
-    release-bundle source inventory pin both the default `false` overlay and
-    direct/merged route-config rejection tests for those production-ready
-    manifests.
+    on-chain `SubmitBridgeProof` validation do not expose an allow-unready
+    transparent-proof bypass. BSC and TRON route-config renderers require
+    production-ready manifests, reject the removed `--allow-unready` option,
+    and strip any stale `sccp_allow_unready_transparent_proofs` key from merged
+    base configs. Release-readiness and strict release-bundle source inventory
+    pin the deleted config surface and the route-config rejection tests.
     On-chain admission uses a manifest-only unready allowance for configured
     deployment lanes and still fails material-only or otherwise unready
     non-SORA source-chain envelopes.

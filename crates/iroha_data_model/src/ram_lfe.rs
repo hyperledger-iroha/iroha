@@ -462,6 +462,20 @@ mod tests {
     }
 
     #[test]
+    fn signed_receipt_rejects_short_signature_material() {
+        let signer = checked_ed25519_keypair(0x33);
+        let mut receipt = signed_receipt(&signer, receipt_payload());
+        receipt.attestation = RamLfeReceiptAttestation::Signed(Signature::from_bytes(&[0x44; 63]));
+
+        assert_eq!(
+            receipt
+                .verify_signature(signer.public_key())
+                .expect_err("short RAM-LFE receipt signature must fail admission"),
+            iroha_crypto::Error::BadSignature
+        );
+    }
+
+    #[test]
     fn signed_receipt_rejects_malformed_ed25519_signature_r() {
         let signer = checked_ed25519_keypair(0x31);
         for (label, replacement_r) in [
@@ -577,6 +591,20 @@ mod tests {
             opening
                 .verify_signature(signer.public_key())
                 .expect_err("all-zero RAM-LFE opening signature must fail admission"),
+            iroha_crypto::Error::BadSignature
+        );
+    }
+
+    #[test]
+    fn output_opening_rejects_short_signature_material() {
+        let signer = checked_ed25519_keypair(0x34);
+        let mut opening = signed_opening(&signer, opening_payload());
+        opening.signature = Signature::from_bytes(&[0x55; 63]);
+
+        assert_eq!(
+            opening
+                .verify_signature(signer.public_key())
+                .expect_err("short RAM-LFE opening signature must fail admission"),
             iroha_crypto::Error::BadSignature
         );
     }

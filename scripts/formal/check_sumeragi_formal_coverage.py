@@ -15,6 +15,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 SPEC_DIR = ROOT_DIR / "docs" / "formal" / "sumeragi"
 APALACHE_RUNNER = ROOT_DIR / "scripts" / "formal" / "sumeragi_apalache.sh"
 TLC_RUNNER = ROOT_DIR / "scripts" / "formal" / "sumeragi_tlc.sh"
+SUMERAGI_FAST_CFG = SPEC_DIR / "Sumeragi_fast.cfg"
 SUMERAGI_DEEP_CFG = SPEC_DIR / "Sumeragi_deep.cfg"
 SUMERAGI_TLC_FAST_CFG = SPEC_DIR / "Sumeragi_tlc_fast.cfg"
 SUMERAGI_ROOT_PROPERTY = "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope"
@@ -856,6 +857,448 @@ SUMERAGI_RBC_LIVE_EVIDENCE_CAUSALITY_ENVELOPE_CONJUNCT_CONTRACTS = {
         "RbcInvalidDigestNeverLeavesIdleOrCorruption",
     ),
 }
+SUMERAGI_BYZANTINE_TOP_COMMON_CONJUNCTS = (
+    "TlcByzantineDirectCommitCorridor",
+    "CommitImpliesHonestSupport",
+    "FinalityCertificateStackComplete",
+    "CommitDisablesByzantineCommitVote",
+    "ByzantineCommitVoteGateMatchesPrepareEvidence",
+    "ByzantineCommitVoteFinalityGateMatchesNextEvidence",
+    "ByzantineCommitVotePendingGateMatchesMissingNextEvidence",
+    "RbcDeliverFinalityGateMatchesBufferedCommitEvidence",
+    "RbcDeliverPendingGateMatchesMissingBufferedCommitEvidence",
+    "CommitEvidenceMatchesVoteCounters",
+    "VoteCountersRespectRosterBudgets",
+    "StakeSignedMatchesVoteCounters",
+    "NoCommitEvidenceBeforeCommit",
+)
+SUMERAGI_BYZANTINE_TOP_WAIT_CONJUNCTS = (
+    "RbcDeliveredWithoutFinalityHasNoCommitCertificate",
+    "RbcDeliveredWithoutFinalityWaitsForCommitEvidence",
+)
+SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS = {
+    "ByzantineDeliveredFirstTopExactness": SUMERAGI_BYZANTINE_TOP_COMMON_CONJUNCTS,
+    "ByzantineDeliveredFirstTopCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ByzantineDeliveredFirstTopExactness",
+    ),
+    "ByzantineVoteFirstTopExactness": (
+        *SUMERAGI_BYZANTINE_TOP_COMMON_CONJUNCTS,
+        *SUMERAGI_BYZANTINE_TOP_WAIT_CONJUNCTS,
+    ),
+    "ByzantineVoteFirstTopCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ByzantineVoteFirstTopExactness",
+    ),
+    "ByzantineDirectTopExactness": (
+        *SUMERAGI_BYZANTINE_TOP_COMMON_CONJUNCTS,
+        *SUMERAGI_BYZANTINE_TOP_WAIT_CONJUNCTS,
+    ),
+    "ByzantineDirectTopCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ByzantineDirectTopExactness",
+    ),
+    "ByzantineDirectTopCoversOrderedTopCorridors": (
+        "ByzantineDeliveredFirstTopExactness",
+        "ByzantineVoteFirstTopExactness",
+    ),
+}
+SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS = {
+    "ByzantineDirectTopCoversOrderedTopCorridors": "ByzantineDirectTopExactness",
+}
+SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS = {
+    "DirectCommitInterleavingExactness": (
+        "RbcEvidenceShape",
+        "VoteHandoffShape",
+        "CommitCertificateShape",
+        "BufferedVotesWaitForDelivery",
+        "DeliveredWithBufferedVotesCommits",
+    ),
+    "DirectCommitInterleavingCorrectnessEnvelope": (
+        "TypeInvariant",
+        "DirectCommitInterleavingExactness",
+    ),
+    "DirectCommitProgressSafetyEnvelope": (
+        "TypeInvariant",
+        "DirectCommitInterleavingExactness",
+    ),
+}
+SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS = {
+    "DirectDeliveredFirstCorridorExactness": (
+        "PhaseMatchesSpec",
+        "RbcStateMatchesSpec",
+        "RbcEvidenceMatchesSpec",
+        "VoteCountersMatchSpec",
+        "CommitEvidenceMatchesSpec",
+        "FinalityRequiresDeliveredQuorumAndStake",
+    ),
+    "DirectDeliveredFirstCorridorCorrectnessEnvelope": (
+        "TypeInvariant",
+        "DirectDeliveredFirstCorridorExactness",
+    ),
+    "DirectDeliveredFirstProgressSafetyEnvelope": (
+        "TypeInvariant",
+        "DirectDeliveredFirstCorridorExactness",
+    ),
+}
+SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS = {
+    "DirectVoteFirstCorridorExactness": (
+        "PhaseMatchesSpec",
+        "RbcStateMatchesSpec",
+        "RbcEvidenceMatchesSpec",
+        "VoteCountersMatchSpec",
+        "CommitEvidenceMatchesSpec",
+        "BufferedCommitWaitHasNoCertificate",
+        "FinalityRequiresBufferedVotesAndDelivery",
+    ),
+    "DirectVoteFirstCorridorCorrectnessEnvelope": (
+        "TypeInvariant",
+        "DirectVoteFirstCorridorExactness",
+    ),
+    "DirectVoteFirstProgressSafetyEnvelope": (
+        "TypeInvariant",
+        "DirectVoteFirstCorridorExactness",
+    ),
+}
+SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS = {
+    "ByzantineCommitInterleavingExactness": (
+        "RbcEvidenceShape",
+        "ProposedRoundInitializesRbc",
+        "VoteHandoffShape",
+        "CommitCertificateShape",
+        "BufferedVotesWaitForDelivery",
+        "DeliveredWithBufferedVotesCommits",
+    ),
+    "ByzantineCommitInterleavingCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ByzantineCommitInterleavingExactness",
+    ),
+    "ByzantineCommitProgressSafetyEnvelope": (
+        "TypeInvariant",
+        "ByzantineCommitInterleavingExactness",
+    ),
+}
+BYZANTINE_INTERLEAVING_EXTRA_EXACTNESS_CONJUNCTS = (
+    "ProposedRoundInitializesRbc",
+)
+SOURCE_PROGRESS_SAFETY_ENVELOPE_ALIGNMENT_CONTRACTS = (
+    (
+        "direct delivered-first",
+        SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS,
+        "DirectDeliveredFirstProgressSafetyEnvelope",
+        ("TypeInvariant", "DirectDeliveredFirstCorridorExactness"),
+    ),
+    (
+        "direct vote-first",
+        SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS,
+        "DirectVoteFirstProgressSafetyEnvelope",
+        ("TypeInvariant", "DirectVoteFirstCorridorExactness"),
+    ),
+    (
+        "direct interleaving",
+        SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+        "DirectCommitProgressSafetyEnvelope",
+        ("TypeInvariant", "DirectCommitInterleavingExactness"),
+    ),
+    (
+        "Byzantine interleaving",
+        SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+        "ByzantineCommitProgressSafetyEnvelope",
+        ("TypeInvariant", "ByzantineCommitInterleavingExactness"),
+    ),
+)
+SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS = {
+    "ProjectedByzantineDeliveredFirstTopExactness": (
+        "ProjectedTlcByzantineDirectCommitCorridor",
+        "ProjectedCommitImpliesHonestSupport",
+        "ProjectedFinalityCertificateStackComplete",
+        "ProjectedCommitDisablesByzantineCommitVote",
+        "ProjectedByzantineCommitVoteGateMatchesPrepareEvidence",
+        "ProjectedByzantineCommitVoteFinalityGateMatchesNextEvidence",
+        "ProjectedByzantineCommitVotePendingGateMatchesMissingNextEvidence",
+        "ProjectedRbcDeliverFinalityGateMatchesBufferedCommitEvidence",
+        "ProjectedRbcDeliverPendingGateMatchesMissingBufferedCommitEvidence",
+        "ProjectedCommitEvidenceMatchesVoteCounters",
+        "ProjectedVoteCountersRespectRosterBudgets",
+        "ProjectedStakeSignedMatchesVoteCounters",
+        "ProjectedNoCommitEvidenceBeforeCommit",
+    ),
+    "ProjectedByzantineDeliveredFirstTopCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ProjectedByzantineDeliveredFirstTopExactness",
+    ),
+    "ProjectedByzantineVoteFirstTopExactness": (
+        "ProjectedTlcByzantineDirectCommitCorridor",
+        "ProjectedCommitImpliesHonestSupport",
+        "ProjectedFinalityCertificateStackComplete",
+        "ProjectedCommitDisablesByzantineCommitVote",
+        "ProjectedByzantineCommitVoteGateMatchesPrepareEvidence",
+        "ProjectedByzantineCommitVoteFinalityGateMatchesNextEvidence",
+        "ProjectedByzantineCommitVotePendingGateMatchesMissingNextEvidence",
+        "ProjectedRbcDeliverFinalityGateMatchesBufferedCommitEvidence",
+        "ProjectedRbcDeliverPendingGateMatchesMissingBufferedCommitEvidence",
+        "ProjectedCommitEvidenceMatchesVoteCounters",
+        "ProjectedVoteCountersRespectRosterBudgets",
+        "ProjectedStakeSignedMatchesVoteCounters",
+        "ProjectedNoCommitEvidenceBeforeCommit",
+        "ProjectedRbcDeliveredWithoutFinalityHasNoCommitCertificate",
+        "ProjectedRbcDeliveredWithoutFinalityWaitsForCommitEvidence",
+    ),
+    "ProjectedByzantineVoteFirstTopCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ProjectedByzantineVoteFirstTopExactness",
+    ),
+    "ProjectedByzantineDirectTopExactness": (
+        "ProjectedTlcByzantineDirectCommitCorridor",
+        "ProjectedCommitImpliesHonestSupport",
+        "ProjectedFinalityCertificateStackComplete",
+        "ProjectedCommitDisablesByzantineCommitVote",
+        "ProjectedByzantineCommitVoteGateMatchesPrepareEvidence",
+        "ProjectedByzantineCommitVoteFinalityGateMatchesNextEvidence",
+        "ProjectedByzantineCommitVotePendingGateMatchesMissingNextEvidence",
+        "ProjectedRbcDeliverFinalityGateMatchesBufferedCommitEvidence",
+        "ProjectedRbcDeliverPendingGateMatchesMissingBufferedCommitEvidence",
+        "ProjectedCommitEvidenceMatchesVoteCounters",
+        "ProjectedVoteCountersRespectRosterBudgets",
+        "ProjectedStakeSignedMatchesVoteCounters",
+        "ProjectedNoCommitEvidenceBeforeCommit",
+        "ProjectedRbcDeliveredWithoutFinalityHasNoCommitCertificate",
+        "ProjectedRbcDeliveredWithoutFinalityWaitsForCommitEvidence",
+    ),
+    "ProjectedByzantineDirectTopCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ProjectedByzantineDirectTopExactness",
+    ),
+    "ProjectionBridgeCoversOrderedTopCorridors": (
+        "ProjectedByzantineDeliveredFirstTopExactness",
+        "ProjectedByzantineVoteFirstTopExactness",
+    ),
+    "ProjectionBridgeMatchesInterleavingCore": (
+        "RbcEvidenceShape",
+        "ProposedRoundInitializesRbc",
+        "VoteHandoffShape",
+        "CommitCertificateShape",
+        "BufferedVotesWaitForDelivery",
+        "DeliveredWithBufferedVotesCommits",
+    ),
+    "ProjectionBridgeMatchesInterleavingExactness": (
+        "ProjectedTlcByzantineDirectCommitCorridor",
+        "ProjectedCommitImpliesHonestSupport",
+        "ProjectedFinalityCertificateStackComplete",
+        "ProjectedCommitDisablesByzantineCommitVote",
+        "ProjectedByzantineCommitVoteGateMatchesPrepareEvidence",
+        "ProjectedByzantineCommitVoteFinalityGateMatchesNextEvidence",
+        "ProjectedByzantineCommitVotePendingGateMatchesMissingNextEvidence",
+        "ProjectedRbcDeliverFinalityGateMatchesBufferedCommitEvidence",
+        "ProjectedRbcDeliverPendingGateMatchesMissingBufferedCommitEvidence",
+        "ProjectedCommitEvidenceMatchesVoteCounters",
+        "ProjectedVoteCountersRespectRosterBudgets",
+        "ProjectedStakeSignedMatchesVoteCounters",
+        "ProjectedNoCommitEvidenceBeforeCommit",
+        "ProjectedRbcDeliveredWithoutFinalityHasNoCommitCertificate",
+        "ProjectedRbcDeliveredWithoutFinalityWaitsForCommitEvidence",
+        "RbcEvidenceShape",
+        "ProposedRoundInitializesRbc",
+        "VoteHandoffShape",
+        "CommitCertificateShape",
+        "BufferedVotesWaitForDelivery",
+        "DeliveredWithBufferedVotesCommits",
+    ),
+    "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ProjectionBridgeMatchesInterleavingExactness",
+    ),
+    "ProjectedCommitProgressSafetyEnvelope": (
+        "ProjectionBridgeCoversOrderedTopCorridors",
+        "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope",
+    ),
+}
+SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS = (
+    "HonestPropose",
+    "PrepareVote",
+    "HonestCommitVote",
+    "ByzantineCommitVote",
+    "RbcChunk",
+    "RbcReady",
+    "RbcDeliver",
+)
+SUMERAGI_PROJECTED_COMMIT_PROGRESS_SPEC_CONJUNCT_CONTRACTS = {
+    "ProjectedCommitProgressSpec": (
+        "Init",
+        "ProjectedCommitProgressFairness",
+    ),
+}
+SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS = (
+    (
+        SPEC_DIR / "SumeragiDirectDeliveredFirstCorridorGate.tla",
+        "DirectDeliveredFirstCorridorProgressSpec",
+        "DirectDeliveredFirstCorridorProgressFairness",
+        "[][DeliveredFirstPathNext]_vars",
+        ("DeliveredFirstPathAdvance",),
+        "direct delivered-first progress",
+    ),
+    (
+        SPEC_DIR / "SumeragiDirectVoteFirstCorridorGate.tla",
+        "DirectVoteFirstCorridorProgressSpec",
+        "DirectVoteFirstCorridorProgressFairness",
+        "[][VoteFirstPathNext]_vars",
+        ("VoteFirstPathAdvance",),
+        "direct vote-first progress",
+    ),
+    (
+        SPEC_DIR / "SumeragiDirectCommitInterleavingGate.tla",
+        "DirectCommitInterleavingProgressSpec",
+        "DirectCommitInterleavingProgressFairness",
+        "[][Next]_vars",
+        (
+            "HonestPropose",
+            "PrepareVote",
+            "CommitVote",
+            "RbcChunk",
+            "RbcReady",
+            "RbcDeliver",
+        ),
+        "direct commit interleaving progress",
+    ),
+    (
+        SPEC_DIR / "SumeragiByzantineCommitInterleavingGate.tla",
+        "ByzantineCommitInterleavingProgressSpec",
+        "ByzantineCommitInterleavingProgressFairness",
+        "[][Next]_vars",
+        (
+            "HonestPropose",
+            "PrepareVote",
+            "HonestCommitVote",
+            "ByzantineCommitVote",
+            "RbcChunk",
+            "RbcReady",
+            "RbcDeliver",
+        ),
+        "Byzantine commit interleaving progress",
+    ),
+)
+SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS = (
+    (
+        SPEC_DIR / "Sumeragi.tla",
+        "Spec",
+        "Fairness",
+        "[][Next]_vars",
+        (
+            "HonestPropose",
+            "HonestPrepareVote",
+            "HonestCommitVote",
+            "HonestNewViewVote",
+            "RbcInit",
+            "RbcChunkGood",
+            "RbcReadyGood",
+            "RbcDeliverGood",
+        ),
+        "top-level Sumeragi spec",
+    ),
+    (
+        SPEC_DIR / "Sumeragi.tla",
+        "DirectCommitSpec",
+        "DirectCommitFairness",
+        "[][DirectCommitNext]_vars",
+        (
+            "HonestPropose",
+            "HonestPrepareVote",
+            "HonestCommitVote",
+            "RbcInit",
+            "RbcChunkGood",
+            "RbcReadyGood",
+            "RbcDeliverGood",
+        ),
+        "top-level direct commit spec",
+    ),
+    (
+        SPEC_DIR / "Sumeragi.tla",
+        "ByzantineDirectCommitSpec",
+        "DirectCommitFairness",
+        "[][ByzantineDirectCommitNext]_vars",
+        (
+            "HonestPropose",
+            "HonestPrepareVote",
+            "HonestCommitVote",
+            "RbcInit",
+            "RbcChunkGood",
+            "RbcReadyGood",
+            "RbcDeliverGood",
+        ),
+        "top-level Byzantine direct commit spec",
+    ),
+    (
+        SPEC_DIR / "Sumeragi.tla",
+        "ByzantineDeliveredFirstCommitSpec",
+        "DirectDeliveredFirstCommitFairness",
+        "[][ByzantineDeliveredFirstCommitNext]_vars",
+        (
+            "HonestPropose",
+            "HonestPrepareVote",
+            "HonestCommitVote",
+            "RbcChunkGood",
+            "RbcReadyGood",
+            "RbcDeliverGood",
+        ),
+        "top-level Byzantine delivered-first commit spec",
+    ),
+    (
+        SPEC_DIR / "Sumeragi.tla",
+        "DirectDeliveredFirstCommitSpec",
+        "DirectDeliveredFirstCommitFairness",
+        "[][DirectDeliveredFirstCommitNext]_vars",
+        (
+            "HonestPropose",
+            "HonestPrepareVote",
+            "HonestCommitVote",
+            "RbcChunkGood",
+            "RbcReadyGood",
+            "RbcDeliverGood",
+        ),
+        "top-level direct delivered-first commit spec",
+    ),
+    (
+        SPEC_DIR / "Sumeragi.tla",
+        "ByzantineVoteFirstCommitSpec",
+        "DirectVoteFirstCommitFairness",
+        "[][ByzantineVoteFirstCommitNext]_vars",
+        (
+            "HonestPropose",
+            "HonestPrepareVote",
+            "HonestCommitVote",
+            "RbcChunkGood",
+            "RbcReadyGood",
+            "RbcDeliverGood",
+        ),
+        "top-level Byzantine vote-first commit spec",
+    ),
+)
+SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS = {
+    "ProjectionBridgeCoversOrderedTopCorridors": "ProjectedByzantineDirectTopExactness",
+    "ProjectionBridgeMatchesInterleavingCore": "ProjectedByzantineDirectTopExactness",
+}
+SUMERAGI_BYZANTINE_TOP_TO_PROJECTION_OPERATOR_CONTRACTS = {
+    "ByzantineDeliveredFirstTopExactness": (
+        "ProjectedByzantineDeliveredFirstTopExactness"
+    ),
+    "ByzantineDeliveredFirstTopCorrectnessEnvelope": (
+        "ProjectedByzantineDeliveredFirstTopCorrectnessEnvelope"
+    ),
+    "ByzantineVoteFirstTopExactness": "ProjectedByzantineVoteFirstTopExactness",
+    "ByzantineVoteFirstTopCorrectnessEnvelope": (
+        "ProjectedByzantineVoteFirstTopCorrectnessEnvelope"
+    ),
+    "ByzantineDirectTopExactness": "ProjectedByzantineDirectTopExactness",
+    "ByzantineDirectTopCorrectnessEnvelope": (
+        "ProjectedByzantineDirectTopCorrectnessEnvelope"
+    ),
+    "ByzantineDirectTopCoversOrderedTopCorridors": (
+        "ProjectionBridgeCoversOrderedTopCorridors"
+    ),
+}
+SUMERAGI_TOP_TO_PROJECTION_LITERAL_CONJUNCTS = {
+    "TypeInvariant": "TypeInvariant",
+}
 FAST_CI = ROOT_DIR / "ci" / "check_sumeragi_formal.sh"
 EXPECTED_FAILURE_CI = ROOT_DIR / "ci" / "check_sumeragi_formal_expected_failures.sh"
 PR_WORKFLOW = ROOT_DIR / ".github" / "workflows" / "pr.yml"
@@ -898,14 +1341,30 @@ TLC_INVOCATION_SNIPPETS = (
     '-config "$cfg_file"',
     '"$module"',
 )
-APALACHE_ONLY_PR_MODES = {"deep"}
+APALACHE_ONLY_PR_MODES = {
+    "deep",
+    "byzantine-direct-top-fast",
+    "byzantine-delivered-first-top-fast",
+    "byzantine-vote-first-top-fast",
+}
 APALACHE_ONLY_PR_MODE_README_SNIPPETS = (
     "`deep` is intentionally Apalache-only in PR CI",
-    "Every other PR baseline mode must have both a TLC runner case and README command.",
+    "`byzantine-direct-top-fast` is Apalache-only in PR CI",
+    "`byzantine-delivered-first-top-fast` is Apalache-only in PR CI",
+    "`byzantine-vote-first-top-fast` is Apalache-only in PR CI",
+    "Every non-allowlisted PR baseline mode must have both a TLC runner case and README command.",
 )
-APALACHE_TYPECHECK_ONLY_MODES = {"fast"}
+APALACHE_TYPECHECK_ONLY_MODES = {
+    "fast",
+    "byzantine-direct-top-fast",
+    "byzantine-delivered-first-top-fast",
+    "byzantine-vote-first-top-fast",
+}
 APALACHE_TYPECHECK_ONLY_README_SNIPPETS = (
     "The Apalache `fast` mode is intentionally a monolithic-module typecheck smoke.",
+    "`byzantine-direct-top-fast` is a focused top-level `Sumeragi.tla`",
+    "`byzantine-delivered-first-top-fast` is a focused top-level `Sumeragi.tla`",
+    "`byzantine-vote-first-top-fast` is a focused top-level `Sumeragi.tla`",
 )
 FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Constants and variables share a single",
@@ -922,7 +1381,8 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "top-level proof-target operators",
     "be duplicate-free, use non-reserved static module identifiers",
     "be top-level",
-    "appear before declarations and definitions",
+    "EXTENDS entries must appear before declarations and definitions",
+    "INSTANCE entries must appear before operator definitions",
     "without `WITH` substitutions",
     "Malformed `EXTENDS`/`INSTANCE` starts are rejected",
     "No-separator `EXTENDS`/`INSTANCE` starts are rejected",
@@ -930,6 +1390,13 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "No-separator named `INSTANCE` aliases are rejected",
     "INSTANCE declarations must be non-LOCAL",
     "Local TLA dependency files are followed transitively",
+    "DirectCommitProgressSafetyEnvelope",
+    "DirectDeliveredFirstProgressSafetyEnvelope",
+    "DirectVoteFirstProgressSafetyEnvelope",
+    "ByzantineCommitProgressSafetyEnvelope",
+    "compares the source/projection Byzantine mutation suffix families",
+    "top/projection Byzantine direct-commit contracts stay aligned",
+    "projection bridge interleaving exactness composes projected direct-top and source core obligations",
     "same module-header, declaration, and assumption/proof guards",
     "Assumption/proof directive starts are rejected even when indented",
     "No-separator assumption/proof directive starts are rejected even when indented",
@@ -949,6 +1416,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Directive-prefixed CFG block entries remain valid",
     "Indented no-separator supported CFG directive starts are rejected",
     "Malformed CHECK_DEADLOCK starts are rejected",
+    "temporal CFGs keep CHECK_DEADLOCK FALSE",
     "Malformed CFG constant binding starts are rejected",
     "Top-level no-separator CFG constant binding starts are rejected",
     "Indented no-separator CFG constant binding directive starts are rejected",
@@ -968,6 +1436,20 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Non-named exactness conjuncts are rejected even when mixed",
     "Named exactness predicates must not hide generic correctness",
     "Transitive named exactness predicate chains must not hide generic correctness",
+    "pins the three top-level Byzantine CFG check surfaces",
+    "top-level Byzantine CFG constants pin quorum and fault envelopes",
+    "projection progress spec composes the named fairness aggregate",
+    "source progress specs compose their named fairness aggregates",
+    "top-level Sumeragi specs compose their named fairness aggregates",
+    "temporal CFGs bind their documented behavior operators",
+    "top-level Sumeragi CFG constants pin quorum and fault envelopes",
+    'clean temporal progress CFGs bind Bug = "none"',
+    "progress mutation CFGs bind Bug to their file suffix",
+    "safety mutation CFGs bind Bug to their file suffix",
+    "quoted-string mutation CFG Bug constants match their file suffix",
+    "safety mutation CFGs bind INIT Init and NEXT Next",
+    'clean safety CFGs bind Bug = "none"',
+    "clean safety CFGs bind INIT Init and NEXT Next",
     "Transitive exactness predicate chains must not hide repeated helper conjuncts",
     "Unary-temporal exactness helper wrappers must not hide repeated helper conjuncts",
     "Unary-temporal exactness helper wrappers must not hide single-helper conjunct aliases",
@@ -1240,6 +1722,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "The correctness root composes `TypeInvariant`, `SumeragiConsensusCoreAlwaysMatchesExactness`,",
     "`SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`, and `EventuallyCommit` directly",
     "The state+temporal, exactness, and fast roots keep their documented direct conjuncts",
+    "Sumeragi_fast.cfg pins the fast correctness envelope",
     "Every direct conjunct of `SumeragiConsensusCoreStateMatchesEnvelope` must be checked",
     "as a top-level deep/TLC-fast `INVARIANT`",
     "`SumeragiConsensusCoreStateMatchesEnvelope` must keep the documented state direct conjunct contract",
@@ -1641,9 +2124,11 @@ CFG_CONSTANT_BINDING_LINE_RE = re.compile(
 CFG_NESTED_CONSTANT_BINDING_RE = re.compile(
     r"(^|\s)([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|<-)"
 )
+TLA_WF_VARS_RE = re.compile(r"\bWF_vars\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)")
 CFG_CONSTANT_DIRECTIVES = {"CONSTANT", "CONSTANTS"}
 CFG_CHECK_DIRECTIVES = {"INVARIANT", "INVARIANTS", "PROPERTY", "PROPERTIES"}
 CFG_MISC_DIRECTIVES = {"CHECK_DEADLOCK"}
+CFG_BEHAVIOR_DIRECTIVES = {"SPECIFICATION", "INIT", "NEXT"}
 CFG_SINGLE_OPERATOR_DIRECTIVES = {
     "SPECIFICATION",
     "INIT",
@@ -1665,6 +2150,406 @@ CFG_ALLOWED_DIRECTIVE_PREFIXES = tuple(
 )
 CFG_NON_PROOF_OPERATOR_REFERENCES = {"vars"}
 TLC_SPECIFIC_MUTATION_CFG_PREFIXES = ("commit-roots-bug-",)
+SUMERAGI_TOP_LEVEL_CFG_REQUIRED_BEHAVIORS = (
+    (
+        SUMERAGI_FAST_CFG,
+        (("INIT", "Init"), ("NEXT", "Next")),
+        "top-level fast coverage",
+    ),
+    (
+        SUMERAGI_DEEP_CFG,
+        (("INIT", "Init"), ("NEXT", "Next")),
+        "top-level deep coverage",
+    ),
+    (
+        SUMERAGI_TLC_FAST_CFG,
+        (("SPECIFICATION", "Spec"),),
+        "top-level TLC fast coverage",
+    ),
+)
+SUMERAGI_TOP_LEVEL_CFG_REQUIRED_DEADLOCK_POLICIES = (
+    (
+        SUMERAGI_TLC_FAST_CFG,
+        "FALSE",
+        "top-level TLC fast coverage",
+    ),
+)
+SUMERAGI_FAST_CONSTANT_VALUES = (
+    ("N", "4"),
+    ("F", "1"),
+    ("CommitQuorum", "3"),
+    ("ViewQuorum", "3"),
+    ("StakeQuorum", "8"),
+    ("StakePerHonestVote", "3"),
+    ("StakePerByzVote", "1"),
+    ("MaxView", "4"),
+    ("MaxChunks", "2"),
+)
+SUMERAGI_DEEP_CONSTANT_VALUES = (
+    ("N", "7"),
+    ("F", "2"),
+    ("CommitQuorum", "5"),
+    ("ViewQuorum", "5"),
+    ("StakeQuorum", "16"),
+    ("StakePerHonestVote", "3"),
+    ("StakePerByzVote", "1"),
+    ("MaxView", "5"),
+    ("MaxChunks", "2"),
+)
+SUMERAGI_TOP_LEVEL_CFG_REQUIRED_CONSTANT_VALUES = (
+    (
+        SUMERAGI_FAST_CFG,
+        SUMERAGI_FAST_CONSTANT_VALUES,
+        "top-level fast coverage",
+    ),
+    (
+        SUMERAGI_DEEP_CFG,
+        SUMERAGI_DEEP_CONSTANT_VALUES,
+        "top-level deep coverage",
+    ),
+    (
+        SUMERAGI_TLC_FAST_CFG,
+        SUMERAGI_FAST_CONSTANT_VALUES,
+        "top-level TLC fast coverage",
+    ),
+)
+SUMERAGI_FAST_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("SumeragiConsensusCoreFastCorrectnessEnvelope", "INVARIANT"),
+)
+BYZANTINE_DELIVERED_FIRST_TOP_CFG = (
+    SPEC_DIR / "Sumeragi_byzantine_delivered_first_top_fast.cfg"
+)
+BYZANTINE_VOTE_FIRST_TOP_CFG = (
+    SPEC_DIR / "Sumeragi_byzantine_vote_first_top_fast.cfg"
+)
+BYZANTINE_DIRECT_TOP_CFG = SPEC_DIR / "Sumeragi_byzantine_direct_top_fast.cfg"
+BYZANTINE_TOP_CFG_REQUIRED_CHECKS = (
+    (
+        BYZANTINE_DELIVERED_FIRST_TOP_CFG,
+        (
+            ("TypeInvariant", "INVARIANT"),
+            ("TlcByzantineDirectCommitCorridor", "INVARIANT"),
+            ("ByzantineDeliveredFirstTopCorrectnessEnvelope", "INVARIANT"),
+        ),
+        "Byzantine delivered-first top coverage",
+    ),
+    (
+        BYZANTINE_VOTE_FIRST_TOP_CFG,
+        (
+            ("TypeInvariant", "INVARIANT"),
+            ("TlcByzantineDirectCommitCorridor", "INVARIANT"),
+            ("ByzantineVoteFirstTopCorrectnessEnvelope", "INVARIANT"),
+        ),
+        "Byzantine vote-first top coverage",
+    ),
+    (
+        BYZANTINE_DIRECT_TOP_CFG,
+        (
+            ("TypeInvariant", "INVARIANT"),
+            ("TlcByzantineDirectCommitCorridor", "INVARIANT"),
+            ("ByzantineDirectTopCorrectnessEnvelope", "INVARIANT"),
+            ("ByzantineDirectTopCoversOrderedTopCorridors", "INVARIANT"),
+        ),
+        "Byzantine direct top coverage",
+    ),
+)
+BYZANTINE_TOP_CFG_REQUIRED_BEHAVIORS = (
+    (
+        BYZANTINE_DELIVERED_FIRST_TOP_CFG,
+        (("INIT", "Init"), ("NEXT", "ByzantineDeliveredFirstCommitNext")),
+        "Byzantine delivered-first top coverage",
+    ),
+    (
+        BYZANTINE_VOTE_FIRST_TOP_CFG,
+        (("INIT", "Init"), ("NEXT", "ByzantineVoteFirstCommitNext")),
+        "Byzantine vote-first top coverage",
+    ),
+    (
+        BYZANTINE_DIRECT_TOP_CFG,
+        (("INIT", "Init"), ("NEXT", "ByzantineDirectCommitNext")),
+        "Byzantine direct top coverage",
+    ),
+)
+BYZANTINE_TOP_CFG_REQUIRED_BEHAVIOR_BY_NAME = {
+    cfg_path.name: (required_behavior, coverage_label)
+    for cfg_path, required_behavior, coverage_label in (
+        BYZANTINE_TOP_CFG_REQUIRED_BEHAVIORS
+    )
+}
+BYZANTINE_TOP_CFG_REQUIRED_CONSTANT_VALUES = (
+    (
+        BYZANTINE_DELIVERED_FIRST_TOP_CFG,
+        SUMERAGI_FAST_CONSTANT_VALUES,
+        "Byzantine delivered-first top coverage",
+    ),
+    (
+        BYZANTINE_VOTE_FIRST_TOP_CFG,
+        SUMERAGI_FAST_CONSTANT_VALUES,
+        "Byzantine vote-first top coverage",
+    ),
+    (
+        BYZANTINE_DIRECT_TOP_CFG,
+        SUMERAGI_FAST_CONSTANT_VALUES,
+        "Byzantine direct top coverage",
+    ),
+)
+BYZANTINE_TOP_CFG_REQUIRED_CONSTANT_VALUES_BY_NAME = {
+    cfg_path.name: (required_values, coverage_label)
+    for cfg_path, required_values, coverage_label in (
+        BYZANTINE_TOP_CFG_REQUIRED_CONSTANT_VALUES
+    )
+}
+DIRECT_DELIVERED_FIRST_MUTATION_CFG_GLOB = (
+    "SumeragiDirectDeliveredFirstCorridorGate_bug_*.cfg"
+)
+DIRECT_DELIVERED_FIRST_MUTATION_STEM_PREFIX = (
+    "SumeragiDirectDeliveredFirstCorridorGate_bug_"
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_CFG_GLOB = (
+    "SumeragiDirectDeliveredFirstCorridorGate_progress_bug_*.cfg"
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX = (
+    "SumeragiDirectDeliveredFirstCorridorGate_progress_bug_"
+)
+DIRECT_DELIVERED_FIRST_FAST_CFG = (
+    SPEC_DIR / "SumeragiDirectDeliveredFirstCorridorGate_fast.cfg"
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_CFG = (
+    SPEC_DIR / "SumeragiDirectDeliveredFirstCorridorGate_progress.cfg"
+)
+DIRECT_DELIVERED_FIRST_FAST_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectDeliveredFirstCorridorExactness", "INVARIANT"),
+    ("DirectDeliveredFirstCorridorCorrectnessEnvelope", "INVARIANT"),
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectDeliveredFirstProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualDirectDeliveredFirstFinalityStack", "PROPERTY"),
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectDeliveredFirstProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualDirectDeliveredFirstFinalityStack", "PROPERTY"),
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_CFG_REQUIRED_BEHAVIOR = (
+    ("SPECIFICATION", "DirectDeliveredFirstCorridorProgressSpec"),
+)
+DIRECT_VOTE_FIRST_MUTATION_CFG_GLOB = (
+    "SumeragiDirectVoteFirstCorridorGate_bug_*.cfg"
+)
+DIRECT_VOTE_FIRST_MUTATION_STEM_PREFIX = (
+    "SumeragiDirectVoteFirstCorridorGate_bug_"
+)
+DIRECT_VOTE_FIRST_PROGRESS_MUTATION_CFG_GLOB = (
+    "SumeragiDirectVoteFirstCorridorGate_progress_bug_*.cfg"
+)
+DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX = (
+    "SumeragiDirectVoteFirstCorridorGate_progress_bug_"
+)
+DIRECT_VOTE_FIRST_FAST_CFG = (
+    SPEC_DIR / "SumeragiDirectVoteFirstCorridorGate_fast.cfg"
+)
+DIRECT_VOTE_FIRST_PROGRESS_CFG = (
+    SPEC_DIR / "SumeragiDirectVoteFirstCorridorGate_progress.cfg"
+)
+DIRECT_VOTE_FIRST_FAST_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectVoteFirstCorridorExactness", "INVARIANT"),
+    ("DirectVoteFirstCorridorCorrectnessEnvelope", "INVARIANT"),
+)
+DIRECT_VOTE_FIRST_PROGRESS_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectVoteFirstProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualDirectVoteFirstFinalityStack", "PROPERTY"),
+)
+DIRECT_VOTE_FIRST_PROGRESS_MUTATION_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectVoteFirstProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualDirectVoteFirstFinalityStack", "PROPERTY"),
+)
+DIRECT_VOTE_FIRST_PROGRESS_CFG_REQUIRED_BEHAVIOR = (
+    ("SPECIFICATION", "DirectVoteFirstCorridorProgressSpec"),
+)
+DIRECT_INTERLEAVING_MUTATION_CFG_GLOB = (
+    "SumeragiDirectCommitInterleavingGate_bug_*.cfg"
+)
+DIRECT_INTERLEAVING_MUTATION_STEM_PREFIX = (
+    "SumeragiDirectCommitInterleavingGate_bug_"
+)
+DIRECT_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB = (
+    "SumeragiDirectCommitInterleavingGate_progress_bug_*.cfg"
+)
+DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX = (
+    "SumeragiDirectCommitInterleavingGate_progress_bug_"
+)
+DIRECT_INTERLEAVING_FAST_CFG = (
+    SPEC_DIR / "SumeragiDirectCommitInterleavingGate_fast.cfg"
+)
+DIRECT_INTERLEAVING_PROGRESS_CFG = (
+    SPEC_DIR / "SumeragiDirectCommitInterleavingGate_progress.cfg"
+)
+DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectCommitInterleavingExactness", "INVARIANT"),
+    ("DirectCommitInterleavingCorrectnessEnvelope", "INVARIANT"),
+)
+DIRECT_INTERLEAVING_PROGRESS_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectCommitProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualDirectCommitFinalityStack", "PROPERTY"),
+)
+DIRECT_INTERLEAVING_PROGRESS_MUTATION_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectCommitProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualDirectCommitFinalityStack", "PROPERTY"),
+)
+DIRECT_INTERLEAVING_PROGRESS_CFG_REQUIRED_BEHAVIOR = (
+    ("SPECIFICATION", "DirectCommitInterleavingProgressSpec"),
+)
+BYZANTINE_INTERLEAVING_MUTATION_CFG_GLOB = (
+    "SumeragiByzantineCommitInterleavingGate_bug_*.cfg"
+)
+BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB = (
+    "SumeragiByzantineCommitInterleavingGate_progress_bug_*.cfg"
+)
+BYZANTINE_INTERLEAVING_MUTATION_STEM_PREFIX = (
+    "SumeragiByzantineCommitInterleavingGate_bug_"
+)
+BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX = (
+    "SumeragiByzantineCommitInterleavingGate_progress_bug_"
+)
+BYZANTINE_INTERLEAVING_FAST_CFG = (
+    SPEC_DIR / "SumeragiByzantineCommitInterleavingGate_fast.cfg"
+)
+BYZANTINE_INTERLEAVING_PROGRESS_CFG = (
+    SPEC_DIR / "SumeragiByzantineCommitInterleavingGate_progress.cfg"
+)
+BYZANTINE_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ByzantineCommitInterleavingExactness", "INVARIANT"),
+    ("ByzantineCommitInterleavingCorrectnessEnvelope", "INVARIANT"),
+)
+BYZANTINE_INTERLEAVING_PROGRESS_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ByzantineCommitProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualByzantineCommitFinalityStack", "PROPERTY"),
+)
+BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ByzantineCommitProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualByzantineCommitFinalityStack", "PROPERTY"),
+)
+BYZANTINE_INTERLEAVING_PROGRESS_CFG_REQUIRED_BEHAVIOR = (
+    ("SPECIFICATION", "ByzantineCommitInterleavingProgressSpec"),
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset()
+DIRECT_VOTE_FIRST_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset(
+    {
+        "commit_before_delivery",
+        "commit_evidence_before_delivery",
+        "phase_committed_before_delivery",
+    }
+)
+DIRECT_INTERLEAVING_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset(
+    {
+        "commit_before_delivery",
+        "commit_evidence_before_delivery",
+        "commit_quorum_under_counted",
+        "prepare_quorum_under_counted",
+        "stake_not_recorded",
+    }
+)
+SOURCE_SAFETY_MUTATION_CFG_REQUIRED_CHECKS = (
+    (
+        DIRECT_DELIVERED_FIRST_MUTATION_CFG_GLOB,
+        DIRECT_DELIVERED_FIRST_FAST_CFG_REQUIRED_CHECKS,
+        "direct delivered-first safety mutation coverage",
+    ),
+    (
+        DIRECT_VOTE_FIRST_MUTATION_CFG_GLOB,
+        DIRECT_VOTE_FIRST_FAST_CFG_REQUIRED_CHECKS,
+        "direct vote-first safety mutation coverage",
+    ),
+    (
+        DIRECT_INTERLEAVING_MUTATION_CFG_GLOB,
+        DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+        "direct interleaving safety mutation coverage",
+    ),
+    (
+        BYZANTINE_INTERLEAVING_MUTATION_CFG_GLOB,
+        BYZANTINE_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+        "Byzantine interleaving safety mutation coverage",
+    ),
+)
+SAFETY_MUTATION_CFG_REQUIRED_BEHAVIOR = (
+    ("INIT", "Init"),
+    ("NEXT", "Next"),
+)
+CLEAN_SAFETY_CFG_REQUIRED_BEHAVIOR = (
+    ("INIT", "Init"),
+    ("NEXT", "Next"),
+)
+CLEAN_SAFETY_BUG_CONSTANT_VALUE = '"none"'
+PROJECTION_FAST_CFG = SPEC_DIR / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+PROJECTION_PROGRESS_CFG = (
+    SPEC_DIR / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+)
+PROJECTION_FAST_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ProjectedByzantineDeliveredFirstTopExactness", "INVARIANT"),
+    ("ProjectedByzantineDeliveredFirstTopCorrectnessEnvelope", "INVARIANT"),
+    ("ProjectedByzantineVoteFirstTopExactness", "INVARIANT"),
+    ("ProjectedByzantineVoteFirstTopCorrectnessEnvelope", "INVARIANT"),
+    ("ProjectedByzantineDirectTopExactness", "INVARIANT"),
+    ("ProjectedByzantineDirectTopCorrectnessEnvelope", "INVARIANT"),
+    ("ProjectionBridgeCoversOrderedTopCorridors", "INVARIANT"),
+    ("ProjectionBridgeMatchesInterleavingCore", "INVARIANT"),
+    ("ProjectionBridgeMatchesInterleavingExactness", "INVARIANT"),
+    ("ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope", "INVARIANT"),
+)
+PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ProjectedCommitProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualProjectedCommitFinalityStack", "PROPERTY"),
+)
+PROJECTION_MUTATION_CFG_GLOB = "SumeragiByzantineCommitProjectionGate_bug_*.cfg"
+PROJECTION_MUTATION_STEM_PREFIX = "SumeragiByzantineCommitProjectionGate_bug_"
+PROJECTION_MUTATION_BRIDGE_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ProjectedByzantineDirectTopExactness", "INVARIANT"),
+    ("ProjectedByzantineDirectTopCorrectnessEnvelope", "INVARIANT"),
+    ("ProjectionBridgeCoversOrderedTopCorridors", "INVARIANT"),
+    ("ProjectionBridgeMatchesInterleavingCore", "INVARIANT"),
+    ("ProjectionBridgeMatchesInterleavingExactness", "INVARIANT"),
+    ("ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope", "INVARIANT"),
+)
+PROJECTION_PROGRESS_MUTATION_CFG_GLOB = (
+    "SumeragiByzantineCommitProjectionGate_progress_bug_*.cfg"
+)
+PROJECTION_PROGRESS_MUTATION_STEM_PREFIX = (
+    "SumeragiByzantineCommitProjectionGate_progress_bug_"
+)
+PROJECTION_PROGRESS_MUTATION_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ProjectedCommitProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualProjectedCommitFinalityStack", "PROPERTY"),
+)
+PROJECTION_PROGRESS_CFG_REQUIRED_BEHAVIOR = (
+    ("SPECIFICATION", "ProjectedCommitProgressSpec"),
+)
+CLEAN_PROGRESS_BUG_CONSTANT_VALUE = '"none"'
+BYZANTINE_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset(
+    {
+        "byzantine_stake_over_counted",
+        "byzantine_vote_over_budget",
+        "commit_before_delivery",
+        "commit_evidence_before_delivery",
+        "honest_stake_not_recorded",
+        "prepare_quorum_under_counted",
+    }
+)
 FORMAL_FILE_SUFFIXES = {".cfg", ".tla"}
 TLA_MODULE_VALIDATION_MODE_MARKER = "__SUMERAGI_FORMAL_MODE__"
 
@@ -2867,6 +3752,351 @@ def cfg_check_operator_kinds(path: Path) -> tuple[dict[str, str], list[str]]:
     return operator_kinds, errors
 
 
+def cfg_behavior_operator_references(
+    path: Path,
+) -> tuple[dict[str, list[tuple[int, str]]], list[str]]:
+    """Return behavior operators referenced by a CFG file."""
+    references, errors = cfg_operator_references(path)
+    behavior_entries: dict[str, list[tuple[int, str]]] = {
+        directive: [] for directive in CFG_BEHAVIOR_DIRECTIVES
+    }
+    for line_number, directive, operator in references:
+        if directive in CFG_BEHAVIOR_DIRECTIVES:
+            behavior_entries[directive].append((line_number, operator))
+    return behavior_entries, errors
+
+
+def cfg_behavior_contract_label(required_behavior: tuple[tuple[str, str], ...]) -> str:
+    """Return a compact human-readable behavior contract label."""
+    expected = dict(required_behavior)
+    specification = expected.get("SPECIFICATION")
+    init = expected.get("INIT")
+    next_operator = expected.get("NEXT")
+    if specification is not None:
+        return f"SPECIFICATION {specification}"
+    if init is not None and next_operator is not None:
+        return f"INIT {init} and NEXT {next_operator}"
+    return " and ".join(
+        f"{directive} {operator}" for directive, operator in required_behavior
+    )
+
+
+def cfg_required_behavior_contract_errors(
+    cfg_path: Path,
+    required_behavior: tuple[tuple[str, str], ...],
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a CFG file is not bound to the expected behavior."""
+
+    if not cfg_path.exists():
+        return [
+            f"{display_path(cfg_path)} is missing required {coverage_label} behavior"
+        ]
+
+    behavior_entries, cfg_errors = cfg_behavior_operator_references(cfg_path)
+    if cfg_errors:
+        return [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
+
+    required = dict(required_behavior)
+    required_directives = set(required)
+    expected_label = cfg_behavior_contract_label(required_behavior)
+    errors: list[str] = []
+
+    for directive in ("SPECIFICATION", "INIT", "NEXT"):
+        entries = behavior_entries[directive]
+        expected_operator = required.get(directive)
+        if expected_operator is None:
+            for line_number, operator in entries:
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} binds unexpected "
+                    f"{directive} {operator}; expected {expected_label} for "
+                    f"{coverage_label}"
+                )
+            continue
+
+        if not entries:
+            errors.append(
+                f"{display_path(cfg_path)} must bind {directive} "
+                f"{expected_operator} for {coverage_label}"
+            )
+            continue
+        if len(entries) > 1:
+            first_line = entries[0][0]
+            for line_number, operator in entries[1:]:
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} repeats "
+                    f"{directive} behavior binding {operator} first declared "
+                    f"at line {first_line}; expected {expected_label} for "
+                    f"{coverage_label}"
+                )
+        for line_number, operator in entries:
+            if operator == expected_operator:
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds {directive} "
+                f"{operator}, expected {expected_operator} for {coverage_label}"
+            )
+
+    if required_directives == {"SPECIFICATION"}:
+        return errors
+    if required_directives == {"INIT", "NEXT"}:
+        return errors
+    errors.append(
+        f"{display_path(cfg_path)} has unsupported CFG behavior contract "
+        f"{expected_label} for {coverage_label}"
+    )
+    return errors
+
+
+def cfg_check_deadlock_entries(path: Path) -> tuple[list[tuple[int, str]], list[str]]:
+    """Return valid top-level CHECK_DEADLOCK entries from a CFG file."""
+
+    directive_errors = cfg_directive_errors(path)
+    if directive_errors:
+        return [], directive_errors
+
+    entries: list[tuple[int, str]] = []
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        stripped = tla_line_without_comment(line).strip()
+        if not stripped or line[:1].isspace():
+            continue
+        parts = stripped.split()
+        if parts[0] == "CHECK_DEADLOCK":
+            entries.append((line_number, parts[1]))
+    return entries, []
+
+
+def cfg_required_check_deadlock_contract_errors(
+    cfg_path: Path,
+    expected_value: str,
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a CFG file does not pin CHECK_DEADLOCK."""
+
+    if not cfg_path.exists():
+        return [
+            f"{display_path(cfg_path)} is missing required {coverage_label} "
+            "deadlock policy"
+        ]
+
+    entries, cfg_errors = cfg_check_deadlock_entries(cfg_path)
+    if cfg_errors:
+        return [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
+
+    if not entries:
+        return [
+            f"{display_path(cfg_path)} must set CHECK_DEADLOCK {expected_value} "
+            f"for {coverage_label}"
+        ]
+
+    errors: list[str] = []
+    for line_number, value in entries:
+        if value == expected_value:
+            continue
+        errors.append(
+            f"{display_path(cfg_path)}:{line_number} sets CHECK_DEADLOCK "
+            f"{value}, expected {expected_value} for {coverage_label}"
+        )
+    return errors
+
+
+def cfg_required_constant_value_contract_errors(
+    cfg_path: Path,
+    constant: str,
+    expected_value: str,
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a CFG file does not pin a constant binding value."""
+
+    if not cfg_path.exists():
+        return [
+            f"{display_path(cfg_path)} is missing required {coverage_label} "
+            f"constant binding {constant}"
+        ]
+
+    bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+    if parse_errors:
+        return parse_errors
+
+    entries = [
+        (line_number, value)
+        for line_number, name, value in bindings
+        if name == constant
+    ]
+    if not entries:
+        return [
+            f"{display_path(cfg_path)} must bind constant {constant} = "
+            f"{expected_value} for {coverage_label}"
+        ]
+
+    errors: list[str] = []
+    for line_number, value in entries:
+        if value == expected_value:
+            continue
+        errors.append(
+            f"{display_path(cfg_path)}:{line_number} binds constant "
+            f"{constant} = {value}, expected {expected_value} for "
+            f"{coverage_label}"
+        )
+    return errors
+
+
+def cfg_required_constant_values_contract_errors(
+    cfg_path: Path,
+    required_values: tuple[tuple[str, str], ...],
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when CFG constants do not match required values."""
+
+    errors: list[str] = []
+    for constant, expected_value in required_values:
+        errors.extend(
+            cfg_required_constant_value_contract_errors(
+                cfg_path,
+                constant,
+                expected_value,
+                coverage_label,
+            )
+        )
+    return errors
+
+
+def cfg_required_bug_suffix_constant_errors(
+    cfg_path: Path,
+    stem_prefix: str,
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a mutation CFG Bug constant drifts from its suffix."""
+
+    stem = cfg_path.stem
+    if not stem.startswith(stem_prefix):
+        return [
+            f"{display_path(cfg_path)} must use stem prefix {stem_prefix} "
+            f"for {coverage_label}"
+        ]
+    expected_value = f'"{stem[len(stem_prefix):]}"'
+    return cfg_required_constant_value_contract_errors(
+        cfg_path,
+        "Bug",
+        expected_value,
+        coverage_label,
+    )
+
+
+def cfg_required_inferred_bug_suffix_constant_errors(
+    cfg_path: Path,
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a mutation CFG Bug constant does not match its suffix."""
+
+    marker = "_bug_"
+    stem = cfg_path.stem
+    marker_index = stem.find(marker)
+    if marker_index == -1:
+        return [
+            f"{display_path(cfg_path)} must include {marker} in its stem for "
+            f"{coverage_label}"
+        ]
+    stem_prefix = stem[: marker_index + len(marker)]
+    return cfg_required_bug_suffix_constant_errors(
+        cfg_path,
+        stem_prefix,
+        coverage_label,
+    )
+
+
+def quoted_bug_suffix_constant_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when quoted Bug constants drift from mutation CFG suffixes."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        expected_value = stem.split("_bug_", 1)[1]
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        for line_number, constant, value in bindings:
+            if constant != "Bug":
+                continue
+            if not (value.startswith('"') and value.endswith('"')):
+                continue
+            actual_value = value.strip('"')
+            if actual_value == expected_value:
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds quoted "
+                f'Bug = {value}, expected "{expected_value}" from mutation '
+                "file suffix"
+            )
+    return errors
+
+
+def top_level_cfg_behavior_errors(
+    cfg_contracts: tuple[
+        tuple[Path, tuple[tuple[str, str], ...], str],
+        ...,
+    ] = SUMERAGI_TOP_LEVEL_CFG_REQUIRED_BEHAVIORS,
+) -> list[str]:
+    """Return errors if root Sumeragi CFG behavior bindings drift."""
+
+    errors: list[str] = []
+    for cfg_path, required_behavior, coverage_label in cfg_contracts:
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                required_behavior,
+                coverage_label,
+            )
+        )
+    return errors
+
+
+def top_level_cfg_deadlock_errors(
+    cfg_contracts: tuple[
+        tuple[Path, str, str],
+        ...,
+    ] = SUMERAGI_TOP_LEVEL_CFG_REQUIRED_DEADLOCK_POLICIES,
+) -> list[str]:
+    """Return errors if root Sumeragi CFG deadlock policy drifts."""
+
+    errors: list[str] = []
+    for cfg_path, expected_value, coverage_label in cfg_contracts:
+        errors.extend(
+            cfg_required_check_deadlock_contract_errors(
+                cfg_path,
+                expected_value,
+                coverage_label,
+            )
+        )
+    return errors
+
+
+def top_level_cfg_constant_errors(
+    cfg_contracts: tuple[
+        tuple[Path, tuple[tuple[str, str], ...], str],
+        ...,
+    ] = SUMERAGI_TOP_LEVEL_CFG_REQUIRED_CONSTANT_VALUES,
+) -> list[str]:
+    """Return errors if root Sumeragi CFG model constants drift."""
+
+    errors: list[str] = []
+    for cfg_path, required_values, coverage_label in cfg_contracts:
+        errors.extend(
+            cfg_required_constant_values_contract_errors(
+                cfg_path,
+                required_values,
+                coverage_label,
+            )
+        )
+    return errors
+
+
 def top_level_cfg_check_parity_errors(
     deep_cfg: Path = SUMERAGI_DEEP_CFG,
     tlc_fast_cfg: Path = SUMERAGI_TLC_FAST_CFG,
@@ -3926,6 +5156,815 @@ def rbc_live_evidence_causality_envelope_conjunct_contract_errors(
     )
 
 
+def implication_antecedent_contract_errors(
+    module_path: Path,
+    contracts: dict[str, str],
+) -> list[str]:
+    """Return errors for proof operators that must keep a top-level implication."""
+
+    if not module_path.exists():
+        return []
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    errors: list[str] = []
+    for operator, expected_antecedent in contracts.items():
+        definition = definitions.get(operator)
+        if definition is None:
+            continue
+        definition_line, body = definition
+        operands = tla_top_level_implication_operands(body)
+        if len(operands) != 2:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{operator}, but it must keep a top-level implication guarded "
+                f"by {expected_antecedent}"
+            )
+            continue
+        antecedent = " ".join(operands[0].split())
+        if antecedent != expected_antecedent:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{operator}, but its implication antecedent is {antecedent}; "
+                f"expected {expected_antecedent}"
+            )
+    return errors
+
+
+def byzantine_top_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for top-level Byzantine corridor aggregate proof drift."""
+
+    errors = consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS,
+        root_kind="top-level Byzantine direct-commit aggregate",
+        zero_arity_requirement=(
+            "top-level Byzantine direct-commit aggregate operators must be "
+            "zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each top-level Byzantine direct-commit obligation must be counted "
+            "once"
+        ),
+        unexpected_requirement=(
+            "keep top-level Byzantine direct-commit aggregate proof operators "
+            "on the documented conjunct contract"
+        ),
+    )
+    errors.extend(
+        implication_antecedent_contract_errors(
+            module_path,
+            SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS,
+        )
+    )
+    return errors
+
+
+def projected_byzantine_top_conjunct(conjunct: str) -> str:
+    """Return the projected counterpart of a top-level Byzantine obligation."""
+
+    return SUMERAGI_TOP_TO_PROJECTION_LITERAL_CONJUNCTS.get(
+        conjunct,
+        f"Projected{conjunct}",
+    )
+
+
+def byzantine_top_projection_contract_alignment_errors(
+    top_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS,
+    projection_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
+    operator_map: dict[
+        str,
+        str,
+    ] = SUMERAGI_BYZANTINE_TOP_TO_PROJECTION_OPERATOR_CONTRACTS,
+    top_implication_contracts: dict[
+        str,
+        str,
+    ] = SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS,
+    projection_implication_contracts: dict[
+        str,
+        str,
+    ] = SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS,
+) -> list[str]:
+    """Return errors if projection top contracts drift from central top contracts."""
+
+    errors: list[str] = []
+    for top_operator, projected_operator in operator_map.items():
+        top_conjuncts = top_contracts.get(top_operator)
+        if top_conjuncts is None:
+            errors.append(
+                "Byzantine top/projection alignment references missing top "
+                f"contract {top_operator}"
+            )
+            continue
+        projected_conjuncts = projection_contracts.get(projected_operator)
+        if projected_conjuncts is None:
+            errors.append(
+                "Byzantine top/projection alignment references missing "
+                f"projection contract {projected_operator}"
+            )
+            continue
+
+        expected_projected_conjuncts = tuple(
+            projected_byzantine_top_conjunct(conjunct)
+            for conjunct in top_conjuncts
+        )
+        expected_projected_set = set(expected_projected_conjuncts)
+        projected_set = set(projected_conjuncts)
+        missing_conjuncts = [
+            conjunct
+            for conjunct in expected_projected_conjuncts
+            if conjunct not in projected_set
+        ]
+        if missing_conjuncts:
+            errors.append(
+                f"{projected_operator} must mirror {top_operator} projected "
+                "conjunct contract; missing projected conjunct(s) "
+                f"{', '.join(missing_conjuncts)}"
+            )
+
+        unexpected_conjuncts = [
+            conjunct
+            for conjunct in projected_conjuncts
+            if conjunct not in expected_projected_set
+        ]
+        if unexpected_conjuncts:
+            errors.append(
+                f"{projected_operator} must mirror {top_operator} projected "
+                "conjunct contract; unexpected projected conjunct(s) "
+                f"{', '.join(unexpected_conjuncts)}"
+            )
+
+    for top_operator, top_antecedent in top_implication_contracts.items():
+        projected_operator = operator_map.get(top_operator)
+        if projected_operator is None:
+            errors.append(
+                "Byzantine top/projection alignment cannot map implication "
+                f"operator {top_operator}"
+            )
+            continue
+        expected_antecedent = projected_byzantine_top_conjunct(top_antecedent)
+        actual_antecedent = projection_implication_contracts.get(projected_operator)
+        if actual_antecedent != expected_antecedent:
+            actual = actual_antecedent or "<missing>"
+            errors.append(
+                f"{projected_operator} implication antecedent must mirror "
+                f"{top_operator}; expected {expected_antecedent}, found {actual}"
+            )
+
+    return errors
+
+
+def byzantine_top_corridor_contract_alignment_errors(
+    top_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS,
+    common_conjuncts: tuple[str, ...] = SUMERAGI_BYZANTINE_TOP_COMMON_CONJUNCTS,
+    wait_conjuncts: tuple[str, ...] = SUMERAGI_BYZANTINE_TOP_WAIT_CONJUNCTS,
+    delivered_operator: str = "ByzantineDeliveredFirstTopExactness",
+    vote_operator: str = "ByzantineVoteFirstTopExactness",
+    direct_operator: str = "ByzantineDirectTopExactness",
+) -> list[str]:
+    """Return errors if top-level Byzantine corridor contracts drift internally."""
+
+    expected_contracts = {
+        delivered_operator: common_conjuncts,
+        vote_operator: (*common_conjuncts, *wait_conjuncts),
+        direct_operator: (*common_conjuncts, *wait_conjuncts),
+    }
+    errors: list[str] = []
+    for operator, expected_conjuncts in expected_contracts.items():
+        actual_conjuncts = top_contracts.get(operator)
+        if actual_conjuncts is None:
+            errors.append(
+                "Byzantine top corridor alignment references missing "
+                f"contract {operator}"
+            )
+            continue
+
+        expected_set = set(expected_conjuncts)
+        actual_set = set(actual_conjuncts)
+        missing_conjuncts = [
+            conjunct for conjunct in expected_conjuncts if conjunct not in actual_set
+        ]
+        if missing_conjuncts:
+            errors.append(
+                f"{operator} must keep the Byzantine top corridor contract; "
+                f"missing conjunct(s) {', '.join(missing_conjuncts)}"
+            )
+
+        unexpected_conjuncts = [
+            conjunct for conjunct in actual_conjuncts if conjunct not in expected_set
+        ]
+        if unexpected_conjuncts:
+            errors.append(
+                f"{operator} must keep the Byzantine top corridor contract; "
+                f"unexpected conjunct(s) {', '.join(unexpected_conjuncts)}"
+            )
+
+    return errors
+
+
+def projection_bridge_interleaving_contract_alignment_errors(
+    projection_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
+    top_operator: str = "ProjectedByzantineDirectTopExactness",
+    core_operator: str = "ProjectionBridgeMatchesInterleavingCore",
+    bridge_operator: str = "ProjectionBridgeMatchesInterleavingExactness",
+) -> list[str]:
+    """Return errors if the full projection bridge drifts from its components."""
+
+    errors: list[str] = []
+    missing_inputs = [
+        operator
+        for operator in (top_operator, core_operator, bridge_operator)
+        if operator not in projection_contracts
+    ]
+    if missing_inputs:
+        errors.append(
+            "projection bridge interleaving alignment references missing "
+            f"contract(s) {', '.join(missing_inputs)}"
+        )
+        return errors
+
+    expected_conjuncts = (
+        *projection_contracts[top_operator],
+        *projection_contracts[core_operator],
+    )
+    expected_set = set(expected_conjuncts)
+    bridge_conjuncts = projection_contracts[bridge_operator]
+    bridge_set = set(bridge_conjuncts)
+
+    missing_conjuncts = [
+        conjunct for conjunct in expected_conjuncts if conjunct not in bridge_set
+    ]
+    if missing_conjuncts:
+        errors.append(
+            f"{bridge_operator} must compose {top_operator} and "
+            f"{core_operator}; missing conjunct(s) {', '.join(missing_conjuncts)}"
+        )
+
+    unexpected_conjuncts = [
+        conjunct for conjunct in bridge_conjuncts if conjunct not in expected_set
+    ]
+    if unexpected_conjuncts:
+        errors.append(
+            f"{bridge_operator} must compose {top_operator} and "
+            f"{core_operator}; unexpected conjunct(s) "
+            f"{', '.join(unexpected_conjuncts)}"
+        )
+
+    return errors
+
+
+def source_progress_safety_contract_alignment_errors(
+    alignment_contracts: tuple[
+        tuple[str, dict[str, tuple[str, ...]], str, tuple[str, ...]],
+        ...,
+    ] = SOURCE_PROGRESS_SAFETY_ENVELOPE_ALIGNMENT_CONTRACTS,
+) -> list[str]:
+    """Return errors if source progress safety envelopes drift from exactness."""
+
+    errors: list[str] = []
+    for (
+        family,
+        conjunct_contracts,
+        envelope_operator,
+        expected_components,
+    ) in alignment_contracts:
+        envelope_conjuncts = conjunct_contracts.get(envelope_operator)
+        if envelope_conjuncts is None:
+            errors.append(
+                f"{family} progress safety alignment references missing "
+                f"contract {envelope_operator}"
+            )
+            continue
+
+        expected_set = set(expected_components)
+        envelope_set = set(envelope_conjuncts)
+        component_summary = " and ".join(expected_components)
+
+        missing_conjuncts = [
+            conjunct for conjunct in expected_components if conjunct not in envelope_set
+        ]
+        if missing_conjuncts:
+            errors.append(
+                f"{envelope_operator} must compose {component_summary} for "
+                f"{family} progress safety; missing conjunct(s) "
+                f"{', '.join(missing_conjuncts)}"
+            )
+
+        unexpected_conjuncts = [
+            conjunct for conjunct in envelope_conjuncts if conjunct not in expected_set
+        ]
+        if unexpected_conjuncts:
+            errors.append(
+                f"{envelope_operator} must compose {component_summary} for "
+                f"{family} progress safety; unexpected conjunct(s) "
+                f"{', '.join(unexpected_conjuncts)}"
+            )
+
+    return errors
+
+
+def byzantine_interleaving_exactness_alignment_errors(
+    direct_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+    byzantine_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+    direct_operator: str = "DirectCommitInterleavingExactness",
+    byzantine_operator: str = "ByzantineCommitInterleavingExactness",
+    byzantine_extra_conjuncts: tuple[str, ...] = (
+        BYZANTINE_INTERLEAVING_EXTRA_EXACTNESS_CONJUNCTS
+    ),
+) -> list[str]:
+    """Return errors if Byzantine interleaving stops extending the direct core."""
+
+    errors: list[str] = []
+    direct_conjuncts = direct_contracts.get(direct_operator)
+    byzantine_conjuncts = byzantine_contracts.get(byzantine_operator)
+    missing_inputs = []
+    if direct_conjuncts is None:
+        missing_inputs.append(direct_operator)
+    if byzantine_conjuncts is None:
+        missing_inputs.append(byzantine_operator)
+    if missing_inputs:
+        errors.append(
+            "Byzantine interleaving exactness alignment references missing "
+            f"contract(s) {', '.join(missing_inputs)}"
+        )
+        return errors
+
+    expected_conjuncts = (*direct_conjuncts, *byzantine_extra_conjuncts)
+    expected_set = set(expected_conjuncts)
+    byzantine_set = set(byzantine_conjuncts)
+
+    missing_conjuncts = [
+        conjunct for conjunct in expected_conjuncts if conjunct not in byzantine_set
+    ]
+    if missing_conjuncts:
+        errors.append(
+            f"{byzantine_operator} must extend {direct_operator} with "
+            "Byzantine-only exactness conjuncts; missing conjunct(s) "
+            f"{', '.join(missing_conjuncts)}"
+        )
+
+    unexpected_conjuncts = [
+        conjunct for conjunct in byzantine_conjuncts if conjunct not in expected_set
+    ]
+    if unexpected_conjuncts:
+        errors.append(
+            f"{byzantine_operator} must extend {direct_operator} with "
+            "Byzantine-only exactness conjuncts; unexpected conjunct(s) "
+            f"{', '.join(unexpected_conjuncts)}"
+        )
+
+    return errors
+
+
+def projection_bridge_core_source_alignment_errors(
+    source_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+    projection_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
+    source_operator: str = "ByzantineCommitInterleavingExactness",
+    bridge_core_operator: str = "ProjectionBridgeMatchesInterleavingCore",
+) -> list[str]:
+    """Return errors if projection bridge core drifts from source exactness."""
+
+    errors: list[str] = []
+    source_conjuncts = source_contracts.get(source_operator)
+    bridge_core_conjuncts = projection_contracts.get(bridge_core_operator)
+    missing_inputs = []
+    if source_conjuncts is None:
+        missing_inputs.append(source_operator)
+    if bridge_core_conjuncts is None:
+        missing_inputs.append(bridge_core_operator)
+    if missing_inputs:
+        errors.append(
+            "projection bridge core/source alignment references missing "
+            f"contract(s) {', '.join(missing_inputs)}"
+        )
+        return errors
+
+    source_set = set(source_conjuncts)
+    bridge_core_set = set(bridge_core_conjuncts)
+
+    missing_conjuncts = [
+        conjunct for conjunct in source_conjuncts if conjunct not in bridge_core_set
+    ]
+    if missing_conjuncts:
+        errors.append(
+            f"{bridge_core_operator} must mirror {source_operator}; "
+            f"missing conjunct(s) {', '.join(missing_conjuncts)}"
+        )
+
+    unexpected_conjuncts = [
+        conjunct for conjunct in bridge_core_conjuncts if conjunct not in source_set
+    ]
+    if unexpected_conjuncts:
+        errors.append(
+            f"{bridge_core_operator} must mirror {source_operator}; "
+            f"unexpected conjunct(s) {', '.join(unexpected_conjuncts)}"
+        )
+
+    return errors
+
+
+def projected_commit_progress_contract_alignment_errors(
+    projection_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
+    envelope_operator: str = "ProjectedCommitProgressSafetyEnvelope",
+    expected_components: tuple[str, ...] = (
+        "ProjectionBridgeCoversOrderedTopCorridors",
+        "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope",
+    ),
+) -> list[str]:
+    """Return errors if projected progress safety drifts from bridge components."""
+
+    errors: list[str] = []
+    missing_inputs = [
+        operator
+        for operator in (*expected_components, envelope_operator)
+        if operator not in projection_contracts
+    ]
+    if missing_inputs:
+        errors.append(
+            "projected commit progress alignment references missing "
+            f"contract(s) {', '.join(missing_inputs)}"
+        )
+        return errors
+
+    expected_set = set(expected_components)
+    envelope_conjuncts = projection_contracts[envelope_operator]
+    envelope_set = set(envelope_conjuncts)
+    component_summary = " and ".join(expected_components)
+
+    missing_conjuncts = [
+        conjunct for conjunct in expected_components if conjunct not in envelope_set
+    ]
+    if missing_conjuncts:
+        errors.append(
+            f"{envelope_operator} must compose {component_summary}; "
+            f"missing conjunct(s) {', '.join(missing_conjuncts)}"
+        )
+
+    unexpected_conjuncts = [
+        conjunct for conjunct in envelope_conjuncts if conjunct not in expected_set
+    ]
+    if unexpected_conjuncts:
+        errors.append(
+            f"{envelope_operator} must compose {component_summary}; "
+            f"unexpected conjunct(s) {', '.join(unexpected_conjuncts)}"
+        )
+
+    return errors
+
+
+def tla_wf_vars_operator_references(body: str) -> tuple[str, ...]:
+    """Return simple operator operands referenced by WF_vars clauses."""
+
+    comment_free_body = "\n".join(
+        tla_line_without_comment(line) for line in body.splitlines()
+    )
+    return tuple(TLA_WF_VARS_RE.findall(comment_free_body))
+
+
+def commit_progress_spec_contract_errors(
+    module_path: Path,
+    spec_operator: str,
+    fairness_operator: str,
+    next_closure: str,
+    expected_fairness_actions: tuple[str, ...],
+    root_kind: str,
+) -> list[str]:
+    """Return errors if a progress spec/fairness wiring contract drifts."""
+
+    errors = consensus_core_root_conjunct_contract_errors(
+        module_path,
+        {spec_operator: ("Init", fairness_operator)},
+        root_kind=root_kind,
+        zero_arity_requirement=(
+            f"{root_kind} operators must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            f"each {root_kind} obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            f"keep {root_kind}s on the documented conjunct contract"
+        ),
+    )
+    if not module_path.exists():
+        return errors
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    signatures = tla_operator_signatures(module_path)
+
+    spec_definition = definitions.get(spec_operator)
+    if spec_definition is not None:
+        definition_line, body = spec_definition
+        compact_body = "".join(
+            "".join(tla_line_without_comment(line).split())
+            for line in body.splitlines()
+        )
+        if next_closure not in compact_body:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{spec_operator}, but must keep direct {next_closure} "
+                "transition closure"
+            )
+
+        raw_fairness_actions = tla_wf_vars_operator_references(body)
+        if raw_fairness_actions:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{spec_operator}, but must compose {fairness_operator} "
+                "instead of raw WF_vars fairness clauses: "
+                f"{', '.join(raw_fairness_actions)}"
+            )
+
+    fairness_definition = definitions.get(fairness_operator)
+    if fairness_definition is None:
+        errors.append(
+            f"{display_path(module_path)} does not define {root_kind} "
+            f"fairness {fairness_operator}"
+        )
+        return errors
+
+    signature = signatures.get(fairness_operator)
+    if signature is not None and signature[1] != 0:
+        root_line, root_arity = signature
+        errors.append(
+            f"{display_path(module_path)}:{root_line} defines {root_kind} "
+            f"fairness {fairness_operator} with arity {root_arity}; "
+            f"{root_kind} fairness operators must be zero-arity"
+        )
+        return errors
+
+    fairness_line, fairness_body = fairness_definition
+    fairness_actions = tla_wf_vars_operator_references(fairness_body)
+    fairness_action_set = set(fairness_actions)
+    expected_action_set = set(expected_fairness_actions)
+
+    repeated_actions = duplicate_values(fairness_actions)
+    if repeated_actions:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but repeats WF_vars action(s) "
+            f"{', '.join(repeated_actions)}; each {root_kind} "
+            "fairness action must be counted once"
+        )
+
+    missing_actions = [
+        action
+        for action in expected_fairness_actions
+        if action not in fairness_action_set
+    ]
+    if missing_actions:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but is missing WF_vars action(s) "
+            f"{', '.join(missing_actions)}"
+        )
+
+    unexpected_actions = [
+        action for action in fairness_actions if action not in expected_action_set
+    ]
+    if unexpected_actions:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but contains unexpected WF_vars action(s) "
+            f"{', '.join(unexpected_actions)}; keep {root_kind} "
+            "fairness on the documented action contract"
+        )
+
+    return errors
+
+
+def projected_commit_progress_spec_contract_errors(
+    module_path: Path = SPEC_DIR / "SumeragiByzantineCommitProjectionGate.tla",
+    spec_operator: str = "ProjectedCommitProgressSpec",
+    fairness_operator: str = "ProjectedCommitProgressFairness",
+    expected_fairness_actions: tuple[
+        str, ...
+    ] = SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS,
+) -> list[str]:
+    """Return errors if projected progress spec/fairness wiring drifts."""
+
+    return commit_progress_spec_contract_errors(
+        module_path,
+        spec_operator,
+        fairness_operator,
+        "[][Next]_vars",
+        expected_fairness_actions,
+        "projected commit progress",
+    )
+
+
+def source_commit_progress_spec_contract_errors(
+    contracts: tuple[
+        tuple[Path, str, str, str, tuple[str, ...], str],
+        ...,
+    ] = SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS,
+) -> list[str]:
+    """Return errors if source progress spec/fairness wiring drifts."""
+
+    errors: list[str] = []
+    for (
+        module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        expected_fairness_actions,
+        root_kind,
+    ) in contracts:
+        errors.extend(
+            commit_progress_spec_contract_errors(
+                module_path,
+                spec_operator,
+                fairness_operator,
+                next_closure,
+                expected_fairness_actions,
+                root_kind,
+            )
+        )
+    return errors
+
+
+def top_level_commit_spec_contract_errors(
+    contracts: tuple[
+        tuple[Path, str, str, str, tuple[str, ...], str],
+        ...,
+    ] = SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS,
+) -> list[str]:
+    """Return errors if top-level Sumeragi spec/fairness wiring drifts."""
+
+    errors: list[str] = []
+    for (
+        module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        expected_fairness_actions,
+        root_kind,
+    ) in contracts:
+        errors.extend(
+            commit_progress_spec_contract_errors(
+                module_path,
+                spec_operator,
+                fairness_operator,
+                next_closure,
+                expected_fairness_actions,
+                root_kind,
+            )
+        )
+    return errors
+
+
+def direct_delivered_first_gate_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "SumeragiDirectDeliveredFirstCorridorGate.tla",
+) -> list[str]:
+    """Return errors for delivered-first progress-safety drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS,
+        root_kind="direct delivered-first progress safety aggregate",
+        zero_arity_requirement=(
+            "direct delivered-first progress safety operators must be "
+            "zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each direct delivered-first progress safety obligation must be "
+            "counted once"
+        ),
+        unexpected_requirement=(
+            "keep direct delivered-first progress safety operators on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def direct_vote_first_gate_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "SumeragiDirectVoteFirstCorridorGate.tla",
+) -> list[str]:
+    """Return errors for vote-first progress-safety drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS,
+        root_kind="direct vote-first progress safety aggregate",
+        zero_arity_requirement=(
+            "direct vote-first progress safety operators must be "
+            "zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each direct vote-first progress safety obligation must be "
+            "counted once"
+        ),
+        unexpected_requirement=(
+            "keep direct vote-first progress safety operators on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def byzantine_interleaving_gate_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "SumeragiByzantineCommitInterleavingGate.tla",
+) -> list[str]:
+    """Return errors for Byzantine interleaving progress-safety drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+        root_kind="Byzantine interleaving progress safety aggregate",
+        zero_arity_requirement=(
+            "Byzantine interleaving progress safety operators must be "
+            "zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each Byzantine interleaving progress safety obligation must be "
+            "counted once"
+        ),
+        unexpected_requirement=(
+            "keep Byzantine interleaving progress safety operators on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def direct_interleaving_gate_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "SumeragiDirectCommitInterleavingGate.tla",
+) -> list[str]:
+    """Return errors for direct interleaving progress-safety drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+        root_kind="direct interleaving progress safety aggregate",
+        zero_arity_requirement=(
+            "direct interleaving progress safety operators must be "
+            "zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each direct interleaving progress safety obligation must be "
+            "counted once"
+        ),
+        unexpected_requirement=(
+            "keep direct interleaving progress safety operators on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def projection_gate_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "SumeragiByzantineCommitProjectionGate.tla",
+) -> list[str]:
+    """Return errors for Byzantine projection gate aggregate proof drift."""
+
+    errors = consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
+        root_kind="projection gate aggregate",
+        zero_arity_requirement=(
+            "projection gate aggregate operators must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each projection gate aggregate obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep projection gate aggregate proof operators on the documented "
+            "conjunct contract"
+        ),
+    )
+    errors.extend(
+        implication_antecedent_contract_errors(
+            module_path,
+            SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS,
+        )
+    )
+    return errors
+
+
 def consensus_core_root_cfg_check_contract_errors(
     module_path: Path = SPEC_DIR / "Sumeragi.tla",
     cfg_paths: tuple[Path, ...] = (SUMERAGI_DEEP_CFG, SUMERAGI_TLC_FAST_CFG),
@@ -4663,6 +6702,14 @@ def tla_module_dependency_references(
     references: list[tuple[int, str, str]] = []
     errors: list[str] = []
     dependency_window_closed_line: int | None = None
+    declarations_seen = False
+    declaration_block_open = False
+
+    def declaration_start(text: str) -> bool:
+        return re.match(r"^(?:CONSTANTS?|VARIABLES?)\b", text) is not None
+
+    def declaration_list_continuation(text: str) -> bool:
+        return TLA_DECLARATION_LIST_RE.match(text) is not None
 
     def malformed_dependency_prefix_start(text: str) -> str | None:
         def missing_separator_after(prefix: str) -> bool:
@@ -4697,17 +6744,33 @@ def tla_module_dependency_references(
             or TLA_NAMED_INSTANCE_START_RE.match(stripped) is not None
             or malformed_dependency_prefix is not None
         )
+        extends_candidate = TLA_EXTENDS_START_RE.match(stripped) is not None
+        instance_candidate = (
+            TLA_INSTANCE_START_RE.match(stripped) is not None
+            or TLA_NAMED_INSTANCE_START_RE.match(stripped) is not None
+            or malformed_dependency_prefix == "INSTANCE"
+        )
         if dependency_text != dependency_text.lstrip() and dependency_candidate:
             errors.append(
                 f"{display_path(path)}:{line_number} TLA dependency "
                 f"declarations must be top-level: {stripped}"
             )
             continue
-        if dependency_window_closed_line is not None and dependency_candidate:
+        if (
+            dependency_window_closed_line is not None
+            and dependency_candidate
+        ):
             errors.append(
                 f"{display_path(path)}:{line_number} TLA dependency "
-                "declarations must appear before declarations and "
-                f"definitions: {stripped}"
+                "declarations must appear before operator definitions: "
+                f"{stripped}"
+            )
+            continue
+        if declarations_seen and extends_candidate:
+            errors.append(
+                f"{display_path(path)}:{line_number} EXTENDS declarations "
+                "must appear before declarations and definitions: "
+                f"{stripped}"
             )
             continue
 
@@ -4825,6 +6888,13 @@ def tla_module_dependency_references(
             and not TLA_MODULE_RE.match(stripped)
             and not TLA_TERMINATOR_RE.match(stripped)
         ):
+            if declaration_start(stripped):
+                declarations_seen = True
+                declaration_block_open = True
+                continue
+            if declaration_block_open and declaration_list_continuation(stripped):
+                continue
+            declaration_block_open = False
             dependency_window_closed_line = line_number
 
     return references, errors
@@ -5476,8 +7546,10 @@ def tla_module_validation_errors_uncached(mode: str, path: Path) -> list[str]:
 
 
 @cache
-def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]:
-    bindings: list[tuple[int, str]] = []
+def cfg_constant_binding_values(
+    path: Path,
+) -> tuple[list[tuple[int, str, str]], list[str]]:
+    bindings: list[tuple[int, str, str]] = []
     errors: list[str] = []
     collecting = False
     collecting_line: int | None = None
@@ -5501,7 +7573,11 @@ def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]
         collecting_entries = 0
         collecting_invalid = False
 
-    def parse_binding(line_number: int, text: str, context: str) -> str | None:
+    def parse_binding(
+        line_number: int,
+        text: str,
+        context: str,
+    ) -> tuple[str, str] | None:
         match = CFG_CONSTANT_BINDING_LINE_RE.match(text)
         if match is None:
             errors.append(
@@ -5524,7 +7600,7 @@ def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]
                 f"nested binding-looking token {nested_match.group(2)}"
             )
             return None
-        return constant
+        return constant, rhs
 
     def malformed_constant_directive_start(text: str) -> bool:
         return any(
@@ -5581,7 +7657,8 @@ def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]
                 line_number, rest, f"directive {directive}"
             )
             if binding is not None:
-                bindings.append((line_number, binding))
+                constant, value = binding
+                bindings.append((line_number, constant, value))
             continue
 
         if malformed_constant_directive_start(stripped):
@@ -5627,11 +7704,21 @@ def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]
         if binding is None:
             collecting_invalid = True
             continue
-        bindings.append((line_number, binding))
+        constant, value = binding
+        bindings.append((line_number, constant, value))
         collecting_entries += 1
 
     close_collecting()
     return bindings, errors
+
+
+@cache
+def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]:
+    bindings, errors = cfg_constant_binding_values(path)
+    return [
+        (line_number, constant)
+        for line_number, constant, _value in bindings
+    ], errors
 
 
 def cfg_constant_binding_errors(mode: str, module_path: Path, cfg_path: Path) -> list[str]:
@@ -17746,6 +19833,903 @@ def mutation_cfg_equivalence_errors(
     return errors
 
 
+def cfg_required_check_contract_errors(
+    cfg_path: Path,
+    required_checks: tuple[tuple[str, str], ...],
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a CFG file omits or downgrades required proof checks."""
+
+    if not cfg_path.exists():
+        return [
+            f"{display_path(cfg_path)} is missing required {coverage_label} checks"
+        ]
+
+    check_kinds, cfg_errors = cfg_check_operator_kinds(cfg_path)
+    if cfg_errors:
+        return [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
+
+    errors: list[str] = []
+    for operator, expected_kind in required_checks:
+        kind = check_kinds.get(operator)
+        if kind is None:
+            errors.append(
+                f"{display_path(cfg_path)} must check {expected_kind} {operator} "
+                f"for {coverage_label}"
+            )
+        elif kind != expected_kind:
+            errors.append(
+                f"{display_path(cfg_path)} checks {kind} {operator}, "
+                f"expected {expected_kind}"
+            )
+    return errors
+
+
+def top_level_fast_cfg_check_errors(
+    cfg_path: Path = SUMERAGI_FAST_CFG,
+    required_checks: tuple[tuple[str, str], ...] = SUMERAGI_FAST_CFG_REQUIRED_CHECKS,
+) -> list[str]:
+    """Return errors if the root fast CFG stops checking its sentinel surface."""
+
+    return cfg_required_check_contract_errors(
+        cfg_path,
+        required_checks,
+        "top-level fast sentinel coverage",
+    )
+
+
+def projection_clean_cfg_errors(
+    fast_cfg: Path = PROJECTION_FAST_CFG,
+    progress_cfg: Path = PROJECTION_PROGRESS_CFG,
+) -> list[str]:
+    """Return errors if clean projection CFGs stop checking the proof surface."""
+
+    return cfg_required_behavior_contract_errors(
+        fast_cfg,
+        CLEAN_SAFETY_CFG_REQUIRED_BEHAVIOR,
+        "projection fast coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        fast_cfg,
+        "Bug",
+        CLEAN_SAFETY_BUG_CONSTANT_VALUE,
+        "projection fast coverage",
+    ) + cfg_required_check_contract_errors(
+        fast_cfg,
+        PROJECTION_FAST_CFG_REQUIRED_CHECKS,
+        "projection fast coverage",
+    ) + cfg_required_check_deadlock_contract_errors(
+        progress_cfg,
+        "FALSE",
+        "projection progress coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        progress_cfg,
+        "Bug",
+        CLEAN_PROGRESS_BUG_CONSTANT_VALUE,
+        "projection progress coverage",
+    ) + cfg_required_behavior_contract_errors(
+        progress_cfg,
+        PROJECTION_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+        "projection progress coverage",
+    ) + cfg_required_check_contract_errors(
+        progress_cfg,
+        PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS,
+        "projection progress coverage",
+    )
+
+
+def byzantine_top_cfg_errors(
+    cfg_contracts: tuple[
+        tuple[Path, tuple[tuple[str, str], ...], str],
+        ...,
+    ] = BYZANTINE_TOP_CFG_REQUIRED_CHECKS,
+) -> list[str]:
+    """Return errors if top-level Byzantine CFGs stop naming bridge checks."""
+
+    errors: list[str] = []
+    for cfg_path, required_checks, coverage_label in cfg_contracts:
+        behavior_contract = BYZANTINE_TOP_CFG_REQUIRED_BEHAVIOR_BY_NAME.get(
+            cfg_path.name
+        )
+        if behavior_contract is not None:
+            required_behavior, behavior_label = behavior_contract
+            errors.extend(
+                cfg_required_behavior_contract_errors(
+                    cfg_path,
+                    required_behavior,
+                    behavior_label,
+                )
+            )
+        constant_contract = BYZANTINE_TOP_CFG_REQUIRED_CONSTANT_VALUES_BY_NAME.get(
+            cfg_path.name
+        )
+        if constant_contract is not None:
+            required_values, constant_label = constant_contract
+            errors.extend(
+                cfg_required_constant_values_contract_errors(
+                    cfg_path,
+                    required_values,
+                    constant_label,
+                )
+            )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                required_checks,
+                coverage_label,
+            )
+        )
+    return errors
+
+
+def byzantine_interleaving_clean_cfg_errors(
+    fast_cfg: Path = BYZANTINE_INTERLEAVING_FAST_CFG,
+    progress_cfg: Path = BYZANTINE_INTERLEAVING_PROGRESS_CFG,
+) -> list[str]:
+    """Return errors if clean source Byzantine CFGs drop proof checks."""
+
+    return cfg_required_behavior_contract_errors(
+        fast_cfg,
+        CLEAN_SAFETY_CFG_REQUIRED_BEHAVIOR,
+        "Byzantine interleaving fast coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        fast_cfg,
+        "Bug",
+        CLEAN_SAFETY_BUG_CONSTANT_VALUE,
+        "Byzantine interleaving fast coverage",
+    ) + cfg_required_check_contract_errors(
+        fast_cfg,
+        BYZANTINE_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+        "Byzantine interleaving fast coverage",
+    ) + cfg_required_check_deadlock_contract_errors(
+        progress_cfg,
+        "FALSE",
+        "Byzantine interleaving progress coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        progress_cfg,
+        "Bug",
+        CLEAN_PROGRESS_BUG_CONSTANT_VALUE,
+        "Byzantine interleaving progress coverage",
+    ) + cfg_required_behavior_contract_errors(
+        progress_cfg,
+        BYZANTINE_INTERLEAVING_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+        "Byzantine interleaving progress coverage",
+    ) + cfg_required_check_contract_errors(
+        progress_cfg,
+        BYZANTINE_INTERLEAVING_PROGRESS_CFG_REQUIRED_CHECKS,
+        "Byzantine interleaving progress coverage",
+    )
+
+
+def direct_delivered_first_clean_cfg_errors(
+    fast_cfg: Path = DIRECT_DELIVERED_FIRST_FAST_CFG,
+    progress_cfg: Path = DIRECT_DELIVERED_FIRST_PROGRESS_CFG,
+) -> list[str]:
+    """Return errors if clean delivered-first CFGs drop proof checks."""
+
+    return cfg_required_behavior_contract_errors(
+        fast_cfg,
+        CLEAN_SAFETY_CFG_REQUIRED_BEHAVIOR,
+        "direct delivered-first fast coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        fast_cfg,
+        "Bug",
+        CLEAN_SAFETY_BUG_CONSTANT_VALUE,
+        "direct delivered-first fast coverage",
+    ) + cfg_required_check_contract_errors(
+        fast_cfg,
+        DIRECT_DELIVERED_FIRST_FAST_CFG_REQUIRED_CHECKS,
+        "direct delivered-first fast coverage",
+    ) + cfg_required_check_deadlock_contract_errors(
+        progress_cfg,
+        "FALSE",
+        "direct delivered-first progress coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        progress_cfg,
+        "Bug",
+        CLEAN_PROGRESS_BUG_CONSTANT_VALUE,
+        "direct delivered-first progress coverage",
+    ) + cfg_required_behavior_contract_errors(
+        progress_cfg,
+        DIRECT_DELIVERED_FIRST_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+        "direct delivered-first progress coverage",
+    ) + cfg_required_check_contract_errors(
+        progress_cfg,
+        DIRECT_DELIVERED_FIRST_PROGRESS_CFG_REQUIRED_CHECKS,
+        "direct delivered-first progress coverage",
+    )
+
+
+def direct_vote_first_clean_cfg_errors(
+    fast_cfg: Path = DIRECT_VOTE_FIRST_FAST_CFG,
+    progress_cfg: Path = DIRECT_VOTE_FIRST_PROGRESS_CFG,
+) -> list[str]:
+    """Return errors if clean vote-first CFGs drop proof checks."""
+
+    return cfg_required_behavior_contract_errors(
+        fast_cfg,
+        CLEAN_SAFETY_CFG_REQUIRED_BEHAVIOR,
+        "direct vote-first fast coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        fast_cfg,
+        "Bug",
+        CLEAN_SAFETY_BUG_CONSTANT_VALUE,
+        "direct vote-first fast coverage",
+    ) + cfg_required_check_contract_errors(
+        fast_cfg,
+        DIRECT_VOTE_FIRST_FAST_CFG_REQUIRED_CHECKS,
+        "direct vote-first fast coverage",
+    ) + cfg_required_check_deadlock_contract_errors(
+        progress_cfg,
+        "FALSE",
+        "direct vote-first progress coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        progress_cfg,
+        "Bug",
+        CLEAN_PROGRESS_BUG_CONSTANT_VALUE,
+        "direct vote-first progress coverage",
+    ) + cfg_required_behavior_contract_errors(
+        progress_cfg,
+        DIRECT_VOTE_FIRST_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+        "direct vote-first progress coverage",
+    ) + cfg_required_check_contract_errors(
+        progress_cfg,
+        DIRECT_VOTE_FIRST_PROGRESS_CFG_REQUIRED_CHECKS,
+        "direct vote-first progress coverage",
+    )
+
+
+def direct_interleaving_clean_cfg_errors(
+    fast_cfg: Path = DIRECT_INTERLEAVING_FAST_CFG,
+    progress_cfg: Path = DIRECT_INTERLEAVING_PROGRESS_CFG,
+) -> list[str]:
+    """Return errors if clean direct interleaving CFGs drop proof checks."""
+
+    return cfg_required_behavior_contract_errors(
+        fast_cfg,
+        CLEAN_SAFETY_CFG_REQUIRED_BEHAVIOR,
+        "direct interleaving fast coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        fast_cfg,
+        "Bug",
+        CLEAN_SAFETY_BUG_CONSTANT_VALUE,
+        "direct interleaving fast coverage",
+    ) + cfg_required_check_contract_errors(
+        fast_cfg,
+        DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+        "direct interleaving fast coverage",
+    ) + cfg_required_check_deadlock_contract_errors(
+        progress_cfg,
+        "FALSE",
+        "direct interleaving progress coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        progress_cfg,
+        "Bug",
+        CLEAN_PROGRESS_BUG_CONSTANT_VALUE,
+        "direct interleaving progress coverage",
+    ) + cfg_required_behavior_contract_errors(
+        progress_cfg,
+        DIRECT_INTERLEAVING_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+        "direct interleaving progress coverage",
+    ) + cfg_required_check_contract_errors(
+        progress_cfg,
+        DIRECT_INTERLEAVING_PROGRESS_CFG_REQUIRED_CHECKS,
+        "direct interleaving progress coverage",
+    )
+
+
+def source_safety_mutation_cfg_errors(
+    cfg_contracts: tuple[
+        tuple[str, tuple[tuple[str, str], ...], str],
+        ...,
+    ] = SOURCE_SAFETY_MUTATION_CFG_REQUIRED_CHECKS,
+    spec_dir: Path = SPEC_DIR,
+) -> list[str]:
+    """Return errors if source safety mutation CFGs drop proof checks."""
+
+    errors: list[str] = []
+    for cfg_glob, required_checks, coverage_label in cfg_contracts:
+        cfg_paths = sorted(spec_dir.glob(cfg_glob))
+        if not cfg_paths:
+            errors.append(f"no {coverage_label} cfgs matched {cfg_glob}")
+            continue
+        for cfg_path in cfg_paths:
+            errors.extend(
+                cfg_required_inferred_bug_suffix_constant_errors(
+                    cfg_path,
+                    coverage_label,
+                )
+            )
+            errors.extend(
+                cfg_required_behavior_contract_errors(
+                    cfg_path,
+                    SAFETY_MUTATION_CFG_REQUIRED_BEHAVIOR,
+                    coverage_label,
+                )
+            )
+            errors.extend(
+                cfg_required_check_contract_errors(
+                    cfg_path,
+                    required_checks,
+                    coverage_label,
+                )
+            )
+    return errors
+
+
+def direct_interleaving_progress_mutation_cfg_errors(
+    cfg_paths: list[Path] | None = None,
+) -> list[str]:
+    """Return errors if direct interleaving progress mutation CFGs drop checks."""
+
+    if cfg_paths is None:
+        cfg_paths = sorted(SPEC_DIR.glob(DIRECT_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB))
+
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(
+            "no direct interleaving progress mutation cfgs matched "
+            f"{DIRECT_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB}"
+        )
+        return errors
+
+    for cfg_path in cfg_paths:
+        errors.extend(
+            cfg_required_check_deadlock_contract_errors(
+                cfg_path,
+                "FALSE",
+                "direct interleaving progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_bug_suffix_constant_errors(
+                cfg_path,
+                DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+                "direct interleaving progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                DIRECT_INTERLEAVING_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+                "direct interleaving progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                DIRECT_INTERLEAVING_PROGRESS_MUTATION_REQUIRED_CHECKS,
+                "direct interleaving progress mutation coverage",
+            )
+        )
+    return errors
+
+
+def direct_delivered_first_progress_mutation_cfg_errors(
+    cfg_paths: list[Path] | None = None,
+) -> list[str]:
+    """Return errors if delivered-first progress mutation CFGs drop checks."""
+
+    if cfg_paths is None:
+        cfg_paths = sorted(
+            SPEC_DIR.glob(DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_CFG_GLOB)
+        )
+
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(
+            "no direct delivered-first progress mutation cfgs matched "
+            f"{DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_CFG_GLOB}"
+        )
+        return errors
+
+    for cfg_path in cfg_paths:
+        errors.extend(
+            cfg_required_check_deadlock_contract_errors(
+                cfg_path,
+                "FALSE",
+                "direct delivered-first progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_bug_suffix_constant_errors(
+                cfg_path,
+                DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+                "direct delivered-first progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                DIRECT_DELIVERED_FIRST_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+                "direct delivered-first progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_REQUIRED_CHECKS,
+                "direct delivered-first progress mutation coverage",
+            )
+        )
+    return errors
+
+
+def direct_vote_first_progress_mutation_cfg_errors(
+    cfg_paths: list[Path] | None = None,
+) -> list[str]:
+    """Return errors if vote-first progress mutation CFGs drop checks."""
+
+    if cfg_paths is None:
+        cfg_paths = sorted(SPEC_DIR.glob(DIRECT_VOTE_FIRST_PROGRESS_MUTATION_CFG_GLOB))
+
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(
+            "no direct vote-first progress mutation cfgs matched "
+            f"{DIRECT_VOTE_FIRST_PROGRESS_MUTATION_CFG_GLOB}"
+        )
+        return errors
+
+    for cfg_path in cfg_paths:
+        errors.extend(
+            cfg_required_check_deadlock_contract_errors(
+                cfg_path,
+                "FALSE",
+                "direct vote-first progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_bug_suffix_constant_errors(
+                cfg_path,
+                DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+                "direct vote-first progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                DIRECT_VOTE_FIRST_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+                "direct vote-first progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                DIRECT_VOTE_FIRST_PROGRESS_MUTATION_REQUIRED_CHECKS,
+                "direct vote-first progress mutation coverage",
+            )
+        )
+    return errors
+
+
+def byzantine_interleaving_progress_mutation_cfg_errors(
+    cfg_paths: list[Path] | None = None,
+) -> list[str]:
+    """Return errors if source Byzantine progress mutation CFGs drop checks."""
+
+    if cfg_paths is None:
+        cfg_paths = sorted(
+            SPEC_DIR.glob(BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB)
+        )
+
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(
+            "no Byzantine interleaving progress mutation cfgs matched "
+            f"{BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB}"
+        )
+        return errors
+
+    for cfg_path in cfg_paths:
+        errors.extend(
+            cfg_required_check_deadlock_contract_errors(
+                cfg_path,
+                "FALSE",
+                "Byzantine interleaving progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_bug_suffix_constant_errors(
+                cfg_path,
+                BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+                "Byzantine interleaving progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                BYZANTINE_INTERLEAVING_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+                "Byzantine interleaving progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_REQUIRED_CHECKS,
+                "Byzantine interleaving progress mutation coverage",
+            )
+        )
+    return errors
+
+
+def projection_mutation_bridge_cfg_errors(
+    cfg_paths: list[Path] | None = None,
+) -> list[str]:
+    """Return errors if projection mutation CFGs stop checking the full bridge."""
+
+    if cfg_paths is None:
+        cfg_paths = sorted(SPEC_DIR.glob(PROJECTION_MUTATION_CFG_GLOB))
+
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(
+            f"no projection mutation cfgs matched {PROJECTION_MUTATION_CFG_GLOB}"
+        )
+        return errors
+
+    for cfg_path in cfg_paths:
+        errors.extend(
+            cfg_required_inferred_bug_suffix_constant_errors(
+                cfg_path,
+                "projection bridge mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                SAFETY_MUTATION_CFG_REQUIRED_BEHAVIOR,
+                "projection bridge mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                PROJECTION_MUTATION_BRIDGE_REQUIRED_CHECKS,
+                "projection bridge mutation coverage",
+            )
+        )
+    return errors
+
+
+def projection_progress_mutation_cfg_errors(
+    cfg_paths: list[Path] | None = None,
+) -> list[str]:
+    """Return errors if projection progress mutation CFGs drop required checks."""
+
+    if cfg_paths is None:
+        cfg_paths = sorted(SPEC_DIR.glob(PROJECTION_PROGRESS_MUTATION_CFG_GLOB))
+
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(
+            "no projection progress mutation cfgs matched "
+            f"{PROJECTION_PROGRESS_MUTATION_CFG_GLOB}"
+        )
+        return errors
+
+    for cfg_path in cfg_paths:
+        errors.extend(
+            cfg_required_check_deadlock_contract_errors(
+                cfg_path,
+                "FALSE",
+                "projection progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_bug_suffix_constant_errors(
+                cfg_path,
+                PROJECTION_PROGRESS_MUTATION_STEM_PREFIX,
+                "projection progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                PROJECTION_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+                "projection progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                PROJECTION_PROGRESS_MUTATION_REQUIRED_CHECKS,
+                "projection progress mutation coverage",
+            )
+        )
+    return errors
+
+
+def mutation_cfg_suffixes(
+    cfg_paths: list[Path],
+    stem_prefix: str,
+    family_label: str,
+) -> tuple[set[str], list[str]]:
+    """Return normalized mutation suffixes for a family of CFG files."""
+
+    suffixes: set[str] = set()
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(f"no {family_label} mutation cfgs were found")
+        return suffixes, errors
+
+    for cfg_path in cfg_paths:
+        stem = cfg_path.stem
+        if not stem.startswith(stem_prefix):
+            errors.append(
+                f"{display_path(cfg_path)} does not match expected "
+                f"{family_label} mutation prefix {stem_prefix}"
+            )
+            continue
+        suffix = stem[len(stem_prefix) :]
+        if not suffix:
+            errors.append(
+                f"{display_path(cfg_path)} has an empty {family_label} "
+                "mutation suffix"
+            )
+            continue
+        suffixes.add(suffix)
+    return suffixes, errors
+
+
+def mutation_suffix_set_difference_errors(
+    actual_label: str,
+    actual_suffixes: set[str],
+    expected_label: str,
+    expected_suffixes: set[str],
+) -> list[str]:
+    """Return errors when one mutation suffix family stops matching another."""
+
+    errors: list[str] = []
+    missing_suffixes = sorted_unique(expected_suffixes - actual_suffixes)
+    if missing_suffixes:
+        errors.append(
+            f"{actual_label} mutation CFGs are missing {expected_label} "
+            "mutation suffixes:\n"
+            + format_items(missing_suffixes)
+        )
+
+    extra_suffixes = sorted_unique(actual_suffixes - expected_suffixes)
+    if extra_suffixes:
+        errors.append(
+            f"{actual_label} mutation CFGs have suffixes absent from "
+            f"{expected_label}:\n"
+            + format_items(extra_suffixes)
+        )
+    return errors
+
+
+def direct_mutation_family_alignment_errors(
+    delivered_cfg_paths: list[Path] | None = None,
+    delivered_progress_cfg_paths: list[Path] | None = None,
+    vote_cfg_paths: list[Path] | None = None,
+    vote_progress_cfg_paths: list[Path] | None = None,
+    interleaving_cfg_paths: list[Path] | None = None,
+    interleaving_progress_cfg_paths: list[Path] | None = None,
+    delivered_progress_safety_only_mutations: frozenset[str] = (
+        DIRECT_DELIVERED_FIRST_PROGRESS_SAFETY_ONLY_MUTATIONS
+    ),
+    vote_progress_safety_only_mutations: frozenset[str] = (
+        DIRECT_VOTE_FIRST_PROGRESS_SAFETY_ONLY_MUTATIONS
+    ),
+    interleaving_progress_safety_only_mutations: frozenset[str] = (
+        DIRECT_INTERLEAVING_PROGRESS_SAFETY_ONLY_MUTATIONS
+    ),
+) -> list[str]:
+    """Return errors if direct safety/progress mutation families drift."""
+
+    if delivered_cfg_paths is None:
+        delivered_cfg_paths = sorted(
+            SPEC_DIR.glob(DIRECT_DELIVERED_FIRST_MUTATION_CFG_GLOB)
+        )
+    if delivered_progress_cfg_paths is None:
+        delivered_progress_cfg_paths = sorted(
+            SPEC_DIR.glob(DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_CFG_GLOB)
+        )
+    if vote_cfg_paths is None:
+        vote_cfg_paths = sorted(SPEC_DIR.glob(DIRECT_VOTE_FIRST_MUTATION_CFG_GLOB))
+    if vote_progress_cfg_paths is None:
+        vote_progress_cfg_paths = sorted(
+            SPEC_DIR.glob(DIRECT_VOTE_FIRST_PROGRESS_MUTATION_CFG_GLOB)
+        )
+    if interleaving_cfg_paths is None:
+        interleaving_cfg_paths = sorted(
+            SPEC_DIR.glob(DIRECT_INTERLEAVING_MUTATION_CFG_GLOB)
+        )
+    if interleaving_progress_cfg_paths is None:
+        interleaving_progress_cfg_paths = sorted(
+            SPEC_DIR.glob(DIRECT_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB)
+        )
+
+    family_specs = (
+        (
+            "direct delivered-first",
+            delivered_cfg_paths,
+            DIRECT_DELIVERED_FIRST_MUTATION_STEM_PREFIX,
+            delivered_progress_cfg_paths,
+            DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            delivered_progress_safety_only_mutations,
+        ),
+        (
+            "direct vote-first",
+            vote_cfg_paths,
+            DIRECT_VOTE_FIRST_MUTATION_STEM_PREFIX,
+            vote_progress_cfg_paths,
+            DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            vote_progress_safety_only_mutations,
+        ),
+        (
+            "direct interleaving",
+            interleaving_cfg_paths,
+            DIRECT_INTERLEAVING_MUTATION_STEM_PREFIX,
+            interleaving_progress_cfg_paths,
+            DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+            interleaving_progress_safety_only_mutations,
+        ),
+    )
+
+    errors: list[str] = []
+    for (
+        family_label,
+        safety_cfg_paths,
+        safety_stem_prefix,
+        progress_cfg_paths,
+        progress_stem_prefix,
+        progress_safety_only_mutations,
+    ) in family_specs:
+        safety_suffixes, safety_errors = mutation_cfg_suffixes(
+            safety_cfg_paths,
+            safety_stem_prefix,
+            f"{family_label} safety",
+        )
+        progress_suffixes, progress_errors = mutation_cfg_suffixes(
+            progress_cfg_paths,
+            progress_stem_prefix,
+            f"{family_label} progress",
+        )
+        errors.extend(safety_errors)
+        errors.extend(progress_errors)
+        if safety_errors or progress_errors:
+            continue
+
+        stale_allowlist = sorted_unique(
+            progress_safety_only_mutations - safety_suffixes
+        )
+        if stale_allowlist:
+            errors.append(
+                f"{family_label} progress safety-only mutation allowlist has "
+                "stale suffixes absent from the safety family:\n"
+                + format_items(stale_allowlist)
+            )
+
+        expected_progress = safety_suffixes - progress_safety_only_mutations
+        errors.extend(
+            mutation_suffix_set_difference_errors(
+                f"{family_label} progress",
+                progress_suffixes,
+                f"{family_label} safety minus safety-only mutations",
+                expected_progress,
+            )
+        )
+    return errors
+
+
+def byzantine_mutation_family_alignment_errors(
+    interleaving_cfg_paths: list[Path] | None = None,
+    interleaving_progress_cfg_paths: list[Path] | None = None,
+    projection_cfg_paths: list[Path] | None = None,
+    projection_progress_cfg_paths: list[Path] | None = None,
+    progress_safety_only_mutations: frozenset[str] = (
+        BYZANTINE_PROGRESS_SAFETY_ONLY_MUTATIONS
+    ),
+) -> list[str]:
+    """Return errors if Byzantine source/projection mutation families drift."""
+
+    if interleaving_cfg_paths is None:
+        interleaving_cfg_paths = sorted(
+            SPEC_DIR.glob(BYZANTINE_INTERLEAVING_MUTATION_CFG_GLOB)
+        )
+    if interleaving_progress_cfg_paths is None:
+        interleaving_progress_cfg_paths = sorted(
+            SPEC_DIR.glob(BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB)
+        )
+    if projection_cfg_paths is None:
+        projection_cfg_paths = sorted(SPEC_DIR.glob(PROJECTION_MUTATION_CFG_GLOB))
+    if projection_progress_cfg_paths is None:
+        projection_progress_cfg_paths = sorted(
+            SPEC_DIR.glob(PROJECTION_PROGRESS_MUTATION_CFG_GLOB)
+        )
+
+    family_specs = (
+        (
+            "source Byzantine interleaving safety",
+            interleaving_cfg_paths,
+            BYZANTINE_INTERLEAVING_MUTATION_STEM_PREFIX,
+        ),
+        (
+            "source Byzantine interleaving progress",
+            interleaving_progress_cfg_paths,
+            BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+        ),
+        (
+            "projection safety",
+            projection_cfg_paths,
+            PROJECTION_MUTATION_STEM_PREFIX,
+        ),
+        (
+            "projection progress",
+            projection_progress_cfg_paths,
+            PROJECTION_PROGRESS_MUTATION_STEM_PREFIX,
+        ),
+    )
+
+    suffix_sets: dict[str, set[str]] = {}
+    errors: list[str] = []
+    for family_label, cfg_paths, stem_prefix in family_specs:
+        suffixes, suffix_errors = mutation_cfg_suffixes(
+            cfg_paths,
+            stem_prefix,
+            family_label,
+        )
+        suffix_sets[family_label] = suffixes
+        errors.extend(suffix_errors)
+
+    if errors:
+        return errors
+
+    source_safety = suffix_sets["source Byzantine interleaving safety"]
+    source_progress = suffix_sets["source Byzantine interleaving progress"]
+    projection_safety = suffix_sets["projection safety"]
+    projection_progress = suffix_sets["projection progress"]
+
+    errors.extend(
+        mutation_suffix_set_difference_errors(
+            "projection safety",
+            projection_safety,
+            "source Byzantine interleaving safety",
+            source_safety,
+        )
+    )
+    errors.extend(
+        mutation_suffix_set_difference_errors(
+            "projection progress",
+            projection_progress,
+            "source Byzantine interleaving progress",
+            source_progress,
+        )
+    )
+
+    stale_allowlist = sorted_unique(progress_safety_only_mutations - source_safety)
+    if stale_allowlist:
+        errors.append(
+            "Byzantine progress safety-only mutation allowlist has stale "
+            "suffixes absent from the source safety family:\n"
+            + format_items(stale_allowlist)
+        )
+
+    for family_label, safety_suffixes, progress_suffixes in (
+        (
+            "source Byzantine interleaving",
+            source_safety,
+            source_progress,
+        ),
+        (
+            "projection",
+            projection_safety,
+            projection_progress,
+        ),
+    ):
+        expected_progress = safety_suffixes - progress_safety_only_mutations
+        errors.extend(
+            mutation_suffix_set_difference_errors(
+                f"{family_label} progress",
+                progress_suffixes,
+                f"{family_label} safety minus safety-only mutations",
+                expected_progress,
+            )
+        )
+    return errors
+
+
 def main() -> int:
     errors: list[str] = []
 
@@ -17812,6 +20796,10 @@ def main() -> int:
         APALACHE_RUNNER, "Apalache"
     ) + expected_failure_default_errors(TLC_RUNNER, "TLC")
     runner_invocation_mismatches = runner_invocation_errors()
+    top_level_cfg_behavior_mismatches = top_level_cfg_behavior_errors()
+    top_level_cfg_deadlock_mismatches = top_level_cfg_deadlock_errors()
+    top_level_cfg_constant_mismatches = top_level_cfg_constant_errors()
+    top_level_fast_cfg_check_mismatches = top_level_fast_cfg_check_errors()
     top_level_cfg_check_parity_mismatches = top_level_cfg_check_parity_errors()
     property_root_reachability_mismatches = cfg_property_root_reachability_errors()
     state_invariant_root_reachability_mismatches = (
@@ -17895,6 +20883,62 @@ def main() -> int:
     rbc_live_evidence_causality_envelope_contract_mismatches = (
         rbc_live_evidence_causality_envelope_conjunct_contract_errors()
     )
+    byzantine_top_contract_mismatches = byzantine_top_conjunct_contract_errors()
+    byzantine_top_cfg_mismatches = byzantine_top_cfg_errors()
+    byzantine_top_corridor_contract_mismatches = (
+        byzantine_top_corridor_contract_alignment_errors()
+    )
+    byzantine_top_projection_contract_mismatches = (
+        byzantine_top_projection_contract_alignment_errors()
+    )
+    projection_bridge_interleaving_contract_mismatches = (
+        projection_bridge_interleaving_contract_alignment_errors()
+    )
+    source_progress_safety_contract_mismatches = (
+        source_progress_safety_contract_alignment_errors()
+    )
+    byzantine_interleaving_exactness_alignment_mismatches = (
+        byzantine_interleaving_exactness_alignment_errors()
+    )
+    projection_bridge_core_source_alignment_mismatches = (
+        projection_bridge_core_source_alignment_errors()
+    )
+    projected_commit_progress_contract_mismatches = (
+        projected_commit_progress_contract_alignment_errors()
+    )
+    projected_commit_progress_spec_contract_mismatches = (
+        projected_commit_progress_spec_contract_errors()
+    )
+    source_commit_progress_spec_contract_mismatches = (
+        source_commit_progress_spec_contract_errors()
+    )
+    top_level_commit_spec_contract_mismatches = (
+        top_level_commit_spec_contract_errors()
+    )
+    direct_delivered_first_contract_mismatches = (
+        direct_delivered_first_gate_conjunct_contract_errors()
+    )
+    direct_delivered_first_clean_cfg_mismatches = (
+        direct_delivered_first_clean_cfg_errors()
+    )
+    direct_vote_first_contract_mismatches = (
+        direct_vote_first_gate_conjunct_contract_errors()
+    )
+    direct_vote_first_clean_cfg_mismatches = direct_vote_first_clean_cfg_errors()
+    direct_interleaving_contract_mismatches = (
+        direct_interleaving_gate_conjunct_contract_errors()
+    )
+    direct_interleaving_clean_cfg_mismatches = (
+        direct_interleaving_clean_cfg_errors()
+    )
+    byzantine_interleaving_contract_mismatches = (
+        byzantine_interleaving_gate_conjunct_contract_errors()
+    )
+    byzantine_interleaving_clean_cfg_mismatches = (
+        byzantine_interleaving_clean_cfg_errors()
+    )
+    projection_gate_contract_mismatches = projection_gate_conjunct_contract_errors()
+    projection_clean_cfg_mismatches = projection_clean_cfg_errors()
     consensus_core_root_cfg_check_contract_mismatches = (
         consensus_core_root_cfg_check_contract_errors()
     )
@@ -17915,6 +20959,7 @@ def main() -> int:
     ci_modes = fast_ci_modes + expected_failure_modes + nightly_ci_modes
     readme_modes = command_modes(README, APALACHE_COMMAND_RE)
     readme_tlc_modes = command_modes(README, TLC_COMMAND_RE)
+    readme_tlc_bug_modes = bug_modes(readme_tlc_modes)
     readme_fast_table_modes = documented_fast_table_modes(README)
     readme_apalache_length_rows = documented_apalache_length_rows(README)
     readme_apalache_length_shape_mismatches = apalache_length_table_shape_errors(
@@ -18099,22 +21144,26 @@ def main() -> int:
     missing_tlc_runner_modes = sorted_unique(
         mode
         for mode in readme_fast_table_set
-        if matching_case(mode, tlc_cases) is None
+        if mode not in APALACHE_ONLY_PR_MODES
+        and matching_case(mode, tlc_cases) is None
     )
     missing_readme_tlc_commands = sorted_unique(
-        readme_fast_table_set - readme_tlc_set
+        readme_fast_table_set - readme_tlc_set - APALACHE_ONLY_PR_MODES
     )
     exact_tlc_fast_modes = exact_fast_runner_modes(tlc_cases)
     undocumented_tlc_runner_modes = sorted_unique(
         exact_tlc_fast_modes - readme_fast_table_set
     )
+    documented_tlc_bug_modes = readme_bug_modes | readme_tlc_bug_modes
     documented_bug_modes_missing_tlc_runner = sorted_unique(
-        mode for mode in readme_bug_modes if matching_case(mode, tlc_cases) is None
+        mode
+        for mode in documented_tlc_bug_modes
+        if matching_case(mode, tlc_cases) is None
     )
     tlc_expected_failure_without_marker = modes_without_expected_failure_marker(
-        readme_bug_modes, tlc_cases, "TLC"
+        documented_tlc_bug_modes, tlc_cases, "TLC"
     )
-    tlc_non_bug_modes = tlc_modes_to_resolve - readme_bug_modes
+    tlc_non_bug_modes = tlc_modes_to_resolve - documented_tlc_bug_modes
     tlc_baseline_with_expected_failure_marker = modes_with_unexpected_failure_marker(
         tlc_non_bug_modes, tlc_cases, "TLC"
     )
@@ -18129,6 +21178,31 @@ def main() -> int:
     mutation_cfg_name_mismatches = mutation_cfg_name_errors(
         readme_bug_modes, apalache_cases, "Apalache"
     ) + mutation_cfg_name_errors(readme_bug_modes, tlc_cases, "TLC")
+    source_safety_mutation_cfg_mismatches = source_safety_mutation_cfg_errors()
+    projection_mutation_bridge_cfg_mismatches = (
+        projection_mutation_bridge_cfg_errors()
+    )
+    direct_delivered_first_progress_mutation_cfg_mismatches = (
+        direct_delivered_first_progress_mutation_cfg_errors()
+    )
+    direct_vote_first_progress_mutation_cfg_mismatches = (
+        direct_vote_first_progress_mutation_cfg_errors()
+    )
+    direct_interleaving_progress_mutation_cfg_mismatches = (
+        direct_interleaving_progress_mutation_cfg_errors()
+    )
+    projection_progress_mutation_cfg_mismatches = (
+        projection_progress_mutation_cfg_errors()
+    )
+    byzantine_interleaving_progress_mutation_cfg_mismatches = (
+        byzantine_interleaving_progress_mutation_cfg_errors()
+    )
+    direct_mutation_family_alignment_mismatches = (
+        direct_mutation_family_alignment_errors()
+    )
+    byzantine_mutation_family_alignment_mismatches = (
+        byzantine_mutation_family_alignment_errors()
+    )
     module_identity_mismatches = module_identity_errors(
         tlc_modes_to_resolve, apalache_cases, tlc_cases
     )
@@ -18385,6 +21459,26 @@ def main() -> int:
             "Sumeragi formal runner invocations do not bind selected proof inputs:\n"
             + format_items(runner_invocation_mismatches)
         )
+    if top_level_cfg_behavior_mismatches:
+        errors.append(
+            "Sumeragi top-level CFG behavior bindings drifted:\n"
+            + format_items(top_level_cfg_behavior_mismatches)
+        )
+    if top_level_cfg_deadlock_mismatches:
+        errors.append(
+            "Sumeragi top-level CFG deadlock policy drifted:\n"
+            + format_items(top_level_cfg_deadlock_mismatches)
+        )
+    if top_level_cfg_constant_mismatches:
+        errors.append(
+            "Sumeragi top-level CFG constants drifted:\n"
+            + format_items(top_level_cfg_constant_mismatches)
+        )
+    if top_level_fast_cfg_check_mismatches:
+        errors.append(
+            "Sumeragi fast CFG sentinel checks drifted:\n"
+            + format_items(top_level_fast_cfg_check_mismatches)
+        )
     if top_level_cfg_check_parity_mismatches:
         errors.append(
             "Sumeragi top-level Apalache/TLC CFG proof checks diverge:\n"
@@ -18544,6 +21638,125 @@ def main() -> int:
                 rbc_live_evidence_causality_envelope_contract_mismatches
             )
         )
+    if byzantine_top_contract_mismatches:
+        errors.append(
+            "Sumeragi Byzantine top-level proof aggregates drifted:\n"
+            + format_items(byzantine_top_contract_mismatches)
+        )
+    if byzantine_top_cfg_mismatches:
+        errors.append(
+            "Sumeragi Byzantine top-level cfg behavior/checks drifted:\n"
+            + format_items(byzantine_top_cfg_mismatches)
+        )
+    if byzantine_top_corridor_contract_mismatches:
+        errors.append(
+            "Sumeragi Byzantine top-level corridor contract alignment "
+            "drifted:\n"
+            + format_items(byzantine_top_corridor_contract_mismatches)
+        )
+    if byzantine_top_projection_contract_mismatches:
+        errors.append(
+            "Sumeragi Byzantine top/projection contract alignment drifted:\n"
+            + format_items(byzantine_top_projection_contract_mismatches)
+        )
+    if projection_bridge_interleaving_contract_mismatches:
+        errors.append(
+            "Sumeragi projection bridge interleaving contract alignment "
+            "drifted:\n"
+            + format_items(projection_bridge_interleaving_contract_mismatches)
+        )
+    if source_progress_safety_contract_mismatches:
+        errors.append(
+            "Sumeragi source progress safety envelope contract alignment "
+            "drifted:\n"
+            + format_items(source_progress_safety_contract_mismatches)
+        )
+    if byzantine_interleaving_exactness_alignment_mismatches:
+        errors.append(
+            "Sumeragi Byzantine interleaving exactness alignment drifted:\n"
+            + format_items(byzantine_interleaving_exactness_alignment_mismatches)
+        )
+    if projection_bridge_core_source_alignment_mismatches:
+        errors.append(
+            "Sumeragi projection bridge core/source alignment drifted:\n"
+            + format_items(projection_bridge_core_source_alignment_mismatches)
+        )
+    if projected_commit_progress_contract_mismatches:
+        errors.append(
+            "Sumeragi projected commit progress safety contract alignment "
+            "drifted:\n"
+            + format_items(projected_commit_progress_contract_mismatches)
+        )
+    if projected_commit_progress_spec_contract_mismatches:
+        errors.append(
+            "Sumeragi projected commit progress spec/fairness contract "
+            "drifted:\n"
+            + format_items(projected_commit_progress_spec_contract_mismatches)
+        )
+    if source_commit_progress_spec_contract_mismatches:
+        errors.append(
+            "Sumeragi source commit progress spec/fairness contracts "
+            "drifted:\n"
+            + format_items(source_commit_progress_spec_contract_mismatches)
+        )
+    if top_level_commit_spec_contract_mismatches:
+        errors.append(
+            "Sumeragi top-level commit spec/fairness contracts drifted:\n"
+            + format_items(top_level_commit_spec_contract_mismatches)
+        )
+    if direct_delivered_first_contract_mismatches:
+        errors.append(
+            "Sumeragi direct delivered-first progress safety aggregate "
+            "drifted:\n"
+            + format_items(direct_delivered_first_contract_mismatches)
+        )
+    if direct_delivered_first_clean_cfg_mismatches:
+        errors.append(
+            "Sumeragi direct delivered-first clean cfg behavior/checks drifted:\n"
+            + format_items(direct_delivered_first_clean_cfg_mismatches)
+        )
+    if direct_vote_first_contract_mismatches:
+        errors.append(
+            "Sumeragi direct vote-first progress safety aggregate drifted:\n"
+            + format_items(direct_vote_first_contract_mismatches)
+        )
+    if direct_vote_first_clean_cfg_mismatches:
+        errors.append(
+            "Sumeragi direct vote-first clean cfg behavior/checks drifted:\n"
+            + format_items(direct_vote_first_clean_cfg_mismatches)
+        )
+    if direct_interleaving_contract_mismatches:
+        errors.append(
+            "Sumeragi direct interleaving progress safety aggregate "
+            "drifted:\n"
+            + format_items(direct_interleaving_contract_mismatches)
+        )
+    if direct_interleaving_clean_cfg_mismatches:
+        errors.append(
+            "Sumeragi direct interleaving clean cfg behavior/checks drifted:\n"
+            + format_items(direct_interleaving_clean_cfg_mismatches)
+        )
+    if byzantine_interleaving_contract_mismatches:
+        errors.append(
+            "Sumeragi Byzantine interleaving progress safety aggregate "
+            "drifted:\n"
+            + format_items(byzantine_interleaving_contract_mismatches)
+        )
+    if byzantine_interleaving_clean_cfg_mismatches:
+        errors.append(
+            "Sumeragi Byzantine interleaving clean cfg behavior/checks drifted:\n"
+            + format_items(byzantine_interleaving_clean_cfg_mismatches)
+        )
+    if projection_gate_contract_mismatches:
+        errors.append(
+            "Sumeragi Byzantine projection gate proof aggregates drifted:\n"
+            + format_items(projection_gate_contract_mismatches)
+        )
+    if projection_clean_cfg_mismatches:
+        errors.append(
+            "Sumeragi Byzantine projection clean cfg behavior/checks drifted:\n"
+            + format_items(projection_clean_cfg_mismatches)
+        )
     if consensus_core_root_cfg_check_contract_mismatches:
         errors.append(
             "Sumeragi consensus-core root CFG check roles drifted:\n"
@@ -18629,6 +21842,57 @@ def main() -> int:
             "mutation-name fragments:\n"
             + format_items(mutation_cfg_name_mismatches)
         )
+    if source_safety_mutation_cfg_mismatches:
+        errors.append(
+            "Sumeragi source safety mutation cfgs must check the fast "
+            "type/exactness surface:\n"
+            + format_items(source_safety_mutation_cfg_mismatches)
+        )
+    if projection_mutation_bridge_cfg_mismatches:
+        errors.append(
+            "Sumeragi projection mutation cfgs must check the full bridge:\n"
+            + format_items(projection_mutation_bridge_cfg_mismatches)
+        )
+    if direct_delivered_first_progress_mutation_cfg_mismatches:
+        errors.append(
+            "Sumeragi direct delivered-first progress mutation cfgs must "
+            "bind progress behavior and check the safety/progress surface:\n"
+            + format_items(direct_delivered_first_progress_mutation_cfg_mismatches)
+        )
+    if direct_vote_first_progress_mutation_cfg_mismatches:
+        errors.append(
+            "Sumeragi direct vote-first progress mutation cfgs must bind "
+            "progress behavior and check the safety/progress surface:\n"
+            + format_items(direct_vote_first_progress_mutation_cfg_mismatches)
+        )
+    if direct_interleaving_progress_mutation_cfg_mismatches:
+        errors.append(
+            "Sumeragi direct interleaving progress mutation cfgs must "
+            "bind progress behavior and check the safety/progress surface:\n"
+            + format_items(direct_interleaving_progress_mutation_cfg_mismatches)
+        )
+    if byzantine_interleaving_progress_mutation_cfg_mismatches:
+        errors.append(
+            "Sumeragi Byzantine interleaving progress mutation cfgs must "
+            "bind progress behavior and check the safety/progress surface:\n"
+            + format_items(byzantine_interleaving_progress_mutation_cfg_mismatches)
+        )
+    if projection_progress_mutation_cfg_mismatches:
+        errors.append(
+            "Sumeragi projection progress mutation cfgs must bind progress "
+            "behavior and check the safety/progress surface:\n"
+            + format_items(projection_progress_mutation_cfg_mismatches)
+        )
+    if direct_mutation_family_alignment_mismatches:
+        errors.append(
+            "Sumeragi direct mutation family coverage drifted:\n"
+            + format_items(direct_mutation_family_alignment_mismatches)
+        )
+    if byzantine_mutation_family_alignment_mismatches:
+        errors.append(
+            "Sumeragi Byzantine mutation family coverage drifted:\n"
+            + format_items(byzantine_mutation_family_alignment_mismatches)
+        )
     if module_identity_mismatches:
         errors.append(
             "TLC modes resolve to different TLA modules than Apalache:\n"
@@ -18692,7 +21956,7 @@ def main() -> int:
         f"{len(set(nightly_ci_modes))} scheduled/manual modes, "
         f"{len(set(readme_modes))} documented modes, "
         f"{len(readme_fast_table_set)} TLC fast modes, "
-        f"{len(readme_bug_modes)} TLC mutation modes)."
+        f"{len(documented_tlc_bug_modes)} TLC mutation modes)."
     )
     return 0
 

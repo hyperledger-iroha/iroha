@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-07-02
+Last updated: 2026-07-03
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -78,19 +78,42 @@ ID/hash replay across Ethereum, BSC, Solana, TON, and TRON. All-lanes deployment
 admission also rejects template-derived source material hashes replayed into
 `adapter_verifier_vk_hash` or `deployment_receipt_hash`, and the release
 source-inventory gate pins those adversarial checks while the live verifier
-engine replacement remains open. The BSC placeholder replay regression now also
+engine replacement remains open. Rust source-adapter deployment builders,
+material/deployment matchers, and standalone descriptor shape gates now apply the
+same built-in template and placeholder denylist to descriptor-only hashes,
+including deployment receipts, adapter verifier commitments, and Solana/TON audit
+verifier roles. Deployment-bound source-verifier evidence common-shape validation
+also applies that denylist before rebuilt OpenVerify wrappers can return adapter
+verifier commitments. Public readiness/bundle `cryptographic_evidence` rows now
+also reject source-verifier material hashes replayed as source-adapter deployment
+hashes before copied public rows can certify deployment evidence. Release-bundle
+pre-render validation also keeps top-level public crypto hash-role replay
+blockers visible when `source_adapter_gate_audit_hashes` is malformed, so a bad
+audit map cannot hide destination, route, source, or top-level source-gate hash
+role reuse before copied public rows are written. Malformed public user-prover,
+crypto, or input provenance list rows also cannot hide missing required
+lane/domain coverage or safe-path provenance drift while copied row contents are
+redacted. The BSC
+placeholder replay regression now also
 pins governed config-bound source-bridge network, owner, and config placeholder
-reuse, without changing the separate BSC material-only envelope profile. Rust
-source-verifier material constructors and
-production-readiness checks now also reject any non-zero built-in
-profile-template hash replayed into a different deployed role, so deterministic
-template trust-anchor, consensus, message-inclusion, finality, source-state, or
-source-bridge hashes cannot be relabelled as governed live verifier material
-across active launch lanes. The same cross-lane template-hash rejection now
-covers Solana and TON full-light-client audit descriptor hashes, so template
-components from another launch lane cannot be repackaged as audited Tower,
-AccountsDB, bank/fork-choice, masterchain-config, validator-transition, or
-shard-accounts verifier material.
+reuse, while the separate BSC material-only envelope profile remains a
+fail-closed diagnostic shape. Rust
+source-verifier material constructors and production-readiness checks now also
+reject any non-zero built-in placeholder or profile-template hash replayed into
+a different deployed role, source-state verifier, or source bridge code hash, so
+deterministic template trust-anchor, consensus, message-inclusion, finality,
+source-state, or source-bridge hashes cannot be relabelled as governed live
+verifier material across active launch lanes. The same cross-lane template-hash
+rejection now covers Solana and TON full-light-client audit descriptor hashes,
+so template components from another launch lane cannot be repackaged as audited
+Tower, AccountsDB, bank/fork-choice, masterchain-config, validator-transition,
+or shard-accounts verifier material. The lower-level Solana/TON
+full-light-client audit gate hash helpers now also consume the built-in
+placeholder/profile-template denylist directly, so callers cannot bypass the
+descriptor builder by passing placeholder audit hashes as raw gate-hash
+parameters. Solana governed source-adapter readiness now also rejects
+request-bound audit statement hash replays and audited-role verifier hash drift
+before proof matching, matching the TON fail-closed audit-role boundary.
 The Python source evidence helpers share that active-template denylist before
 rendering operator TOML or JSON, covering ETH, BSC, Solana, TON, TRON, and the
 Solana/TON audit hash bundles.
@@ -111,14 +134,20 @@ governed deployment shape instead of the BSC material-only envelope profile.
 BSC source-SDK facade and Core bridge-proof helpers now use the same
 config-bound constructor, and their replay coverage includes coherent
 source-bridge network-id and owner-address drift before deployment-bound
-admission can pass.
-The generic source-adapter deployment builder and matcher now also require
-non-placeholder source material, so the BSC material-only envelope profile can
-pass signed source-proof admission without minting or matching governed
-deployment descriptors. Release-readiness and strict bundle source inventories
-now pin that all-lane material-only readiness guard plus the BSC config-bound
-negative markers, so the coverage cannot silently fall back to an ETH-only
-check. Solana and TON deployment-binding derivation now also refuses
+admission can pass. BSC mainnet destination binding now rejects BSC testnet
+chain-id aliases at both the builder and deployment-bound parser. BSC
+placeholder material-only source-adapter openings now bind the decoded
+OpenVerify verifier key, schema, public-input columns, and FastPQ public I/O hash
+before proof structure can pass, so retargeted source-event and inner
+OpenVerify metadata replays cannot recover a verifier commitment.
+The generic source-adapter deployment builder, matcher, production proof gate,
+and local-admission path now require governed non-placeholder source material
+plus deployment evidence, so the BSC material-only envelope profile cannot pass
+production source-proof admission or mint/match governed deployment descriptors.
+Release-readiness and strict bundle source inventories now pin that all-lane
+material-only readiness guard plus the BSC fail-closed/config-bound negative
+markers, so the coverage cannot silently fall back to an ETH-only check.
+Solana and TON deployment-binding derivation now also refuses
 standalone-valid descriptors unless their full-light-client audit hashes match
 the governed launch set, and the Rust, JavaScript, and Python helpers pin
 drifted-audit negatives. TON descriptor-to-binding promotion now mirrors the
@@ -152,12 +181,91 @@ TRON copied summary hashes that join source bridge, destination verifier, and
 route allowlist readiness now also require exact string metadata before hash
 parsing: source bridge config/network ids, destination network and binding
 hashes, source material hashes, and source deployment hashes reject hostile
-non-string copied values without stringification.
+non-string copied values without stringification. TRON live source-event
+transaction readiness now also requires the computed witness seal hash to match
+an expected governed witness-seal hash before
+`source_event_transaction_production_ready` can become true, and copied
+source-event replay metadata must already be exact public strings before replay
+arguments can be generated. TRON route-canary replay/full-TOML copied metadata
+now follows the same exact-string boundary for route, destination, transcript,
+and signature hashes, and generated full-TOML/offline arguments now require
+source bridge, source-record input, destination verifier, route, and canary
+metadata to pass exact public-string parsing before required flags are emitted;
+TRON Torii destination query parameters now apply the same exact parsing before
+publishing copied destination verifier metadata, and TRON source-record
+preflight now parses copied source bridge domains, owner/address, network id,
+and config hash exactly before constructing governed source hashes. TRON
+full-TOML metadata annotations now use exact parsed comment values for source
+bridge, destination verifier, and route-canary copied metadata before rendering,
+and route-canary collection helpers parse copied destination verifier metadata
+exactly before event matching or used-message-proof checks. TRON optional live
+hex argument helpers now also reject non-string namespace values before
+delegating to bytes32 or blob parsers, so fixture or runtime callers cannot
+stringify hostile objects into route, witness-seal, or receipt-proof arguments.
+Inline TRON witness-schedule payload inputs now share that exact parser boundary
+before active-schedule proof construction, while file-backed payloads remain
+explicit text reads with the existing whitespace-tolerant normalization. TRON
+runtime hex32 list inputs now also reject scalar source-inclusion branch values
+before entry parsing, so operator proof branches cannot be interpreted
+character-by-character or through hostile object iteration. Repeated
+witness-seal signature and witness-schedule transition inputs now use the same
+shape gate before parsing individual signature hex or JSON transition entries.
 EVM live destination summaries now mirror that copied-metadata boundary for
 destination, source-record, route allowlist, route-canary, and Torii query
 fields: copied non-string hashes or addresses are rejected before parser
 dispatch or generated TOML argument emission, with hostile-object coverage
-pinning that no operator scalar text is stringified.
+pinning that no operator scalar text is stringified. EVM destination-live
+runtime namespace inputs now also validate optional bytes32 hashes and
+route-canary integer pins before RPC, so direct callers cannot smuggle
+non-bytes or hostile objects into expected-network, destination-binding,
+route-allowlist, source-record, or route-canary evidence arguments.
+EVM source-live runtime namespace inputs now apply the same pre-RPC bytes32
+validation to expected source bridge code hashes, deployment transaction pins,
+source component hashes, adapter verifier keys, deployment receipt hashes, and
+expected source-record hashes before live source bridge evidence collection.
+EVM receipt-proof direct collector inputs now validate transaction hashes,
+source bridge addresses, receipt-only mode, and explicit expected chain ids
+before RPC, so malformed namespace values cannot trigger provider calls or be
+stringified into receipt proof evidence.
+Solana live RPC commitment values now also require exact `finalized` or
+`confirmed` text before collection or imported summary validation, so hostile
+scalar equality/hash hooks cannot affect live snapshot admission.
+Solana live expected pins now also normalize destination-binding hashes,
+verifier-code hashes, and ProgramData addresses before summary comparison, so
+hostile scalar equality hooks cannot mark live evidence ready or leak into drift
+diagnostics. TON live expected pins now mirror that boundary for
+destination-binding, verifier-code, and account-state hashes before summary
+comparison or TOML readiness can open.
+ETH/BSC source-bridge expected source verifier material and source-adapter
+deployment record hashes now normalize before summary comparison and TOML
+readiness, so hostile equality hooks cannot mark direct source records ready.
+Solana/TON source-state expected material, deployment, and full-light-client
+gate hashes now use the same normalized non-zero bytes32 boundary before
+readiness comparisons can run.
+TRON source-bridge expected config, source-record, source-gate,
+destination-binding, and route-allowlist hashes now share that boundary before
+readiness comparisons can run.
+EVM/Solana/TON destination expected binding hashes now normalize through the
+same non-zero bytes32 boundary before JSON, TOML, or CLI readiness comparisons.
+Python and JavaScript SDK Solana route-canary transcripts now also reject
+duplicate camelCase and snake_case aliases for governed route hashes, source
+material/deployment hashes, verifier identity, ProgramData address, and
+ProgramData executable bytes before canonical bytes are hashed. The strict
+release-bundle and readiness inventories pin representative exact
+alias-rejection messages for those helpers.
+The JavaScript source-adapter verifier VK helper now also rejects duplicate
+`sourceDomain`/`source_domain` aliases before computing the OpenVerify
+commitment, and the strict release inventory pins the source and dist helper
+plus source/dist regressions.
+The JavaScript Solana production proof-result wrapper now also rejects duplicate
+`mainnetGenesisHash`/`mainnet_genesis_hash` aliases on raw request objects before
+proof wrapping, with the strict release inventory pinning source, dist, and the
+focused source regression.
+Python and JavaScript source-adapter deployment binding normalizers now reject
+duplicate source/target-domain and deployment-hash aliases before canonical
+binding hashes are derived, and JavaScript native destination binding helpers
+reject duplicate target-domain object aliases before route tooling hashes a
+display-different lane.
 EVM destination-live, source-live, and receipt-proof JSON-RPC `--rpc-url`
 inputs now also require exact URL text and public-DNS HTTPS except loopback HTTP
 for local development; credentialed, query/fragment-bearing, localhost,
@@ -291,7 +399,11 @@ The Python TON live CLI parser helpers now apply that boundary to verifier raw
 addresses and bytes32 evidence hashes before delegated TON parser helpers can
 run string-like hooks. The Python TRON live CLI parser helpers now apply the
 same boundary to TRON address payloads and bytes32 evidence hashes before
-delegated address or hex parser helpers can run string-like hooks.
+delegated address or hex parser helpers can run string-like hooks, including
+optional hex namespace helpers and inline witness-schedule payload inputs used
+by live evidence collection; source-inclusion branch lists are shape-checked
+before hex entry parsing, and repeated witness-seal signature / schedule
+transition inputs reject scalar containers before item parsing.
 TRON live `--tron-node-url` inputs now also require exact URL text and
 public-DNS HTTPS except loopback HTTP for local development; credentialed,
 query/fragment-bearing, localhost, IP-literal, single-label, `.local`,
@@ -3999,7 +4111,10 @@ redistributable schemas, and official trust/revocation bundles.
 						  trust anchors, and record/package construction
 						  fail-fast on non-Ed25519 reviewer signing keys or all-zero Ed25519
 						  reviewer private-key payloads before public-key derivation, evidence
-						  derivation, or audit-byte validation; the Soracloud full-bootstrap schemas advertise the
+						  derivation, or audit-byte validation. Release-audit signoff validation
+						  now also routes reviewer signatures through Ed25519 signature
+						  admission, rejecting all-zero, short, small-order, or noncanonical
+						  payloads before backend verification; the Soracloud full-bootstrap schemas advertise the
 						  Ed25519 trusted-reviewer payload contract. Soracloud FHE execution-policy
 						  validation now uses the same crypto reviewer-id and reviewer-public-key
 						  preflights, so placeholder reviewer ids fail on the trusted-reviewer
@@ -5087,11 +5202,23 @@ redistributable schemas, and official trust/revocation bundles.
 					  malformed-`R` boundary, SoraFS PoTR receipt validation routes Ed25519
 					  receipt signatures, provider-admission council signatures, and repair
 					  signed-auditor signatures through the same malformed-`R` preflight,
+					  transaction submission receipt verification now pins all-zero, short,
+					  small-order-`R`, and noncanonical-`R` receipt-signature rejection before
+					  receipt signing-byte verification, while generic RAM-LFE execution
+					  receipts and output openings now pin short Ed25519 signature-payload
+					  rejection at the same parse-before-verify boundary,
 					  gateway GAR compact-JWS signatures use the same preflight, alias-proof
 					  council signatures reject inert all-zero payloads and malformed `R`
 					  encodings before bundle verification, SoraFS proof-token binary decode
 					  routes token signatures through the shared strict `R` parser before
-					  admission, and direct byte-key/preparsed batch APIs now filter exact
+					  admission, SoraFS governance log and PoTR ML-DSA signatures now
+					  preflight ML-DSA-65 public-key and detached-signature material before
+					  opaque signature wrapping, shared
+					  `iroha_crypto::mldsa65_parse_signature` and Connect identifier receipt
+					  parsing now preflight ML-DSA-65 detached signatures before opaque
+					  signature storage, and Torii operator-auth ML-DSA header signatures
+					  now use the same shared parser before request verification,
+					  and direct byte-key/preparsed batch APIs now filter exact
 					  verify-cache hits before signature parsing and backend setup;
 	  the thread-local exact verify-ok cache now keeps two entries per exact slot
 	  to reduce collision churn for 32-byte transaction-hash verification tuples

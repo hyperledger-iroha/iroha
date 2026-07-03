@@ -3496,6 +3496,57 @@ mod tests {
         }
     }
 
+    #[test]
+    fn verify_json_signature_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let key_pair = checked_seed_keypair(0x43);
+        let payload = json_object(vec![(
+            "kind",
+            string_value("offline-v2-json-ed25519-r-admission"),
+        )]);
+        let payload_bytes = json::to_vec(&payload).expect("offline v2 JSON signing payload");
+        let valid_signature = checked_signature(&key_pair, &payload_bytes);
+        verify_json_signature(
+            key_pair.public_key(),
+            &payload,
+            &BASE64_STANDARD.encode(valid_signature.payload()),
+            "offline_v2_json_signature_test",
+            "OFFLINE_V2_SIGNATURE_INVALID",
+            "Offline Notes V2 signature_base64 is invalid.",
+        )
+        .expect("valid offline v2 JSON signature verifies before mutation");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = valid_signature.payload().to_vec();
+            malformed[..replacement_r.len()].copy_from_slice(&replacement_r);
+
+            assert_eq!(
+                validation_code(verify_json_signature(
+                    key_pair.public_key(),
+                    &payload,
+                    &BASE64_STANDARD.encode(malformed),
+                    "offline_v2_json_signature_test",
+                    "OFFLINE_V2_SIGNATURE_INVALID",
+                    "Offline Notes V2 signature_base64 is invalid.",
+                )),
+                "OFFLINE_V2_SIGNATURE_INVALID",
+                "{label} Ed25519 signature R must fail closed"
+            );
+        }
+    }
+
     fn app_error_code(result: Result<impl Sized, Error>) -> &'static str {
         match result {
             Err(Error::AppQueryValidation { code, .. } | Error::AppForbidden { code, .. }) => code,

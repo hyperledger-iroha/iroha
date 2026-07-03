@@ -3487,7 +3487,8 @@ mod tests {
             .checked_sub(1)
             .expect("transaction signature payload should never be empty");
         signature_payload[flip_index] ^= 0xFF;
-        let forged_signature = iroha_crypto::Signature::from_bytes(&signature_payload);
+        let forged_signature = iroha_crypto::Signature::try_from_bytes(&signature_payload)
+            .expect("tampered gossip signature remains structurally admissible");
         tx.set_signature(TransactionSignature(
             iroha_crypto::SignatureOf::from_signature(forged_signature),
         ));

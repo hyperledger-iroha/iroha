@@ -298,7 +298,8 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([manifest_tag; 32]),
-            iroha_crypto::Signature::from_bytes(&[0xAA; 64]),
+            iroha_crypto::Signature::try_from_bytes(&[0xAA; 64])
+                .expect("checked core DA proof acknowledgement signature fixture"),
         )
     }
 

@@ -763,7 +763,8 @@ mod tests {
         let mut set = std::collections::BTreeSet::new();
         for (idx, fill) in [0x11_u8, 0x7f_u8, 0xe3_u8].into_iter().enumerate() {
             let payload = [fill; 64];
-            let signature = Signature::from_bytes(&payload);
+            let signature =
+                Signature::try_from_bytes(&payload).expect("nonzero block-signature codec fixture");
             let block_signature =
                 BlockSignature::new(idx as u64, SignatureOf::from_signature(signature));
             set.insert(block_signature);

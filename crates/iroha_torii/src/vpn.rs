@@ -1791,6 +1791,33 @@ mod tests {
         assert_eq!(encoded, hex::encode(payload));
     }
 
+    #[test]
+    fn parse_metering_public_key_rejects_inert_or_malformed_ed25519_material() {
+        const SMALL_ORDER_POINT: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_IDENTITY: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        for (label, public_key_bytes) in [
+            ("all-zero", [0_u8; 32]),
+            ("small-order", SMALL_ORDER_POINT),
+            ("noncanonical", NONCANONICAL_IDENTITY),
+        ] {
+            let error = parse_metering_public_key(&hex::encode(public_key_bytes))
+                .expect_err("malformed metering key material must fail closed");
+
+            assert!(
+                format!("{error:?}").contains("metering_public_key_hex"),
+                "{label} public key rejection should name the field: {error:?}"
+            );
+        }
+    }
+
     async fn create_quote_for_account(
         app: SharedAppState,
         account: &AccountId,

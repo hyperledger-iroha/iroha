@@ -25268,7 +25268,8 @@ mod offline_note_instance_guardrail_tests {
         for (index, byte) in bytes.iter_mut().enumerate() {
             *byte = seed.wrapping_add(u8::try_from(index).expect("signature index fits"));
         }
-        Signature::from_bytes(&bytes)
+        Signature::try_from_bytes(&bytes)
+            .expect("offline-note guardrail fixture signature passes admission")
     }
 
     fn sample_account(seed: u8) -> AccountId {
@@ -38914,7 +38915,8 @@ mod offline_note_real_prover_tests {
         for (index, byte) in bytes.iter_mut().enumerate() {
             *byte = seed.wrapping_add(u8::try_from(index).expect("signature index fits"));
         }
-        Signature::from_bytes(&bytes)
+        Signature::try_from_bytes(&bytes)
+            .expect("offline-note recursive fixture signature passes admission")
     }
 
     fn sample_account(seed: u8) -> AccountId {

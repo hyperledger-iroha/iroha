@@ -496,7 +496,7 @@ def test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_sourc
         assert "source_bridge_address is required for SCCP source-event evidence" in str(exc)
     else:
         raise AssertionError("receipt-only evidence was accepted without explicit opt-in")
-    assert [call[0] for call in opener.calls] == ["eth_chainId"]
+    assert opener.calls == []
 
 
 def test_collect_receipt_proof_allows_explicit_receipt_only_mode():
@@ -712,6 +712,81 @@ def test_collect_receipt_proof_rejects_boolean_domain_and_expected_chain_id_befo
             assert str(exc) == expected_message
         else:
             raise AssertionError("boolean receipt proof domain metadata was accepted")
+
+
+def test_collect_receipt_proof_rejects_direct_namespace_args_before_rpc():
+    module = load_module()
+
+    class HostileImportedScalar:
+        def __str__(self):
+            raise AssertionError("secret-token receipt namespace scalar was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token receipt namespace scalar was repr'd")
+
+    def opener(_request, timeout=15.0):
+        del timeout
+        raise AssertionError("receipt proof namespace validation reached RPC")
+
+    cases = (
+        (
+            {"transaction_hash": HostileImportedScalar()},
+            "transaction_hash must be bytes",
+        ),
+        (
+            {"transaction_hash": b"\x11" * 31},
+            "transaction_hash must be 32 bytes",
+        ),
+        (
+            {"transaction_hash": b"\x00" * 32},
+            "transaction_hash must not be zero",
+        ),
+        (
+            {"source_bridge_address": HostileImportedScalar()},
+            "source_bridge_address must be bytes",
+        ),
+        (
+            {"source_bridge_address": b"\x22" * 19},
+            "source_bridge_address must be 20 bytes",
+        ),
+        (
+            {"source_bridge_address": b"\x00" * 20},
+            "source_bridge_address must not be zero",
+        ),
+        (
+            {"expected_rpc_chain_id": 0},
+            "--expected-rpc-chain-id must be a positive u64 integer",
+        ),
+        (
+            {"expected_rpc_chain_id": 2**64},
+            "--expected-rpc-chain-id must be a positive u64 integer",
+        ),
+        (
+            {"expected_rpc_chain_id": module.EXPECTED_RPC_CHAIN_IDS[module.SCCP_DOMAIN_BSC]},
+            "--expected-rpc-chain-id must match the canonical eth mainnet chain id 1",
+        ),
+    )
+    for overrides, expected_message in cases:
+        kwargs = {
+            "domain": module.SCCP_DOMAIN_ETH,
+            "transaction_hash": bytes.fromhex("11" * 32),
+            "source_bridge_address": bytes.fromhex("22" * 20),
+            "allow_receipt_only_evidence": False,
+            "opener": opener,
+        }
+        kwargs.update(overrides)
+        try:
+            module.collect_receipt_proof_evidence(
+                "https://rpc.example",
+                **kwargs,
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("hostile receipt proof namespace value was accepted")
 
 
 def test_collect_receipt_proof_rejects_noncanonical_chain_id_quantity():

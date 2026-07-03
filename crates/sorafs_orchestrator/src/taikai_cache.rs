@@ -2471,10 +2471,18 @@ mod tests {
         0, 0,
     ];
 
-    fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_with_malformed_ed25519_r(
+        signature: &Signature,
+        replacement_r: &[u8; 32],
+    ) -> Signature {
         let mut payload = signature.payload().to_vec();
-        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
-            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&payload)
     }
 
@@ -2511,18 +2519,26 @@ mod tests {
             .envelope()
             .clone();
         let (body, signer, signature) = envelope.into_parts();
-        let envelope = CacheAdmissionEnvelope::from_parts(
-            body,
-            signer,
-            signature_with_malformed_ed25519_r(&signature),
-        );
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            let envelope = CacheAdmissionEnvelope::from_parts(
+                body.clone(),
+                signer.clone(),
+                signature_with_malformed_ed25519_r(&signature, &replacement_r),
+            );
 
-        assert!(matches!(
-            envelope
-                .verify(issued_ms)
-                .expect_err("malformed envelope signature R must fail admission"),
-            CacheAdmissionError::InvalidSignature
-        ));
+            assert!(
+                matches!(
+                    envelope
+                        .verify(issued_ms)
+                        .expect_err("malformed envelope signature R must fail admission"),
+                    CacheAdmissionError::InvalidSignature
+                ),
+                "{label} envelope signature R must fail admission"
+            );
+        }
     }
 
     #[test]
@@ -2531,18 +2547,26 @@ mod tests {
         let ttl = Duration::from_secs(30);
         let gossip = cache_admission_gossip(TaikaiShardId(7), 44, issued_ms, ttl);
         let (body, signer, signature) = gossip.into_parts();
-        let gossip = CacheAdmissionGossip::from_parts(
-            body,
-            signer,
-            signature_with_malformed_ed25519_r(&signature),
-        );
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            let gossip = CacheAdmissionGossip::from_parts(
+                body.clone(),
+                signer.clone(),
+                signature_with_malformed_ed25519_r(&signature, &replacement_r),
+            );
 
-        assert!(matches!(
-            gossip
-                .verify(issued_ms)
-                .expect_err("malformed gossip signature R must fail admission"),
-            CacheAdmissionError::InvalidSignature
-        ));
+            assert!(
+                matches!(
+                    gossip
+                        .verify(issued_ms)
+                        .expect_err("malformed gossip signature R must fail admission"),
+                    CacheAdmissionError::InvalidSignature
+                ),
+                "{label} gossip signature R must fail admission"
+            );
+        }
     }
 
     #[test]

@@ -4852,6 +4852,17 @@ public sealed class SccpEthereumMainnetTests
             parityFixture.ToriiSubmitPayloadHash,
             parityFixture.SdkResults["dotnet"].ToriiSubmitPayloadHash);
         Assert.Contains(
+            "nativeProverParityFixture.schema",
+            Assert.Throws<ArgumentException>(
+                () => EthereumMainnetNativeEvmProverParityFixture.FromJson(
+                    SampleNativeEvmProverParityFixtureJson(nativeProverBundle).Replace(
+                        "\"schema\": \""
+                            + EthereumMainnetSccp.EthNativeEvmProverParityFixtureSchemaV1
+                            + "\"",
+                        "\"schema\": \"sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1\"",
+                        StringComparison.Ordinal),
+                    nativeProverBundle)).Message);
+        Assert.Contains(
             "valid UTF-8 JSON",
             Assert.Throws<ArgumentException>(
                 () => EthereumMainnetNativeEvmProverParityFixture.FromJsonBytes(

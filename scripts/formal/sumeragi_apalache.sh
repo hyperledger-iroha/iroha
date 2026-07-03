@@ -30,6 +30,24 @@ case "$mode" in
     cfg_file="$spec_dir/Sumeragi_deep.cfg"
     apalache_length=10
     ;;
+  byzantine-delivered-first-top-fast)
+    spec_file="$spec_dir/Sumeragi.tla"
+    cfg_file="$spec_dir/Sumeragi_byzantine_delivered_first_top_fast.cfg"
+    apalache_length=14
+    typecheck_only=1
+    ;;
+  byzantine-vote-first-top-fast)
+    spec_file="$spec_dir/Sumeragi.tla"
+    cfg_file="$spec_dir/Sumeragi_byzantine_vote_first_top_fast.cfg"
+    apalache_length=14
+    typecheck_only=1
+    ;;
+  byzantine-direct-top-fast)
+    spec_file="$spec_dir/Sumeragi.tla"
+    cfg_file="$spec_dir/Sumeragi_byzantine_direct_top_fast.cfg"
+    apalache_length=14
+    typecheck_only=1
+    ;;
   fork-fast)
     spec_file="$spec_dir/SumeragiForkSafety.tla"
     cfg_file="$spec_dir/SumeragiForkSafety_fast.cfg"
@@ -1529,6 +1547,71 @@ case "$mode" in
     spec_file="$spec_dir/SumeragiWorkerTickGapGate.tla"
     cfg_file="$spec_dir/SumeragiWorkerTickGapGate_fast.cfg"
     apalache_length=1
+    ;;
+  direct-delivered-first-corridor-fast)
+    spec_file="$spec_dir/SumeragiDirectDeliveredFirstCorridorGate.tla"
+    cfg_file="$spec_dir/SumeragiDirectDeliveredFirstCorridorGate_fast.cfg"
+    apalache_length=1
+    ;;
+  direct-delivered-first-corridor-bug-*)
+    bug_name="${mode#direct-delivered-first-corridor-bug-}"
+    cfg_bug_name="${bug_name//-/_}"
+    spec_file="$spec_dir/SumeragiDirectDeliveredFirstCorridorGate.tla"
+    cfg_file="$spec_dir/SumeragiDirectDeliveredFirstCorridorGate_bug_${cfg_bug_name}.cfg"
+    apalache_length=1
+    expect_failure=1
+    ;;
+  direct-vote-first-corridor-fast)
+    spec_file="$spec_dir/SumeragiDirectVoteFirstCorridorGate.tla"
+    cfg_file="$spec_dir/SumeragiDirectVoteFirstCorridorGate_fast.cfg"
+    apalache_length=1
+    ;;
+  direct-vote-first-corridor-bug-*)
+    bug_name="${mode#direct-vote-first-corridor-bug-}"
+    cfg_bug_name="${bug_name//-/_}"
+    spec_file="$spec_dir/SumeragiDirectVoteFirstCorridorGate.tla"
+    cfg_file="$spec_dir/SumeragiDirectVoteFirstCorridorGate_bug_${cfg_bug_name}.cfg"
+    apalache_length=1
+    expect_failure=1
+    ;;
+  direct-commit-interleaving-fast)
+    spec_file="$spec_dir/SumeragiDirectCommitInterleavingGate.tla"
+    cfg_file="$spec_dir/SumeragiDirectCommitInterleavingGate_fast.cfg"
+    apalache_length=14
+    ;;
+  direct-commit-interleaving-bug-*)
+    bug_name="${mode#direct-commit-interleaving-bug-}"
+    cfg_bug_name="${bug_name//-/_}"
+    spec_file="$spec_dir/SumeragiDirectCommitInterleavingGate.tla"
+    cfg_file="$spec_dir/SumeragiDirectCommitInterleavingGate_bug_${cfg_bug_name}.cfg"
+    apalache_length=14
+    expect_failure=1
+    ;;
+  byzantine-commit-interleaving-fast)
+    spec_file="$spec_dir/SumeragiByzantineCommitInterleavingGate.tla"
+    cfg_file="$spec_dir/SumeragiByzantineCommitInterleavingGate_fast.cfg"
+    apalache_length=14
+    ;;
+  byzantine-commit-interleaving-bug-*)
+    bug_name="${mode#byzantine-commit-interleaving-bug-}"
+    cfg_bug_name="${bug_name//-/_}"
+    spec_file="$spec_dir/SumeragiByzantineCommitInterleavingGate.tla"
+    cfg_file="$spec_dir/SumeragiByzantineCommitInterleavingGate_bug_${cfg_bug_name}.cfg"
+    apalache_length=14
+    expect_failure=1
+    ;;
+  byzantine-commit-projection-fast)
+    spec_file="$spec_dir/SumeragiByzantineCommitProjectionGate.tla"
+    cfg_file="$spec_dir/SumeragiByzantineCommitProjectionGate_fast.cfg"
+    apalache_length=14
+    ;;
+  byzantine-commit-projection-bug-*)
+    bug_name="${mode#byzantine-commit-projection-bug-}"
+    cfg_bug_name="${bug_name//-/_}"
+    spec_file="$spec_dir/SumeragiByzantineCommitProjectionGate.tla"
+    cfg_file="$spec_dir/SumeragiByzantineCommitProjectionGate_bug_${cfg_bug_name}.cfg"
+    apalache_length=14
+    expect_failure=1
     ;;
   proposal-parent-resolution-fast)
     spec_file="$spec_dir/SumeragiProposalParentResolutionGate.tla"

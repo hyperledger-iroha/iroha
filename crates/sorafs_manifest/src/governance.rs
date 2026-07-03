@@ -6,6 +6,7 @@ use blake3::Hasher;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
+use soranet_pq::MlDsaSuite;
 use thiserror::Error;
 
 use crate::{
@@ -2241,6 +2242,20 @@ fn verify_mldsa_governance_signature(
     publisher_signature: &GovernanceLogSignatureV1,
     payload_bytes: &[u8],
 ) -> Result<(), GovernanceLogSignatureVerificationError> {
+    MlDsaSuite::MlDsa65
+        .validate_public_key(&publisher_signature.public_key)
+        .map_err(
+            |err| GovernanceLogSignatureVerificationError::InvalidPublicKey {
+                reason: err.to_string(),
+            },
+        )?;
+    MlDsaSuite::MlDsa65
+        .validate_signature(&publisher_signature.signature)
+        .map_err(
+            |err| GovernanceLogSignatureVerificationError::Verification {
+                reason: format!("invalid signature material: {err}"),
+            },
+        )?;
     let public_key = PublicKey::from_bytes(Algorithm::MlDsa, &publisher_signature.public_key)
         .map_err(
             |err| GovernanceLogSignatureVerificationError::InvalidPublicKey {
@@ -3449,6 +3464,37 @@ mod tests {
             node.verify_publisher_signature(),
             Err(GovernanceLogSignatureVerificationError::Verification { .. })
         ));
+    }
+
+    #[test]
+    fn verify_publisher_signature_rejects_malformed_dilithium3_signature_lengths() {
+        for label in ["short", "overlong"] {
+            let seed = [0xB6; 32];
+            let mut node = governance_node_for_signing();
+            sign_governance_node_mldsa(&mut node, &seed);
+            match label {
+                "short" => {
+                    node.publisher_signature
+                        .signature
+                        .pop()
+                        .expect("signed ML-DSA fixture is non-empty");
+                }
+                "overlong" => node.publisher_signature.signature.push(0xA5),
+                _ => unreachable!("covered labels"),
+            }
+
+            let err = node
+                .verify_publisher_signature()
+                .expect_err("malformed ML-DSA governance signature length must be rejected");
+            assert!(
+                matches!(
+                    &err,
+                    GovernanceLogSignatureVerificationError::Verification { reason }
+                        if reason.contains("signature")
+                ),
+                "{label} ML-DSA governance signature produced unexpected error: {err}"
+            );
+        }
     }
 
     #[test]

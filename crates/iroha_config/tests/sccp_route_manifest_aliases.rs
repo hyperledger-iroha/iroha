@@ -16,11 +16,22 @@ fn base_reader() -> ConfigReader {
 }
 
 fn route_manifest_toml(address_fields: &str) -> String {
+    let blocker_fields = [
+        "production_blockers",
+        "post_deploy_production_blockers",
+        "full_toml_production_blockers",
+        "source_event_transaction_production_blockers",
+        "route_canary_production_blockers",
+    ]
+    .into_iter()
+    .filter(|field| !address_fields.contains(field))
+    .map(|field| format!("{field} = []"))
+    .collect::<Vec<_>>()
+    .join("\n");
+
     format!(
         r#"
 [zk]
-sccp_allow_unready_transparent_proofs = true
-
 [[zk.sccp_route_manifests]]
 version = 1
 route_id = "taira_bsc_xor"
@@ -32,6 +43,7 @@ counterparty_domain = 2
 verifier_target = "EvmContract"
 production_ready = false
 disabled_reason = "test route"
+{blocker_fields}
 network_id_hex = "0x0000000000000000000000000000000000000000000000000000000000000061"
 taira_xor_token_address = "0x1111111111111111111111111111111111111111"
 taira_xor_bridge_address = "0x2222222222222222222222222222222222222222"
