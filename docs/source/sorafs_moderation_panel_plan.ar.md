@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_moderation_panel_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ebafcf5e29c2e62abdfc5d8dabeb1f50a2a142bad2c4280f23a8d3bd97e11585
-source_last_modified: "2026-07-02T10:33:51.542605+00:00"
-translation_last_reviewed: 2026-07-02
-source_mtime: 2026-07-02T10:33:51.542605+00:00
+source_hash: e4c2bc2db1c326aa35ede54424c7a43528193393aba8f26dc08b0057a441329f
+source_last_modified: "2026-07-03T13:35:45.145176+00:00"
+translation_last_reviewed: 2026-07-03
+source_mtime: 2026-07-03T13:35:45.145176+00:00
 ---
 
 # Moderation Appeals & Sortition Panels
@@ -192,18 +192,24 @@ route, viewer role/security/event/export, commit-reveal scenario, publication
 target, outcome, and metric coverage where applicable, shared
 case/roster/tally digest bindings, and threshold-bounded route, event-lag,
 viewer-URL, panel-size, peer-count, validator-count, reviewed peer/validator
-labels, reviewed appeal-intake `--case` labels whose unique inventory matches
-`--case-count`, reviewed sortition-roster `--roster-juror` labels whose unique
-inventory matches `--panel-size`, reviewed evidence-viewer `--viewer-session` labels whose unique
-inventory matches `--session-count`, reviewed juror-notification
+labels. It rejects duplicate or unknown `--verified-claim`, route,
+viewer-role, viewer-security-control, viewer-event-kind, viewer-export-target,
+scenario, outcome, publication-target, and metric inputs before any canary JSON
+is written. It also requires reviewed appeal-intake `--case` labels whose unique
+inventory matches `--case-count`, reviewed sortition-roster `--roster-juror`
+labels whose unique inventory matches `--panel-size`, reviewed evidence-viewer
+`--viewer-session` labels whose unique inventory matches `--session-count`,
+reviewed juror-notification
 `--notification` and `--juror` labels whose unique inventories match the
 notification and juror counts, reviewed commit/reveal `--commit` and `--reveal`
 labels whose unique inventories match the commit and reveal counts, and
 reviewed settlement-integration `--settlement` labels whose unique inventory
 matches `--settlement-count`, reviewed end-to-end `--panel-case` labels whose
-unique inventory matches `--case-count`, and reviewed end-to-end/governance policy-digest
-facts. It forces raw
-evidence,
+unique inventory matches `--case-count`, and reviewed end-to-end/governance
+policy-digest facts. It also derives the reviewed evidence-viewer role, security-control,
+access-event-kind, and export-target count fields, commit/reveal scenario
+count, decision outcome count, and transparency publication-target count from the
+corresponding reviewed inventories before checker prevalidation. It forces raw evidence,
 commit/reveal payload, decision, transaction, ledger, response body, signed URL,
 session token, private juror data, and watermark secret inclusion flags to
 `false`, prevalidates the generated artifact with
@@ -241,39 +247,74 @@ that fail appeal-intake binding and commit/reveal runs that fail roster binding
 do not anchor downstream rollout evidence.
 Appeal-intake artifacts also bind `case_count` to the unique canonical
 `cases[].name` inventory, require `accepted_case_count` to match the
-`cases[].accepted` partition, and reject duplicate case entries before
-promotion can report ready.
+`cases[].accepted` partition, require reviewed lowercase
+`moderation-appeal-case-*` labels without non-production markers, and reject
+duplicate case entries before promotion can report ready.
 Sortition-roster artifacts also bind `panel_size` to the unique canonical
 `jurors[].name` inventory, require `panel_size` to match the
-`jurors[].eligible` partition, and reject duplicate roster juror entries before
-promotion can report ready.
+`jurors[].eligible` partition, require reviewed lowercase
+`moderation-roster-juror-*` labels without non-production markers, and reject
+duplicate roster juror entries before promotion can report ready.
 Appeal-intake, operator-workflow, commit/reveal, and decision-publication
 artifacts also bind `route_count` to the unique canonical `routes[].name`
-inventory and reject duplicate route entries before promotion can report ready.
+inventory and reject duplicate or unknown route entries before promotion can
+report ready.
 Evidence-viewer artifacts also bind `session_count` to the unique canonical
 `sessions[].name` inventory, require `attested_session_count` and
 `logged_session_count` to match the `sessions[].attested` and
-`sessions[].logged` partitions, and reject duplicate session entries before
-promotion can report ready.
+`sessions[].logged` partitions, require reviewed lowercase
+`moderation-viewer-session-*` labels without non-production markers, and reject
+duplicate session entries before promotion can report ready.
+Evidence-viewer artifacts also bind `role_count`, `security_control_count`,
+`access_event_kind_count`, and `export_target_count` to the unique canonical
+`roles_tested`, `viewer_security_controls`, `access_event_kinds`, and
+`export_targets` inventories and reject missing, inflated, duplicate, or
+unknown scalar coverage before promotion can report ready.
 Juror-notification artifacts also bind `notification_count` and `juror_count`
 to the unique canonical `notifications[].name` and `jurors[].name`
 inventories, require `delivered_notification_count` to match the
-`notifications[].delivered` partition, and reject duplicate notification or
+`notifications[].delivered` partition, require reviewed lowercase
+`moderation-notification-*` notification labels and `moderation-juror-*` juror
+labels without non-production markers, and reject duplicate notification or
 juror entries before promotion can report ready.
 Commit/reveal artifacts also bind `commit_count` and `reveal_count` to the
 unique canonical `commits[].name` and `reveals[].name` inventories, reject
-duplicate commit or reveal entries, and reject reveal totals above the reviewed
-commit total before promotion can report ready.
+duplicate commit or reveal entries, require reviewed lowercase
+`moderation-commit-*` and `moderation-reveal-*` labels without non-production
+markers, and reject reveal totals above the reviewed commit total before
+promotion can report ready.
+Commit/reveal artifacts also bind `scenario_count` to the unique canonical
+`scenarios_exercised` inventory and reject missing, inflated, duplicate, or
+unknown scenario coverage before promotion can report ready.
 Settlement-integration artifacts also bind `settlement_count` to the unique
-canonical `settlements[].name` inventory and reject duplicate settlement
-entries before promotion can report ready.
+canonical `settlements[].name` inventory, require reviewed lowercase
+`moderation-settlement-*` labels without non-production markers, and reject
+duplicate settlement entries before promotion can report ready.
+Decision-publication artifacts also bind `outcome_count` to the unique
+canonical `outcomes` inventory and reject missing, inflated, duplicate, or
+unknown outcome coverage before promotion can report ready.
+Transparency/reputation artifacts also bind `publication_target_count` to the
+unique canonical `publication_targets` inventory and reject missing, inflated,
+duplicate, or unknown publication-target coverage before promotion can report
+ready.
+Metrics/alert artifacts also bind `metric_count` to the unique canonical
+`metrics` inventory and reject duplicate or unknown metric entries before
+promotion can report ready.
+The summary exports the sorted reviewed `metrics` inventory plus
+`metric_count_values`, and the aggregate production-readiness gate requires
+those fields to match the metrics/alert artifact fingerprint before final
+promotion can report ready.
 End-to-end panel artifacts also bind `peer_count` and `validator_count` to the
 unique canonical `peers[].name` and `validators[].name` inventories and reject
-duplicate peer or validator entries before promotion can report ready.
+duplicate peer or validator entries before promotion can report ready, and
+require reviewed lowercase
+`moderation-peer-*` and `moderation-validator-*` labels without non-production
+markers.
 End-to-end panel artifacts also bind `case_count` to the unique canonical
 `cases[].name` inventory, require `case_count` to match the `cases[].passed`
-partition, and reject duplicate end-to-end case entries before promotion can
-report ready.
+partition, require reviewed lowercase `moderation-case-*` labels without
+non-production markers, and reject duplicate end-to-end case entries before
+promotion can report ready.
 The gate also requires end-to-end panel evidence to carry `policy_digest_hex`,
 publishes those values as `valid_policy_digests`, and requires governance
 approval `policy_digest_hex` to match one of those valid panel policy digests.

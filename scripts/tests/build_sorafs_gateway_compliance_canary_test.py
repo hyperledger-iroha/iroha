@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = SCRIPT_ROOT / "build_sorafs_gateway_compliance_canary.py"
@@ -52,6 +54,16 @@ def checker_options() -> object:
         min_denylist_entries=CHECKER.DEFAULT_MIN_DENYLIST_ENTRIES,
         min_honey_probes=CHECKER.DEFAULT_MIN_HONEY_PROBES,
     )
+
+
+def canary_path(tmp_path: Path, kind: str) -> Path:
+    """Return the output path used by the test arguments for a canary kind."""
+
+    if kind == "controller_runtime":
+        return tmp_path / "controller-runtime.json"
+    if kind == "moderation_toggle":
+        return tmp_path / "moderation-toggle.json"
+    return tmp_path / f"{kind}.json"
 
 
 def feed_promotion() -> dict:
@@ -156,6 +168,62 @@ def moderation_args(tmp_path: Path) -> list[str]:
     return args
 
 
+def args_for(kind: str, tmp_path: Path) -> list[str]:
+    """Build reviewed arguments for one gateway-compliance canary kind."""
+
+    if kind == "controller_runtime":
+        return controller_args(tmp_path)
+    if kind == "moderation_toggle":
+        return moderation_args(tmp_path)
+
+    args = [
+        "--kind",
+        kind,
+        "--out",
+        str(tmp_path / f"{kind}.json"),
+        "--deployment-id",
+        "sorafs-gateway-prod-20260701",
+        "--environment",
+        "production",
+        "--generated-at-unix",
+        str(GENERATED_AT),
+        "--now-unix",
+        str(GENERATED_AT),
+        "--bundle-digest-hex",
+        DIGEST,
+    ]
+    if kind in {"feed_promotion", "governance_approval"}:
+        args.extend(["--policy-digest-hex", POLICY_DIGEST])
+    if kind == "enforcement_probe":
+        for reason in MODULE.REQUIRED_DENIAL_REASONS:
+            args.extend(["--denial-reason", reason])
+    elif kind == "honey_audit":
+        args.extend(["--audit-digest-hex", DIGEST])
+    elif kind == "appeal_override":
+        args.extend(["--override-digest-hex", DIGEST])
+    elif kind == "transparency_publication":
+        args.extend(["--publication-digest-hex", DIGEST])
+    elif kind == "observability":
+        for metric in MODULE.REQUIRED_METRICS:
+            args.extend(["--metric", metric])
+    return args
+
+
+def assert_rejected_without_artifact(
+    args: list[str],
+    *,
+    kind: str,
+    tmp_path: Path,
+    capsys,
+    expected_error: str,
+) -> None:
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
+    assert not canary_path(tmp_path, kind).exists()
+
+
 def test_builds_payload_free_controller_runtime_canary(tmp_path: Path) -> None:
     assert MODULE.main(controller_args(tmp_path)) == 0
 
@@ -185,6 +253,88 @@ def test_builds_payload_free_controller_runtime_canary(tmp_path: Path) -> None:
     assert errors == []
 
 
+def test_controller_runtime_requires_complete_required_feeds(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = controller_args(tmp_path)
+    index = args.index("--feed")
+    del args[index : index + 2]
+    args[args.index("--feed-count") + 1] = "6"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--feed must include every required value" in captured.err
+    assert not (tmp_path / "controller-runtime.json").exists()
+
+
+def test_controller_runtime_feed_count_must_match_required_feeds(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = controller_args(tmp_path)
+    args[args.index("--feed-count") + 1] = "6"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--feed-count must match the number of required unique --feed values"
+        in captured.err
+    )
+    assert not (tmp_path / "controller-runtime.json").exists()
+
+
+def test_controller_instance_id_must_be_canonical(tmp_path: Path, capsys) -> None:
+    args = controller_args(tmp_path)
+    args[args.index("--controller-instance-id") + 1] = (
+        "gateway_compliance_controller_prod_a"
+    )
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--controller-instance-id must match canonical lowercase "
+        "`compliance-controller-name` or `gateway-compliance-controller-name`"
+    ) in captured.err
+    assert not (tmp_path / "controller-runtime.json").exists()
+
+
+def test_controller_instance_id_rejects_non_production_markers(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = controller_args(tmp_path)
+    args[args.index("--controller-instance-id") + 1] = (
+        "compliance-controller-prod-placeholder"
+    )
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--controller-instance-id must not contain non-production markers "
+        "['placeholder']"
+    ) in captured.err
+    assert not (tmp_path / "controller-runtime.json").exists()
+
+
+def test_controller_instance_id_accepts_gateway_prefixed_future_label(
+    tmp_path: Path,
+) -> None:
+    args = controller_args(tmp_path)
+    args[args.index("--controller-instance-id") + 1] = (
+        "gateway-compliance-controller-prod-b-2"
+    )
+
+    assert MODULE.main(args) == 0
+
+    payload = json.loads((tmp_path / "controller-runtime.json").read_text("utf-8"))
+    assert payload["controller_instance_id"] == "gateway-compliance-controller-prod-b-2"
+
+
 def test_builds_payload_free_moderation_toggle_canary(tmp_path: Path) -> None:
     assert MODULE.main(moderation_args(tmp_path)) == 0
 
@@ -210,46 +360,100 @@ def test_builds_payload_free_moderation_toggle_canary(tmp_path: Path) -> None:
     assert errors == []
 
 
-def test_generated_canaries_pass_gateway_gate_with_feed_promotion_anchor(
+def test_moderation_toggle_requires_complete_required_toggles(
     tmp_path: Path,
+    capsys,
 ) -> None:
-    assert MODULE.main(controller_args(tmp_path)) == 0
-    assert MODULE.main(moderation_args(tmp_path)) == 0
-    write_json(tmp_path / "feed-promotion.json", feed_promotion())
+    args = moderation_args(tmp_path)
+    index = args.index("--toggle")
+    del args[index : index + 2]
+    args[args.index("--toggle-count") + 1] = "3"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--toggle must include every required value" in captured.err
+    assert not (tmp_path / "moderation-toggle.json").exists()
+
+
+def test_moderation_toggle_count_must_match_required_toggles(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = moderation_args(tmp_path)
+    args[args.index("--toggle-count") + 1] = "3"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--toggle-count must match the number of required unique --toggle values"
+        in captured.err
+    )
+    assert not (tmp_path / "moderation-toggle.json").exists()
+
+
+def test_builds_payload_free_observability_canary(tmp_path: Path) -> None:
+    assert MODULE.main(args_for("observability", tmp_path)) == 0
+
+    payload = json.loads((tmp_path / "observability.json").read_text("utf-8"))
+
+    assert payload["schema"] == "sorafs.gateway_compliance.observability_canary.v1"
+    assert payload["metrics"] == list(MODULE.REQUIRED_METRICS)
+    assert payload["metric_count"] == len(MODULE.REQUIRED_METRICS)
+    assert payload["critical_alerts_firing"] is False
+    for claim in MODULE.FORBIDDEN_PAYLOAD_CLAIMS["observability"]:
+        assert payload[claim] is False
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "observability"
+    assert errors == []
+
+
+def test_toggle_api_url_rejects_encoded_or_secret_bearing_values_without_leaking(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    unsafe_urls = (
+        "https://user:private_key@gateway-compliance.internal/toggles",
+        "https://gateway-compliance.internal/%2e%2e/toggles",
+        "https://gateway-compliance.internal/bad%2Ftoggle",
+        "https://gateway-compliance.internal/C%3A/toggles",
+        "https://gateway-compliance.internal/toggles?token=secret",
+    )
+
+    for unsafe_url in unsafe_urls:
+        args = moderation_args(tmp_path)
+        args[args.index("--toggle-api-url") + 1] = unsafe_url
+
+        assert MODULE.main(args) == 2
+
+        captured = capsys.readouterr()
+        assert MODULE.CANARY_URL_ARG_ERROR in captured.err
+        assert unsafe_url not in captured.err
+        assert not (tmp_path / "moderation-toggle.json").exists()
+
+
+def test_generated_canaries_pass_full_gateway_gate(tmp_path: Path) -> None:
+    evidence_paths: list[Path] = []
+    for kind in MODULE.CANARY_KINDS:
+        assert MODULE.main(args_for(kind, tmp_path)) == 0
+        evidence_paths.append(canary_path(tmp_path, kind))
     summary = tmp_path / "summary.json"
 
-    assert (
-        CHECKER.main(
-            [
-                "--evidence",
-                str(tmp_path / "feed-promotion.json"),
-                "--evidence",
-                str(tmp_path / "controller-runtime.json"),
-                "--evidence",
-                str(tmp_path / "moderation-toggle.json"),
-                "--require-kind",
-                "feed_promotion",
-                "--require-kind",
-                "controller_runtime",
-                "--require-kind",
-                "moderation_toggle",
-                "--summary-out",
-                str(summary),
-                "--now-unix",
-                str(GENERATED_AT),
-            ]
-        )
-        == 0
-    )
+    command: list[str] = []
+    for path in evidence_paths:
+        command.extend(["--evidence", str(path)])
+    command.extend(["--summary-out", str(summary), "--now-unix", str(GENERATED_AT)])
+
+    assert CHECKER.main(command) == 0
 
     payload = json.loads(summary.read_text("utf-8"))
     assert payload["status"] == "ready"
     assert payload["valid_bundle_digests"] == [DIGEST]
     assert payload["valid_policy_digests"] == [POLICY_DIGEST]
-    assert payload["required"]["controller_runtime"]["artifact_count"] == 1
-    assert payload["required"]["controller_runtime"]["artifacts"][0]["valid"] is True
-    assert payload["required"]["moderation_toggle"]["artifact_count"] == 1
-    assert payload["required"]["moderation_toggle"]["artifacts"][0]["valid"] is True
+    for kind in MODULE.CANARY_KINDS:
+        assert payload["required"][kind]["artifact_count"] == 1
+        assert payload["required"][kind]["artifacts"][0]["valid"] is True
 
 
 def test_response_file_can_build_controller_canary(tmp_path: Path) -> None:
@@ -274,6 +478,89 @@ def test_missing_verified_claim_fails_closed(tmp_path: Path, capsys) -> None:
     assert not (tmp_path / "controller-runtime.json").exists()
 
 
+def test_unknown_verified_claim_fails_closed(tmp_path: Path, capsys) -> None:
+    args = controller_args(tmp_path)
+    args.extend(["--verified-claim", "shadow-controller-claim"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--verified-claim contains an unknown value" in captured.err
+    assert not (tmp_path / "controller-runtime.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "option", "duplicate_value", "unknown_value"),
+    (
+        (
+            "controller_runtime",
+            "--verified-claim",
+            MODULE.CONTROLLER_TRUE_CLAIMS[0],
+            "unreviewed-controller-claim",
+        ),
+        (
+            "moderation_toggle",
+            "--verified-claim",
+            MODULE.MODERATION_TRUE_CLAIMS[0],
+            "unreviewed-toggle-claim",
+        ),
+        (
+            "controller_runtime",
+            "--feed",
+            MODULE.REQUIRED_CONTROLLER_FEEDS[0],
+            "unreviewed-controller-feed",
+        ),
+        (
+            "moderation_toggle",
+            "--toggle",
+            MODULE.REQUIRED_MODERATION_TOGGLES[0],
+            "unreviewed-moderation-toggle",
+        ),
+        (
+            "enforcement_probe",
+            "--denial-reason",
+            MODULE.REQUIRED_DENIAL_REASONS[0],
+            "unreviewed-denial-reason",
+        ),
+        (
+            "observability",
+            "--metric",
+            MODULE.REQUIRED_METRICS[0],
+            "unreviewed-gateway-compliance-metric",
+        ),
+    ),
+)
+def test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write(
+    kind: str,
+    option: str,
+    duplicate_value: str,
+    unknown_value: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    duplicate_args = args_for(kind, tmp_path)
+    duplicate_args.extend([option, duplicate_value])
+    assert_rejected_without_artifact(
+        duplicate_args,
+        kind=kind,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=f"{option} must not contain duplicates",
+    )
+
+    unknown_dir = tmp_path / "unknown"
+    unknown_dir.mkdir()
+    unknown_args = args_for(kind, unknown_dir)
+    unknown_args.extend([option, unknown_value])
+    assert_rejected_without_artifact(
+        unknown_args,
+        kind=kind,
+        tmp_path=unknown_dir,
+        capsys=capsys,
+        expected_error=f"{option} contains an unknown value",
+    )
+
+
 def test_missing_controller_feed_inventory_fails_closed(tmp_path: Path, capsys) -> None:
     args = controller_args(tmp_path)
     while "--feed" in args:
@@ -283,7 +570,7 @@ def test_missing_controller_feed_inventory_fails_closed(tmp_path: Path, capsys) 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--feed is required for controller_runtime" in captured.err
+    assert "--feed must include every required value" in captured.err
     assert not (tmp_path / "controller-runtime.json").exists()
 
 
@@ -296,7 +583,24 @@ def test_duplicate_controller_feed_inventory_fails_closed(tmp_path: Path, capsys
 
     captured = capsys.readouterr()
     assert "--feed must not contain duplicates" in captured.err
-    assert "--feed-count must match the number of unique --feed values" in captured.err
+    assert (
+        "--feed-count must match the number of required unique --feed values"
+        in captured.err
+    )
+    assert not (tmp_path / "controller-runtime.json").exists()
+
+
+def test_unknown_controller_feed_inventory_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = controller_args(tmp_path)
+    args.extend(["--feed", "shadow-feed"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--feed contains an unknown value" in captured.err
     assert not (tmp_path / "controller-runtime.json").exists()
 
 
@@ -321,7 +625,7 @@ def test_missing_moderation_toggle_inventory_fails_closed(tmp_path: Path, capsys
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--toggle is required for moderation_toggle" in captured.err
+    assert "--toggle must include every required value" in captured.err
     assert not (tmp_path / "moderation-toggle.json").exists()
 
 
@@ -337,8 +641,75 @@ def test_duplicate_moderation_toggle_inventory_fails_closed(
 
     captured = capsys.readouterr()
     assert "--toggle must not contain duplicates" in captured.err
-    assert "--toggle-count must match the number of unique --toggle values" in captured.err
+    assert (
+        "--toggle-count must match the number of required unique --toggle values"
+        in captured.err
+    )
     assert not (tmp_path / "moderation-toggle.json").exists()
+
+
+def test_unknown_moderation_toggle_inventory_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = moderation_args(tmp_path)
+    args.extend(["--toggle", "shadow-toggle"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--toggle contains an unknown value" in captured.err
+    assert not (tmp_path / "moderation-toggle.json").exists()
+
+
+def test_duplicate_denial_reason_inventory_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("enforcement_probe", tmp_path)
+    args.extend(["--denial-reason", MODULE.REQUIRED_DENIAL_REASONS[0]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--denial-reason must not contain duplicates" in captured.err
+    assert not (tmp_path / "enforcement_probe.json").exists()
+
+
+def test_unknown_denial_reason_inventory_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("enforcement_probe", tmp_path)
+    args.extend(["--denial-reason", "shadow-denial-reason"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--denial-reason contains an unknown value" in captured.err
+    assert not (tmp_path / "enforcement_probe.json").exists()
+
+
+def test_duplicate_metric_inventory_fails_closed(tmp_path: Path, capsys) -> None:
+    args = args_for("observability", tmp_path)
+    args.extend(["--metric", MODULE.REQUIRED_METRICS[0]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--metric must not contain duplicates" in captured.err
+    assert not (tmp_path / "observability.json").exists()
+
+
+def test_unknown_metric_inventory_fails_closed(tmp_path: Path, capsys) -> None:
+    args = args_for("observability", tmp_path)
+    args.extend(["--metric", "sorafs_gateway_shadow_metric_total"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--metric contains an unknown value" in captured.err
+    assert not (tmp_path / "observability.json").exists()
 
 
 def test_output_symlink_is_rejected(tmp_path: Path, capsys) -> None:
@@ -352,3 +723,14 @@ def test_output_symlink_is_rejected(tmp_path: Path, capsys) -> None:
     assert "--out" in captured.err
     assert "must not be a symlink" in captured.err
     assert not target.exists()
+
+
+def test_output_directory_is_rejected(tmp_path: Path, capsys) -> None:
+    directory = tmp_path / "controller-runtime.json"
+    directory.mkdir()
+
+    assert MODULE.main(controller_args(tmp_path)) == 2
+
+    captured = capsys.readouterr()
+    assert "--out" in captured.err
+    assert "must not be a directory" in captured.err

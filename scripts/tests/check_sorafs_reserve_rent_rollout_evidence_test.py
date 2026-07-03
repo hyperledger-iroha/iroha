@@ -156,16 +156,27 @@ def signed_routes(*, wrong_account_rejected: bool = True) -> dict:
 
 
 def reserve_movement() -> dict:
+    movements = [
+        {
+            "action": action,
+            "accepted": True,
+            "chain_submitted": True,
+            "finality_confirmed": True,
+            "custody_reconciled": True,
+        }
+        for action in MODULE.REQUIRED_RESERVE_MOVEMENT_ACTIONS
+    ]
     return with_reviewed_context({
         "schema": "sorafs.reserve.reserve_movement_canary.v1",
         "status": "passed",
         "policy_digest_hex": DIGEST,
         "matrix_digest_hex": MATRIX_DIGEST,
         "ledger_digest_hex": LEDGER_DIGEST,
-        "movement_count": 4,
-        "accepted_movement_count": 4,
+        "movement_count": len(movements),
+        "accepted_movement_count": len(movements),
         "failed_movement_count": 0,
         "unexpected_failure_count": 0,
+        "movements": movements,
         "rent_settlement_present": True,
         "reserve_top_up_present": True,
         "withdrawal_limits_enforced": True,
@@ -191,14 +202,30 @@ def reserve_movement() -> dict:
 
 
 def credit_line() -> dict:
+    credit_line_mutations = [
+        {
+            "name": name,
+            "verified": True,
+        }
+        for name in MODULE.REQUIRED_CREDIT_LINE_MUTATIONS
+    ]
+    accrual_cycles = [
+        {
+            "name": name,
+            "posted_to_account_state": True,
+        }
+        for name in MODULE.REQUIRED_CREDIT_LINE_ACCRUAL_CYCLES
+    ]
     return with_reviewed_context({
         "schema": "sorafs.reserve.credit_line_canary.v1",
         "status": "passed",
         "policy_digest_hex": DIGEST,
         "matrix_digest_hex": MATRIX_DIGEST,
         "ledger_digest_hex": LEDGER_DIGEST,
-        "credit_line_mutation_count": 2,
-        "accrual_cycle_count": 2,
+        "credit_line_mutation_count": len(credit_line_mutations),
+        "credit_line_mutations": credit_line_mutations,
+        "accrual_cycle_count": len(accrual_cycles),
+        "accrual_cycles": accrual_cycles,
         "credit_draw_cap_enforced": True,
         "apr_accrual_verified": True,
         "manual_approval_tier_blocked": True,
@@ -215,15 +242,30 @@ def credit_line() -> dict:
 
 
 def appeal_policy() -> dict:
+    appeal_probes = [
+        {
+            "name": "approved_policy_override",
+            "outcome": "approved",
+            "governance_recorded": True,
+            "policy_digest_bound": True,
+        },
+        {
+            "name": "rejected_unauthorized_appeal",
+            "outcome": "rejected",
+            "governance_recorded": True,
+            "policy_digest_bound": True,
+        },
+    ]
     return with_reviewed_context({
         "schema": "sorafs.reserve.appeal_policy_canary.v1",
         "status": "passed",
         "policy_digest_hex": DIGEST,
         "matrix_digest_hex": MATRIX_DIGEST,
         "ledger_digest_hex": LEDGER_DIGEST,
-        "appeal_probe_count": 2,
+        "appeal_probe_count": len(appeal_probes),
         "approved_appeal_count": 1,
         "rejected_appeal_count": 1,
+        "appeal_probes": appeal_probes,
         "appeal_route_present": True,
         "policy_update_route_present": True,
         "governance_recorded": True,
@@ -267,11 +309,41 @@ def metrics_alerts(*, include_all_metrics: bool = True) -> dict:
         "alert_rules_installed": True,
         "critical_alerts_firing": False,
         "metrics": metrics,
+        "metric_count": len(metrics),
         "response_bodies_included": False,
     })
 
 
 def provider_bake(*, failure_count: int = 0) -> dict:
+    providers = [
+        {
+            "name": "provider-alpha",
+            "completed": True,
+            "defaulted": True,
+            "scheduler_tick_observed": True,
+        },
+        {
+            "name": "provider-beta",
+            "completed": True,
+            "defaulted": False,
+            "scheduler_tick_observed": True,
+        },
+        {
+            "name": "provider-gamma",
+            "completed": True,
+            "defaulted": False,
+            "scheduler_tick_observed": True,
+        },
+    ]
+    rent_cycles = [
+        {"name": "rent-cycle-001", "settled": True},
+        {"name": "rent-cycle-002", "settled": True},
+    ]
+    top_up_cycles = [
+        {"name": "top-up-cycle-001", "reconciled": True},
+        {"name": "top-up-cycle-002", "reconciled": True},
+    ]
+    appeal_cycles = [{"name": "appeal-cycle-001", "reviewed": True}]
     return with_reviewed_context({
         "schema": "sorafs.reserve.provider_bake.v1",
         "status": "passed",
@@ -281,12 +353,16 @@ def provider_bake(*, failure_count: int = 0) -> dict:
         "bake_id": "reserve-bake-001",
         "started_at_unix": GENERATED_AT - 3_600,
         "completed_at_unix": GENERATED_AT,
-        "provider_count": 3,
-        "completed_provider_count": 3,
+        "provider_count": len(providers),
+        "providers": providers,
+        "completed_provider_count": len(providers),
         "failure_count": failure_count,
-        "rent_cycle_count": 2,
-        "top_up_cycle_count": 2,
-        "appeal_cycle_count": 1,
+        "rent_cycle_count": len(rent_cycles),
+        "rent_cycles": rent_cycles,
+        "top_up_cycle_count": len(top_up_cycles),
+        "top_up_cycles": top_up_cycles,
+        "appeal_cycle_count": len(appeal_cycles),
+        "appeal_cycles": appeal_cycles,
         "scheduler_config_bound": True,
         "scheduled_lifecycle_canary_passed": True,
         "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT - 60,
@@ -370,6 +446,13 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
             "ledger_digest_hex": LEDGER_DIGEST,
         }
     ]
+    assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
+    assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
+    metrics_artifact = payload["required"]["metrics_alerts"]["artifacts"][0]
+    assert metrics_artifact["fingerprint"]["metric_count"] == len(
+        MODULE.REQUIRED_METRICS
+    )
+    assert metrics_artifact["fingerprint"]["metrics"] == list(MODULE.REQUIRED_METRICS)
     assert payload["valid_provider_bakes"] == [
         {
             "bake_id": "reserve-bake-001",
@@ -427,6 +510,37 @@ def test_quote_matrix_scenario_count_must_match_dimension_product(
     )
 
 
+def test_quote_matrix_dimensions_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        ("storage_classes", "cold"),
+        ("tiers", "tier-d"),
+        ("durations", "weekly"),
+    )
+    for field, unknown in cases:
+        root = tmp_path / field
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = quote_matrix()
+        payload[field].append(unknown)
+        payload["scenario_count"] = (
+            len(payload["storage_classes"])
+            * len(payload["tiers"])
+            * len(payload["durations"])
+        )
+        payload["passed_scenario_count"] = payload["scenario_count"]
+        write_json(root / "quote-matrix.json", payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"]["quote_matrix"]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert f"{field} must not include unknown values" in artifact["errors"]
+
+
 def test_route_count_must_match_unique_routes_for_route_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -475,6 +589,32 @@ def test_routes_must_not_duplicate_for_route_artifacts(tmp_path: Path) -> None:
         assert "route_count must match unique routes count" in artifact["errors"]
 
 
+def test_routes_must_not_include_unknown_values_for_route_artifacts(
+    tmp_path: Path,
+) -> None:
+    route_artifacts = (
+        ("lifecycle_service", "lifecycle-service.json", lifecycle_service),
+        ("signed_routes", "signed-routes.json", signed_routes),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["routes"].append(route("debug_route"))
+        payload["route_count"] = len(payload["routes"])
+        payload["passed_route_count"] = len(payload["routes"])
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert "routes must not include unknown values" in artifact["errors"]
+
+
 def test_stale_ledger_digest_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     stale = NOW_UNIX - MODULE.DEFAULT_MAX_LEDGER_AGE_SECS - 1
@@ -497,6 +637,22 @@ def test_missing_required_metric_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "metrics-alerts.json", metrics_alerts(include_all_metrics=False))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = metrics_alerts()
+    payload["metrics"].append("torii_sorafs_reserve_debug_metric")
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "metrics-alerts.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["metrics_alerts"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "metrics must not include unknown values" in artifact["errors"]
 
 
 def test_ledger_requires_policy_matrix_binding(tmp_path: Path) -> None:
@@ -611,6 +767,188 @@ def test_reserve_movement_requires_custody_finality_evidence(tmp_path: Path) -> 
     assert "chain_reconciled_readback_verified must be true" in artifact["errors"]
 
 
+def test_reserve_movement_actions_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reserve_movement()
+    payload["movements"].append(dict(payload["movements"][0]))
+    payload["movement_count"] = len(payload["movements"])
+    payload["accepted_movement_count"] = len(payload["movements"])
+    write_json(tmp_path / "reserve-movement.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["reserve_movement"]["artifacts"][0]
+    assert "movements must not contain duplicate values" in artifact["errors"]
+    assert "movement_count must match unique movements count" in artifact["errors"]
+
+
+def test_reserve_movement_requires_action_coverage(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reserve_movement()
+    missing = payload["movements"].pop()["action"]
+    payload["movement_count"] = len(payload["movements"])
+    payload["accepted_movement_count"] = len(payload["movements"])
+    payload["chain_submission_count"] = len(payload["movements"])
+    payload["finality_poll_attempt_count"] = len(payload["movements"])
+    write_json(tmp_path / "reserve-movement.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["reserve_movement"]["artifacts"][0]
+    assert f"movements must include action `{missing}`" in artifact["errors"]
+
+
+def test_reserve_movement_actions_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reserve_movement()
+    payload["movements"].append({
+        "action": "debug_movement",
+        "accepted": True,
+        "chain_submitted": True,
+        "finality_confirmed": True,
+        "custody_reconciled": True,
+    })
+    payload["movement_count"] = len(payload["movements"])
+    payload["accepted_movement_count"] = len(payload["movements"])
+    payload["chain_submission_count"] = len(payload["movements"])
+    payload["finality_poll_attempt_count"] = len(payload["movements"])
+    write_json(tmp_path / "reserve-movement.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["reserve_movement"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "movements must not include unknown values" in artifact["errors"]
+
+
+def test_reserve_movement_accepted_count_must_match_rows(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reserve_movement()
+    payload["movements"][0]["accepted"] = False
+    write_json(tmp_path / "reserve-movement.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["reserve_movement"]["artifacts"][0]
+    assert "movements[0].accepted must be true" in artifact["errors"]
+    assert (
+        "accepted_movement_count must match accepted movements count"
+        in artifact["errors"]
+    )
+
+
+def test_appeal_policy_probes_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = appeal_policy()
+    payload["appeal_probes"].append(dict(payload["appeal_probes"][0]))
+    payload["appeal_probe_count"] = len(payload["appeal_probes"])
+    payload["approved_appeal_count"] = 2
+    write_json(tmp_path / "appeal-policy.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["appeal_policy"]["artifacts"][0]
+    assert "appeal_probes must not contain duplicate values" in artifact["errors"]
+    assert (
+        "appeal_probe_count must match unique appeal_probes count"
+        in artifact["errors"]
+    )
+
+
+def test_appeal_policy_requires_probe_coverage(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = appeal_policy()
+    missing = payload["appeal_probes"].pop()["name"]
+    payload["appeal_probe_count"] = len(payload["appeal_probes"])
+    payload["rejected_appeal_count"] = 0
+    write_json(tmp_path / "appeal-policy.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["appeal_policy"]["artifacts"][0]
+    assert f"appeal_probes must include name `{missing}`" in artifact["errors"]
+
+
+def test_appeal_policy_probes_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = appeal_policy()
+    payload["appeal_probes"].append({
+        "name": "debug_probe",
+        "outcome": "approved",
+        "governance_recorded": True,
+        "policy_digest_bound": True,
+    })
+    payload["appeal_probe_count"] = len(payload["appeal_probes"])
+    payload["approved_appeal_count"] = 2
+    payload["rejected_appeal_count"] = 1
+    write_json(tmp_path / "appeal-policy.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["appeal_policy"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "appeal_probes must not include unknown values" in artifact["errors"]
+
+
+def test_appeal_policy_partition_counts_must_match_probe_outcomes(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = appeal_policy()
+    payload["appeal_probes"][0]["outcome"] = "rejected"
+    payload["approved_appeal_count"] = 1
+    payload["rejected_appeal_count"] = 1
+    write_json(tmp_path / "appeal-policy.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["appeal_policy"]["artifacts"][0]
+    assert (
+        "approved_appeal_count must match approved appeal probes count"
+        in artifact["errors"]
+    )
+    assert (
+        "rejected_appeal_count must match rejected appeal probes count"
+        in artifact["errors"]
+    )
+
+
+def test_appeal_policy_probe_outcome_must_be_known(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = appeal_policy()
+    payload["appeal_probes"][0]["outcome"] = "remanded"
+    write_json(tmp_path / "appeal-policy.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["appeal_policy"]["artifacts"][0]
+    assert "appeal_probes[0].outcome must be approved or rejected" in artifact[
+        "errors"
+    ]
+
+
 def test_ledger_bound_subset_requires_ledger_anchor(tmp_path: Path) -> None:
     write_json(tmp_path / "metrics-alerts.json", metrics_alerts())
     summary = tmp_path / "summary.json"
@@ -674,6 +1012,157 @@ def test_credit_line_requires_live_account_mutation_evidence(tmp_path: Path) -> 
     )
 
 
+def test_credit_line_mutations_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = credit_line()
+    payload["credit_line_mutations"].append(dict(payload["credit_line_mutations"][0]))
+    payload["credit_line_mutation_count"] = len(payload["credit_line_mutations"])
+    write_json(tmp_path / "credit-line.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["credit_line"]["artifacts"][0]
+    assert "credit_line_mutations must not contain duplicate values" in artifact[
+        "errors"
+    ]
+    assert (
+        "credit_line_mutation_count must match unique "
+        "credit_line_mutations count"
+    ) in artifact["errors"]
+
+
+def test_credit_line_requires_mutation_coverage(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = credit_line()
+    missing = payload["credit_line_mutations"].pop()["name"]
+    payload["credit_line_mutation_count"] = len(payload["credit_line_mutations"])
+    write_json(tmp_path / "credit-line.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["credit_line"]["artifacts"][0]
+    assert (
+        f"credit_line_mutations must include name `{missing}`"
+        in artifact["errors"]
+    )
+
+
+def test_credit_line_mutations_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = credit_line()
+    payload["credit_line_mutations"].append({
+        "name": "debug_mutation",
+        "verified": True,
+    })
+    payload["credit_line_mutation_count"] = len(payload["credit_line_mutations"])
+    write_json(tmp_path / "credit-line.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["credit_line"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "credit_line_mutations must not include unknown values"
+        in artifact["errors"]
+    )
+
+
+def test_credit_line_mutation_rows_must_be_verified(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = credit_line()
+    payload["credit_line_mutations"][0]["verified"] = False
+    write_json(tmp_path / "credit-line.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["credit_line"]["artifacts"][0]
+    assert "credit_line_mutations[0].verified must be true" in artifact["errors"]
+
+
+def test_credit_line_accrual_cycles_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = credit_line()
+    payload["accrual_cycles"].append(dict(payload["accrual_cycles"][0]))
+    payload["accrual_cycle_count"] = len(payload["accrual_cycles"])
+    write_json(tmp_path / "credit-line.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["credit_line"]["artifacts"][0]
+    assert "accrual_cycles must not contain duplicate values" in artifact["errors"]
+    assert (
+        "accrual_cycle_count must match unique accrual_cycles count"
+        in artifact["errors"]
+    )
+
+
+def test_credit_line_requires_accrual_cycle_coverage(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = credit_line()
+    missing = payload["accrual_cycles"].pop()["name"]
+    payload["accrual_cycle_count"] = len(payload["accrual_cycles"])
+    write_json(tmp_path / "credit-line.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["credit_line"]["artifacts"][0]
+    assert f"accrual_cycles must include name `{missing}`" in artifact["errors"]
+
+
+def test_credit_line_accrual_cycles_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = credit_line()
+    payload["accrual_cycles"].append({
+        "name": "debug_accrual",
+        "posted_to_account_state": True,
+    })
+    payload["accrual_cycle_count"] = len(payload["accrual_cycles"])
+    write_json(tmp_path / "credit-line.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["credit_line"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "accrual_cycles must not include unknown values" in artifact["errors"]
+
+
+def test_credit_line_accrual_cycles_must_post_to_account_state(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = credit_line()
+    payload["accrual_cycles"][0]["posted_to_account_state"] = False
+    write_json(tmp_path / "credit-line.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["credit_line"]["artifacts"][0]
+    assert (
+        "accrual_cycles[0].posted_to_account_state must be true"
+        in artifact["errors"]
+    )
+
+
 def test_provider_bake_failure_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "provider-bake.json", provider_bake(failure_count=1))
@@ -714,6 +1203,185 @@ def test_provider_bake_requires_scheduler_lifecycle_canary(tmp_path: Path) -> No
         "scheduled_lifecycle_canary_defaulted_provider_count must be a positive integer"
         in artifact["errors"]
     )
+
+
+def test_provider_bake_id_must_be_canonical(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["bake_id"] = "reserve_bake_001"
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert MODULE.BAKE_ID_ERROR in artifact["errors"]
+
+
+def test_provider_bake_id_rejects_non_production_markers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["bake_id"] = "reserve-bake-prod-placeholder"
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert (
+        "bake_id must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_provider_bake_id_accepts_future_production_label(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["bake_id"] = "reserve-bake-prod-a-202607"
+    write_json(tmp_path / "provider-bake.json", bake)
+
+    assert run_gate(tmp_path) == 0
+
+
+def test_provider_bake_providers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["providers"].append(dict(bake["providers"][1]))
+    bake["provider_count"] = len(bake["providers"])
+    bake["completed_provider_count"] = len(bake["providers"])
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert "providers must not contain duplicate values" in artifact["errors"]
+    assert "provider_count must match unique providers count" in artifact["errors"]
+
+
+def test_provider_bake_provider_names_must_be_reviewed_labels(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["providers"][0] = {
+        **bake["providers"][0],
+        "name": "provider_alpha",
+    }
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert (
+        "providers[].name must match canonical lowercase `provider-name`"
+        in artifact["errors"]
+    )
+
+
+def test_provider_bake_provider_names_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["providers"][0] = {
+        **bake["providers"][0],
+        "name": "provider-placeholder",
+    }
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert (
+        "providers[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_provider_bake_completed_count_must_match_provider_rows(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["providers"][0]["completed"] = False
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert "providers[0].completed must be true" in artifact["errors"]
+    assert (
+        "completed_provider_count must match completed providers count"
+        in artifact["errors"]
+    )
+
+
+def test_provider_bake_defaulted_count_must_match_provider_rows(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["providers"][0]["defaulted"] = False
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert (
+        "scheduled_lifecycle_canary_defaulted_provider_count must match "
+        "defaulted providers count"
+    ) in artifact["errors"]
+
+
+def test_provider_bake_cycle_counts_must_match_unique_inventories(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["rent_cycles"].append(dict(bake["rent_cycles"][0]))
+    bake["rent_cycle_count"] = len(bake["rent_cycles"])
+    bake["top_up_cycle_count"] += 1
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert "rent_cycles must not contain duplicate values" in artifact["errors"]
+    assert "rent_cycle_count must match unique rent_cycles count" in artifact["errors"]
+    assert (
+        "top_up_cycle_count must match unique top_up_cycles count"
+        in artifact["errors"]
+    )
+
+
+def test_provider_bake_cycle_rows_must_carry_proof_flags(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["rent_cycles"][0]["settled"] = False
+    bake["top_up_cycles"][0]["reconciled"] = False
+    bake["appeal_cycles"][0]["reviewed"] = False
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert "rent_cycles[0].settled must be true" in artifact["errors"]
+    assert "top_up_cycles[0].reconciled must be true" in artifact["errors"]
+    assert "appeal_cycles[0].reviewed must be true" in artifact["errors"]
 
 
 def test_provider_bake_scheduler_lifecycle_canary_must_be_fresh(tmp_path: Path) -> None:
@@ -781,6 +1449,21 @@ def test_invalid_optional_artifact_fails_subset_gate(tmp_path: Path) -> None:
     write_json(tmp_path / "metrics-alerts.json", invalid)
 
     assert run_gate(tmp_path, "--require-kind", "policy_config") == 1
+
+
+def test_metrics_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = metrics_alerts()
+    payload["metrics"].append(payload["metrics"][0])
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "metrics-alerts.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["metrics_alerts"]["artifacts"][0]
+    assert "metrics must not contain duplicate values" in artifact["errors"]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
 
 
 def test_response_file_complete_evidence_passes(tmp_path: Path) -> None:

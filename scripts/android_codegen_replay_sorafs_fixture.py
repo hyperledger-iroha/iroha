@@ -19,11 +19,20 @@ import datetime
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from sorafs_checker_preflight import fsync_checker_output_parent
+from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label
+
+
+REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_FIXTURE_DIR = REPO_ROOT / "fixtures/sorafs_orchestrator/multi_peer_parity_v1"
 DEFAULT_CHUNKER_FIXTURE = REPO_ROOT / "fixtures/sorafs_chunker/sf1_profile_v1.json"
 DEFAULT_REGISTER_PIN_EXAMPLE = (
@@ -142,11 +151,17 @@ def write_json(path: Path, payload: dict, *, label: str = "JSON fixture") -> Non
     try:
         fd = os.open(path, write_open_flags(), 0o666)
         write_all(fd, rendered)
+        os.fsync(fd)
     except OSError as error:
-        raise ValueError(f"failed to write {label} `{path}`: {error}") from error
+        path_label = path_diagnostic_label(path)
+        error_label = error_diagnostic_label(error, path_label=path_label)
+        raise ValueError(f"failed to write {label} `{path_label}`: {error_label}") from error
     finally:
         if fd >= 0:
             os.close(fd)
+    parent_sync_errors = fsync_checker_output_parent(path, label=label)
+    if parent_sync_errors:
+        raise ValueError(parent_sync_errors[0])
 
 
 def run_manifest_stub(

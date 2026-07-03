@@ -12,6 +12,8 @@ production
 1800200000
 --config-digest-hex
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--policy-digest-hex
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 --verified-claim
 pricing_config_present
 --verified-claim
@@ -28,3 +30,11 @@ status_route_2xx
 baseline-v1
 --class-count
 4
+--appeal-class
+content
+--appeal-class
+access
+--appeal-class
+fraud
+--appeal-class
+other

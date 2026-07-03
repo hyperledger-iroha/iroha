@@ -296,10 +296,18 @@ moderation ledger publication service described by the original plan.
   response hash binding for publication and explorer route evidence, checks the
   explorer snapshot/UI/proof-token index routes, binds publication and explorer
   `route_count` to the unique canonical `routes[].name` inventories with
-  duplicate route rejection, keeps probe-based `probe_count` values equal to
+  duplicate route rejection, binds publication `cycle_detail_probe_count` to
+  the unique canonical `cycle_detail_probes[].name` inventory with duplicate
+  cycle-detail probe rejection, keeps probe-based `probe_count` values equal to
   the `probes[]` inventory length, requires source-entry, source-event,
   publish-due, and proof-token issuance sub-counts to match the corresponding
-  `probes[]` role inventory, and
+  `probes[]` role inventory, binds privacy aggregate and proof-token issuance
+  `probe_count` values to the unique canonical `probes[].action` inventory
+  with duplicate action rejection, binds source-entry
+  `source_entry_probe_count` to the unique canonical `probes[].source_kind`
+  inventory with duplicate source-kind rejection, rejects unknown values outside
+  the reviewed source-kind, route, cycle-detail-probe, privacy-action, and
+  proof-token action inventories, and
   recursively rejects raw
   payload, request/response body, bearer-token, signed-transaction,
   proof-token frame, private-key, and private digest-key fields. Publication
@@ -312,14 +320,16 @@ moderation ledger publication service described by the original plan.
   evidence contract before live collection. It supports shell-style `@ARGFILE`
   inputs for direct replay of reviewed artifact directories.
 - `scripts/build_sorafs_transparency_canary.py` is the checked-in
-  payload-free SFM-4c transparency canary builder for reviewed source-entry,
-  publication, privacy-aggregate, proof-token issuance, and explorer rollout
-  artifacts. It requires complete source kind, publication route, privacy action,
-  and explorer route coverage where applicable, enforces reviewed
-  deployment/environment context, source-batch and cycle digest bindings, and
-  validates every generated artifact through the transparency rollout checker
-  before atomically writing JSON without following output symlinks. The source
-  entry and publication response-file examples are
+	  payload-free SFM-4c transparency canary builder for reviewed source-entry,
+	  publication, privacy-aggregate, proof-token issuance, and explorer rollout
+	  artifacts. It requires complete source kind, publication route,
+	  publication cycle-detail probe, privacy action, and explorer route coverage
+	  where applicable, rejects duplicate or unknown operator inventory names
+	  before writing, enforces reviewed deployment/environment context,
+	  source-batch and cycle digest bindings, and validates every generated
+	  artifact through the transparency rollout checker before atomically writing
+	  JSON without following output symlinks or output directories. The source
+	  entry and publication response-file examples are
   `scripts/examples/sorafs_transparency_source_entry_canary.args.example` and
   `scripts/examples/sorafs_transparency_publication_canary.args.example`.
 - `scripts/run_sorafs_transparency_rollout_evidence.py --torii-url URL

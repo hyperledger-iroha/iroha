@@ -37,7 +37,9 @@ planner. The shared checker exports its required top-level payload fields as
 can review the exact SF-9 artifact contract before promotion, and the runner
 validates the schema-closed collection plan, required kinds, thresholds,
 external evidence map, evidence contract, and command steps before dry-run
-output or verifier execution.
+output or verifier execution. Observability artifacts also bind `metric_count`
+to the unique canonical `metrics` inventory and reject duplicate metric labels
+before promotion can report ready.
 
 ## Validator Personas
 - **Auditor:** Independent or council-appointed reviewer validating provider proofs, filing slashing proposals, and verifying remediation.

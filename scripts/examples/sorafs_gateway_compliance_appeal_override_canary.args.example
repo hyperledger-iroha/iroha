@@ -1,0 +1,9 @@
+# Reviewed appeal-override canary inputs for the SFM-4 gateway compliance gate.
+--kind appeal_override
+--out artifacts/sorafs_gateway/appeal-override-canary.json
+--deployment-id sorafs-gateway-prod-20260701
+--environment production
+--generated-at-unix 1800100000
+--now-unix 1800100000
+--bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--override-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

@@ -377,6 +377,7 @@ static LAST_PIPELINE_TOTAL_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static COMMIT_PIPELINE_STATUS: OnceLock<Mutex<CommitPipelineStatusState>> = OnceLock::new();
 static ROUND_GAP_STATUS: OnceLock<Mutex<RoundGapStatusState>> = OnceLock::new();
 static ROUND_TRACE_STATUS: OnceLock<Mutex<RoundTraceStatusState>> = OnceLock::new();
+static PROPOSAL_GATE_STATUS: OnceLock<Mutex<ProposalGateSnapshot>> = OnceLock::new();
 static GOSSIP_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static QUORUM_STALL_AGE_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -3465,6 +3466,53 @@ pub struct CommitInflightSnapshot {
     pub resume_queue_depths: WorkerQueueDepthSnapshot,
 }
 
+/// Snapshot of proposal-gate inputs from the most recent pacemaker evaluation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProposalGateSnapshot {
+    /// Height currently considered by the proposal path.
+    pub height: u64,
+    /// View currently considered by the proposal path.
+    pub view: u64,
+    /// Number of locally queued transactions when the gate was evaluated.
+    pub queue_len: u64,
+    /// Total locally tracked pending blocks.
+    pub pending_blocks_total: u64,
+    /// Pending blocks considered blocking by the proposal backpressure gate.
+    pub pending_blocks_blocking: u64,
+    /// Active pending blocks that still extend the local tip.
+    pub active_pending_for_tip: u64,
+    /// Whether transaction-queue capacity pressure is gating proposals.
+    pub queue_saturated: bool,
+    /// Whether active pending block state is gating proposals.
+    pub active_pending: bool,
+    /// Whether RBC backlog is gating proposals.
+    pub rbc_backlog: bool,
+    /// Whether lane relay backpressure is gating proposals.
+    pub relay_backpressure: bool,
+    /// Whether consensus worker queues are gating proposals.
+    pub consensus_queue_backpressure: bool,
+    /// Whether the aggregate proposal backpressure decision defers proposal assembly.
+    pub should_defer: bool,
+    /// Whether the deferral is only queue/consensus pacing and queue work may still proceed.
+    pub only_pacing_backpressure: bool,
+    /// Whether a commit job is currently in flight.
+    pub commit_inflight_active: bool,
+    /// Whether the current height/view has a cached proposal.
+    pub cached_proposal_present: bool,
+    /// Whether the current height/view has a cached proposal hint.
+    pub cached_proposal_hint_present: bool,
+    /// Whether local round-liveness evidence exists for the current height/view.
+    pub round_liveness_present: bool,
+    /// Whether a local frontier owner still exists for this height/view.
+    pub frontier_owner_present: bool,
+    /// Whether missing-QC liveness recovery is active for this height/view.
+    pub missing_qc_liveness_active: bool,
+    /// Milliseconds since the last pacemaker proposal attempt.
+    pub last_pacemaker_attempt_age_ms: u64,
+    /// Milliseconds since the last successful proposal assembly.
+    pub last_successful_proposal_age_ms: u64,
+}
+
 /// Snapshot of the latest commit-quorum signature tally.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CommitQuorumSnapshot {
@@ -4034,6 +4082,8 @@ pub struct StatusSnapshot {
     /// Total times pacemaker deferred proposal assembly due to proposal backpressure
     /// (queue saturation, relay/RBC backpressure, or blocking pending blocks).
     pub pacemaker_backpressure_deferrals_total: u64,
+    /// Most recent proposal-gate inputs observed by the pacemaker tick loop.
+    pub proposal_gate: ProposalGateSnapshot,
     /// Total times the commit pipeline executed from the pacemaker tick loop.
     pub commit_pipeline_tick_total: u64,
     /// Total prevote-quorum timeouts that triggered rebroadcast + view change.
@@ -4230,6 +4280,10 @@ fn round_gap_status_slot() -> &'static Mutex<RoundGapStatusState> {
 
 fn round_trace_status_slot() -> &'static Mutex<RoundTraceStatusState> {
     ROUND_TRACE_STATUS.get_or_init(|| Mutex::new(RoundTraceStatusState::default()))
+}
+
+fn proposal_gate_status_slot() -> &'static Mutex<ProposalGateSnapshot> {
+    PROPOSAL_GATE_STATUS.get_or_init(|| Mutex::new(ProposalGateSnapshot::default()))
 }
 
 fn round_ema_ms(value_ms: f64) -> u64 {
@@ -5084,6 +5138,7 @@ pub fn snapshot() -> StatusSnapshot {
         da_gate: da_gate_snapshot(),
         pacemaker_backpressure_deferrals_total: PACEMAKER_BACKPRESSURE_DEFERRALS_TOTAL
             .load(Ordering::Relaxed),
+        proposal_gate: proposal_gate_snapshot(),
         commit_pipeline_tick_total: COMMIT_PIPELINE_TICK_TOTAL.load(Ordering::Relaxed),
         prevote_timeout_total: PREVOTE_TIMEOUT_TOTAL.load(Ordering::Relaxed),
         da_reschedule_total: da_reschedule_total(),
@@ -6527,9 +6582,19 @@ pub fn inc_pacemaker_backpressure_deferrals() {
     PACEMAKER_BACKPRESSURE_DEFERRALS_TOTAL.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Record the latest proposal-gate snapshot for operator diagnostics.
+pub fn set_proposal_gate_snapshot(snapshot: ProposalGateSnapshot) {
+    *lock_operator_status_slot(proposal_gate_status_slot(), "proposal gate snapshot") = snapshot;
+}
+
+fn proposal_gate_snapshot() -> ProposalGateSnapshot {
+    *lock_operator_status_slot(proposal_gate_status_slot(), "proposal gate snapshot")
+}
+
 #[cfg(test)]
 pub(crate) fn reset_pacemaker_backpressure_deferrals_for_test() {
     PACEMAKER_BACKPRESSURE_DEFERRALS_TOTAL.store(0, Ordering::Relaxed);
+    set_proposal_gate_snapshot(ProposalGateSnapshot::default());
 }
 /// Snapshot latest per-phase latencies (ms).
 pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {

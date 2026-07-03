@@ -18,16 +18,27 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_gateway_load_rollout_evidence import (  # noqa: E402
+    ALLOWED_GATEWAY_CONFORMANCE_CARGO_COMMANDS,
     DEFAULT_MAX_ERROR_RATE_BPS,
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_MAX_P95_LATENCY_MS,
     DEFAULT_MAX_P99_LATENCY_MS,
+    DEFAULT_GATEWAY_CONFORMANCE_CARGO_COMMAND,
     DEFAULT_MIN_STAGING_DURATION_SECS,
     DEFAULT_MIN_STREAMS,
     DEFAULT_MIN_SUCCESS_RATE_BPS,
+    CACHE_STATE_ERROR,
+    FORBIDDEN_STAGING_METADATA_MARKERS,
+    GATEWAY_VERSION_ERROR,
+    GATEWAY_VERSION_PATTERN,
+    HARDWARE_PROFILE_ERROR,
     KIND_BY_NAME,
+    PROVIDER_NAME_ERROR,
+    PROVIDER_NAME_PATTERN,
     REQUIRED_METRICS,
     REQUIRED_SCENARIOS,
+    REQUIRED_CACHE_STATES,
+    STAGING_METADATA_LABEL_PATTERN,
     ValidationOptions,
     validate_evidence_payload,
 )
@@ -35,6 +46,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -92,6 +105,14 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_gateway_version_arg(value: str | None, *, errors: list[str]) -> None:
+    """Require a concrete gateway release or release-candidate version label."""
+
+    validate_canonical_string(value, label="--gateway-version", errors=errors)
+    if value and GATEWAY_VERSION_PATTERN.fullmatch(value) is None:
+        errors.append(GATEWAY_VERSION_ERROR.replace("gateway_version", "--gateway-version"))
+
+
 def validate_output_path(path: Path, errors: list[str]) -> None:
     """Reject unsafe output targets before writing a canary artifact."""
 
@@ -135,6 +156,44 @@ def validate_canonical_string(value: str | None, *, label: str, errors: list[str
         errors.append(f"{label} must be a non-empty canonical string")
 
 
+def validate_staging_metadata_label(
+    value: str | None,
+    *,
+    option: str,
+    pattern: Any,
+    pattern_error: str,
+    errors: list[str],
+) -> None:
+    """Validate a reviewed staging metadata label before writing a canary."""
+
+    validate_canonical_string(value, label=option, errors=errors)
+    if not value:
+        return
+    if pattern.fullmatch(value) is None:
+        errors.append(
+            pattern_error.replace("hardware_profile.name", option).replace(
+                "providers[].name",
+                option,
+            )
+        )
+        return
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_STAGING_METADATA_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{option} must not contain non-production markers {forbidden}")
+
+
+def validate_cache_state_arg(value: str | None, *, errors: list[str]) -> None:
+    """Validate a reviewed cache-state mode before writing a canary."""
+
+    validate_canonical_string(value, label="--cache-state", errors=errors)
+    if value and value not in REQUIRED_CACHE_STATES:
+        errors.append(CACHE_STATE_ERROR.replace("cache_state.mode", "--cache-state"))
+
+
 def require_kind_options(
     args: argparse.Namespace,
     errors: list[str],
@@ -160,7 +219,13 @@ def validate_provider_names(args: argparse.Namespace, errors: list[str]) -> None
     if not provider_names:
         errors.append("--provider is required for staging_load")
     for name in provider_names:
-        validate_canonical_string(name, label="--provider", errors=errors)
+        validate_staging_metadata_label(
+            name,
+            option="--provider",
+            pattern=PROVIDER_NAME_PATTERN,
+            pattern_error=PROVIDER_NAME_ERROR,
+            errors=errors,
+        )
     if len(set(provider_names)) != len(provider_names):
         errors.append("--provider must not contain duplicates")
     if args.provider_count != len(set(provider_names)):
@@ -234,6 +299,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "cold_cache_baseline_recorded": True,
                 "critical_alerts_firing": False,
                 "metrics": args.metrics,
+                "metric_count": len(args.metrics),
                 "response_bodies_included": False,
             }
         )
@@ -325,8 +391,8 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             label="--cargo-command",
             errors=errors,
         )
-        if "sorafs_gateway_conformance" not in args.cargo_command:
-            errors.append("--cargo-command must run sorafs_gateway_conformance")
+        if args.cargo_command not in ALLOWED_GATEWAY_CONFORMANCE_CARGO_COMMANDS:
+            errors.append("--cargo-command must be a reviewed gateway conformance command")
         if args.load_profile_window_seconds <= 0:
             errors.append("--load-profile-window-seconds must be positive")
         if args.stream_count < DEFAULT_MIN_STREAMS:
@@ -347,17 +413,15 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             option="--fixture-bundle-digest-hex",
             errors=errors,
         )
-        validate_canonical_string(
-            args.gateway_version,
-            label="--gateway-version",
-            errors=errors,
-        )
-        validate_canonical_string(
+        validate_gateway_version_arg(args.gateway_version, errors=errors)
+        validate_staging_metadata_label(
             args.hardware_profile,
-            label="--hardware-profile",
+            option="--hardware-profile",
+            pattern=STAGING_METADATA_LABEL_PATTERN,
+            pattern_error=HARDWARE_PROFILE_ERROR,
             errors=errors,
         )
-        validate_canonical_string(args.cache_state, label="--cache-state", errors=errors)
+        validate_cache_state_arg(args.cache_state, errors=errors)
         validate_provider_names(args, errors)
         validate_thresholds(args, errors)
     elif args.kind == "telemetry_slo":
@@ -416,12 +480,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:
@@ -454,10 +520,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--policy-digest-hex")
     parser.add_argument(
         "--cargo-command",
-        default=(
-            "cargo test -p integration_tests --test nexus_and_streaming "
-            "sorafs_gateway_conformance -- --nocapture"
-        ),
+        default=DEFAULT_GATEWAY_CONFORMANCE_CARGO_COMMAND,
     )
     parser.add_argument("--scenario", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])

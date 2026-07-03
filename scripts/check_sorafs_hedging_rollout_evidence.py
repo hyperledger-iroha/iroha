@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -39,11 +40,13 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
+    hashable_evidence_values,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
+    record_observed_evidence_value,
     validate_bound_evidence_digest_references,
     validate_bound_evidence_tuple_references,
     require_2xx_status,
@@ -95,6 +98,53 @@ DEFAULT_MAX_CYCLE_AGE_SECS = 45 * 24 * 60 * 60
 DEFAULT_MAX_DIVERGENCE_BPS = 500
 DEFAULT_MIN_BILLING_CYCLES = 2
 HEX64_LEN = 64
+CYCLE_ID_PATTERN = re.compile(r"^cycle-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+CYCLE_ID_ERROR = "cycle_id must match canonical lowercase `cycle-name`"
+STATEMENT_LABEL_PATTERN = re.compile(
+    r"^billing-statement-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+STATEMENT_LABEL_ERROR = (
+    "statements[].name must match canonical lowercase `billing-statement-name`"
+)
+LINE_ITEM_LABEL_PATTERN = re.compile(
+    r"^billing-line-item-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+LINE_ITEM_LABEL_ERROR = (
+    "line_items[].name must match canonical lowercase `billing-line-item-name`"
+)
+FORBIDDEN_CYCLE_ID_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
+FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "local",
+        "mock",
+        "placeholder",
+        "sample",
+        "sandbox",
+        "secret",
+        "test",
+        "todo",
+    )
+)
 
 REQUIRED_PUBLICATION_ROUTES = (
     "statements_list",
@@ -114,6 +164,11 @@ REQUIRED_METRICS = (
     "statement_generation_count",
     "statement_failure_count",
     "escrow_runway_seconds",
+)
+REQUIRED_PRICE_FEEDS = (
+    "feed-primary",
+    "feed-secondary",
+    "feed-tertiary",
 )
 CYCLE_BOUND_KINDS = (
     "statement_publication",
@@ -152,6 +207,74 @@ SENSITIVE_KEYS = {
     "statement_payload",
     "token",
 }
+
+
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
+
+
+def require_cycle_id(payload: dict[str, Any], errors: list[str]) -> str:
+    """Require a reviewed lowercase billing cycle identifier."""
+
+    cycle_id = require_string(payload, "cycle_id", errors)
+    if not cycle_id:
+        return ""
+    if CYCLE_ID_PATTERN.fullmatch(cycle_id) is None:
+        errors.append(CYCLE_ID_ERROR)
+        return ""
+    forbidden = sorted(
+        marker for marker in FORBIDDEN_CYCLE_ID_MARKERS if marker in cycle_id.split("-")
+    )
+    if forbidden:
+        errors.append(f"cycle_id must not contain non-production markers {forbidden}")
+        return ""
+    return cycle_id
+
+
+def require_inventory_label(
+    value: Any,
+    *,
+    path: str,
+    pattern: re.Pattern[str],
+    label_error: str,
+    errors: list[str],
+) -> str:
+    """Require a reviewed production inventory label with the expected family."""
+
+    if not isinstance(value, str):
+        return ""
+    if pattern.fullmatch(value) is None:
+        errors.append(label_error)
+        return value
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -243,6 +366,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "route_count",
         "passed_route_count",
         "acknowledgement_probe_count",
+        "acknowledgement_probes",
         "routes",
         "response_bodies_included",
     ),
@@ -268,6 +392,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "alert_rules_installed",
         "critical_alerts_firing",
         "metrics",
+        "metric_count",
         "response_bodies_included",
     ),
     "native_bridge_release": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -318,6 +443,8 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "policy_digest_hex",
     "statement_bundle_digest_hex",
     "reconciliation_digest_hex",
+    "metric_count",
+    "metrics",
 )
 BILLING_CYCLE_DETAIL_FIELDS: tuple[str, ...] = (
     "deployment_id",
@@ -352,7 +479,7 @@ def validate_feed_collector(
     options: ValidationOptions,
 ) -> None:
     feed_count = require_count_equal(payload, "feed_count", "accepted_feed_count", errors)
-    require_minimum_value(feed_count, "feed_count", 2, errors)
+    require_minimum_value(feed_count, "feed_count", len(REQUIRED_PRICE_FEEDS), errors)
     require_string_inventory_count_match(
         payload,
         "feeds",
@@ -361,6 +488,15 @@ def validate_feed_collector(
         field="name",
         allow_scalar_items=False,
     )
+    require_string_coverage(
+        payload,
+        "feeds",
+        "name",
+        REQUIRED_PRICE_FEEDS,
+        errors,
+        allow_scalar_items=False,
+    )
+    require_only_required_values(payload, "feeds", "name", REQUIRED_PRICE_FEEDS, errors)
     for _index, record in require_object_array(payload, "feeds", errors):
         require_string(record, "name", errors)
     require_bool_true(payload, "primary_feed_present", errors)
@@ -385,7 +521,7 @@ def validate_reference_price(
     require_minimum_value(
         feed_count,
         "feed_count",
-        2,
+        len(REQUIRED_PRICE_FEEDS),
         errors,
     )
     require_string_inventory_count_match(
@@ -396,6 +532,15 @@ def validate_reference_price(
         field="name",
         allow_scalar_items=False,
     )
+    require_string_coverage(
+        payload,
+        "feeds",
+        "name",
+        REQUIRED_PRICE_FEEDS,
+        errors,
+        allow_scalar_items=False,
+    )
+    require_only_required_values(payload, "feeds", "name", REQUIRED_PRICE_FEEDS, errors)
     for _index, record in require_object_array(payload, "feeds", errors):
         require_string(record, "name", errors)
     require_zero_count(payload, "rejected_feed_count", errors)
@@ -416,7 +561,7 @@ def validate_billing_cycle(
     errors: list[str],
     options: ValidationOptions,
 ) -> None:
-    require_string(payload, "cycle_id", errors)
+    require_cycle_id(payload, errors)
     require_positive_int(payload, "cycle_index", errors)
     require_bool_true(payload, "staged_cycle", errors)
     require_recent_timestamp(
@@ -438,8 +583,15 @@ def validate_billing_cycle(
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "statements", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "statements", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"statements[{index}].name",
+            pattern=STATEMENT_LABEL_PATTERN,
+            label_error=STATEMENT_LABEL_ERROR,
+            errors=errors,
+        )
     require_positive_int(payload, "line_item_count", errors)
     require_string_inventory_count_match(
         payload,
@@ -449,8 +601,15 @@ def validate_billing_cycle(
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "line_items", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "line_items", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"line_items[{index}].name",
+            pattern=LINE_ITEM_LABEL_PATTERN,
+            label_error=LINE_ITEM_LABEL_ERROR,
+            errors=errors,
+        )
     require_positive_int(payload, "total_micro_xor", errors)
     require_positive_int(payload, "total_usd_micro", errors)
     require_bool_true(payload, "reference_price_bound", errors)
@@ -487,6 +646,12 @@ def validate_statement_publication(payload: dict[str, Any], errors: list[str]) -
         allow_scalar_items=False,
     )
     require_positive_int(payload, "acknowledgement_probe_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "acknowledgement_probes",
+        "acknowledgement_probe_count",
+        errors,
+    )
     require_string_coverage(
         payload,
         "routes",
@@ -494,6 +659,7 @@ def validate_statement_publication(payload: dict[str, Any], errors: list[str]) -
         REQUIRED_PUBLICATION_ROUTES,
         errors,
     )
+    require_only_required_values(payload, "routes", "name", REQUIRED_PUBLICATION_ROUTES, errors)
     require_false(payload, "response_bodies_included", errors)
     validate_routes(payload, errors)
 
@@ -503,6 +669,13 @@ def validate_reconciliation(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "reconciliation_digest_hex", HEX64_LEN, errors)
     require_positive_int(payload, "source_count", errors)
     require_string_coverage(
+        payload,
+        "sources",
+        "name",
+        REQUIRED_RECONCILIATION_SOURCES,
+        errors,
+    )
+    require_only_required_values(
         payload,
         "sources",
         "name",
@@ -526,8 +699,15 @@ def validate_reconciliation(payload: dict[str, Any], errors: list[str]) -> None:
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "line_items", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "line_items", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"line_items[{index}].name",
+            pattern=LINE_ITEM_LABEL_PATTERN,
+            label_error=LINE_ITEM_LABEL_ERROR,
+            errors=errors,
+        )
     require_zero_count(payload, "mismatch_count", errors)
     require_zero_count(payload, "unmatched_event_count", errors)
     require_false(payload, "raw_financial_records_included", errors)
@@ -541,6 +721,9 @@ def validate_metrics_alerts(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "alert_rules_installed", errors)
     require_false(payload, "critical_alerts_firing", errors)
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_positive_int(payload, "metric_count", errors)
+    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
     require_false(payload, "response_bodies_included", errors)
 
 
@@ -650,6 +833,8 @@ def build_summary(
     valid_cycle_bindings: set[tuple[str, str]] = set()
     cycle_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    metric_counts: set[int] = set()
+    metric_names: set[str] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -688,6 +873,9 @@ def build_summary(
             decision_id = payload.get("decision_id_hex")
             if isinstance(decision_id, str):
                 valid_reference_decision_ids.add(decision_id.lower())
+        if kind_name == "metrics_alerts" and artifact_valid:
+            record_observed_evidence_value(metric_counts, payload.get("metric_count"))
+            metric_names.update(hashable_evidence_values(payload.get("metrics")))
         if kind_name in CYCLE_BOUND_KINDS and artifact_valid:
             cycle_bound_artifacts.append((kind_name, artifact))
         if kind_name in POLICY_BOUND_KINDS and artifact_valid:
@@ -805,6 +993,8 @@ def build_summary(
         "valid_billing_cycles": valid_billing_cycles,
         "valid_reference_decision_ids": sorted(valid_reference_decision_ids),
         "valid_policy_digests": sorted(valid_policy_digests),
+        "metrics": sorted(metric_names),
+        "metric_count_values": sorted(metric_counts),
         "valid_cycle_bindings": [
             {
                 "statement_bundle_digest_hex": statement_bundle,

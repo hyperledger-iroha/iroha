@@ -1347,9 +1347,8 @@ mod tests {
         OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, POP_CREDENTIAL_VERSION_V1,
         PopCredentialAttributeV1, PopCredentialV1, PopEligibilityClassV1, PopSignatureAlgorithmV1,
         PopSignatureV1, ReplicationOrderSignatureV1, ReplicationOrderV1,
-        SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1,
-        SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementChannelStatusV1, SettlementChannelV1,
-        SettlementReceiptV1, SignatureAlgorithm, SignedReplicationOrderV1, TradeEventV1, XorAmount,
+        SETTLEMENT_RECEIPT_VERSION_V1, SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1,
+        SignatureAlgorithm, SignedReplicationOrderV1, TradeEventV1, XorAmount,
         build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,
         sign_pop_credential_ed25519_v1,
     };
@@ -1452,22 +1451,19 @@ mod tests {
             taker_fee: XorAmount::from_micro(3_750),
             timestamp_unix: 1_800_000_005,
         };
-        let channel = SettlementChannelV1 {
-            version: SETTLEMENT_CHANNEL_VERSION_V1,
-            channel_id: [0x82; 32],
-            trade_id: trade.trade_id,
-            buyer_account: b"buyer@sora".to_vec(),
-            provider_id: [0x91; 32],
-            total_bytes: 512,
-            remaining_bytes: 256,
-            xor_locked: XorAmount::from_micro(900),
-            status: SettlementChannelStatusV1::Open,
-            opened_at_unix: 1_800_000_005,
-            updated_at_unix: 1_800_000_010,
-        };
+        let channel = crate::open_settlement_channel_for_trade_v1(
+            &trade,
+            [0x82; 32],
+            b"buyer@sora".to_vec(),
+            [0x91; 32],
+            1_800_000_005,
+        )
+        .expect("orderbook fixture channel should open");
         let mut receipt = orderbook_settlement_receipt();
         receipt.channel_id = channel.channel_id;
         receipt.trade_id = channel.trade_id;
+        let channel = crate::apply_settlement_receipt_v1(&channel, &receipt)
+            .expect("orderbook fixture receipt should apply");
         OrderbookRuntimeSnapshotV1 {
             version: ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
             next_sequence: 4,

@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_evidence_viewer_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0f58f1c34a5288e16ae7ed03bad03cc26f36d6ba794df6c1418f74d1f8058fba
-source_last_modified: "2026-07-02T09:53:55.165190+00:00"
-translation_last_reviewed: 2026-07-02
-source_mtime: 2026-07-02T09:53:55.165190+00:00
+source_hash: 9916214d7e38da9aef61585e0955d4c0c35dd9dc686d8e57bcf07f4280ecebad
+source_last_modified: "2026-07-03T08:17:55.197093+00:00"
+translation_last_reviewed: 2026-07-03
+source_mtime: 2026-07-03T08:17:55.197093+00:00
 ---
 
 # Secure Evidence Viewer & Access Logging
@@ -61,8 +61,12 @@ missing viewer service.
   positive control claim explicitly, forces raw evidence/session-token/signed
   URL/watermark-secret/body flags to `false`, requires reviewed
   `--viewer-session` labels whose unique inventory matches `--session-count`,
-  validates the generated JSON with
-  the same SFM-4b checker contract before writing, and writes atomically. It
+  emits `role_count`, `security_control_count`, `access_event_kind_count`, and
+  `export_target_count` from the reviewed role/control/event/export inventories
+  before checker prevalidation, rejects duplicate or unknown `--verified-claim`,
+  `--role`, `--security-control`, `--access-event-kind`, and `--export-target`
+  inputs before any canary JSON is written, validates the generated JSON with the
+  same SFM-4b checker contract before writing, and writes atomically. It
   helps operators prepare reviewable canary evidence, but it still does not
   replace the browser viewer, streaming backend, watermark engine, WebAuthn
   session flow, or access-log service.

@@ -3641,6 +3641,170 @@ mod tests {
     }
 
     #[test]
+    fn incoming_block_message_routes_certified_fetch_payloads_via_payload_ingress_queue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let block = test_signed_block(3, 0);
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let validator_set = vec![checked_peer()];
+        let signers_bitmap = vec![1];
+        let bls_aggregate_signature = vec![0xA5];
+        let parent_state_root = Hash::prehashed([0x11; Hash::LENGTH]);
+        let post_state_root = Hash::prehashed([0x12; Hash::LENGTH]);
+        let chain_order_hash = iroha_data_model::consensus::default_chain_order_hash();
+        let qc = Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root,
+            post_state_root,
+            height,
+            view,
+            epoch: 0,
+            chain_order_hash,
+            rechain_seq: 0,
+            mode_tag: String::new(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version:
+                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: validator_set.clone(),
+            aggregate: QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
+        };
+        let validator_checkpoint =
+            iroha_data_model::consensus::ValidatorSetCheckpoint::new_with_chain_order(
+                height,
+                view,
+                block_hash,
+                chain_order_hash,
+                0,
+                parent_state_root,
+                post_state_root,
+                validator_set,
+                signers_bitmap,
+                bls_aggregate_signature,
+                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            );
+
+        let messages = [
+            BlockMessage::CertifiedBlockFetch(message::CertifiedBlockFetch::Response(
+                message::CertifiedBlockFetchResponse {
+                    height,
+                    view,
+                    block: block.clone(),
+                    commit_qc: qc.clone(),
+                    validator_checkpoint: validator_checkpoint.clone(),
+                    stake_snapshot: None,
+                },
+            )),
+            BlockMessage::CertifiedBlockFetch(message::CertifiedBlockFetch::Proof(
+                message::CertifiedBlockFetchProof {
+                    height,
+                    view,
+                    block_hash,
+                    commit_qc: qc,
+                    validator_checkpoint,
+                    stake_snapshot: None,
+                },
+            )),
+            BlockMessage::CertifiedBlockFetch(message::CertifiedBlockFetch::Body(
+                message::CertifiedBlockFetchBody {
+                    height,
+                    view,
+                    block,
+                },
+            )),
+        ];
+
+        for message in messages {
+            assert!(handle.incoming_block_message(message));
+            let received = block_payload_rx
+                .try_recv()
+                .expect("certified fetch payload should be enqueued to payload ingress");
+            let (queue_kind, _latency_ms) = received
+                .queue_latency_ms()
+                .expect("CertifiedBlockFetch payload should record enqueue metadata");
+            assert_eq!(queue_kind, status::WorkerQueueKind::BlockPayload);
+            assert!(matches!(
+                received,
+                InboundBlockMessage {
+                    message: BlockMessage::CertifiedBlockFetch(
+                        message::CertifiedBlockFetch::Response(_)
+                            | message::CertifiedBlockFetch::Proof(_)
+                            | message::CertifiedBlockFetch::Body(_)
+                    ),
+                    ..
+                }
+            ));
+        }
+
+        let requester = checked_peer();
+        assert!(handle.incoming_block_message(BlockMessage::CertifiedBlockFetch(
+            message::CertifiedBlockFetch::Request(message::CertifiedBlockFetchRequest {
+                requester,
+                height,
+                view,
+                block_hash,
+            }),
+        )));
+        let received = block_rx
+            .try_recv()
+            .expect("certified fetch request should stay on block ingress");
+        let (queue_kind, _latency_ms) = received
+            .queue_latency_ms()
+            .expect("CertifiedBlockFetch request should record enqueue metadata");
+        assert_eq!(queue_kind, status::WorkerQueueKind::Blocks);
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::CertifiedBlockFetch(
+                    message::CertifiedBlockFetch::Request(_)
+                ),
+                ..
+            }
+        ));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
     fn incoming_block_message_drops_committed_block_created_before_enqueue() {
         let (handle, block_payload_rx, block_rx, rbc_chunk_rx, vote_rx) =
             test_handle_with_state(state_with_committed_height(2));
@@ -13611,13 +13775,31 @@ impl SumeragiHandle {
                 }
                 accepted
             }
-            BlockMessage::CertifiedBlockFetch(fetch) => enqueue_with_mode(
-                &self.block,
-                InboundBlockMessage::new(BlockMessage::CertifiedBlockFetch(fetch), sender),
-                "CertifiedBlockFetch",
-                status::WorkerQueueKind::Blocks,
-                mode,
-            ),
+            BlockMessage::CertifiedBlockFetch(fetch) => {
+                let is_payload = matches!(
+                    fetch,
+                    message::CertifiedBlockFetch::Response(_)
+                        | message::CertifiedBlockFetch::Proof(_)
+                        | message::CertifiedBlockFetch::Body(_)
+                );
+                let queue = if is_payload {
+                    status::WorkerQueueKind::BlockPayload
+                } else {
+                    status::WorkerQueueKind::Blocks
+                };
+                let tx = if is_payload {
+                    &self.block_payload
+                } else {
+                    &self.block
+                };
+                enqueue_with_mode(
+                    tx,
+                    InboundBlockMessage::new(BlockMessage::CertifiedBlockFetch(fetch), sender),
+                    "CertifiedBlockFetch",
+                    queue,
+                    mode,
+                )
+            }
             other => enqueue_with_mode(
                 &self.block,
                 InboundBlockMessage::new(other, sender),

@@ -23,7 +23,7 @@
 //! );
 //! ```
 
-use std::sync::OnceLock;
+use std::{error::Error, fmt, sync::OnceLock};
 
 use sha3::{Digest, Sha3_256};
 
@@ -61,10 +61,16 @@ pub struct Chunk {
 }
 
 impl Chunk {
+    /// Returns the end offset (`offset + length`) when it fits in `usize`.
+    #[must_use]
+    pub fn checked_end(&self) -> Option<usize> {
+        self.offset.checked_add(self.length)
+    }
+
     /// Returns the end offset (`offset + length`) of the chunk.
     #[must_use]
     pub fn end(&self) -> usize {
-        self.offset + self.length
+        self.checked_end().expect("chunk end overflows usize")
     }
 }
 
@@ -92,6 +98,65 @@ pub struct ChunkProfile {
     pub break_mask: u64,
 }
 
+/// Errors returned when chunking cannot proceed deterministically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkerError {
+    /// The minimum chunk size was zero.
+    MinSizeZero,
+    /// The target chunk size was smaller than the minimum chunk size.
+    TargetBeforeMin {
+        /// Configured minimum chunk size.
+        min_size: usize,
+        /// Configured target chunk size.
+        target_size: usize,
+    },
+    /// The maximum chunk size was smaller than the target chunk size.
+    MaxBeforeTarget {
+        /// Configured target chunk size.
+        target_size: usize,
+        /// Configured maximum chunk size.
+        max_size: usize,
+    },
+    /// The rolling-hash break mask was zero.
+    BreakMaskZero,
+    /// A chunk's offset plus length could not be represented as `usize`.
+    ChunkRangeOverflow {
+        /// Chunk start offset.
+        offset: usize,
+        /// Chunk length in bytes.
+        length: usize,
+    },
+}
+
+impl fmt::Display for ChunkerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MinSizeZero => f.write_str("min_size must be greater than zero"),
+            Self::TargetBeforeMin {
+                min_size,
+                target_size,
+            } => write!(
+                f,
+                "target_size {target_size} is smaller than min_size {min_size}"
+            ),
+            Self::MaxBeforeTarget {
+                target_size,
+                max_size,
+            } => write!(
+                f,
+                "max_size {max_size} is smaller than target_size {target_size}"
+            ),
+            Self::BreakMaskZero => f.write_str("break_mask must be non-zero"),
+            Self::ChunkRangeOverflow { offset, length } => write!(
+                f,
+                "chunk range overflows usize: offset {offset}, length {length}"
+            ),
+        }
+    }
+}
+
+impl Error for ChunkerError {}
+
 impl ChunkProfile {
     /// Default profile used by SoraFS.
     pub const DEFAULT: Self = DEFAULT_PROFILE;
@@ -99,13 +164,26 @@ impl ChunkProfile {
     pub const SF2: Self = HIGH_DENSITY_PROFILE;
 
     /// Validates that the profile respects ordering and mask requirements.
-    fn validate(self) {
-        assert!(self.min_size > 0, "min_size must be > 0");
-        assert!(
-            self.min_size <= self.target_size && self.target_size <= self.max_size,
-            "expected min <= target <= max"
-        );
-        assert!(self.break_mask != 0, "break_mask may not be zero");
+    pub fn validate(self) -> Result<(), ChunkerError> {
+        if self.min_size == 0 {
+            return Err(ChunkerError::MinSizeZero);
+        }
+        if self.min_size > self.target_size {
+            return Err(ChunkerError::TargetBeforeMin {
+                min_size: self.min_size,
+                target_size: self.target_size,
+            });
+        }
+        if self.target_size > self.max_size {
+            return Err(ChunkerError::MaxBeforeTarget {
+                target_size: self.target_size,
+                max_size: self.max_size,
+            });
+        }
+        if self.break_mask == 0 {
+            return Err(ChunkerError::BreakMaskZero);
+        }
+        Ok(())
     }
 }
 
@@ -118,12 +196,21 @@ pub fn chunk_bytes(input: &[u8]) -> Vec<Chunk> {
 /// Chunks the provided bytes using a custom profile.
 #[must_use]
 pub fn chunk_bytes_with_profile(profile: ChunkProfile, input: &[u8]) -> Vec<Chunk> {
-    profile.validate();
+    try_chunk_bytes_with_profile(profile, input).expect("invalid SoraFS chunk profile")
+}
+
+/// Chunks the provided bytes using a custom profile, returning validation
+/// errors instead of panicking on invalid profile parameters.
+pub fn try_chunk_bytes_with_profile(
+    profile: ChunkProfile,
+    input: &[u8],
+) -> Result<Vec<Chunk>, ChunkerError> {
+    profile.validate()?;
     if input.is_empty() {
-        return vec![Chunk {
+        return Ok(vec![Chunk {
             offset: 0,
             length: 0,
-        }];
+        }]);
     }
 
     let table = gear_table();
@@ -132,11 +219,11 @@ pub fn chunk_bytes_with_profile(profile: ChunkProfile, input: &[u8]) -> Vec<Chun
     let mut chunks = Vec::new();
 
     while offset < len {
-        let max_end = len.min(offset + profile.max_size);
+        let max_end = checked_window_end(offset, profile.max_size, len);
         let mut idx = offset;
         let mut hash = 0u64;
 
-        let must_end = len.min(offset + profile.min_size);
+        let must_end = checked_window_end(offset, profile.min_size, len);
 
         while idx < must_end {
             hash = roll(hash, input[idx], table);
@@ -164,7 +251,7 @@ pub fn chunk_bytes_with_profile(profile: ChunkProfile, input: &[u8]) -> Vec<Chun
 
         if chunk_end <= offset {
             // Safety net: never emit zero-length chunks.
-            chunk_end = (offset + profile.max_size).min(len);
+            chunk_end = checked_window_end(offset, profile.max_size, len);
         }
 
         chunks.push(Chunk {
@@ -174,7 +261,7 @@ pub fn chunk_bytes_with_profile(profile: ChunkProfile, input: &[u8]) -> Vec<Chun
         offset = chunk_end;
     }
 
-    chunks
+    Ok(chunks)
 }
 
 /// Chunks the input and returns chunk metadata with BLAKE3 digests.
@@ -186,20 +273,40 @@ pub fn chunk_bytes_with_digests(input: &[u8]) -> Vec<ChunkDigest> {
 /// Chunks the input with a custom profile and computes BLAKE3 digests per chunk.
 #[must_use]
 pub fn chunk_bytes_with_digests_profile(profile: ChunkProfile, input: &[u8]) -> Vec<ChunkDigest> {
-    let chunks = chunk_bytes_with_profile(profile, input);
+    try_chunk_bytes_with_digests_profile(profile, input).expect("invalid SoraFS chunk profile")
+}
+
+/// Chunks the input with a custom profile and computes BLAKE3 digests per
+/// chunk, returning validation errors instead of panicking on invalid profile
+/// parameters.
+pub fn try_chunk_bytes_with_digests_profile(
+    profile: ChunkProfile,
+    input: &[u8],
+) -> Result<Vec<ChunkDigest>, ChunkerError> {
+    let chunks = try_chunk_bytes_with_profile(profile, input)?;
     chunks
         .iter()
         .map(|chunk| {
             let start = chunk.offset;
-            let end = chunk.end().min(input.len());
+            let end = chunk
+                .checked_end()
+                .ok_or(ChunkerError::ChunkRangeOverflow {
+                    offset: chunk.offset,
+                    length: chunk.length,
+                })?
+                .min(input.len());
             let digest = blake3::hash(&input[start..end]).into();
-            ChunkDigest {
+            Ok(ChunkDigest {
                 offset: chunk.offset,
                 length: chunk.length,
                 digest,
-            }
+            })
         })
         .collect()
+}
+
+fn checked_window_end(offset: usize, window: usize, len: usize) -> usize {
+    offset.checked_add(window).map_or(len, |end| end.min(len))
 }
 
 #[inline]
@@ -253,15 +360,21 @@ impl Chunker {
     /// Creates a chunker configured with a custom profile.
     #[must_use]
     pub fn with_profile(profile: ChunkProfile) -> Self {
-        profile.validate();
-        Self {
+        Self::try_with_profile(profile).expect("invalid SoraFS chunk profile")
+    }
+
+    /// Creates a chunker configured with a custom profile, returning validation
+    /// errors instead of panicking on invalid profile parameters.
+    pub fn try_with_profile(profile: ChunkProfile) -> Result<Self, ChunkerError> {
+        profile.validate()?;
+        Ok(Self {
             profile,
             table: gear_table(),
             offset: 0,
             current_len: 0,
             current_hash: 0,
             chunk_start: 0,
-        }
+        })
     }
 
     /// Feeds data into the chunker, invoking `emit` for each completed chunk.
@@ -580,6 +693,62 @@ mod tests {
                 length: 0
             }]
         );
+    }
+
+    #[test]
+    fn invalid_profiles_return_errors_without_chunking() {
+        let zero_min = ChunkProfile {
+            min_size: 0,
+            ..ChunkProfile::DEFAULT
+        };
+        assert!(matches!(
+            zero_min.validate(),
+            Err(ChunkerError::MinSizeZero)
+        ));
+        assert!(matches!(
+            try_chunk_bytes_with_profile(zero_min, b"payload"),
+            Err(ChunkerError::MinSizeZero)
+        ));
+
+        let target_before_min = ChunkProfile {
+            min_size: 4096,
+            target_size: 1024,
+            max_size: 8192,
+            break_mask: 1,
+        };
+        assert!(matches!(
+            try_chunk_bytes_with_digests_profile(target_before_min, b"payload"),
+            Err(ChunkerError::TargetBeforeMin { .. })
+        ));
+
+        let max_before_target = ChunkProfile {
+            min_size: 1024,
+            target_size: 4096,
+            max_size: 2048,
+            break_mask: 1,
+        };
+        assert!(matches!(
+            Chunker::try_with_profile(max_before_target),
+            Err(ChunkerError::MaxBeforeTarget { .. })
+        ));
+
+        let zero_mask = ChunkProfile {
+            break_mask: 0,
+            ..ChunkProfile::DEFAULT
+        };
+        assert!(matches!(
+            try_chunk_bytes_with_profile(zero_mask, b"payload"),
+            Err(ChunkerError::BreakMaskZero)
+        ));
+    }
+
+    #[test]
+    fn checked_chunk_end_reports_overflow() {
+        let chunk = Chunk {
+            offset: usize::MAX,
+            length: 1,
+        };
+        assert_eq!(chunk.checked_end(), None);
     }
 
     #[test]

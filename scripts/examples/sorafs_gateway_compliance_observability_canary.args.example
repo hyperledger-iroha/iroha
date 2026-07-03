@@ -1,0 +1,14 @@
+# Reviewed observability canary inputs for the SFM-4 gateway compliance gate.
+--kind observability
+--out artifacts/sorafs_gateway/observability-canary.json
+--deployment-id sorafs-gateway-prod-20260701
+--environment production
+--generated-at-unix 1800100000
+--now-unix 1800100000
+--bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--metric sorafs_gateway_policy_denials_total
+--metric sorafs_gateway_denylist_reload_total
+--metric sorafs_gateway_denylist_reload_latency_ms
+--metric sorafs_gateway_honey_audit_failures_total
+--metric sorafs_gateway_compliance_override_total
+--metric sorafs_transparency_source_entries_total

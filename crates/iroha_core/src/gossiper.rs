@@ -1457,6 +1457,37 @@ impl TransactionGossiper {
             return;
         }
 
+        if routes.len() > txs.len() || plans.len() > txs.len() {
+            let reason = match (routes.len() > txs.len(), plans.len() > txs.len()) {
+                (true, true) => "extra_route_and_plan_metadata",
+                (true, false) => "extra_route_metadata",
+                (false, true) => "extra_plan_metadata",
+                (false, false) => {
+                    unreachable!("extra metadata guard only runs on overlong vectors")
+                }
+            };
+            iroha_logger::warn!(
+                routes = routes.len(),
+                plans = plans.len(),
+                txs = txs.len(),
+                reason,
+                "dropping transaction gossip with unpaired routing metadata"
+            );
+            self.record_drop_metric(
+                plane,
+                DataSpaceId::UNIVERSAL,
+                &[],
+                reason,
+                false,
+                None,
+                &[],
+                self.target_cap_for_plane(plane),
+                batch_txs,
+                0,
+            );
+            return;
+        }
+
         if routes.len() != txs.len() {
             iroha_logger::warn!(
                 routes = routes.len(),
@@ -2063,6 +2094,37 @@ impl TransactionGossiper {
                 DataSpaceId::UNIVERSAL,
                 &[],
                 "missing_routes",
+                false,
+                None,
+                &[],
+                self.target_cap_for_plane(plane),
+                batch_txs,
+                0,
+            );
+            return;
+        }
+
+        if routes.len() > txs.len() || plans.len() > txs.len() {
+            let reason = match (routes.len() > txs.len(), plans.len() > txs.len()) {
+                (true, true) => "extra_route_and_plan_metadata",
+                (true, false) => "extra_route_metadata",
+                (false, true) => "extra_plan_metadata",
+                (false, false) => {
+                    unreachable!("extra metadata guard only runs on overlong vectors")
+                }
+            };
+            iroha_logger::warn!(
+                routes = routes.len(),
+                plans = plans.len(),
+                txs = txs.len(),
+                reason,
+                "dropping transaction gossip with unpaired routing metadata"
+            );
+            self.record_drop_metric(
+                plane,
+                DataSpaceId::UNIVERSAL,
+                &[],
+                reason,
                 false,
                 None,
                 &[],
@@ -3422,9 +3484,12 @@ mod tests {
     };
     use iroha_data_model::{
         ChainId, DataSpaceId, Level,
+        domain::{Domain, DomainId},
         identifier::IdentifierPolicyId,
-        isi::{Instruction, InstructionBox, Log, ram_lfe::RegisterRamLfeProgramPolicy},
-        nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneId, LaneVisibility},
+        isi::{Instruction, InstructionBox, Log, Register, ram_lfe::RegisterRamLfeProgramPolicy},
+        nexus::{
+            DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId, LaneVisibility,
+        },
         ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
         transaction::{
             TransactionBuilder,
@@ -3434,7 +3499,7 @@ mod tests {
             },
         },
     };
-    use iroha_primitives::{addr::socket_addr, time::TimeSource};
+    use iroha_primitives::{addr::socket_addr, numeric::Numeric, time::TimeSource};
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, PEER_KEYPAIR,
     };
@@ -3459,6 +3524,25 @@ mod tests {
             .sign(ALICE_KEYPAIR.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
         (signed, accepted)
+    }
+
+    fn install_active_single_lane_nexus(state: &State) {
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(1).expect("non-zero lane count"),
+            vec![LaneConfig::default()],
+        )
+        .expect("authoritative default lane catalog");
+        let mut nexus = state.nexus.write();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = false;
+        nexus.lane_catalog = lane_catalog;
+        nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = DataSpaceCatalog::default();
+        nexus.routing_policy = iroha_config::parameters::actual::LaneRoutingPolicy::default();
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
     }
 
     fn payload_for(tx: &SignedTransaction) -> Arc<Vec<u8>> {
@@ -3850,6 +3934,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),
             &TimeSource::new_system(),
@@ -4006,6 +4091,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),
             &TimeSource::new_system(),
@@ -5475,6 +5561,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),
             &TimeSource::new_system(),
@@ -5497,7 +5584,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
             queue: Arc::clone(&queue),
-            state,
+            state: Arc::clone(&state),
             tx_frame_cap: 1024,
             dataspace_cfg: DataspaceGossip::default(),
             public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
@@ -5573,6 +5660,43 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     }
 
     #[test]
+    fn gossip_drops_batch_with_extra_routing_metadata() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (extra_route_tx, _) = build_transaction("extra-route-metadata");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![extra_route_tx.into()],
+            routes: vec![route, route],
+            plans: vec![default_plan()],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            0,
+            "unpaired extra route metadata must reject the whole gossip frame"
+        );
+
+        let (extra_plan_tx, _) = build_transaction("extra-plan-metadata");
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![extra_plan_tx.into()],
+            routes: vec![route],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            0,
+            "unpaired extra plan metadata must reject the whole gossip frame"
+        );
+    }
+
+    #[test]
     fn shared_gossip_accepts_valid_prefix_when_route_metadata_is_short() {
         let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
         let (valid, _) = build_transaction("shared-valid-before-missing-route");
@@ -5639,6 +5763,40 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         assert!(
             !retained.txs[1].is_entrypoint_materialized(),
             "missing plan metadata must drop before entrypoint materialization"
+        );
+    }
+
+    #[test]
+    fn shared_gossip_drops_batch_with_extra_routing_metadata_without_materialization() {
+        let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let (valid, _) = build_transaction("shared-extra-routing-metadata");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(
+                valid.clone(),
+                payload_for(&valid),
+            )],
+            routes: vec![route],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        });
+        assert!(!decoded.txs[0].is_entrypoint_materialized());
+
+        let shared = Arc::new(decoded);
+        let retained = Arc::clone(&shared);
+        gossiper.handle_transaction_gossip(shared);
+
+        assert_eq!(
+            gossiper.queue.queued_len(),
+            0,
+            "shared gossip with unpaired extra metadata must reject the whole frame"
+        );
+        assert!(
+            !retained.txs[0].is_entrypoint_materialized(),
+            "extra routing metadata must drop before entrypoint materialization"
         );
     }
 
@@ -6077,6 +6235,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),
             &TimeSource::new_system(),
@@ -6215,24 +6374,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
 
     #[tokio::test(flavor = "current_thread")]
     async fn gossip_drops_stale_native_amx_participant_plan_but_keeps_valid_entry() {
-        struct FixedPlanRouter {
-            plan: RoutingPlan,
-        }
-
-        impl LaneRouter for FixedPlanRouter {
-            fn route(&self, _tx: &crate::tx::AcceptedTransaction<'_>) -> RoutingDecision {
-                self.plan.coordinator_route()
-            }
-
-            fn try_route_plan_with_state(
-                &self,
-                _tx: &crate::tx::AcceptedTransaction<'_>,
-                _state: &State,
-            ) -> Result<RoutingPlan, crate::queue::RoutingResolveError> {
-                Ok(self.plan.clone())
-            }
-        }
-
         let temp_dir = tempdir().expect("temp dir");
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -6252,18 +6393,104 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
 
-        let coordinator = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-        let current_participant = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(8));
-        let stale_participant = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(9));
-        let current_plan = RoutingPlan::native_amx(
-            coordinator,
-            vec![crate::queue::RouteLeg::new(
-                current_participant,
-                crate::queue::RouteLegRole::Participant,
-            )],
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let first_lane = LaneId::new(2);
+        let second_lane = LaneId::new(3);
+        let stale_participant = RoutingDecision::new(LaneId::new(4), DataSpaceId::new(9));
+
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(4).expect("nonzero lanes"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: first_lane,
+                    dataspace_id: first_dataspace,
+                    alias: "acme".to_owned(),
+                    visibility: LaneVisibility::Public,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+                iroha_data_model::nexus::LaneConfig {
+                    id: second_lane,
+                    dataspace_id: second_dataspace,
+                    alias: "bank".to_owned(),
+                    visibility: LaneVisibility::Public,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: first_dataspace,
+                alias: "acme".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: second_dataspace,
+                alias: "bank".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = true;
+            nexus.autoscale.enabled = false;
+            nexus.fees.base_fee = iroha_primitives::numeric::Numeric::zero();
+            nexus.fees.per_byte_fee = iroha_primitives::numeric::Numeric::zero();
+            nexus.fees.per_instruction_fee = iroha_primitives::numeric::Numeric::zero();
+            nexus.fees.per_gas_unit_fee = iroha_primitives::numeric::Numeric::zero();
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
+            nexus.dataspace_catalog = dataspace_catalog.clone();
+        }
+        assert!(state.is_lane_active_for_authority(first_lane));
+        assert!(state.is_lane_active_for_authority(second_lane));
+        assert!(!state.is_lane_active_for_authority(stale_participant.lane_id));
+
+        let queue = Arc::new(Queue::test(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+        ));
+        let mixed_domain_signed = |primary: &str, secondary: &str| {
+            let chain_id: ChainId = "test-chain".parse().expect("chain id");
+            TransactionBuilder::new(chain_id, (*ALICE_ID).clone())
+                .with_instructions([
+                    InstructionBox::from(Register::domain(Domain::new(
+                        DomainId::try_new(primary, "acme").expect("first dataspace domain id"),
+                    ))),
+                    InstructionBox::from(Register::domain(Domain::new(
+                        DomainId::try_new(secondary, "bank").expect("second dataspace domain id"),
+                    ))),
+                ])
+                .sign(ALICE_KEYPAIR.private_key())
+        };
+        let stale_signed = mixed_domain_signed("stalenativeamx", "stalenativepeer");
+        let valid_signed = mixed_domain_signed("validnativeamx", "validnativepeer");
+        let valid_accepted = AcceptedTransaction::new_unchecked(Cow::Owned(valid_signed.clone()));
+        let current_plan = queue
+            .route_plan_for_gossip_with_state(&valid_accepted, state.as_ref())
+            .expect("current Native AMX plan should resolve through config router");
+        let RoutingPlan::NativeAmx(native_plan) = &current_plan else {
+            panic!("mixed dataspace writes should build a Native AMX plan");
+        };
+        assert_eq!(
+            native_plan.coordinator.route,
+            RoutingDecision::new(first_lane, first_dataspace)
+        );
+        assert!(
+            native_plan
+                .participants
+                .iter()
+                .any(|leg| { leg.route == RoutingDecision::new(second_lane, second_dataspace) }),
+            "current Native AMX plan should include the second dataspace participant"
         );
         let stale_plan = RoutingPlan::native_amx(
-            coordinator,
+            native_plan.coordinator.route,
             vec![crate::queue::RouteLeg::new(
                 stale_participant,
                 crate::queue::RouteLegRole::Participant,
@@ -6275,55 +6502,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         );
         assert_ne!(stale_plan, current_plan);
 
-        let lane_catalog = LaneCatalog::new(
-            NonZeroU32::new(3).expect("nonzero lanes"),
-            vec![
-                iroha_data_model::nexus::LaneConfig::default(),
-                iroha_data_model::nexus::LaneConfig {
-                    id: current_participant.lane_id,
-                    dataspace_id: current_participant.dataspace_id,
-                    alias: "current-participant".to_owned(),
-                    visibility: LaneVisibility::Public,
-                    ..iroha_data_model::nexus::LaneConfig::default()
-                },
-            ],
-        )
-        .expect("lane catalog");
-        let dataspace_catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: current_participant.dataspace_id,
-                alias: "current-participant".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("dataspace catalog");
-        {
-            let mut nexus = state.nexus.write();
-            nexus.enabled = false;
-            nexus.fees.base_fee = iroha_primitives::numeric::Numeric::zero();
-            nexus.fees.per_byte_fee = iroha_primitives::numeric::Numeric::zero();
-            nexus.fees.per_instruction_fee = iroha_primitives::numeric::Numeric::zero();
-            nexus.fees.per_gas_unit_fee = iroha_primitives::numeric::Numeric::zero();
-            nexus.lane_catalog = lane_catalog.clone();
-            nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
-            nexus.dataspace_catalog = dataspace_catalog.clone();
-        }
-
-        let lane_catalog = Arc::new(lane_catalog);
-        let dataspace_catalog = Arc::new(dataspace_catalog);
-        let queue = Arc::new(Queue::from_config_with_router_limits_and_catalogs(
-            QueueConfig::default(),
-            tokio::sync::broadcast::Sender::new(1),
-            Arc::new(FixedPlanRouter {
-                plan: current_plan.clone(),
-            }),
-            crate::queue::QueueLimits::default(),
-            &lane_catalog,
-            &dataspace_catalog,
-            None,
-        ));
         let now = Instant::now();
         let gossiper = TransactionGossiper {
             chain_id: "test-chain".parse().expect("chain id"),
@@ -6348,11 +6526,9 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             restricted_seed: GossipTargetSeed::new(0xBEEF_0002, Duration::from_secs(1), now),
         };
 
-        let (stale_signed, _) = build_transaction("stale-native-amx-plan");
-        let (valid_signed, _) = build_transaction("valid-native-amx-plan");
         let route = GossipRoute {
-            lane_id: coordinator.lane_id,
-            dataspace_id: coordinator.dataspace_id,
+            lane_id: current_plan.coordinator_route().lane_id,
+            dataspace_id: current_plan.coordinator_route().dataspace_id,
         };
         gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
             txs: vec![stale_signed.into(), valid_signed.into()],
@@ -6371,17 +6547,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::too_many_lines)]
     async fn gossip_accepts_restricted_route_match() {
-        struct FixedRouter {
-            lane: LaneId,
-            dataspace: DataSpaceId,
-        }
-
-        impl LaneRouter for FixedRouter {
-            fn route(&self, _tx: &crate::tx::AcceptedTransaction<'_>) -> RoutingDecision {
-                RoutingDecision::new(self.lane, self.dataspace)
-            }
-        }
-
         let temp_dir = tempdir().expect("temp dir");
         let kura_cfg = KuraConfig {
             init_mode: InitMode::Strict,
@@ -6433,7 +6598,8 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         .expect("dataspace catalog");
         {
             let mut nexus = state.nexus.write();
-            nexus.enabled = false;
+            nexus.enabled = true;
+            nexus.autoscale.enabled = false;
             nexus.fees.base_fee = iroha_primitives::numeric::Numeric::zero();
             nexus.fees.per_byte_fee = iroha_primitives::numeric::Numeric::zero();
             nexus.fees.per_instruction_fee = iroha_primitives::numeric::Numeric::zero();
@@ -6441,21 +6607,14 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog;
+            nexus.routing_policy.default_lane = restricted_lane;
+            nexus.routing_policy.default_dataspace = restricted_dataspace;
         }
+        assert!(state.is_lane_active_for_authority(restricted_lane));
 
-        let lane_catalog = Arc::new(lane_catalog);
-        let dataspace_catalog = Arc::new(state.nexus.read().dataspace_catalog.clone());
-        let queue = Arc::new(Queue::from_config_with_router_limits_and_catalogs(
+        let queue = Arc::new(Queue::test(
             QueueConfig::default(),
-            tokio::sync::broadcast::Sender::new(1),
-            Arc::new(FixedRouter {
-                lane: restricted_lane,
-                dataspace: restricted_dataspace,
-            }),
-            crate::queue::QueueLimits::default(),
-            &lane_catalog,
-            &dataspace_catalog,
-            None,
+            &TimeSource::new_system(),
         ));
 
         let now = Instant::now();
@@ -6475,7 +6634,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
             queue: Arc::clone(&queue),
-            state,
+            state: Arc::clone(&state),
             tx_frame_cap: 1024,
             dataspace_cfg: DataspaceGossip::default(),
             public_seed: GossipTargetSeed::new(0xBEEF_0001, Duration::from_secs(1), now),
@@ -6487,6 +6646,19 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             lane_id: restricted_lane,
             dataspace_id: restricted_dataspace,
         };
+        assert_eq!(
+            dataspace_plane(&state.nexus.read().lane_config, route.dataspace_id),
+            Some(GossipPlane::Restricted)
+        );
+        assert_eq!(
+            queue
+                .route_plan_for_gossip_with_state(
+                    &AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone())),
+                    state.as_ref(),
+                )
+                .expect("restricted route should resolve locally"),
+            plan_for_route(route)
+        );
         gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
             txs: vec![signed.into()],
             routes: vec![route],

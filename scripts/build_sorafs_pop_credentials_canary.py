@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import sys
 from collections.abc import Iterable, Sequence
@@ -18,14 +19,28 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_pop_credentials_rollout_evidence import (  # noqa: E402
+    COMMIT_REVEAL_PROBE_LABEL_ERROR,
+    COMMIT_REVEAL_PROBE_LABEL_PATTERN,
+    CREDENTIAL_LABEL_ERROR,
+    CREDENTIAL_LABEL_PATTERN,
     DEFAULT_MAX_REVOCATION_AGE_SECS,
     DEFAULT_MAX_ROOT_AGE_SECS,
     DEFAULT_MAX_SERVICE_LAG_SECS,
     DEFAULT_MAX_VERIFY_LATENCY_MS,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
+    FORBIDDEN_ISSUER_ID_MARKERS,
+    INVALID_PROOF_PROBE_LABEL_ERROR,
+    INVALID_PROOF_PROBE_LABEL_PATTERN,
+    ISSUER_ID_ERROR,
+    ISSUER_ID_PATTERN,
     KIND_BY_NAME,
     REQUIRED_ENROLLMENT_ROUTES,
     REQUIRED_METRICS,
     REQUIRED_VERIFIER_ROUTES,
+    SORTITION_PROBE_LABEL_ERROR,
+    SORTITION_PROBE_LABEL_PATTERN,
+    VALID_PROOF_PROBE_LABEL_ERROR,
+    VALID_PROOF_PROBE_LABEL_PATTERN,
     ValidationOptions,
     validate_evidence_payload,
 )
@@ -33,6 +48,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -177,6 +194,8 @@ def validate_reviewed_inventory(
     kind: str,
     count_option: str,
     errors: list[str],
+    pattern: re.Pattern[str] | None = None,
+    label_error: str | None = None,
 ) -> list[str]:
     """Return reviewed unique inventory labels whose count matches a CLI count."""
 
@@ -185,12 +204,36 @@ def validate_reviewed_inventory(
         errors.append(f"{option} is required for {kind}")
     for index, item in enumerate(items):
         validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+        if pattern is not None and pattern.fullmatch(item) is None:
+            if label_error is None:
+                errors.append(f"{option} has malformed inventory label")
+            else:
+                errors.append(render_inventory_label_error(label_error, option))
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in item.split("-")
+        )
+        if forbidden:
+            errors.append(f"{option} must not contain non-production markers {forbidden}")
     unique_items = set(items)
     if len(unique_items) != len(items):
         errors.append(f"{option} must not contain duplicates")
     if len(unique_items) != expected_count:
         errors.append(f"{option} unique values must match {count_option}")
     return items
+
+
+def render_inventory_label_error(label_error: str, option: str) -> str:
+    """Render checker inventory-label diagnostics against a CLI option."""
+
+    return (
+        label_error.replace("credentials[].name", option)
+        .replace("probes[].name", option)
+        .replace("sortition_probes[].name", option)
+        .replace("commit_reveal_probes[].name", option)
+    )
 
 
 def validate_output_path(path: Path, errors: list[str]) -> None:
@@ -234,6 +277,24 @@ def validate_canonical_string(value: str | None, *, label: str, errors: list[str
         or any(ord(character) < 32 or ord(character) == 127 for character in value)
     ):
         errors.append(f"{label} must be a non-empty canonical string")
+
+
+def validate_issuer_id_arg(value: str | None, *, errors: list[str]) -> None:
+    """Require a reviewed lowercase PoP issuer identifier."""
+
+    validate_canonical_string(value, label="--issuer-id", errors=errors)
+    if not isinstance(value, str):
+        return
+    if ISSUER_ID_PATTERN.fullmatch(value) is None:
+        errors.append(ISSUER_ID_ERROR.replace("issuer_id", "--issuer-id"))
+        return
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_ISSUER_ID_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"--issuer-id must not contain non-production markers {forbidden}")
 
 
 def require_kind_options(
@@ -363,6 +424,8 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "accepted_valid_proof_count": args.accepted_valid_proof_count,
                 "rejected_invalid_proof_count": args.rejected_invalid_proof_count,
                 "probes": probes,
+                "route_count": len(routes),
+                "passed_route_count": len(routes),
                 "max_verify_latency_ms": args.max_verify_latency_ms,
                 "max_service_lag_seconds": args.max_service_lag_seconds,
                 "routes": routes,
@@ -381,7 +444,12 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     elif args.kind == "metrics_alerts":
-        payload["metrics"] = args.metrics
+        payload.update(
+            {
+                "metrics": args.metrics,
+                "metric_count": len(args.metrics),
+            }
+        )
     elif args.kind == "governance_approval":
         payload.update(
             {
@@ -420,7 +488,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--credential-count", args.credential_count),
             ),
         )
-        validate_canonical_string(args.issuer_id, label="--issuer-id", errors=errors)
+        validate_issuer_id_arg(args.issuer_id, errors=errors)
         validate_hex64(args.bundle_id_hex, option="--bundle-id-hex", errors=errors)
         args.credentials = validate_reviewed_inventory(
             split_csv_values(args.credential),
@@ -428,6 +496,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--credential",
             kind="issuer_bundle",
             count_option="--credential-count",
+            pattern=CREDENTIAL_LABEL_PATTERN,
+            label_error=CREDENTIAL_LABEL_ERROR,
             errors=errors,
         )
     elif args.kind == "commitment_root":
@@ -481,6 +551,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--accepted-proof-probe",
             kind="verifier_service",
             count_option="--accepted-valid-proof-count",
+            pattern=VALID_PROOF_PROBE_LABEL_PATTERN,
+            label_error=VALID_PROOF_PROBE_LABEL_ERROR,
             errors=errors,
         )
         args.rejected_proof_probes = validate_reviewed_inventory(
@@ -489,6 +561,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--rejected-proof-probe",
             kind="verifier_service",
             count_option="--rejected-invalid-proof-count",
+            pattern=INVALID_PROOF_PROBE_LABEL_PATTERN,
+            label_error=INVALID_PROOF_PROBE_LABEL_ERROR,
             errors=errors,
         )
         proof_probe_names = args.accepted_proof_probes + args.rejected_proof_probes
@@ -517,6 +591,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--sortition-probe",
             kind="moderation_integration",
             count_option="--sortition-probe-count",
+            pattern=SORTITION_PROBE_LABEL_PATTERN,
+            label_error=SORTITION_PROBE_LABEL_ERROR,
             errors=errors,
         )
         args.commit_reveal_probes = validate_reviewed_inventory(
@@ -525,6 +601,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--commit-reveal-probe",
             kind="moderation_integration",
             count_option="--commit-reveal-probe-count",
+            pattern=COMMIT_REVEAL_PROBE_LABEL_PATTERN,
+            label_error=COMMIT_REVEAL_PROBE_LABEL_ERROR,
             errors=errors,
         )
     elif args.kind == "metrics_alerts":
@@ -617,12 +695,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:

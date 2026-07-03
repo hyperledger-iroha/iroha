@@ -15,8 +15,8 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --auditor-count
 3
 --auditor
-auditor-00
+repair-auditor-00
 --auditor
-auditor-01
+repair-auditor-01
 --auditor
-auditor-02
+repair-auditor-02

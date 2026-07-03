@@ -14,11 +14,13 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 from sorafs_checker_preflight import (  # noqa: E402
     artifact_path_label,
+    checker_output_parent_sync_open_flags,
     checker_summary_write_open_flags,
     emit_checker_error_block,
     emit_checker_exception,
     emit_checker_error_lines,
     emit_checker_notice,
+    fsync_checker_output_parent,
     inspect_checker_preflight_path_exists,
     inspect_checker_preflight_path_is_dir,
     inspect_checker_preflight_path_is_symlink,
@@ -732,6 +734,114 @@ def test_write_checker_summary_completes_partial_descriptor_writes(
     assert len(writes) > 1
 
 
+def test_write_checker_summary_fsyncs_descriptor_before_close(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    summary = tmp_path / "summary.json"
+    original_fsync = os.fsync
+    fsynced: list[int] = []
+
+    def fsync(fd: int) -> None:
+        fsynced.append(fd)
+        original_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+
+    errors = write_checker_summary(summary, '{"status":"ready"}')
+
+    assert errors == []
+    assert summary.read_text(encoding="utf-8") == '{"status":"ready"}'
+    assert len(fsynced) == 2
+
+
+def test_fsync_checker_output_parent_uses_directory_descriptor(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    summary = tmp_path / "summary.json"
+    summary.write_text("{}", encoding="utf-8")
+    original_open = os.open
+    original_fsync = os.fsync
+    opened: dict[str, int] = {}
+    fsynced: list[int] = []
+
+    def open_path(path: Path, flags: int, mode: int = 0o777, *args, **kwargs):
+        fd = original_open(path, flags, mode, *args, **kwargs)
+        if path == summary.parent:
+            opened["flags"] = flags
+            opened["fd"] = fd
+        return fd
+
+    def fsync(fd: int) -> None:
+        fsynced.append(fd)
+        original_fsync(fd)
+
+    monkeypatch.setattr(os, "open", open_path)
+    monkeypatch.setattr(os, "fsync", fsync)
+
+    errors = fsync_checker_output_parent(summary, label="--summary-out")
+
+    assert errors == []
+    assert fsynced == [opened["fd"]]
+    if hasattr(os, "O_DIRECTORY"):
+        assert opened["flags"] & os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        assert opened["flags"] & os.O_NOFOLLOW
+    assert checker_output_parent_sync_open_flags() == opened["flags"]
+
+
+def test_fsync_checker_output_parent_rejects_non_path_without_traceback() -> None:
+    assert fsync_checker_output_parent("summary.json", label="--summary-out") == [
+        "--summary-out `summary.json` must be a path"
+    ]
+
+
+def test_fsync_checker_output_parent_rejects_malformed_label(
+    tmp_path: Path,
+) -> None:
+    for label in ("", " --summary-out", "--summary-out ", "--summary\nout", 7):
+        try:
+            fsync_checker_output_parent(tmp_path / "summary.json", label=label)
+        except ValueError as error:
+            assert "checker preflight label must be a non-empty canonical string" in str(
+                error
+            )
+        else:
+            raise AssertionError(f"accepted malformed label {label!r}")
+
+
+def test_write_checker_summary_sanitizes_parent_fsync_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    summary = tmp_path / "bad\nparent" / "summary.json"
+    original_open = os.open
+    original_fsync = os.fsync
+    parent_fds: set[int] = set()
+
+    def open_path(path: Path, flags: int, mode: int = 0o777, *args, **kwargs):
+        fd = original_open(path, flags, mode, *args, **kwargs)
+        if path == summary.parent:
+            parent_fds.add(fd)
+        return fd
+
+    def fsync(fd: int) -> None:
+        if fd in parent_fds:
+            raise OSError(f"parent fsync denied for {summary.parent}")
+        original_fsync(fd)
+
+    monkeypatch.setattr(os, "open", open_path)
+    monkeypatch.setattr(os, "fsync", fsync)
+
+    errors = write_checker_summary(summary, "{}")
+
+    assert errors == [
+        "failed to fsync --summary-out parent `<non-canonical-path>`: "
+        "<non-canonical-error>"
+    ]
+
+
 def test_write_checker_summary_rejects_non_string_text(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
@@ -819,6 +929,25 @@ def test_write_checker_summary_sanitizes_write_failure(
         return original_open(path, flags, mode, *args, **kwargs)
 
     monkeypatch.setattr(os, "open", open_path)
+
+    errors = write_checker_summary(summary, "{}")
+
+    assert errors == [
+        "failed to write --summary-out `<non-canonical-path>`: "
+        "<non-canonical-error>"
+    ]
+
+
+def test_write_checker_summary_sanitizes_fsync_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    summary = tmp_path / "bad\nsummary.json"
+
+    def fsync(_fd: int) -> None:
+        raise OSError(f"fsync denied for {summary}")
+
+    monkeypatch.setattr(os, "fsync", fsync)
 
     errors = write_checker_summary(summary, "{}")
 

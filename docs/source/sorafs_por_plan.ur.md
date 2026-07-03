@@ -4,9 +4,10 @@ direction: rtl
 source: docs/source/sorafs_por_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f0787cf555f6c9dc09ff306b9c8b44deb8a1145f3ec42b8c2e9e2c3664bd8f31
-source_last_modified: "2026-07-02T07:55:00.613722+00:00"
-translation_last_reviewed: 2026-07-02
+source_hash: 5f607ae145e189be67f97e860b5e6b288b975ad601e8dec36e476bd3e1624249
+source_last_modified: "2026-07-03T12:08:20.829019+00:00"
+translation_last_reviewed: 2026-07-03
+source_mtime: 2026-07-03T12:08:20.829019+00:00
 ---
 
 # SoraFS PoR Challenge Scheduler & Randomness Integration
@@ -55,13 +56,16 @@ governance approval artifact through the same summary path.
 artifacts for randomness, scheduler runtime, validator replay,
 reporting/archive, observability, and governance approval evidence. The
 builder requires reviewed deployment context, complete runtime/reporting route
-and metric coverage where applicable, seed-replay digest bindings, provider
-and challenge minimum counts, reviewed provider names whose unique inventory
-matches `provider_count`, route, scheduler-lag, and report-latency threshold
-facts, the SQL/Parquet archive backend selection, the manual-trigger route
-decision, config-backed governance metadata, reviewed policy digest input for
-randomness and governance-approval canaries, and validates every generated
-artifact through `scripts/check_sorafs_por_rollout_evidence.py` before writing.
+and metric coverage where applicable, rejects duplicate or unknown
+runtime-route, reporting-route, and metric inputs before writing, seed-replay
+digest bindings, provider and challenge minimum counts, reviewed provider names
+using lowercase `provider-*` labels without non-production markers whose unique
+inventory matches `provider_count`, route, scheduler-lag, and report-latency
+threshold facts, the SQL/Parquet archive backend selection, the manual-trigger
+route decision, config-backed governance metadata, reviewed policy digest input
+for randomness and governance-approval canaries, and
+validates every generated artifact through
+`scripts/check_sorafs_por_rollout_evidence.py` before writing.
 Checked-in response-file examples cover randomness and scheduler-runtime
 canaries.
 
@@ -338,9 +342,17 @@ failures are attached to the offending artifact in the emitted summary, and
 policy binding failures are attached to the governance approval artifact.
 Randomness artifacts also bind `provider_count` to the unique canonical
 `providers[].name` inventory and reject duplicate provider entries before
-promotion can report ready. Scheduler-runtime and reporting/archive artifacts
-also bind `route_count` to the unique canonical `routes[].name` inventory and
-reject duplicate route entries before promotion can report ready.
+promotion can report ready. Provider inventory labels must use reviewed
+lowercase `provider-*` IDs without non-production markers. Scheduler-runtime and
+reporting/archive artifacts also bind `route_count` to the unique canonical
+`routes[].name` inventory and reject duplicate or unknown route entries before
+promotion can report ready.
+Observability artifacts also bind `metric_count` to the unique canonical
+`metrics` inventory, require the reviewed PoR metric set, and reject duplicate
+or unknown metric labels before promotion can report ready. The summary exports
+the sorted reviewed `metrics` inventory plus `metric_count_values`, and the
+aggregate production-readiness gate requires those fields to match the
+observability artifact fingerprint before final promotion can report ready.
 
 ## Rollout Status
 Implemented locally:

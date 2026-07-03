@@ -27,9 +27,9 @@ invalid_payload_rejected
 --case-count
 2
 --case
-appeal-case-00
+moderation-appeal-case-00
 --case
-appeal-case-01
+moderation-appeal-case-01
 --intake-route
 appeal_submit
 --intake-route

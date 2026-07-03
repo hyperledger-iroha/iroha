@@ -27,6 +27,14 @@ DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
 
 
+def payload_kinds() -> list[str]:
+    return list(MODULE.REQUIRED_PAYLOAD_KINDS)
+
+
+def block_refs(count: int) -> list[str]:
+    return [f"governance-dag-block-{index:02d}" for index in range(count)]
+
+
 def write_json(path: Path, payload: dict) -> Path:
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -53,16 +61,7 @@ def ingest_service() -> dict:
             "dedupe_by_digest_enabled": True,
             "quarantine_invalid_blocks": True,
             "source_count": 8,
-            "payload_kinds": [
-                "deal-settlement",
-                "repair-audit",
-                "reconciliation",
-                "reputation-snapshot",
-                "moderation-ballot-event",
-                "appeal-finance-report",
-                "appeal-finance-settlement-receipt",
-                "orderbook-settlement-receipt",
-            ],
+            "payload_kinds": payload_kinds(),
             "payload_bytes_included": False,
         }
     )
@@ -84,7 +83,9 @@ def publisher_service(*, head_age: int = 300, block_count: int = 6) -> dict:
             "pin_lag_seconds": 120,
             "head_age_seconds": head_age,
             "block_count": block_count,
+            "block_refs": block_refs(block_count),
             "payload_kind_count": 8,
+            "payload_kinds": payload_kinds(),
             "raw_head_included": False,
             "raw_car_included": False,
         }
@@ -182,6 +183,7 @@ def observability(*, critical: bool = False) -> dict:
                 "sorafs_governance_dag_ipns_update_total",
                 "sorafs_governance_dag_mirror_drift",
             ],
+            "metric_count": len(MODULE.REQUIRED_METRICS),
             "response_bodies_included": False,
         }
     )
@@ -201,7 +203,9 @@ def ipfs_ipns_e2e(*, block_count: int = 6) -> dict:
             "pinning_outage_tested": True,
             "publisher_key_failure_tested": True,
             "block_count": block_count,
+            "block_refs": block_refs(block_count),
             "payload_kind_count": 8,
+            "payload_kinds": payload_kinds(),
             "raw_blocks_included": False,
         }
     )
@@ -255,6 +259,15 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["valid_checkpoint_digests"] == [DIGEST]
     assert payload["valid_public_head_cids"] == [DIGEST]
     assert payload["valid_policy_digests"] == [DIGEST]
+    assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
+    assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
+    observability_artifact = payload["required"]["observability"]["artifacts"][0]
+    assert observability_artifact["fingerprint"]["metric_count"] == len(
+        MODULE.REQUIRED_METRICS
+    )
+    assert observability_artifact["fingerprint"]["metrics"] == list(
+        MODULE.REQUIRED_METRICS
+    )
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -419,6 +432,183 @@ def test_ingest_payload_kinds_must_not_duplicate(tmp_path: Path) -> None:
     assert "source_count must match unique payload_kinds count" in artifact["errors"]
 
 
+def test_ingest_payload_kinds_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ingest_service()
+    payload["payload_kinds"].append("unknown-governance-payload")
+    payload["source_count"] = len(payload["payload_kinds"])
+    write_json(tmp_path / "ingest-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["ingest_service"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "payload_kinds must not include unknown values" in artifact["errors"]
+
+
+def test_publisher_block_count_must_match_unique_block_refs(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publisher_service()
+    payload["block_count"] += 1
+    write_json(tmp_path / "publisher-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["publisher_service"]["artifacts"][0]
+    assert "block_count must match unique block_refs count" in artifact["errors"]
+
+
+def test_publisher_block_refs_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publisher_service()
+    payload["block_refs"].append(payload["block_refs"][0])
+    payload["block_count"] = len(payload["block_refs"])
+    write_json(tmp_path / "publisher-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["publisher_service"]["artifacts"][0]
+    assert "block_refs must not contain duplicate values" in artifact["errors"]
+    assert "block_count must match unique block_refs count" in artifact["errors"]
+
+
+def test_publisher_block_refs_must_use_production_family(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publisher_service()
+    payload["block_refs"][0] = "governance-block-00"
+    write_json(tmp_path / "publisher-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["publisher_service"]["artifacts"][0]
+    assert MODULE.BLOCK_REF_LABEL_ERROR in artifact["errors"]
+
+
+def test_publisher_block_refs_reject_placeholder_marker(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publisher_service()
+    payload["block_refs"][0] = "governance-dag-block-placeholder"
+    write_json(tmp_path / "publisher-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["publisher_service"]["artifacts"][0]
+    assert (
+        "block_refs[0] must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_publisher_payload_kind_count_must_match_inventory(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publisher_service()
+    payload["payload_kind_count"] += 1
+    write_json(tmp_path / "publisher-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["publisher_service"]["artifacts"][0]
+    assert "payload_kind_count must match unique payload_kinds count" in artifact[
+        "errors"
+    ]
+
+
+def test_publisher_payload_kinds_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publisher_service()
+    payload["payload_kinds"].append("unknown-governance-payload")
+    payload["payload_kind_count"] = len(payload["payload_kinds"])
+    write_json(tmp_path / "publisher-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["publisher_service"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "payload_kinds must not include unknown values" in artifact["errors"]
+
+
+def test_ipfs_block_refs_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ipfs_ipns_e2e()
+    payload["block_refs"].append(payload["block_refs"][0])
+    payload["block_count"] = len(payload["block_refs"])
+    write_json(tmp_path / "ipfs-ipns-e2e.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["ipfs_ipns_e2e"]["artifacts"][0]
+    assert "block_refs must not contain duplicate values" in artifact["errors"]
+    assert "block_count must match unique block_refs count" in artifact["errors"]
+
+
+def test_ipfs_block_refs_must_use_production_family(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ipfs_ipns_e2e()
+    payload["block_refs"][0] = "governance-block-00"
+    write_json(tmp_path / "ipfs-ipns-e2e.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["ipfs_ipns_e2e"]["artifacts"][0]
+    assert MODULE.BLOCK_REF_LABEL_ERROR in artifact["errors"]
+
+
+def test_ipfs_payload_kinds_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ipfs_ipns_e2e()
+    payload["payload_kinds"].append(payload["payload_kinds"][0])
+    payload["payload_kind_count"] = len(payload["payload_kinds"])
+    write_json(tmp_path / "ipfs-ipns-e2e.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["ipfs_ipns_e2e"]["artifacts"][0]
+    assert "payload_kinds must not contain duplicate values" in artifact["errors"]
+    assert "payload_kind_count must match unique payload_kinds count" in artifact[
+        "errors"
+    ]
+
+
+def test_ipfs_payload_kinds_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ipfs_ipns_e2e()
+    payload["payload_kinds"].append("unknown-governance-payload")
+    payload["payload_kind_count"] = len(payload["payload_kinds"])
+    write_json(tmp_path / "ipfs-ipns-e2e.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["ipfs_ipns_e2e"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "payload_kinds must not include unknown values" in artifact["errors"]
+
+
 def test_raw_payload_leakage_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = publisher_service()
@@ -481,6 +671,24 @@ def test_dashboard_routes_must_not_duplicate(tmp_path: Path) -> None:
     assert "route_count must match unique routes count" in artifact["errors"]
 
 
+def test_dashboard_routes_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = dashboard_api()
+    unknown = dict(payload["routes"][0])
+    unknown["name"] = "shadow_dashboard_route"
+    payload["routes"].append(unknown)
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "dashboard-api.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["dashboard_api"]["artifacts"][0]
+    assert "routes must not include unknown values" in artifact["errors"]
+
+
 def test_mirror_drift_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "mirror-datastore.json", mirror_datastore(drift=True))
@@ -500,6 +708,36 @@ def test_observability_critical_alert_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "observability.json", observability(critical=True))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_observability_metrics_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = observability()
+    payload["metrics"].append(payload["metrics"][0])
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "observability.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["observability"]["artifacts"][0]
+    assert "metrics must not contain duplicate values" in artifact["errors"]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
+
+
+def test_observability_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = observability()
+    payload["metrics"].append("sorafs_governance_dag_shadow_metric")
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "observability.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["observability"]["artifacts"][0]
+    assert "metrics must not include unknown values" in artifact["errors"]
 
 
 def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:

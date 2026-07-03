@@ -11,6 +11,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -63,46 +64,57 @@ from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
 from check_sorafs_appeal_finance_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as APPEAL_FINANCE_REQUIRED_KINDS,
     KIND_BY_NAME as APPEAL_FINANCE_KIND_BY_NAME,
+    REQUIRED_METRICS as APPEAL_FINANCE_REQUIRED_METRICS,
 )
 from check_sorafs_gateway_compliance_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GATEWAY_COMPLIANCE_REQUIRED_KINDS,
     KIND_BY_NAME as GATEWAY_COMPLIANCE_KIND_BY_NAME,
+    REQUIRED_METRICS as GATEWAY_COMPLIANCE_REQUIRED_METRICS,
 )
 from check_sorafs_gateway_load_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GATEWAY_LOAD_REQUIRED_KINDS,
     KIND_BY_NAME as GATEWAY_LOAD_KIND_BY_NAME,
+    REQUIRED_METRICS as GATEWAY_LOAD_REQUIRED_METRICS,
 )
 from check_sorafs_governance_dag_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as GOVERNANCE_DAG_REQUIRED_KINDS,
     KIND_BY_NAME as GOVERNANCE_DAG_KIND_BY_NAME,
+    REQUIRED_METRICS as GOVERNANCE_DAG_REQUIRED_METRICS,
 )
 from check_sorafs_hedging_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as HEDGING_BILLING_REQUIRED_KINDS,
     KIND_BY_NAME as HEDGING_BILLING_KIND_BY_NAME,
+    REQUIRED_METRICS as HEDGING_BILLING_REQUIRED_METRICS,
 )
 from check_sorafs_moderation_panel_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as MODERATION_PANEL_REQUIRED_KINDS,
     KIND_BY_NAME as MODERATION_PANEL_KIND_BY_NAME,
+    REQUIRED_METRICS as MODERATION_PANEL_REQUIRED_METRICS,
 )
 from check_sorafs_orderbook_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as ORDERBOOK_REQUIRED_KINDS,
     KIND_BY_NAME as ORDERBOOK_KIND_BY_NAME,
+    REQUIRED_METRICS as ORDERBOOK_REQUIRED_METRICS,
 )
 from check_sorafs_pdp_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as PDP_REQUIRED_KINDS,
     KIND_BY_NAME as PDP_KIND_BY_NAME,
+    REQUIRED_METRICS as PDP_REQUIRED_METRICS,
 )
 from check_sorafs_pop_credentials_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as POP_CREDENTIALS_REQUIRED_KINDS,
     KIND_BY_NAME as POP_CREDENTIALS_KIND_BY_NAME,
+    REQUIRED_METRICS as POP_CREDENTIALS_REQUIRED_METRICS,
 )
 from check_sorafs_por_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as POR_REQUIRED_KINDS,
     KIND_BY_NAME as POR_KIND_BY_NAME,
+    REQUIRED_METRICS as POR_REQUIRED_METRICS,
 )
 from check_sorafs_potr_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as POTR_REQUIRED_KINDS,
     KIND_BY_NAME as POTR_KIND_BY_NAME,
+    REQUIRED_METRICS as POTR_REQUIRED_METRICS,
 )
 from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as REFERENCE_SDK_REQUIRED_KINDS,
@@ -111,14 +123,17 @@ from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
 from check_sorafs_repair_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as REPAIR_REQUIRED_KINDS,
     KIND_BY_NAME as REPAIR_KIND_BY_NAME,
+    REQUIRED_METRICS as REPAIR_REQUIRED_METRICS,
 )
 from check_sorafs_reputation_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as REPUTATION_REQUIRED_KINDS,
     KIND_BY_NAME as REPUTATION_KIND_BY_NAME,
+    REQUIRED_METRICS as REPUTATION_REQUIRED_METRICS,
 )
 from check_sorafs_reserve_rent_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as RESERVE_RENT_REQUIRED_KINDS,
     KIND_BY_NAME as RESERVE_RENT_KIND_BY_NAME,
+    REQUIRED_METRICS as RESERVE_RENT_REQUIRED_METRICS,
 )
 from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as TRANSPARENCY_REQUIRED_KINDS,
@@ -172,11 +187,26 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
         }
     ),
     "appeal_finance": frozenset(
-        {"valid_config_digests", "valid_multi_peer_runs", "valid_policy_digests"}
+        {
+            "metric_count_values",
+            "metrics",
+            "valid_config_digests",
+            "valid_multi_peer_runs",
+            "valid_policy_digests",
+        }
     ),
-    "gateway_compliance": frozenset({"valid_bundle_digests", "valid_policy_digests"}),
+    "gateway_compliance": frozenset(
+        {
+            "metric_count_values",
+            "metrics",
+            "valid_bundle_digests",
+            "valid_policy_digests",
+        }
+    ),
     "gateway_load": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_policy_digests",
             "valid_staging_report_digests",
             "valid_suite_report_digests",
@@ -184,6 +214,8 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     ),
     "governance_dag": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_checkpoint_digests",
             "valid_policy_digests",
             "valid_public_head_cids",
@@ -191,6 +223,8 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     ),
     "hedging_billing": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_billing_cycles",
             "valid_cycle_bindings",
             "valid_policy_digests",
@@ -200,6 +234,8 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     "moderation_panel": frozenset(
         {
             "deployment_context",
+            "metric_count_values",
+            "metrics",
             "valid_case_digests",
             "valid_e2e_runs",
             "valid_evidence_viewer_digest_sets",
@@ -208,9 +244,18 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
             "valid_tally_bindings",
         }
     ),
-    "orderbook": frozenset({"valid_contract_digests", "valid_policy_digests"}),
+    "orderbook": frozenset(
+        {
+            "metric_count_values",
+            "metrics",
+            "valid_contract_digests",
+            "valid_policy_digests",
+        }
+    ),
     "pdp": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_policy_digests",
             "valid_proof_summary_digests",
             "valid_provider_roster_digests",
@@ -218,6 +263,8 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     ),
     "pop_credentials": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_juror_sync_bindings",
             "valid_policy_digests",
             "valid_pop_snapshot_digests",
@@ -225,9 +272,18 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
             "valid_root_digests",
         }
     ),
-    "por": frozenset({"valid_policy_digests", "valid_seed_replay_digests"}),
+    "por": frozenset(
+        {
+            "metric_count_values",
+            "metrics",
+            "valid_policy_digests",
+            "valid_seed_replay_digests",
+        }
+    ),
     "potr": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_policy_digests",
             "valid_pq_key_roster_digests",
             "valid_receipt_summary_digests",
@@ -249,6 +305,8 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     ),
     "repair": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_failure_bundle_digests",
             "valid_handoff_digests",
             "valid_policy_digests",
@@ -257,6 +315,8 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     ),
     "reputation": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "merkle_root_hex",
             "provider_count_values",
             "provider_ids",
@@ -266,6 +326,8 @@ GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     ),
     "reserve_rent": frozenset(
         {
+            "metric_count_values",
+            "metrics",
             "valid_policy_digests",
             "valid_policy_matrix_bindings",
             "valid_policy_matrix_ledger_bindings",
@@ -298,7 +360,9 @@ PAYLOAD_FREE_SUMMARY_LIST_METADATA_FIELDS = frozenset(
     field
     for field in PAYLOAD_FREE_SUMMARY_METADATA_FIELDS
     if field.startswith("valid_")
-) | frozenset({"provider_count_values", "provider_ids"})
+) | frozenset(
+    {"metric_count_values", "metrics", "provider_count_values", "provider_ids"}
+)
 PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS = frozenset(
     {
         "valid_bundle_digests",
@@ -376,7 +440,7 @@ PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS = {
     },
 }
 PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS = frozenset(
-    {"provider_count_values"}
+    {"metric_count_values", "provider_count_values"}
 )
 PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
     "valid_billing_cycles": {
@@ -435,6 +499,13 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
         },
         "ordered_int_pairs": (("started_at_unix", "completed_at_unix"),),
     },
+}
+PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS = {
+    "valid_billing_cycles": ("cycle_id",),
+    "valid_e2e_runs": ("case_digest_hex", "roster_hash_hex", "tally_digest_hex"),
+    "valid_evidence_viewer_digest_sets": ("case_digest_hex", "roster_hash_hex"),
+    "valid_multi_peer_runs": ("deployment_id", "environment", "generated_at_unix"),
+    "valid_provider_bakes": ("bake_id",),
 }
 PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS = {
     "valid_billing_cycles": "billing_cycle",
@@ -585,11 +656,77 @@ PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS = {
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS = {
     ("reputation", "provider_ids"): ("provider",),
 }
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS = {
+    "metrics": "metrics",
+}
+PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS = {
+    ("appeal_finance", "metrics"): ("dashboard_metrics",),
+    ("gateway_compliance", "metrics"): ("observability",),
+    ("gateway_load", "metrics"): ("telemetry_slo",),
+    ("governance_dag", "metrics"): ("observability",),
+    ("hedging_billing", "metrics"): ("metrics_alerts",),
+    ("moderation_panel", "metrics"): ("metrics_alerts",),
+    ("orderbook", "metrics"): ("observability",),
+    ("pdp", "metrics"): ("observability",),
+    ("pop_credentials", "metrics"): ("metrics_alerts",),
+    ("por", "metrics"): ("observability",),
+    ("potr", "metrics"): ("observability",),
+    ("repair", "metrics"): ("observability",),
+    ("reputation", "metrics"): ("metrics",),
+    ("reserve_rent", "metrics"): ("metrics_alerts",),
+}
+PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES = {
+    ("appeal_finance", "metrics"): APPEAL_FINANCE_REQUIRED_METRICS,
+    ("gateway_compliance", "metrics"): GATEWAY_COMPLIANCE_REQUIRED_METRICS,
+    ("gateway_load", "metrics"): GATEWAY_LOAD_REQUIRED_METRICS,
+    ("governance_dag", "metrics"): GOVERNANCE_DAG_REQUIRED_METRICS,
+    ("hedging_billing", "metrics"): HEDGING_BILLING_REQUIRED_METRICS,
+    ("moderation_panel", "metrics"): MODERATION_PANEL_REQUIRED_METRICS,
+    ("orderbook", "metrics"): ORDERBOOK_REQUIRED_METRICS,
+    ("pdp", "metrics"): PDP_REQUIRED_METRICS,
+    ("pop_credentials", "metrics"): POP_CREDENTIALS_REQUIRED_METRICS,
+    ("por", "metrics"): POR_REQUIRED_METRICS,
+    ("potr", "metrics"): POTR_REQUIRED_METRICS,
+    ("repair", "metrics"): REPAIR_REQUIRED_METRICS,
+    ("reputation", "metrics"): REPUTATION_REQUIRED_METRICS,
+    ("reserve_rent", "metrics"): RESERVE_RENT_REQUIRED_METRICS,
+}
+PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS = {
+    ("appeal_finance", "metrics"): "metric_count_values",
+    ("gateway_compliance", "metrics"): "metric_count_values",
+    ("gateway_load", "metrics"): "metric_count_values",
+    ("governance_dag", "metrics"): "metric_count_values",
+    ("hedging_billing", "metrics"): "metric_count_values",
+    ("moderation_panel", "metrics"): "metric_count_values",
+    ("orderbook", "metrics"): "metric_count_values",
+    ("pdp", "metrics"): "metric_count_values",
+    ("pop_credentials", "metrics"): "metric_count_values",
+    ("por", "metrics"): "metric_count_values",
+    ("potr", "metrics"): "metric_count_values",
+    ("repair", "metrics"): "metric_count_values",
+    ("reputation", "metrics"): "metric_count_values",
+    ("reserve_rent", "metrics"): "metric_count_values",
+}
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS = {
+    "metric_count_values": "metric_count",
     "provider_count_values": "provider_count",
 }
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS = {
+    ("appeal_finance", "metric_count_values"): ("dashboard_metrics",),
+    ("gateway_compliance", "metric_count_values"): ("observability",),
+    ("gateway_load", "metric_count_values"): ("telemetry_slo",),
+    ("governance_dag", "metric_count_values"): ("observability",),
+    ("hedging_billing", "metric_count_values"): ("metrics_alerts",),
+    ("moderation_panel", "metric_count_values"): ("metrics_alerts",),
+    ("orderbook", "metric_count_values"): ("observability",),
+    ("pdp", "metric_count_values"): ("observability",),
+    ("pop_credentials", "metric_count_values"): ("metrics_alerts",),
+    ("por", "metric_count_values"): ("observability",),
+    ("potr", "metric_count_values"): ("observability",),
+    ("repair", "metric_count_values"): ("observability",),
+    ("reputation", "metric_count_values"): ("metrics",),
     ("reputation", "provider_count_values"): ("publish", "latest"),
+    ("reserve_rent", "metric_count_values"): ("metrics_alerts",),
 }
 PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_FIELDS = {
     "valid_cycle_bindings": (
@@ -645,7 +782,7 @@ PAYLOAD_FREE_SUMMARY_ORDERED_LIST_METADATA_FIELDS = (
     PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS
     | frozenset(PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS)
     | PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS
-    | frozenset({"provider_ids"})
+    | frozenset({"metrics", "provider_ids"})
 )
 MAX_SUMMARY_METADATA_DEPTH = 32
 PAYLOAD_FREE_ARTIFACT_FIELDS = frozenset(
@@ -1056,6 +1193,53 @@ def require_threshold_map(
     return valid_thresholds
 
 
+def decoded_text_variants(value: str) -> tuple[str, ...]:
+    """Return raw plus repeatedly percent-decoded text variants."""
+
+    variants = [value]
+    seen = {value}
+    current = value
+    for _ in range(4):
+        decoded = unquote(current)
+        if decoded == current or decoded in seen:
+            break
+        variants.append(decoded)
+        seen.add(decoded)
+        current = decoded
+    return tuple(variants)
+
+
+def path_component_has_windows_drive_prefix(component: str) -> bool:
+    """Return whether a path component starts with a Windows drive prefix."""
+
+    return len(component) >= 2 and component[1] == ":" and component[0].isalpha()
+
+
+def path_component_has_uri_scheme_prefix(component: str) -> bool:
+    """Return whether a path component starts with a URI-like scheme."""
+
+    head, separator, _tail = component.partition(":")
+    if not separator:
+        return False
+    return re.fullmatch(r"[A-Za-z][A-Za-z0-9+.-]*", head) is not None
+
+
+def archive_path_component_is_portable(component: str) -> bool:
+    """Return whether an archive path component is safe in raw or decoded form."""
+
+    for variant in decoded_text_variants(component):
+        if (
+            canonical_string(variant) is None
+            or variant in {".", ".."}
+            or "/" in variant
+            or "\\" in variant
+            or path_component_has_windows_drive_prefix(variant)
+            or path_component_has_uri_scheme_prefix(variant)
+        ):
+            return False
+    return True
+
+
 def is_archive_portable_artifact_path(path: str) -> bool:
     """Return whether an artifact label is portable inside release archives."""
 
@@ -1065,11 +1249,7 @@ def is_archive_portable_artifact_path(path: str) -> bool:
         return False
     if len(path) >= 2 and path[1] == ":" and path[0].isalpha():
         return False
-    parts = path.split("/")
-    return all(
-        canonical_string(part) is not None and part not in {".", ".."}
-        for part in parts
-    )
+    return all(archive_path_component_is_portable(part) for part in path.split("/"))
 
 
 def aggregate_summary_path_label(path: Path, evidence_dirs: list[Path]) -> str:
@@ -1111,7 +1291,7 @@ def require_artifact_identity_fields(
     elif not is_archive_portable_artifact_path(artifact_path):
         errors.append(
             f"{path}.path must be archive-relative without absolute, empty, "
-            "current, parent, or platform-specific segments"
+            "current, parent, encoded, URI-scheme-like, or platform-specific segments"
         )
     sha256 = artifact.get("sha256")
     if (
@@ -1249,6 +1429,46 @@ def payload_free_object_list_metadata_identity(
     return tuple(identity)
 
 
+def payload_free_object_list_metadata_domain_identity(
+    field: str,
+    item: Any,
+    schema: dict[str, Any],
+) -> tuple[tuple[str, Any], ...] | None:
+    """Return the domain identity for validated object-list metadata."""
+
+    if payload_free_object_list_metadata_identity(item, schema) is None:
+        return None
+    identity_fields = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS.get(field)
+    if identity_fields is None:
+        return None
+    string_fields = schema.get("strings", frozenset())
+    positive_int_fields = schema.get("positive_ints", frozenset())
+    hex_fields = schema.get("hex", {})
+    identity: list[tuple[str, Any]] = []
+    for key in identity_fields:
+        if key in string_fields:
+            value = canonical_string(item.get(key))
+            if value is None:
+                return None
+        elif key in positive_int_fields:
+            value = item.get(key)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                return None
+        elif key in hex_fields:
+            value = item.get(key)
+            expected_hex_length = hex_fields[key]
+            if (
+                not isinstance(value, str)
+                or len(value) != expected_hex_length
+                or any(character not in LOWER_HEX_DIGITS for character in value)
+            ):
+                return None
+        else:
+            return None
+        identity.append((key, value))
+    return tuple(identity)
+
+
 def validate_payload_free_object_list_metadata(
     field: str,
     value: Any,
@@ -1262,6 +1482,7 @@ def validate_payload_free_object_list_metadata(
     hex_fields = schema.get("hex", {})
     allowed_fields = set(string_fields) | set(positive_int_fields) | set(hex_fields)
     identities: list[tuple[tuple[str, Any], ...]] = []
+    domain_identities: list[tuple[tuple[str, Any], ...]] = []
     for index, item in enumerate(value):
         item_path = f"{field}[{index}]"
         if not isinstance(item, dict):
@@ -1270,6 +1491,13 @@ def validate_payload_free_object_list_metadata(
         identity = payload_free_object_list_metadata_identity(item, schema)
         if identity is not None:
             identities.append(identity)
+        domain_identity = payload_free_object_list_metadata_domain_identity(
+            field,
+            item,
+            schema,
+        )
+        if domain_identity is not None:
+            domain_identities.append(domain_identity)
         for key in item:
             key_label = canonical_string(key)
             if key_label is None:
@@ -1315,6 +1543,8 @@ def validate_payload_free_object_list_metadata(
                 errors.append(f"{item_path}.{end_key} must be >= {start_key}")
     if len(set(identities)) != len(identities):
         errors.append(f"{field} must not contain duplicate metadata entries")
+    if len(set(domain_identities)) != len(domain_identities):
+        errors.append(f"{field} must not contain duplicate metadata identities")
 
 
 def validate_payload_free_object_metadata(
@@ -1586,6 +1816,24 @@ def fingerprint_string_values(
     }
 
 
+def fingerprint_string_array_values(
+    fingerprints: list[dict[str, Any]],
+    fingerprint_field: str,
+) -> set[str]:
+    """Return canonical string-array values from recognized artifact fingerprints."""
+
+    values: set[str] = set()
+    for fingerprint in fingerprints:
+        items = fingerprint.get(fingerprint_field)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            item_label = canonical_string(item)
+            if item_label is not None:
+                values.add(item_label)
+    return values
+
+
 def fingerprint_positive_int_values(
     fingerprints: list[dict[str, Any]],
     fingerprint_field: str,
@@ -1714,6 +1962,35 @@ def validate_payload_free_summary_metadata_fingerprint_tethers(
             kind_names=source_kinds,
         )
         fingerprint_values = fingerprint_string_values(
+            source_fingerprints,
+            fingerprint_field,
+        )
+        if not metadata_values <= fingerprint_values:
+            errors.append(f"{field} must match recognized artifact fingerprints")
+
+    for field, fingerprint_field in (
+        PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS.items()
+    ):
+        if field not in allowed_metadata_fields or field not in payload:
+            continue
+        metadata_values = payload_free_string_list_metadata_values(payload.get(field))
+        if metadata_values is None or not metadata_values:
+            continue
+        source_kinds = (
+            PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS.get(
+                (gate.name, field),
+            )
+        )
+        if source_kinds is None:
+            errors.append(
+                f"{field} source-kind tether is not configured for `{gate.name}`"
+            )
+            continue
+        source_fingerprints = payload_free_summary_artifact_fingerprints(
+            payload,
+            kind_names=source_kinds,
+        )
+        fingerprint_values = fingerprint_string_array_values(
             source_fingerprints,
             fingerprint_field,
         )
@@ -1938,6 +2215,54 @@ def validate_payload_free_ordered_list_metadata(
         errors.append(f"{field} must be sorted in canonical order")
 
 
+def validate_payload_free_required_string_list_values(
+    gate: GateSummaryKind,
+    field: str,
+    value: Any,
+    errors: list[str],
+) -> None:
+    """Require exact reviewed values for configured string-list metadata."""
+
+    required_values = PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES.get(
+        (gate.name, field)
+    )
+    if required_values is None or not isinstance(value, list):
+        return
+    metadata_values = payload_free_string_list_metadata_values(value)
+    if metadata_values is None:
+        return
+    required_set = frozenset(required_values)
+    for required_value in required_values:
+        if required_value not in metadata_values:
+            errors.append(f"{field} must include metadata value `{required_value}`")
+    if not metadata_values <= required_set:
+        errors.append(f"{field} must not include unknown metadata values")
+
+
+def validate_payload_free_string_list_count_binding(
+    gate: GateSummaryKind,
+    payload: dict[str, Any],
+    field: str,
+    value: Any,
+    errors: list[str],
+) -> None:
+    """Require configured string-list metadata counts to match companion counts."""
+
+    count_field = PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS.get(
+        (gate.name, field)
+    )
+    if count_field is None or not isinstance(value, list):
+        return
+    metadata_values = payload_free_string_list_metadata_values(value)
+    count_values = payload_free_positive_int_list_metadata_values(
+        payload.get(count_field)
+    )
+    if metadata_values is None or count_values is None:
+        return
+    if len(metadata_values) not in count_values:
+        errors.append(f"{count_field} must include the unique {field} count")
+
+
 def validate_payload_free_summary_metadata(
     gate: GateSummaryKind,
     payload: dict[str, Any],
@@ -1966,6 +2291,23 @@ def validate_payload_free_summary_metadata(
             errors.append(f"{field} must not be empty for `{gate.name}` lane metadata")
         if field in PAYLOAD_FREE_SUMMARY_ORDERED_LIST_METADATA_FIELDS:
             validate_payload_free_ordered_list_metadata(field, value, errors)
+        if (
+            field in PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS
+            or field in PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS
+        ):
+            validate_payload_free_required_string_list_values(
+                gate,
+                field,
+                value,
+                errors,
+            )
+            validate_payload_free_string_list_count_binding(
+                gate,
+                payload,
+                field,
+                value,
+                errors,
+            )
         object_list_schema = PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS.get(field)
         if object_list_schema is not None:
             validate_payload_free_object_list_metadata(
@@ -2024,7 +2366,10 @@ def validate_payload_free_summary_metadata(
                 if not isinstance(item, int) or isinstance(item, bool) or item <= 0:
                     errors.append(f"{field}[{index}] must be a positive integer")
             continue
-        if field in PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS:
+        if (
+            field in PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS
+            or field in PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS
+        ):
             for index, item in enumerate(value):
                 if canonical_string(item) is None:
                     errors.append(f"{field}[{index}] must be a canonical string")

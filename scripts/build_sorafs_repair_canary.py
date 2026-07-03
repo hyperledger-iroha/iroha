@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import sys
 from collections.abc import Iterable, Sequence
@@ -18,12 +19,15 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_repair_rollout_evidence import (  # noqa: E402
+    AUDITOR_LABEL_ERROR,
+    AUDITOR_LABEL_PATTERN,
     DEFAULT_MAX_EVENT_LAG_SECS,
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_MAX_REPAIR_LATENCY_SECS,
     DEFAULT_MAX_ROUTE_LATENCY_MS,
     DEFAULT_MIN_AUDITORS,
     FAILURE_BOUND_KINDS,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
     KIND_BY_NAME,
     REQUIRED_AUDITOR_ROUTES,
     REQUIRED_EVENT_ROUTES,
@@ -40,6 +44,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -100,6 +106,8 @@ def validate_reviewed_inventory(
     kind: str,
     count_option: str,
     errors: list[str],
+    pattern: re.Pattern[str] | None = None,
+    label_error: str | None = None,
 ) -> list[str]:
     """Return reviewed unique inventory labels whose count matches a CLI count."""
 
@@ -108,12 +116,82 @@ def validate_reviewed_inventory(
         errors.append(f"{option} is required for {kind}")
     for index, item in enumerate(items):
         validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+        if pattern is None:
+            continue
+        if pattern.fullmatch(item) is None:
+            if label_error is None:
+                errors.append(f"{option} has malformed inventory label")
+            else:
+                errors.append(render_inventory_label_error(label_error, option))
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in item.split("-")
+        )
+        if forbidden:
+            errors.append(f"{option} must not contain non-production markers {forbidden}")
     unique_items = set(items)
     if len(unique_items) != len(items):
         errors.append(f"{option} must not contain duplicates")
     if len(unique_items) != expected_count:
         errors.append(f"{option} unique values must match {count_option}")
     return items
+
+
+def render_inventory_label_error(label_error: str, option: str) -> str:
+    """Render checker inventory-label diagnostics against a CLI option."""
+
+    return label_error.replace("auditors[].name", option)
+
+
+def validate_failure_events(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    errors: list[str],
+) -> list[dict[str, str]]:
+    """Return reviewed failure event records from SOURCE:NAME CLI values."""
+
+    items = list(values)
+    if not items:
+        errors.append("--failure-event is required for failure_capture")
+    records: list[dict[str, str]] = []
+    names: list[str] = []
+    sources: list[str] = []
+    for index, item in enumerate(items):
+        if ":" not in item:
+            errors.append("--failure-event values must use <source>:<name>")
+            continue
+        source, name = item.split(":", 1)
+        source = source.strip()
+        name = name.strip()
+        validate_canonical_string(
+            source,
+            label=f"--failure-event[{index}].source",
+            errors=errors,
+        )
+        validate_canonical_string(
+            name,
+            label=f"--failure-event[{index}].name",
+            errors=errors,
+        )
+        if source and source not in REQUIRED_FAILURE_SOURCES:
+            errors.append("--failure-event source must be a reviewed failure source")
+        if source and name:
+            records.append({"source": source, "name": name})
+            names.append(name)
+            sources.append(source)
+    if len(set(names)) != len(names):
+        errors.append("--failure-event names must not contain duplicates")
+    if len(set(names)) != expected_count:
+        errors.append("--failure-event unique names must match --failure-event-count")
+    missing_sources = [
+        source for source in REQUIRED_FAILURE_SOURCES if source not in set(sources)
+    ]
+    if missing_sources:
+        errors.append("--failure-event must include every required failure source")
+    return records
 
 
 def validate_output_path(path: Path, errors: list[str]) -> None:
@@ -228,12 +306,14 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "failure_sources": args.failure_sources,
+                "failure_source_count": len(args.failure_sources),
                 "por_history_replayed": True,
                 "potr_receipt_replayed": True,
                 "coordinator_event_verified": True,
                 "merkle_or_receipt_inclusion_verified": True,
                 "object_storage_retention_bound": True,
                 "failure_event_count": args.failure_event_count,
+                "failure_events": args.failure_events,
                 "evidence_bundle_digest_hex": args.evidence_bundle_digest_hex,
                 "raw_evidence_included": False,
             }
@@ -262,6 +342,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "routes": routes,
                 "roster_digest_hex": args.roster_digest_hex,
                 "evidence_bundle_digest_hex": args.evidence_bundle_digest_hex,
+                "status_count": len(args.lifecycle_statuses),
                 "statuses_observed": args.lifecycle_statuses,
                 "worker_permission_enforced": True,
                 "lease_heartbeat_enforced": True,
@@ -300,6 +381,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "reserve_rent_handoff_verified": True,
                 "transparency_publication_verified": True,
                 "reputation_handoff_verified": True,
+                "handoff_target_count": len(args.handoff_targets),
                 "handoff_targets": args.handoff_targets,
                 "handoff_digest_hex": args.handoff_digest_hex,
                 "policy_digest_hex": args.policy_digest_hex,
@@ -314,6 +396,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "alert_rules_installed": True,
                 "critical_alerts_firing": False,
                 "metrics": args.metrics,
+                "metric_count": len(args.metrics),
                 "response_bodies_included": False,
             }
         )
@@ -380,6 +463,8 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             option="--auditor",
             kind="auditor_roster",
             count_option="--auditor-count",
+            pattern=AUDITOR_LABEL_PATTERN,
+            label_error=AUDITOR_LABEL_ERROR,
             errors=errors,
         )
     elif args.kind == "failure_capture":
@@ -387,6 +472,11 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             split_csv_values(args.failure_source),
             allowed=REQUIRED_FAILURE_SOURCES,
             option="--failure-source",
+            errors=errors,
+        )
+        args.failure_events = validate_failure_events(
+            split_csv_values(args.failure_event),
+            expected_count=args.failure_event_count,
             errors=errors,
         )
     elif args.kind == "auditor_api":
@@ -498,12 +588,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:
@@ -535,6 +627,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--handoff-digest-hex")
     parser.add_argument("--policy-digest-hex")
     parser.add_argument("--failure-source", action="append", default=[])
+    parser.add_argument("--failure-event", action="append", default=[])
     parser.add_argument("--auditor-route", action="append", default=[])
     parser.add_argument("--worker-route", action="append", default=[])
     parser.add_argument("--event-route", action="append", default=[])

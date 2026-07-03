@@ -16,3 +16,5 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 cycles_list
 --publication-route
 cycle_publication
+--cycle-detail-probe
+cycle_detail_readback

@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_release_pipeline_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 226cff418c5c50cfe095d28d310b2d94d11160062e3c53c3edfe971ba284195b
+source_hash: c870834a7e83c80365b0a6d21eb4c71d99fbefab1122132d678dbb01c89b76d3
 source_last_modified: "2026-07-01T21:09:57.142415+00:00"
 translation_last_reviewed: 2026-07-02
 ---
@@ -112,7 +112,8 @@ translation_last_reviewed: 2026-07-02
   before aggregate promotion, validate governance public-head identifiers as
   lowercase hex list metadata before aggregate promotion, validate exact
   object-list metadata shapes before aggregate promotion, reject exact duplicate
-  object-list metadata entries while preserving artifact order, require every
+  object-list metadata entries while preserving artifact order, reject
+  domain-duplicate object-list metadata identities before aggregate promotion, require every
   object-list metadata field to declare its owning required artifact kind before
   its detail rows can be matched to recognized artifact fingerprints, validate exact
   object metadata shapes before aggregate

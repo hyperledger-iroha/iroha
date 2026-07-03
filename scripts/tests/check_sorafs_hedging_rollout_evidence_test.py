@@ -44,13 +44,9 @@ def feed_collector(*, lag: int = 60) -> dict:
     return with_context({
         "schema": "sorafs.hedging.feed_collector_canary.v1",
         "status": "passed",
-        "feed_count": 3,
-        "accepted_feed_count": 3,
-        "feeds": [
-            {"name": "feed-primary"},
-            {"name": "feed-secondary"},
-            {"name": "feed-tertiary"},
-        ],
+        "feed_count": len(MODULE.REQUIRED_PRICE_FEEDS),
+        "accepted_feed_count": len(MODULE.REQUIRED_PRICE_FEEDS),
+        "feeds": [{"name": name} for name in MODULE.REQUIRED_PRICE_FEEDS],
         "primary_feed_present": True,
         "secondary_feed_present": True,
         "rejected_feed_count": 0,
@@ -69,13 +65,9 @@ def reference_price(*, divergence_bps: int = 50) -> dict:
         "feed_quorum_met": True,
         "signed_payload_verified": True,
         "reference_price_micro_usd": 4_200_000,
-        "feed_count": 3,
-        "accepted_feed_count": 3,
-        "feeds": [
-            {"name": "feed-primary"},
-            {"name": "feed-secondary"},
-            {"name": "feed-tertiary"},
-        ],
+        "feed_count": len(MODULE.REQUIRED_PRICE_FEEDS),
+        "accepted_feed_count": len(MODULE.REQUIRED_PRICE_FEEDS),
+        "feeds": [{"name": name} for name in MODULE.REQUIRED_PRICE_FEEDS],
         "rejected_feed_count": 0,
         "stale_feed_count": 0,
         "divergence_bps": divergence_bps,
@@ -95,9 +87,14 @@ def billing_cycle(cycle_id: str, cycle_index: int, *, generated_at: int = GENERA
         "generated_at_unix": generated_at,
         "statement_count": 2,
         "signed_statement_count": 2,
-        "statements": [{"name": "statement-00"}, {"name": "statement-01"}],
+        "statements": [
+            {"name": "billing-statement-00"},
+            {"name": "billing-statement-01"},
+        ],
         "line_item_count": 5,
-        "line_items": [{"name": f"line-{index:02d}"} for index in range(5)],
+        "line_items": [
+            {"name": f"billing-line-item-{index:02d}"} for index in range(5)
+        ],
         "total_micro_xor": 10_000,
         "total_usd_micro": 42_000,
         "reference_price_bound": True,
@@ -132,6 +129,7 @@ def statement_publication() -> dict:
         "route_count": len(routes),
         "passed_route_count": len(routes),
         "acknowledgement_probe_count": 1,
+        "acknowledgement_probes": ["statement-ack-probe-00"],
         "response_bodies_included": False,
         "routes": routes,
     })
@@ -152,7 +150,9 @@ def reconciliation(*, mismatch_count: int = 0) -> dict:
             {"name": "governance-penalties"},
         ],
         "line_item_count": 5,
-        "line_items": [{"name": f"line-{index:02d}"} for index in range(5)],
+        "line_items": [
+            {"name": f"billing-line-item-{index:02d}"} for index in range(5)
+        ],
         "reconciled_line_item_count": 5,
         "mismatch_count": mismatch_count,
         "unmatched_event_count": 0,
@@ -177,6 +177,7 @@ def metrics_alerts(*, critical: bool = False) -> dict:
             "statement_failure_count",
             "escrow_runway_seconds",
         ],
+        "metric_count": 5,
         "response_bodies_included": False,
     })
 
@@ -248,6 +249,13 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
         }
     ]
     assert payload["valid_policy_digests"] == [DIGEST]
+    assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
+    assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
+    metrics_artifact = payload["required"]["metrics_alerts"]["artifacts"][0]
+    assert metrics_artifact["fingerprint"]["metric_count"] == len(
+        MODULE.REQUIRED_METRICS
+    )
+    assert metrics_artifact["fingerprint"]["metrics"] == list(MODULE.REQUIRED_METRICS)
     assert payload["required"]["feed_collector"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
@@ -352,6 +360,39 @@ def test_feed_collector_feeds_must_not_duplicate(tmp_path: Path) -> None:
     assert "feed_count must match unique feeds count" in artifact["errors"]
 
 
+def test_feed_collector_feeds_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_collector()
+    payload["feeds"].append({"name": "feed-shadow"})
+    payload["feed_count"] = len(payload["feeds"])
+    payload["accepted_feed_count"] = len(payload["feeds"])
+    write_json(tmp_path / "feed-collector.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["feed_collector"]["artifacts"][0]
+    assert "feeds must not include unknown values" in artifact["errors"]
+
+
+def test_feed_collector_must_cover_required_price_feeds(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_collector()
+    payload["feeds"] = payload["feeds"][:-1]
+    payload["feed_count"] = len(payload["feeds"])
+    payload["accepted_feed_count"] = len(payload["feeds"])
+    write_json(tmp_path / "feed-collector.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["feed_collector"]["artifacts"][0]
+    assert "feed_count must be at least 3" in artifact["errors"]
+    assert "feeds must include name `feed-tertiary`" in artifact["errors"]
+
+
 def test_reference_price_feed_count_must_match_unique_feeds(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = reference_price()
@@ -382,6 +423,39 @@ def test_reference_price_feeds_must_not_duplicate(tmp_path: Path) -> None:
     artifact = result["required"]["reference_price"]["artifacts"][0]
     assert "feeds must not contain duplicate values" in artifact["errors"]
     assert "feed_count must match unique feeds count" in artifact["errors"]
+
+
+def test_reference_price_feeds_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reference_price()
+    payload["feeds"].append({"name": "feed-shadow"})
+    payload["feed_count"] = len(payload["feeds"])
+    payload["accepted_feed_count"] = len(payload["feeds"])
+    write_json(tmp_path / "reference-price.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reference_price"]["artifacts"][0]
+    assert "feeds must not include unknown values" in artifact["errors"]
+
+
+def test_reference_price_must_cover_required_price_feeds(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reference_price()
+    payload["feeds"] = payload["feeds"][:-1]
+    payload["feed_count"] = len(payload["feeds"])
+    payload["accepted_feed_count"] = len(payload["feeds"])
+    write_json(tmp_path / "reference-price.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reference_price"]["artifacts"][0]
+    assert "feed_count must be at least 3" in artifact["errors"]
+    assert "feeds must include name `feed-tertiary`" in artifact["errors"]
 
 
 def test_reference_price_accepted_feed_count_must_equal_feed_count(
@@ -472,6 +546,68 @@ def test_statement_publication_routes_must_not_duplicate(tmp_path: Path) -> None
     assert "route_count must match unique routes count" in artifact["errors"]
 
 
+def test_statement_publication_routes_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = statement_publication()
+    unknown = dict(payload["routes"][0])
+    unknown["name"] = "statement_shadow_route"
+    payload["routes"].append(unknown)
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "statement-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["statement_publication"]["artifacts"][0]
+    assert "routes must not include unknown values" in artifact["errors"]
+
+
+def test_statement_publication_ack_probe_count_must_match_unique_probes(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = statement_publication()
+    payload["acknowledgement_probe_count"] += 1
+    write_json(tmp_path / "statement-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["statement_publication"]["artifacts"][0]
+    assert (
+        "acknowledgement_probe_count must match unique acknowledgement_probes count"
+        in artifact["errors"]
+    )
+
+
+def test_statement_publication_ack_probes_must_not_duplicate(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = statement_publication()
+    payload["acknowledgement_probes"].append(payload["acknowledgement_probes"][0])
+    payload["acknowledgement_probe_count"] = len(payload["acknowledgement_probes"])
+    write_json(tmp_path / "statement-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["statement_publication"]["artifacts"][0]
+    assert "acknowledgement_probes must not contain duplicate values" in artifact[
+        "errors"
+    ]
+    assert (
+        "acknowledgement_probe_count must match unique acknowledgement_probes count"
+        in artifact["errors"]
+    )
+
+
 def test_governed_hedge_execution_can_pass(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = governance_approval()
@@ -540,6 +676,44 @@ def test_billing_cycle_requires_policy_digest(tmp_path: Path) -> None:
     )
     assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
     assert result["valid_policy_digests"] == [DIGEST]
+
+
+def test_billing_cycle_id_must_be_canonical(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = billing_cycle("cycle_1", 1)
+    write_json(tmp_path / "billing-cycle-1.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifacts = result["required"]["billing_cycle"]["artifacts"]
+    assert any(MODULE.CYCLE_ID_ERROR in artifact["errors"] for artifact in artifacts)
+
+
+def test_billing_cycle_id_rejects_non_production_markers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = billing_cycle("cycle-prod-placeholder", 1)
+    write_json(tmp_path / "billing-cycle-1.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifacts = result["required"]["billing_cycle"]["artifacts"]
+    assert any(
+        "cycle_id must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+        for artifact in artifacts
+    )
+
+
+def test_billing_cycle_id_accepts_future_production_label(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = billing_cycle("cycle-prod-a-202607", 1)
+    write_json(tmp_path / "billing-cycle-1.json", payload)
+
+    assert run_gate(tmp_path) == 0
 
 
 def test_billing_cycle_reference_must_match_valid_reference_price(tmp_path: Path) -> None:
@@ -747,6 +921,49 @@ def test_billing_cycle_statements_must_not_duplicate(tmp_path: Path) -> None:
     assert "statement_count must match unique statements count" in artifact["errors"]
 
 
+def test_billing_cycle_statement_labels_must_use_billing_statement_family(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = billing_cycle("cycle-1", 1)
+    payload["statements"][0]["name"] = "statement-00"
+    write_json(tmp_path / "billing-cycle-1.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = next(
+        artifact
+        for artifact in result["required"]["billing_cycle"]["artifacts"]
+        if artifact["fingerprint"]["cycle_id"] == "cycle-1"
+    )
+    assert MODULE.STATEMENT_LABEL_ERROR in artifact["errors"]
+
+
+def test_billing_cycle_statement_labels_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = billing_cycle("cycle-1", 1)
+    payload["statements"][0]["name"] = "billing-statement-placeholder"
+    write_json(tmp_path / "billing-cycle-1.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = next(
+        artifact
+        for artifact in result["required"]["billing_cycle"]["artifacts"]
+        if artifact["fingerprint"]["cycle_id"] == "cycle-1"
+    )
+    assert (
+        "statements[0].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
 def test_billing_cycle_line_item_count_must_match_unique_line_items(
     tmp_path: Path,
 ) -> None:
@@ -785,6 +1002,49 @@ def test_billing_cycle_line_items_must_not_duplicate(tmp_path: Path) -> None:
     )
     assert "line_items must not contain duplicate values" in artifact["errors"]
     assert "line_item_count must match unique line_items count" in artifact["errors"]
+
+
+def test_billing_cycle_line_item_labels_must_use_billing_line_item_family(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = billing_cycle("cycle-1", 1)
+    payload["line_items"][0]["name"] = "line-item-00"
+    write_json(tmp_path / "billing-cycle-1.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = next(
+        artifact
+        for artifact in result["required"]["billing_cycle"]["artifacts"]
+        if artifact["fingerprint"]["cycle_id"] == "cycle-1"
+    )
+    assert MODULE.LINE_ITEM_LABEL_ERROR in artifact["errors"]
+
+
+def test_billing_cycle_line_item_labels_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = billing_cycle("cycle-1", 1)
+    payload["line_items"][0]["name"] = "billing-line-item-placeholder"
+    write_json(tmp_path / "billing-cycle-1.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = next(
+        artifact
+        for artifact in result["required"]["billing_cycle"]["artifacts"]
+        if artifact["fingerprint"]["cycle_id"] == "cycle-1"
+    )
+    assert (
+        "line_items[0].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
 
 
 def test_reconciliation_mismatch_fails(tmp_path: Path) -> None:
@@ -841,6 +1101,21 @@ def test_reconciliation_sources_must_not_duplicate(tmp_path: Path) -> None:
     assert "source_count must match unique sources count" in artifact["errors"]
 
 
+def test_reconciliation_sources_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["sources"].append({"name": "shadow-ledger"})
+    payload["source_count"] = len(payload["sources"])
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["reconciliation"]["artifacts"][0]
+    assert "sources must not include unknown values" in artifact["errors"]
+
+
 def test_reconciliation_line_item_count_must_match_unique_line_items(
     tmp_path: Path,
 ) -> None:
@@ -875,11 +1150,101 @@ def test_reconciliation_line_items_must_not_duplicate(tmp_path: Path) -> None:
     assert "line_item_count must match unique line_items count" in artifact["errors"]
 
 
+def test_reconciliation_line_item_labels_must_use_billing_line_item_family(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["line_items"][0]["name"] = "line-item-00"
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reconciliation"]["artifacts"][0]
+    assert MODULE.LINE_ITEM_LABEL_ERROR in artifact["errors"]
+
+
+def test_reconciliation_line_item_labels_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["line_items"][0]["name"] = "billing-line-item-placeholder"
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reconciliation"]["artifacts"][0]
+    assert (
+        "line_items[0].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
 def test_metrics_critical_alert_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "metrics-alerts.json", metrics_alerts(critical=True))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_metrics_metric_count_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = metrics_alerts()
+    del payload["metric_count"]
+    write_json(tmp_path / "metrics-alerts.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["metrics_alerts"]["artifacts"][0]
+    assert "metric_count must be a positive integer" in artifact["errors"]
+
+
+def test_metrics_metric_count_must_match_unique_metrics(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = metrics_alerts()
+    payload["metric_count"] += 1
+    write_json(tmp_path / "metrics-alerts.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["metrics_alerts"]["artifacts"][0]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
+
+
+def test_metrics_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = metrics_alerts()
+    payload["metrics"].append(payload["metrics"][0])
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "metrics-alerts.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["metrics_alerts"]["artifacts"][0]
+    assert "metrics must not contain duplicate values" in artifact["errors"]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
+
+
+def test_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = metrics_alerts()
+    payload["metrics"].append("shadow_hedging_metric")
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "metrics-alerts.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["metrics_alerts"]["artifacts"][0]
+    assert "metrics must not include unknown values" in artifact["errors"]
 
 
 def test_native_bridge_abi_below_twelve_fails(tmp_path: Path) -> None:

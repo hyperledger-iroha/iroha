@@ -107,7 +107,8 @@ summary: Current SF-6 release automation and QA surfaces.
   before aggregate promotion, validate governance public-head identifiers as
   lowercase hex list metadata before aggregate promotion, validate exact
   object-list metadata shapes before aggregate promotion, reject exact duplicate
-  object-list metadata entries while preserving artifact order, require every
+  object-list metadata entries while preserving artifact order, reject
+  domain-duplicate object-list metadata identities before aggregate promotion, require every
   object-list metadata field to declare its owning required artifact kind before
   its detail rows can be matched to recognized artifact fingerprints, validate exact
   object metadata shapes before aggregate
@@ -117,7 +118,9 @@ summary: Current SF-6 release automation and QA surfaces.
   require required-row and artifact schema labels to match the owning checker
   evidence schemas, reject extra required-row fields outside the schema-closed
   payload-free required-row contract, require canonical unique artifact paths
-  and lowercase SHA-256 digests, reject explicit artifact `status` labels
+  whose raw or repeatedly percent-decoded components do not contain traversal,
+  hidden separators, drive prefixes, or URI-scheme-like path tokens, require
+  lowercase SHA-256 digests, reject explicit artifact `status` labels
   outside successful states such as `passed` or `verified`, reject
   extra artifact-row fields
   outside the schema-closed payload-free
@@ -166,6 +169,10 @@ summary: Current SF-6 release automation and QA surfaces.
   `--require-gate` selection, validates the schema-closed collection plan
   envelope against the built command plan and independently rechecks final
   production deployment context before dry-run output or execution,
+  rejects reviewed summary, verifier, output, URL, and passthrough argument
+  strings whose raw or repeatedly percent-decoded components contain
+  secret-looking material, traversal, path separators, drive prefixes, or
+  URI-scheme-like path tokens before they can enter dry-run plans,
   rejects non-object or non-strict-JSON collection-plan renderings before
   stdout or verifier launch,
   and emits that dry-run collection plan so release operators can inspect the

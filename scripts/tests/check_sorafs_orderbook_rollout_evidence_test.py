@@ -25,6 +25,18 @@ DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
 
 
+def order_refs(count: int) -> list[str]:
+    return [f"order-{index:02d}" for index in range(count)]
+
+
+def channel_refs(count: int) -> list[str]:
+    return [f"channel-{index:02d}" for index in range(count)]
+
+
+def receipt_refs(count: int) -> list[str]:
+    return [f"receipt-{index:02d}" for index in range(count)]
+
+
 def write_json(path: Path, payload: dict) -> Path:
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -73,7 +85,9 @@ def matcher_service(*, lag_ms: int = 100) -> dict:
             "divergence_detected": False,
             "matcher_lag_ms": lag_ms,
             "accepted_order_count": 12,
+            "accepted_orders": order_refs(12),
             "matched_order_count": 8,
+            "matched_orders": order_refs(8),
             "rejected_invalid_order_count": 2,
             "raw_snapshot_included": False,
         }
@@ -92,7 +106,9 @@ def settlement_service() -> dict:
             "non_overlapping_ranges_enforced": True,
             "governance_receipts_published": True,
             "open_channel_count": 3,
+            "open_channels": channel_refs(3),
             "settled_receipt_count": 5,
+            "settled_receipts": receipt_refs(5),
             "settlement_backlog_count": 1,
             "raw_receipts_included": False,
         }
@@ -154,6 +170,7 @@ def event_streams(*, lag_ms: int = 250) -> dict:
     payload.update(
         {
             "contract_digest_hex": DIGEST,
+            "stream_count": len(streams),
             "streams": streams,
             "response_bodies_included": False,
         }
@@ -170,6 +187,7 @@ def sdk_release() -> dict:
             "live_smoke_passed": True,
             "submitter_helpers_verified": True,
             "debug_artifacts": False,
+            "language_count": 6,
             "languages": [
                 {"name": "rust"},
                 {"name": "javascript"},
@@ -207,6 +225,7 @@ def observability(*, critical: bool = False) -> dict:
                 "torii_sorafs_orderbook_escrow_runway_seconds",
                 "torii_sorafs_orderbook_contract_mirror_divergence",
             ],
+            "metric_count": len(MODULE.REQUIRED_METRICS),
             "response_bodies_included": False,
         }
     )
@@ -287,6 +306,15 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["contract_surface"]["valid"] is True
     assert payload["valid_contract_digests"] == [DIGEST]
     assert payload["valid_policy_digests"] == [DIGEST]
+    assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
+    assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
+    observability_artifact = payload["required"]["observability"]["artifacts"][0]
+    assert observability_artifact["fingerprint"]["metric_count"] == len(
+        MODULE.REQUIRED_METRICS
+    )
+    assert observability_artifact["fingerprint"]["metrics"] == list(
+        MODULE.REQUIRED_METRICS
+    )
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -402,6 +430,170 @@ def test_contract_bound_artifact_must_match_contract_surface_digest(tmp_path: Pa
     ]
 
 
+def test_matcher_accepted_order_count_must_match_unique_orders(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = matcher_service()
+    payload["accepted_order_count"] += 1
+    write_json(tmp_path / "matcher-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["matcher_service"]["artifacts"][0]
+    assert "accepted_order_count must match unique accepted_orders count" in artifact[
+        "errors"
+    ]
+
+
+def test_matcher_accepted_orders_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = matcher_service()
+    payload["accepted_orders"].append(payload["accepted_orders"][0])
+    payload["accepted_order_count"] = len(payload["accepted_orders"])
+    write_json(tmp_path / "matcher-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["matcher_service"]["artifacts"][0]
+    assert "accepted_orders must not contain duplicate values" in artifact["errors"]
+    assert "accepted_order_count must match unique accepted_orders count" in artifact[
+        "errors"
+    ]
+
+
+def test_matcher_matched_orders_must_be_accepted(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = matcher_service()
+    payload["matched_orders"][-1] = "order-outside-accepted-set"
+    write_json(tmp_path / "matcher-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["matcher_service"]["artifacts"][0]
+    assert "matched_orders must be a subset of accepted_orders" in artifact["errors"]
+
+
+def test_matcher_order_ids_must_use_reviewed_labels(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = matcher_service()
+    payload["accepted_orders"][0] = "order_alpha"
+    write_json(tmp_path / "matcher-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["matcher_service"]["artifacts"][0]
+    assert (
+        "accepted_orders[] must match canonical lowercase `order-name`"
+        in artifact["errors"]
+    )
+
+
+def test_matcher_order_ids_reject_non_production_markers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = matcher_service()
+    payload["accepted_orders"][0] = "order-placeholder"
+    write_json(tmp_path / "matcher-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["matcher_service"]["artifacts"][0]
+    assert (
+        "accepted_orders[] must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_settlement_open_channel_count_must_match_unique_channels(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_service()
+    payload["open_channel_count"] += 1
+    write_json(tmp_path / "settlement-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_service"]["artifacts"][0]
+    assert "open_channel_count must match unique open_channels count" in artifact[
+        "errors"
+    ]
+
+
+def test_settlement_settled_receipts_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_service()
+    payload["settled_receipts"].append(payload["settled_receipts"][0])
+    payload["settled_receipt_count"] = len(payload["settled_receipts"])
+    write_json(tmp_path / "settlement-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_service"]["artifacts"][0]
+    assert "settled_receipts must not contain duplicate values" in artifact["errors"]
+    assert "settled_receipt_count must match unique settled_receipts count" in artifact[
+        "errors"
+    ]
+
+
+def test_settlement_ids_must_use_reviewed_labels(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_service()
+    payload["open_channels"][0] = "channel_alpha"
+    payload["settled_receipts"][0] = "receipt_alpha"
+    write_json(tmp_path / "settlement-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_service"]["artifacts"][0]
+    assert (
+        "open_channels[] must match canonical lowercase `channel-name`"
+        in artifact["errors"]
+    )
+    assert (
+        "settled_receipts[] must match canonical lowercase `receipt-name`"
+        in artifact["errors"]
+    )
+
+
+def test_settlement_ids_reject_non_production_markers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = settlement_service()
+    payload["open_channels"][0] = "channel-placeholder"
+    payload["settled_receipts"][0] = "receipt-placeholder"
+    write_json(tmp_path / "settlement-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["settlement_service"]["artifacts"][0]
+    assert (
+        "open_channels[] must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+    assert (
+        "settled_receipts[] must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
 def test_api_gateway_route_count_must_match_unique_routes(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = api_gateway()
@@ -432,6 +624,190 @@ def test_api_gateway_routes_must_not_duplicate(tmp_path: Path) -> None:
     artifact = result["required"]["api_gateway"]["artifacts"][0]
     assert "routes must not contain duplicate values" in artifact["errors"]
     assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_api_gateway_routes_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = api_gateway()
+    payload["routes"].append(
+        {
+            "name": "debug_backdoor",
+            "passed": True,
+            "status_code": 200,
+            "latency_ms": 200,
+            "authz_enforced": True,
+            "signature_verified": True,
+        }
+    )
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "api-gateway.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["api_gateway"]["artifacts"][0]
+    assert "routes must not include unknown values" in artifact["errors"]
+
+
+def test_event_streams_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = event_streams()
+    payload["streams"].append(dict(payload["streams"][0]))
+    payload["stream_count"] = len(payload["streams"])
+    write_json(tmp_path / "event-streams.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["event_streams"]["artifacts"][0]
+    assert "streams must not contain duplicate values" in artifact["errors"]
+    assert "stream_count must match unique streams count" in artifact["errors"]
+
+
+def test_event_streams_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = event_streams()
+    payload["streams"].append(
+        {
+            "name": "long_poll_orderbook_events",
+            "passed": True,
+            "backlog_replay_verified": True,
+            "live_delivery_verified": True,
+            "contract_backed": True,
+            "lag_ms": 250,
+        }
+    )
+    payload["stream_count"] = len(payload["streams"])
+    write_json(tmp_path / "event-streams.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["event_streams"]["artifacts"][0]
+    assert "streams must not include unknown values" in artifact["errors"]
+
+
+def test_event_stream_count_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = event_streams()
+    del payload["stream_count"]
+    write_json(tmp_path / "event-streams.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["event_streams"]["artifacts"][0]
+    assert "stream_count must be a positive integer" in artifact["errors"]
+
+
+def test_sdk_artifacts_must_not_duplicate_id(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = sdk_release()
+    payload["artifacts"].append(dict(payload["artifacts"][0]))
+    payload["artifact_count"] = len(payload["artifacts"])
+    write_json(tmp_path / "sdk-release.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["sdk_release"]["artifacts"][0]
+    assert "artifacts must not contain duplicate values" in artifact["errors"]
+    assert "artifact_count must match unique artifacts count" in artifact["errors"]
+
+
+def test_sdk_languages_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = sdk_release()
+    payload["languages"].append(dict(payload["languages"][0]))
+    write_json(tmp_path / "sdk-release.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["sdk_release"]["artifacts"][0]
+    assert "languages must not contain duplicate values" in artifact["errors"]
+
+
+def test_sdk_languages_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = sdk_release()
+    payload["languages"].append({"name": "go"})
+    payload["language_count"] = len(payload["languages"])
+    write_json(tmp_path / "sdk-release.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["sdk_release"]["artifacts"][0]
+    assert "languages must not include unknown values" in artifact["errors"]
+
+
+def test_sdk_language_count_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = sdk_release()
+    del payload["language_count"]
+    write_json(tmp_path / "sdk-release.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["sdk_release"]["artifacts"][0]
+    assert "language_count must be a positive integer" in artifact["errors"]
+    assert "language_count must be at least 6" in artifact["errors"]
+
+
+def test_sdk_language_count_must_match_inventory(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = sdk_release()
+    payload["language_count"] += 1
+    write_json(tmp_path / "sdk-release.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["sdk_release"]["artifacts"][0]
+    assert "language_count must match unique languages count" in artifact["errors"]
+
+
+def test_observability_metrics_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = observability()
+    payload["metrics"].append(payload["metrics"][0])
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "observability.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["observability"]["artifacts"][0]
+    assert "metrics must not contain duplicate values" in artifact["errors"]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
+
+
+def test_observability_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = observability()
+    payload["metrics"].append("torii_sorafs_orderbook_debug_metric")
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "observability.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["observability"]["artifacts"][0]
+    assert "metrics must not include unknown values" in artifact["errors"]
 
 
 def test_governance_approval_must_match_contract_surface_digest(tmp_path: Path) -> None:
@@ -510,6 +886,23 @@ def test_reconciliation_sources_must_not_duplicate(tmp_path: Path) -> None:
     assert "source_count must match unique sources count" in artifact["errors"]
 
 
+def test_reconciliation_sources_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["sources"].append({"name": "shadow-indexer"})
+    payload["source_count"] = len(payload["sources"])
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reconciliation"]["artifacts"][0]
+    assert "sources must not include unknown values" in artifact["errors"]
+
+
 def test_reconciliation_peer_count_must_match_unique_peers(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = reconciliation()
@@ -538,6 +931,41 @@ def test_reconciliation_peers_must_not_duplicate(tmp_path: Path) -> None:
     artifact = result["required"]["reconciliation"]["artifacts"][0]
     assert "peers must not contain duplicate values" in artifact["errors"]
     assert "peer_count must match unique peers count" in artifact["errors"]
+
+
+def test_reconciliation_peer_names_must_use_reviewed_labels(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["peers"][0]["name"] = "peer_alpha"
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reconciliation"]["artifacts"][0]
+    assert "peers[].name must match canonical lowercase `peer-name`" in artifact[
+        "errors"
+    ]
+
+
+def test_reconciliation_peer_names_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reconciliation()
+    payload["peers"][0]["name"] = "peer-placeholder"
+    write_json(tmp_path / "reconciliation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reconciliation"]["artifacts"][0]
+    assert (
+        "peers[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
 
 
 def test_policy_bound_subset_requires_contract_surface_anchor(tmp_path: Path) -> None:

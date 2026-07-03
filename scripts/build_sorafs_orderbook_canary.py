@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import sys
 from collections.abc import Iterable, Sequence
@@ -18,12 +19,21 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_orderbook_rollout_evidence import (  # noqa: E402
+    CHANNEL_REF_ERROR,
+    CHANNEL_REF_PATTERN,
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_MAX_MATCHER_LAG_MS,
     DEFAULT_MAX_ROUTE_LATENCY_MS,
     DEFAULT_MAX_STREAM_LAG_MS,
     DEFAULT_MIN_RECONCILIATION_PEERS,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
     KIND_BY_NAME,
+    ORDER_REF_ERROR,
+    ORDER_REF_PATTERN,
+    PEER_LABEL_ERROR,
+    PEER_LABEL_PATTERN,
+    RECEIPT_REF_ERROR,
+    RECEIPT_REF_PATTERN,
     REQUIRED_API_ROUTES,
     REQUIRED_METRICS,
     REQUIRED_RECONCILIATION_SOURCES,
@@ -36,6 +46,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -165,6 +177,8 @@ def validate_reviewed_inventory(
     kind: str,
     count_option: str,
     errors: list[str],
+    pattern: re.Pattern[str] | None = None,
+    label_error: str | None = None,
 ) -> list[str]:
     """Return reviewed unique inventory labels whose count matches a CLI count."""
 
@@ -173,6 +187,19 @@ def validate_reviewed_inventory(
         errors.append(f"{option} is required for {kind}")
     for index, item in enumerate(items):
         validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+        if pattern is not None and pattern.fullmatch(item) is None:
+            if label_error is None:
+                errors.append(f"{option} has malformed inventory label")
+            else:
+                errors.append(label_error.format(path=option))
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in item.split("-")
+        )
+        if forbidden:
+            errors.append(f"{option} must not contain non-production markers {forbidden}")
     unique_items = set(items)
     if len(unique_items) != len(items):
         errors.append(f"{option} must not contain duplicates")
@@ -323,7 +350,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "matcher_lag_ms": args.matcher_lag_ms,
                 "accepted_order_count": args.accepted_order_count,
+                "accepted_orders": args.accepted_orders,
                 "matched_order_count": args.matched_order_count,
+                "matched_orders": args.matched_orders,
                 "rejected_invalid_order_count": args.rejected_invalid_order_count,
             }
         )
@@ -331,7 +360,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "open_channel_count": args.open_channel_count,
+                "open_channels": args.open_channels,
                 "settled_receipt_count": args.settled_receipt_count,
+                "settled_receipts": args.settled_receipts,
                 "settlement_backlog_count": args.settlement_backlog_count,
             }
         )
@@ -345,17 +376,29 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     elif args.kind == "event_streams":
-        payload["streams"] = build_stream_records(args)
+        streams = build_stream_records(args)
+        payload.update(
+            {
+                "stream_count": len(streams),
+                "streams": streams,
+            }
+        )
     elif args.kind == "sdk_release":
         payload.update(
             {
+                "language_count": len(args.languages),
                 "languages": [{"name": language} for language in args.languages],
                 "artifact_count": len(args.artifacts),
                 "artifacts": args.artifacts,
             }
         )
     elif args.kind == "observability":
-        payload["metrics"] = args.metrics
+        payload.update(
+            {
+                "metrics": args.metrics,
+                "metric_count": len(args.metrics),
+            }
+        )
     elif args.kind == "reconciliation":
         payload.update(
             {
@@ -398,6 +441,29 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
         ):
             if value is None:
                 errors.append(f"{option} is required for matcher_service")
+        args.accepted_orders = validate_reviewed_inventory(
+            split_csv_values(args.accepted_order),
+            expected_count=args.accepted_order_count or 0,
+            option="--accepted-order",
+            kind="matcher_service",
+            count_option="--accepted-order-count",
+            pattern=ORDER_REF_PATTERN,
+            label_error=ORDER_REF_ERROR,
+            errors=errors,
+        )
+        args.matched_orders = validate_reviewed_inventory(
+            split_csv_values(args.matched_order),
+            expected_count=args.matched_order_count or 0,
+            option="--matched-order",
+            kind="matcher_service",
+            count_option="--matched-order-count",
+            pattern=ORDER_REF_PATTERN,
+            label_error=ORDER_REF_ERROR,
+            errors=errors,
+        )
+        accepted_order_set = set(args.accepted_orders)
+        if any(order not in accepted_order_set for order in args.matched_orders):
+            errors.append("--matched-order values must also be present in --accepted-order")
         if args.rejected_invalid_order_count is None:
             args.rejected_invalid_order_count = 0
     elif args.kind == "settlement_service":
@@ -407,6 +473,26 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
         ):
             if value is None:
                 errors.append(f"{option} is required for settlement_service")
+        args.open_channels = validate_reviewed_inventory(
+            split_csv_values(args.open_channel),
+            expected_count=args.open_channel_count or 0,
+            option="--open-channel",
+            kind="settlement_service",
+            count_option="--open-channel-count",
+            pattern=CHANNEL_REF_PATTERN,
+            label_error=CHANNEL_REF_ERROR,
+            errors=errors,
+        )
+        args.settled_receipts = validate_reviewed_inventory(
+            split_csv_values(args.settled_receipt),
+            expected_count=args.settled_receipt_count or 0,
+            option="--settled-receipt",
+            kind="settlement_service",
+            count_option="--settled-receipt-count",
+            pattern=RECEIPT_REF_PATTERN,
+            label_error=RECEIPT_REF_ERROR,
+            errors=errors,
+        )
         if args.settlement_backlog_count is None:
             args.settlement_backlog_count = 0
     elif args.kind == "api_gateway":
@@ -447,6 +533,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--peer",
             kind="reconciliation",
             count_option="--peer-count",
+            pattern=PEER_LABEL_PATTERN,
+            label_error=PEER_LABEL_ERROR,
             errors=errors,
         )
         args.sources = validate_name_set(
@@ -522,12 +610,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:
@@ -559,10 +649,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verified-claim", action="append", default=[])
     parser.add_argument("--matcher-lag-ms", type=non_negative_int_arg)
     parser.add_argument("--accepted-order-count", type=positive_int_arg)
+    parser.add_argument("--accepted-order", action="append", default=[])
     parser.add_argument("--matched-order-count", type=positive_int_arg)
+    parser.add_argument("--matched-order", action="append", default=[])
     parser.add_argument("--rejected-invalid-order-count", type=non_negative_int_arg)
     parser.add_argument("--open-channel-count", type=positive_int_arg)
+    parser.add_argument("--open-channel", action="append", default=[])
     parser.add_argument("--settled-receipt-count", type=positive_int_arg)
+    parser.add_argument("--settled-receipt", action="append", default=[])
     parser.add_argument("--settlement-backlog-count", type=non_negative_int_arg)
     parser.add_argument("--route", action="append", default=[])
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=200)

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -40,10 +41,12 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_is_valid,
     evidence_gate_status,
     evidence_schema_by_kind,
+    hashable_evidence_values,
     init_evidence_artifact_buckets,
     record_evidence_artifact,
     record_evidence_validation_errors,
     record_explicit_evidence_validation_errors,
+    record_observed_evidence_value,
     require_bool_true,
     require_config_backed_governance_approval,
     require_false,
@@ -59,6 +62,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_in,
     require_string_inventory_count_match,
     required_evidence_kind_names,
     validate_bound_evidence_digest_references,
@@ -85,6 +89,62 @@ DEFAULT_MAX_ERROR_RATE_BPS = 100
 DEFAULT_MAX_P95_LATENCY_MS = 1_500
 DEFAULT_MAX_P99_LATENCY_MS = 3_000
 HEX64_LEN = 64
+DEFAULT_GATEWAY_CONFORMANCE_CARGO_COMMAND = (
+    "cargo test -p integration_tests --test nexus_and_streaming "
+    "sorafs_gateway_conformance -- --nocapture"
+)
+LOCKED_GATEWAY_CONFORMANCE_CARGO_COMMAND = (
+    "cargo test --locked -p integration_tests --test nexus_and_streaming "
+    "sorafs_gateway_conformance -- --nocapture"
+)
+ALLOWED_GATEWAY_CONFORMANCE_CARGO_COMMANDS = (
+    DEFAULT_GATEWAY_CONFORMANCE_CARGO_COMMAND,
+    LOCKED_GATEWAY_CONFORMANCE_CARGO_COMMAND,
+)
+GATEWAY_VERSION_PATTERN = re.compile(
+    r"^iroha-gateway "
+    r"(0|[1-9][0-9]*)\."
+    r"(0|[1-9][0-9]*)\."
+    r"(0|[1-9][0-9]*)"
+    r"(?:-rc\.([1-9][0-9]*))?"
+    r"\Z"
+)
+GATEWAY_VERSION_ERROR = (
+    "gateway_version must match `iroha-gateway X.Y.Z` or "
+    "`iroha-gateway X.Y.Z-rc.N`"
+)
+STAGING_METADATA_LABEL_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+STREAM_NAME_PATTERN = re.compile(r"^stream-[0-9]{4,}\Z")
+PROVIDER_NAME_PATTERN = re.compile(r"^provider-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+HARDWARE_PROFILE_ERROR = (
+    "hardware_profile.name must match canonical lowercase hardware profile label"
+)
+STREAM_NAME_ERROR = "streams[].name must match generated stream label"
+PROVIDER_NAME_ERROR = "providers[].name must match canonical lowercase `provider-name`"
+CACHE_STATE_ERROR = "cache_state.mode must be a reviewed cache-state value"
+REQUIRED_CACHE_STATES = (
+    "cold-cache",
+    "warm-cache",
+    "mixed-cache",
+)
+FORBIDDEN_STAGING_METADATA_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "local",
+        "laptop",
+        "placeholder",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+        "tmp",
+    )
+)
 
 REQUIRED_SCENARIOS = (
     "full_car_replay",
@@ -212,6 +272,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "cold_cache_baseline_recorded",
         "critical_alerts_firing",
         "metrics",
+        "metric_count",
         "response_bodies_included",
     ),
     "transport_scope": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -256,6 +317,31 @@ class ValidationOptions:
     max_p99_latency_ms: int
 
 
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
+
+
 FINGERPRINT_FIELDS: tuple[str, ...] = (
     "schema",
     "generated_at_unix",
@@ -265,7 +351,80 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "suite_report_digest_hex",
     "staging_report_digest_hex",
     "policy_digest_hex",
+    "metric_count",
+    "metrics",
 )
+
+
+def require_gateway_version(payload: dict[str, Any], errors: list[str]) -> str:
+    """Require a concrete gateway release or release-candidate version label."""
+
+    version = require_string(payload, "gateway_version", errors)
+    if version and GATEWAY_VERSION_PATTERN.fullmatch(version) is None:
+        errors.append(GATEWAY_VERSION_ERROR)
+        return ""
+    return version
+
+
+def require_staging_metadata_label(
+    record: dict[str, Any],
+    field: str,
+    errors: list[str],
+    *,
+    path: str,
+    pattern: re.Pattern[str],
+    pattern_error: str,
+) -> str:
+    """Require a reviewed lowercase staging metadata label."""
+
+    value = require_string(record, field, errors)
+    if not value:
+        return ""
+    if pattern.fullmatch(value) is None:
+        errors.append(pattern_error)
+        return ""
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_STAGING_METADATA_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+        return ""
+    return value
+
+
+def require_hardware_profile(payload: dict[str, Any], errors: list[str]) -> str:
+    """Require a reviewed hardware profile label for live staging load evidence."""
+
+    raw_record = payload.get("hardware_profile")
+    if not isinstance(raw_record, dict):
+        require_object(raw_record, "hardware_profile", errors)
+        return ""
+    record = require_object(raw_record, "hardware_profile", errors)
+    return require_staging_metadata_label(
+        record,
+        "name",
+        errors,
+        path="hardware_profile.name",
+        pattern=STAGING_METADATA_LABEL_PATTERN,
+        pattern_error=HARDWARE_PROFILE_ERROR,
+    )
+
+
+def require_cache_state(payload: dict[str, Any], errors: list[str]) -> str:
+    """Require a reviewed cache-state mode for live staging load evidence."""
+
+    raw_record = payload.get("cache_state")
+    if not isinstance(raw_record, dict):
+        require_object(raw_record, "cache_state", errors)
+        return ""
+    record = require_object(raw_record, "cache_state", errors)
+    mode = require_string(record, "mode", errors)
+    if mode and mode not in REQUIRED_CACHE_STATES:
+        errors.append(CACHE_STATE_ERROR)
+        return ""
+    return mode
 
 
 def validate_local_conformance(payload: dict[str, Any], errors: list[str]) -> None:
@@ -275,9 +434,13 @@ def validate_local_conformance(payload: dict[str, Any], errors: list[str]) -> No
         "ci/check_sorafs_gateway_conformance.sh",
         errors,
     )
-    cargo_command = require_string(payload, "cargo_command", errors)
-    if "sorafs_gateway_conformance" not in cargo_command:
-        errors.append("cargo_command must run sorafs_gateway_conformance")
+    require_string_in(
+        payload,
+        "cargo_command",
+        ALLOWED_GATEWAY_CONFORMANCE_CARGO_COMMANDS,
+        errors,
+        quote_values=False,
+    )
     require_bool_true(payload, "deterministic_harness_passed", errors)
     require_bool_true(payload, "attestation_verified", errors)
     require_hex(payload, "suite_report_digest_hex", HEX64_LEN, errors)
@@ -285,6 +448,7 @@ def validate_local_conformance(payload: dict[str, Any], errors: list[str]) -> No
     require_minimum_int(payload, "load_profile_streams", DEFAULT_MIN_STREAMS, errors)
     require_positive_int(payload, "load_profile_window_seconds", errors)
     require_string_coverage(payload, "scenarios", "", REQUIRED_SCENARIOS, errors)
+    require_only_required_values(payload, "scenarios", "", REQUIRED_SCENARIOS, errors)
     require_string_inventory_count_match(payload, "scenarios", "scenario_count", errors)
     require_false(payload, "raw_report_included", errors)
     require_false(payload, "private_keys_included", errors)
@@ -299,9 +463,9 @@ def validate_staging_load(
     require_hex(payload, "staging_report_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "fixture_bundle_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
-    require_string(payload, "gateway_version", errors)
-    require_object(payload, "hardware_profile", errors)
-    require_object(payload, "cache_state", errors)
+    require_gateway_version(payload, errors)
+    require_hardware_profile(payload, errors)
+    require_cache_state(payload, errors)
     require_minimum_int(payload, "duration_seconds", options.min_staging_duration_secs, errors)
     require_minimum_int(payload, "stream_count", options.min_streams, errors)
     require_string_inventory_count_match(
@@ -313,7 +477,14 @@ def validate_staging_load(
         allow_scalar_items=False,
     )
     for _, record in require_object_array(payload, "streams", errors):
-        require_string(record, "name", errors)
+        require_staging_metadata_label(
+            record,
+            "name",
+            errors,
+            path="streams[].name",
+            pattern=STREAM_NAME_PATTERN,
+            pattern_error=STREAM_NAME_ERROR,
+        )
     require_positive_int(payload, "provider_count", errors)
     require_string_inventory_count_match(
         payload,
@@ -324,7 +495,14 @@ def validate_staging_load(
         allow_scalar_items=False,
     )
     for _, record in require_object_array(payload, "providers", errors):
-        require_string(record, "name", errors)
+        require_staging_metadata_label(
+            record,
+            "name",
+            errors,
+            path="providers[].name",
+            pattern=PROVIDER_NAME_PATTERN,
+            pattern_error=PROVIDER_NAME_ERROR,
+        )
     require_minimum_int(payload, "success_rate_bps", options.min_success_rate_bps, errors)
     require_maximum_number(payload, "error_rate_bps", options.max_error_rate_bps, errors)
     require_maximum_number(payload, "p95_latency_ms", options.max_p95_latency_ms, errors)
@@ -341,6 +519,9 @@ def validate_telemetry_slo(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "cold_cache_baseline_recorded", errors)
     require_false(payload, "critical_alerts_firing", errors)
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_positive_int(payload, "metric_count", errors)
+    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
     require_false(payload, "response_bodies_included", errors)
 
 
@@ -433,6 +614,8 @@ def build_summary(
     staging_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_policy_digests: set[str] = set()
     policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    metric_counts: set[int] = set()
+    metric_names: set[str] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -461,6 +644,9 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
+        if kind_name == "telemetry_slo":
+            record_observed_evidence_value(metric_counts, payload.get("metric_count"))
+            metric_names.update(hashable_evidence_values(payload.get("metrics")))
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
             suite_digest = fingerprint.get("suite_report_digest_hex")
@@ -558,6 +744,8 @@ def build_summary(
         "valid_suite_report_digests": sorted(valid_suite_report_digests),
         "valid_staging_report_digests": sorted(valid_staging_report_digests),
         "valid_policy_digests": sorted(valid_policy_digests),
+        "metrics": sorted(metric_names),
+        "metric_count_values": sorted(metric_counts),
         "required": required,
         "errors": errors,
     }

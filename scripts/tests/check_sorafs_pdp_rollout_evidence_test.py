@@ -90,9 +90,9 @@ def proof_generation(
     payload = base("sorafs.pdp.proof_generation_canary.v1")
     providers = [{"name": f"provider-{index:02d}"} for index in range(provider_count)]
     challenges = [
-        {"name": f"challenge-{index:02d}"} for index in range(challenge_count)
+        {"name": f"pdp-challenge-{index:02d}"} for index in range(challenge_count)
     ]
-    proofs = [{"name": f"proof-{index:02d}"} for index in range(proof_count)]
+    proofs = [{"name": f"pdp-proof-{index:02d}"} for index in range(proof_count)]
     payload.update(
         {
             "provider_count": provider_count,
@@ -180,6 +180,7 @@ def observability(*, critical: bool = False) -> dict:
                 "sorafs_pdp_response_latency_seconds_bucket",
                 "sorafs_pdp_repair_handoffs_total",
             ],
+            "metric_count": len(MODULE.REQUIRED_METRICS),
             "proof_summary_digest_hex": DIGEST,
             "response_bodies_included": False,
         }
@@ -232,6 +233,15 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["provider_transport"]["valid"] is True
     assert payload["valid_policy_digests"] == [DIGEST]
     assert payload["valid_provider_roster_digests"] == [ROSTER_DIGEST]
+    assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
+    assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
+    observability_artifact = payload["required"]["observability"]["artifacts"][0]
+    assert observability_artifact["fingerprint"]["metric_count"] == len(
+        MODULE.REQUIRED_METRICS
+    )
+    assert observability_artifact["fingerprint"]["metrics"] == list(
+        MODULE.REQUIRED_METRICS
+    )
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -321,6 +331,24 @@ def test_provider_transport_routes_must_not_duplicate(tmp_path: Path) -> None:
     assert "route_count must match unique routes count" in artifact["errors"]
 
 
+def test_provider_transport_routes_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = provider_transport()
+    payload["routes"].append(route("pdp_debug_route"))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "provider-transport.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["provider_transport"]["artifacts"][0]
+    assert "routes must not include unknown values" in artifact["errors"]
+
+
 def test_proof_generation_requires_minimum_provider_count(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "proof-generation.json", proof_generation(provider_count=2))
@@ -360,6 +388,44 @@ def test_proof_generation_providers_must_not_duplicate(tmp_path: Path) -> None:
     assert "provider_count must match unique providers count" in artifact["errors"]
 
 
+def test_proof_generation_provider_names_must_be_reviewed_labels(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["providers"][0] = {"name": "provider_00"}
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert (
+        "providers[].name must match canonical lowercase `provider-name`"
+        in artifact["errors"]
+    )
+
+
+def test_proof_generation_provider_names_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["providers"][0] = {"name": "provider-placeholder"}
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert (
+        "providers[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
 def test_proof_generation_challenge_count_must_match_unique_challenges(
     tmp_path: Path,
 ) -> None:
@@ -390,6 +456,41 @@ def test_proof_generation_challenges_must_not_duplicate(tmp_path: Path) -> None:
     artifact = result["required"]["proof_generation"]["artifacts"][0]
     assert "challenges must not contain duplicate values" in artifact["errors"]
     assert "challenge_count must match unique challenges count" in artifact["errors"]
+
+
+def test_proof_generation_challenge_names_must_be_reviewed_labels(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["challenges"][0]["name"] = "challenge-00"
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert MODULE.CHALLENGE_LABEL_ERROR in artifact["errors"]
+
+
+def test_proof_generation_challenge_names_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["challenges"][0]["name"] = "pdp-challenge-placeholder"
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert (
+        "challenges[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
 
 
 def test_proof_generation_requires_minimum_proof_count(tmp_path: Path) -> None:
@@ -431,6 +532,39 @@ def test_proof_generation_proofs_must_not_duplicate(tmp_path: Path) -> None:
     assert "proof_count must match unique proofs count" in artifact["errors"]
 
 
+def test_proof_generation_proof_names_must_be_reviewed_labels(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["proofs"][0]["name"] = "proof-00"
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert MODULE.PROOF_LABEL_ERROR in artifact["errors"]
+
+
+def test_proof_generation_proof_names_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_generation()
+    payload["proofs"][0]["name"] = "pdp-proof-placeholder"
+    write_json(tmp_path / "proof-generation.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_generation"]["artifacts"][0]
+    assert (
+        "proofs[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
 def test_proof_latency_above_threshold_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(
@@ -455,6 +589,37 @@ def test_validator_replay_requires_proof_summary_binding(tmp_path: Path) -> None
     write_json(tmp_path / "validator-replay.json", payload)
 
     assert run_gate(tmp_path) == 1
+
+
+def test_observability_metrics_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = observability()
+    payload["metrics"].append(payload["metrics"][0])
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "observability.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["observability"]["artifacts"][0]
+    assert "metrics must not contain duplicate values" in artifact["errors"]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
+
+
+def test_observability_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = observability()
+    payload["metrics"].append("sorafs_pdp_debug_metric")
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "observability.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["observability"]["artifacts"][0]
+    assert "metrics must not include unknown values" in artifact["errors"]
 
 
 def test_proof_generation_requires_policy_digest(tmp_path: Path) -> None:

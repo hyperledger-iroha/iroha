@@ -416,11 +416,17 @@ def test_plan_rendered_path_safety_rejects_unsafe_components() -> None:
     for path in (
         Path("artifacts") / "private_key_output" / "summary.json",
         Path("artifacts") / "bearer_token_summary.json",
+        Path("artifacts") / "%70rivate_key_output" / "summary.json",
+        Path("artifacts") / "%2570rivate_key_output" / "summary.json",
         Path("artifacts") / "nested" / ".." / "summary.json",
+        Path("artifacts") / "%2e%2e" / "summary.json",
+        Path("artifacts") / "bad%2Fsummary.json",
         Path("."),
         Path("artifacts") / "bad\\summary.json",
         Path("artifacts") / "bad\nsummary.json",
         Path("C:/sorafs/summary.json"),
+        Path("artifacts") / "C%3A" / "summary.json",
+        Path("https://torii.example/summary.json"),
     ):
         assert not plan_rendered_path_is_safe(path)
 
@@ -558,8 +564,16 @@ def test_runner_url_arg_safety_rejects_secret_bearing_urls() -> None:
         "https://torii.example/path?bearer_token=secret",
         "https://torii.example/path#secret",
         "https://private-key.example",
+        "https://%70rivate-key.example",
+        "https://%2e%2e.example",
         "https://torii.example/private_key/hook",
         "https://torii.example/bearer%5Ftoken/hook",
+        "https://torii.example/bearer%255Ftoken/hook",
+        "https://torii.example/%2e%2e/admin",
+        "https://torii.example/%252e%252e/admin",
+        "https://torii.example/bad%2Fpath",
+        "https://torii.example/C%3A/summary",
+        "https://torii.example/http%3A/summary",
         "https://torii.example/bad\npath",
         "ftp://torii.example",
         "torii.example",
@@ -613,10 +627,15 @@ def test_runner_passthrough_arg_safety_rejects_secret_like_arguments() -> None:
 
     for value in (
         "--private-key",
+        "--%70rivate-key",
         "--bearer-token=runtime-secret",
+        "--config=%2Fruntime%2Fprivate_key%2Fclient.toml",
         "authorization=Bearer token",
+        "private%5Fkey",
         "/runtime/private_key/client.toml",
+        "/runtime/%70rivate_key/client.toml",
         "https://user:private_key@torii.example",
+        "https%3A%2F%2Fuser%3Aprivate_key%40torii.example",
         "bad\narg",
     ):
         assert not runner_passthrough_arg_is_plan_safe(value)

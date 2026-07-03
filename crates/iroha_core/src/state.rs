@@ -47665,6 +47665,34 @@ mod tests {
         block
     }
 
+    fn insert_empty_transaction_block_for_test(state_block: &mut StateBlock<'_>) {
+        let block_height = state_block
+            ._curr_block
+            .height()
+            .try_into()
+            .expect("test block height fits storage height");
+        state_block
+            .transactions
+            .insert_block(std::collections::HashSet::new(), block_height);
+    }
+
+    fn commit_and_store_autoscale_previous_block_for_test(
+        state: &mut State,
+        kura: &Arc<Kura>,
+        block: &SignedBlock,
+    ) {
+        let mut state_block = state.block(block.header());
+        let committed = ValidBlock::new_unverified_for_tests(block.clone())
+            .commit_unchecked()
+            .unpack(|_| {});
+        let _events = state_block.apply_without_execution(&committed, Vec::new());
+        state_block
+            .commit()
+            .expect("commit previous autoscale block");
+        kura.store_block(Arc::new(block.clone()))
+            .expect("store previous autoscale block");
+    }
+
     fn autoscale_transition_test_nexus(
         lanes: Vec<LaneConfig>,
         min_lanes: u32,
@@ -51146,10 +51174,10 @@ mod tests {
             seeded_nexus.autoscale.min_lanes.get(),
             seeded_nexus.autoscale.max_lanes.get(),
         );
-        assert_eq!(seeded_capacity, 5);
+        assert_eq!(seeded_capacity, 3);
         assert!(
-            seeded_capacity >= u64::from(seeded_nexus.autoscale.max_lanes.get()),
-            "public-profile capacity can meet numeric max_lanes while the elastic id range is full"
+            seeded_capacity < u64::from(seeded_nexus.autoscale.max_lanes.get()),
+            "manual public-profile lanes must not inflate default-route autoscale capacity"
         );
         assert_eq!(
             autoscale_next_lane_id(
@@ -52457,14 +52485,14 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
 
         let mut state_block = state.block(second.header());
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
         state_block.maybe_apply_nexus_autoscale(&committed_second);
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits cleanup");
@@ -52980,7 +53008,7 @@ mod tests {
                 (retired_lane_id, DataSpaceId::UNIVERSAL, validator_ids),
             ],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
         let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
         let retired_relay =
             sample_lane_relay_envelope(2, retired_lane_id, &signers, full_signer_bitmap(4))
@@ -53012,8 +53040,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
 
         let mut state_block = state.block(second.header());
         {
@@ -53102,6 +53129,7 @@ mod tests {
                 .is_some(),
             "autoscale scale-in must not prune spoofed contract-map siblings"
         );
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits staged relay pruning");
@@ -53245,8 +53273,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
 
         let mut state_block = state.block(second.header());
         state_block.world.lane_relay_emergency_validators.insert(
@@ -53389,6 +53416,7 @@ mod tests {
             "autoscale scale-in must retain same-block surviving-lane economics"
         );
 
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in commits same-block cleanup");
@@ -53491,8 +53519,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
 
         let mut state_block = state.block(second.header());
         state_block.world.public_lane_validators.insert(
@@ -53607,6 +53634,7 @@ mod tests {
             "autoscale scale-in must retain same-block replay entries for surviving lanes"
         );
 
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in commits same-block validator and replay cleanup");
@@ -53747,7 +53775,7 @@ mod tests {
                 AxtReplayRecord {
                     dataspace: DataSpaceId::UNIVERSAL,
                     used_slot: 1,
-                    retain_until_slot: 100,
+                    retain_until_slot: 10_000,
                 },
             );
             block.insert(
@@ -53755,7 +53783,7 @@ mod tests {
                 AxtReplayRecord {
                     dataspace: DataSpaceId::UNIVERSAL,
                     used_slot: 1,
-                    retain_until_slot: 100,
+                    retain_until_slot: 10_000,
                 },
             );
             block.commit();
@@ -53797,8 +53825,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
 
         let mut state_block = state.block(second.header());
         let committed_second = ValidBlock::new_unverified_for_tests(second)
@@ -53820,6 +53847,7 @@ mod tests {
             },
             "test setup must exercise the real autoscale scale-in transition"
         );
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("committed autoscale lifecycle must publish and prune persistent state");
@@ -54557,14 +54585,14 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
 
         let mut state_block = state.block(second.header());
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
         state_block.maybe_apply_nexus_autoscale(&committed_second);
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits runtime cleanup");
@@ -55297,14 +55325,14 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
 
         let mut state_block = state.block(second.header());
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
         state_block.maybe_apply_nexus_autoscale(&committed_second);
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits validator cleanup");
@@ -55379,14 +55407,14 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
 
         let mut state_block = state.block(second.header());
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
         state_block.maybe_apply_nexus_autoscale(&committed_second);
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits embedded validator cleanup");
@@ -55457,8 +55485,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
 
         let mut state_block = state.block(second.header());
         let committed_second = ValidBlock::new_unverified_for_tests(second)
@@ -55515,6 +55542,7 @@ mod tests {
             "autoscale scale-in must preserve default-lane reward claim cursors"
         );
 
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits public-lane economic cleanup");
@@ -55575,8 +55603,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
 
         let mut state_block = state.block(second.header());
         let committed_second = ValidBlock::new_unverified_for_tests(second)
@@ -55625,6 +55652,7 @@ mod tests {
             "autoscale scale-in must preserve unrelated rewards on the surviving lane"
         );
 
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits embedded public-lane economic cleanup");
@@ -55779,8 +55807,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
 
         let mut state_block = state.block(second.header());
         let committed_second = ValidBlock::new_unverified_for_tests(second)
@@ -55805,6 +55832,7 @@ mod tests {
             Some(preserved_policy),
             "explicit AXT policy targeting a surviving lane should be preserved without directory data"
         );
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits AXT cleanup");
@@ -55881,8 +55909,7 @@ mod tests {
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-        kura.store_block(Arc::new(first))
-            .expect("store previous autoscale block");
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
 
         let mut state_block = state.block(second.header());
         let committed_second = ValidBlock::new_unverified_for_tests(second)
@@ -55906,6 +55933,7 @@ mod tests {
                 .is_some(),
             "replay entries keyed by surviving lanes must remain"
         );
+        insert_empty_transaction_block_for_test(&mut state_block);
         state_block
             .commit()
             .expect("autoscale scale-in block scope commits replay-ledger cleanup");
@@ -64649,7 +64677,7 @@ mod tests {
                 (recreated_lane_id, DataSpaceId::UNIVERSAL, validator_ids),
             ],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
         let old_envelope =
             sample_lane_relay_envelope_for_state(&state, 2, recreated_lane_id, &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
@@ -64853,7 +64881,7 @@ mod tests {
                 (recreated_lane_id, DataSpaceId::UNIVERSAL, validator_ids),
             ],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
         let old_envelope =
             sample_lane_relay_envelope_for_state(&state, 2, recreated_lane_id, &validator_keypairs)
                 .with_manifest_root(Some([0x84; 32]));
@@ -67544,7 +67572,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        set_commit_topology_from_keypairs(&state, &validator_keypairs);
         (state, validator_keypairs)
     }
 
@@ -67640,7 +67668,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -67678,7 +67706,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -67706,7 +67734,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs);
@@ -67734,7 +67762,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs);
@@ -67804,7 +67832,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs);
@@ -67842,7 +67870,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
@@ -67958,7 +67986,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
@@ -68681,7 +68709,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 3, LaneId::new(0), &validator_keypairs);
@@ -68708,7 +68736,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         state
             .record_lane_relay(&sample_lane_relay_envelope_for_state(
@@ -68753,7 +68781,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -68798,7 +68826,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -68831,7 +68859,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope = sample_lane_relay_envelope(1, LaneId::new(0), &signers, signers_bitmap);
         let err = state
@@ -68856,7 +68884,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -68887,7 +68915,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -68940,7 +68968,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let mut envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -68989,7 +69017,7 @@ mod tests {
     }
 
     #[test]
-    fn record_lane_relay_rejects_unknown_dataspace_catalog_entry() {
+    fn record_lane_relay_rejects_lane_with_missing_dataspace_catalog_entry() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
@@ -69009,10 +69037,9 @@ mod tests {
 
         assert!(matches!(
             err,
-            LaneRelayError::UnknownDataspace(dataspace_id)
-                if dataspace_id == DataSpaceId::UNIVERSAL
+            LaneRelayError::UnknownLane(lane_id) if lane_id == LaneId::SINGLE
         ));
-        assert_eq!(err.as_label(), "unknown_dataspace");
+        assert_eq!(err.as_label(), "unknown_lane");
         assert!(state.lane_relay_snapshot().is_empty());
     }
 
@@ -71969,7 +71996,7 @@ mod tests {
                 validator_ids.clone(),
             )],
         );
-        let keypairs = configure_commit_topology(&state, 1);
+        let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
 
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -72045,7 +72072,7 @@ mod tests {
                 ),
             ],
         );
-        let keypairs = configure_commit_topology(&state, 1);
+        let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
 
         let lane0 =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -72165,7 +72192,7 @@ mod tests {
                 (LaneId::new(1), DataSpaceId::UNIVERSAL, validator_ids),
             ],
         );
-        configure_commit_topology(&state, 1);
+        configure_commit_topology_preserving_world_peers(&state, 1);
 
         let lane0 = sample_lane_relay_envelope_for_state_with_view(
             &state,
@@ -72235,7 +72262,7 @@ mod tests {
                 ),
             ],
         );
-        let keypairs = configure_commit_topology(&state, 1);
+        let keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
 
         let lane0_h1 =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
@@ -74575,7 +74602,7 @@ mod tests {
     fn missing_insert_block_does_not_hydrate_staged_verified_lane_relays() {
         let (state, validator_keypairs) = setup_lane_relay_burn_state();
         let envelope =
-            sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validator_keypairs)
+            sample_lane_relay_envelope_for_state(&state, 2, LaneId::SINGLE, &validator_keypairs)
                 .with_manifest_root(Some([0x44; 32]));
         let record = sample_verified_lane_relay_record(&envelope);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -84178,6 +84205,15 @@ mod tests {
         candidate.into_entry(merge_qc)
     }
 
+    fn set_commit_topology_from_keypairs(state: &State, keypairs: &[KeyPair]) {
+        let mut topo = state.commit_topology.block();
+        topo.clear();
+        for keypair in keypairs {
+            topo.push(PeerId::new(keypair.public_key().clone()));
+        }
+        topo.commit();
+    }
+
     fn configure_commit_topology(state: &State, count: usize) -> Vec<KeyPair> {
         let mut peers = Vec::with_capacity(count);
         let mut keypairs = Vec::with_capacity(count);
@@ -84205,6 +84241,20 @@ mod tests {
             peers.apply();
         }
         world_block.commit();
+        seed_consensus_keys_with_pops(state, &keypairs);
+        keypairs
+    }
+
+    fn configure_commit_topology_preserving_world_peers(
+        state: &State,
+        count: usize,
+    ) -> Vec<KeyPair> {
+        let keypairs: Vec<_> = (0..count)
+            .map(|_| {
+                crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+            })
+            .collect();
+        set_commit_topology_from_keypairs(state, &keypairs);
         seed_consensus_keys_with_pops(state, &keypairs);
         keypairs
     }
@@ -84255,7 +84305,7 @@ mod tests {
             })
             .collect();
         install_lane_manifest_registry(state, &registry_entries);
-        let commit_keypairs = configure_commit_topology(state, 1);
+        let commit_keypairs = configure_commit_topology_preserving_world_peers(state, 1);
 
         for idx in 0..lane_count {
             let envelope = sample_lane_relay_envelope_for_state(
@@ -85046,7 +85096,7 @@ mod tests {
             &state,
             &[(LaneId::new(0), DataSpaceId::UNIVERSAL, validator_ids)],
         );
-        let commit_keypairs = configure_commit_topology(&state, 1);
+        let commit_keypairs = configure_commit_topology_preserving_world_peers(&state, 1);
         let envelope =
             sample_lane_relay_envelope_for_state(&state, 1, LaneId::new(0), &validator_keypairs);
         let mut settlement = envelope.settlement_commitment.clone();

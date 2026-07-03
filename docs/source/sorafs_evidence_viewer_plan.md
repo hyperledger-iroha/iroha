@@ -54,8 +54,12 @@ missing viewer service.
   positive control claim explicitly, forces raw evidence/session-token/signed
   URL/watermark-secret/body flags to `false`, requires reviewed
   `--viewer-session` labels whose unique inventory matches `--session-count`,
-  validates the generated JSON with
-  the same SFM-4b checker contract before writing, and writes atomically. It
+  emits `role_count`, `security_control_count`, `access_event_kind_count`, and
+  `export_target_count` from the reviewed role/control/event/export inventories
+  before checker prevalidation, rejects duplicate or unknown `--verified-claim`,
+  `--role`, `--security-control`, `--access-event-kind`, and `--export-target`
+  inputs before any canary JSON is written, validates the generated JSON with the
+  same SFM-4b checker contract before writing, and writes atomically. It
   helps operators prepare reviewable canary evidence, but it still does not
   replace the browser viewer, streaming backend, watermark engine, WebAuthn
   session flow, or access-log service.

@@ -26,7 +26,10 @@ from check_sorafs_por_rollout_evidence import (  # noqa: E402
     DEFAULT_MAX_SCHEDULER_LAG_SECS,
     DEFAULT_MIN_CHALLENGES,
     DEFAULT_MIN_PROVIDERS,
+    FORBIDDEN_PROVIDER_LABEL_MARKERS,
     KIND_BY_NAME,
+    PROVIDER_LABEL_ERROR,
+    PROVIDER_LABEL_PATTERN,
     REQUIRED_METRICS,
     REQUIRED_REPORTING_ROUTES,
     REQUIRED_RUNTIME_ROUTES,
@@ -39,6 +42,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -105,6 +110,8 @@ def validate_reviewed_inventory(
         errors.append(f"{option} is required for randomness")
     for index, item in enumerate(items):
         validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+        if option == "--provider":
+            validate_provider_label_arg(item, option=option, errors=errors)
     unique_items = set(items)
     if len(unique_items) != len(items):
         errors.append(f"{option} must not contain duplicates")
@@ -154,6 +161,28 @@ def validate_canonical_string(value: str | None, *, label: str, errors: list[str
         or any(ord(character) < 32 or ord(character) == 127 for character in value)
     ):
         errors.append(f"{label} must be a non-empty canonical string")
+
+
+def validate_provider_label_arg(
+    value: str | None,
+    *,
+    option: str,
+    errors: list[str],
+) -> None:
+    """Require a reviewed lowercase production provider inventory label."""
+
+    if not isinstance(value, str):
+        return
+    if PROVIDER_LABEL_PATTERN.fullmatch(value) is None:
+        errors.append(PROVIDER_LABEL_ERROR.replace("providers[].name", option))
+        return
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_PROVIDER_LABEL_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{option} must not contain non-production markers {forbidden}")
 
 
 def require_kind_options(
@@ -292,6 +321,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "ingest_backlog_alert_tested": True,
                 "critical_alerts_firing": False,
                 "metrics": args.metrics,
+                "metric_count": len(args.metrics),
                 "seed_replay_digest_hex": args.seed_replay_digest_hex,
                 "response_bodies_included": False,
             }
@@ -469,12 +499,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:

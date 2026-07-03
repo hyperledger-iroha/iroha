@@ -13,8 +13,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, List
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from sorafs_checker_preflight import fsync_checker_output_parent
 
 FIXTURE_NAME = "multi_peer_parity_v1"
 FIXTURE_NOW_UNIX_SECS = 1_725_000_000
@@ -229,9 +236,15 @@ def write_json(path: Path, payload: Any) -> None:
     try:
         fd = os.open(path, write_open_flags(), 0o666)
         write_all(fd, rendered)
+        os.fsync(fd)
     finally:
         if fd >= 0:
             os.close(fd)
+    parent_sync_errors = fsync_checker_output_parent(
+        path, label="orchestrator fixture output"
+    )
+    if parent_sync_errors:
+        raise ValueError(parent_sync_errors[0])
 
 
 def main() -> None:

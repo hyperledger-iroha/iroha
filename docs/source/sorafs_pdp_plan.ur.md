@@ -4,9 +4,10 @@ direction: rtl
 source: docs/source/sorafs_pdp_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: fb4f60fe5ae278b9207530f4b3f7e01aae3619bfe267ff97d4c8af98a21e338d
-source_last_modified: "2026-07-02T08:01:52.733347+00:00"
-translation_last_reviewed: 2026-07-02
+source_hash: 5927c163d62714dfb922b1c80b843e321005bd240dc3cf6723553758e7754f77
+source_last_modified: "2026-07-03T13:09:01.361553+00:00"
+translation_last_reviewed: 2026-07-03
+source_mtime: 2026-07-03T13:09:01.361553+00:00
 ---
 
 # Sora-PDP Hot Storage Proofs
@@ -48,11 +49,22 @@ Implemented locally:
   its `policy_digest_hex` and `provider_roster_digest_hex` to the matching
   valid proof-generation digests. Provider-transport artifacts also bind
   `route_count` to the unique canonical `routes[].name` inventory and reject
-  duplicate route entries before promotion can report ready. Proof-generation
-  artifacts also bind `provider_count`, `challenge_count`, and `proof_count` to
-  the unique canonical `providers[].name`, `challenges[].name`, and
-  `proofs[].name` inventories and reject duplicate provider, challenge, or
-  proof entries before promotion can report ready.
+  duplicate or unknown route entries before promotion can report ready.
+  Proof-generation artifacts also bind `provider_count`, `challenge_count`, and
+  `proof_count` to the unique canonical `providers[].name`, `challenges[].name`,
+  and `proofs[].name` inventories and reject duplicate provider, challenge, or
+  proof entries before promotion can report ready. Provider inventory labels
+  must use reviewed lowercase `provider-*` IDs without non-production markers,
+  challenge inventory labels must use reviewed lowercase `pdp-challenge-*`
+  labels without non-production markers, and proof inventory labels must use
+  reviewed lowercase `pdp-proof-*` labels without non-production markers.
+  Observability artifacts also bind `metric_count` to the unique canonical
+  `metrics` inventory, require the reviewed PDP metric set, and reject duplicate
+  or unknown metric labels before promotion can report ready.
+  The summary exports the sorted reviewed `metrics` inventory plus
+  `metric_count_values`, and the aggregate production-readiness gate requires
+  those fields to match the observability artifact fingerprint before final
+  promotion can report ready.
   Proof-summary mismatches are recorded on the offending artifact in the JSON
   summary before required-kind validity is reported. Policy and provider-roster
   mismatches are recorded on the offending governance approval artifact through
@@ -69,9 +81,12 @@ Implemented locally:
   canary artifacts for provider transport, proof generation, validator replay,
   governance/repair, observability, and governance approval evidence. The
   builder requires reviewed deployment context, complete PDP route and metric
-  coverage where applicable, proof-summary digest bindings, provider/challenge/
-  proof minimum counts, reviewed provider/challenge/proof names whose unique
-  inventories match their scalar counts, route/proof latency thresholds,
+  coverage where applicable, rejects duplicate or unknown route and metric
+  inputs before writing, proof-summary digest bindings, provider/challenge/
+  proof minimum counts, reviewed `provider-*` provider names plus reviewed
+  `pdp-challenge-*` challenge names and `pdp-proof-*` proof names whose unique
+  inventories match their scalar counts, rejects duplicate or non-production
+  provider/challenge/proof names before writing, route/proof latency thresholds,
   config-backed governance metadata, and reviewed policy and provider-roster
   digest input for proof-generation and governance-approval canaries, then
   validates every generated artifact through

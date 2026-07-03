@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import sys
 from collections.abc import Iterable, Sequence
@@ -18,14 +19,23 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_hedging_rollout_evidence import (  # noqa: E402
+    CYCLE_ID_ERROR,
+    CYCLE_ID_PATTERN,
     DEFAULT_MAX_CYCLE_AGE_SECS,
     DEFAULT_MAX_DIVERGENCE_BPS,
     DEFAULT_MAX_FEED_LAG_SECS,
     DEFAULT_MIN_BILLING_CYCLES,
+    FORBIDDEN_CYCLE_ID_MARKERS,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
     KIND_BY_NAME,
+    LINE_ITEM_LABEL_ERROR,
+    LINE_ITEM_LABEL_PATTERN,
     REQUIRED_METRICS,
+    REQUIRED_PRICE_FEEDS,
     REQUIRED_PUBLICATION_ROUTES,
     REQUIRED_RECONCILIATION_SOURCES,
+    STATEMENT_LABEL_ERROR,
+    STATEMENT_LABEL_PATTERN,
     ValidationOptions,
     validate_evidence_payload,
 )
@@ -33,6 +43,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -133,6 +145,15 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def render_inventory_label_error(label_error: str, *, option: str) -> str:
+    """Render checker inventory label diagnostics as CLI option diagnostics."""
+
+    return (
+        label_error.replace("statements[].name", option)
+        .replace("line_items[].name", option)
+    )
+
+
 def validate_reviewed_inventory(
     values: Iterable[str],
     *,
@@ -141,6 +162,8 @@ def validate_reviewed_inventory(
     kind: str,
     count_option: str,
     errors: list[str],
+    pattern: re.Pattern[str] | None = None,
+    label_error: str | None = None,
 ) -> list[str]:
     """Return reviewed unique inventory labels whose count matches a CLI count."""
 
@@ -149,12 +172,47 @@ def validate_reviewed_inventory(
         errors.append(f"{option} is required for {kind}")
     for index, item in enumerate(items):
         validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+        if pattern is None or not isinstance(item, str):
+            continue
+        if pattern.fullmatch(item) is None:
+            errors.append(
+                render_inventory_label_error(
+                    label_error or f"{option} must use the expected label family",
+                    option=option,
+                )
+            )
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in item.split("-")
+        )
+        if forbidden:
+            errors.append(
+                f"{option}[{index}] must not contain non-production markers {forbidden}"
+            )
     unique_items = set(items)
     if len(unique_items) != len(items):
         errors.append(f"{option} must not contain duplicates")
     if len(unique_items) != expected_count:
         errors.append(f"{option} unique values must match {count_option}")
     return items
+
+
+def validate_price_feed_names(args: argparse.Namespace, errors: list[str]) -> None:
+    """Validate reviewed price feed names and bind the count cross-check."""
+
+    feed_names = validate_name_set(
+        split_csv_values(args.feed),
+        allowed=REQUIRED_PRICE_FEEDS,
+        option="--feed",
+        errors=errors,
+    )
+    if args.feed_count is not None and len(feed_names) != args.feed_count:
+        errors.append(
+            "--feed-count must match the number of required unique --feed values"
+        )
+    args.feeds = feed_names
 
 
 def validate_output_path(path: Path, errors: list[str]) -> None:
@@ -198,6 +256,22 @@ def validate_canonical_string(value: str | None, *, label: str, errors: list[str
         or any(ord(character) < 32 or ord(character) == 127 for character in value)
     ):
         errors.append(f"{label} must be a non-empty canonical string")
+
+
+def validate_cycle_id_arg(value: str | None, *, errors: list[str]) -> None:
+    """Require a reviewed lowercase billing cycle identifier."""
+
+    validate_canonical_string(value, label="--cycle-id", errors=errors)
+    if not isinstance(value, str):
+        return
+    if CYCLE_ID_PATTERN.fullmatch(value) is None:
+        errors.append(CYCLE_ID_ERROR.replace("cycle_id", "--cycle-id"))
+        return
+    forbidden = sorted(
+        marker for marker in FORBIDDEN_CYCLE_ID_MARKERS if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"--cycle-id must not contain non-production markers {forbidden}")
 
 
 def parse_artifacts(values: Sequence[str], errors: list[str]) -> list[dict[str, str]]:
@@ -336,6 +410,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "route_count": len(routes),
                 "passed_route_count": len(routes),
                 "acknowledgement_probe_count": args.acknowledgement_probe_count,
+                "acknowledgement_probes": args.acknowledgement_probes,
                 "routes": routes,
             }
         )
@@ -352,7 +427,12 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     elif args.kind == "metrics_alerts":
-        payload["metrics"] = args.metrics
+        payload.update(
+            {
+                "metrics": args.metrics,
+                "metric_count": len(args.metrics),
+            }
+        )
     elif args.kind == "native_bridge_release":
         payload.update(
             {
@@ -410,14 +490,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--feed-lag-seconds", args.feed_lag_seconds),
             ),
         )
-        args.feeds = validate_reviewed_inventory(
-            split_csv_values(args.feed),
-            expected_count=args.feed_count or 0,
-            option="--feed",
-            kind="feed_collector",
-            count_option="--feed-count",
-            errors=errors,
-        )
+        validate_price_feed_names(args, errors)
     elif args.kind == "reference_price":
         require_kind_options(
             args,
@@ -431,14 +504,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             ),
         )
         validate_hex64(args.decision_id_hex, option="--decision-id-hex", errors=errors)
-        args.feeds = validate_reviewed_inventory(
-            split_csv_values(args.feed),
-            expected_count=args.feed_count or 0,
-            option="--feed",
-            kind="reference_price",
-            count_option="--feed-count",
-            errors=errors,
-        )
+        validate_price_feed_names(args, errors)
     elif args.kind == "billing_cycle":
         require_kind_options(
             args,
@@ -453,7 +519,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--line-item-root-hex", args.line_item_root_hex),
             ),
         )
-        validate_canonical_string(args.cycle_id, label="--cycle-id", errors=errors)
+        validate_cycle_id_arg(args.cycle_id, errors=errors)
         validate_hex64(
             args.reference_decision_id_hex,
             option="--reference-decision-id-hex",
@@ -472,6 +538,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="billing_cycle",
             count_option="--statement-digest-hex",
             errors=errors,
+            pattern=STATEMENT_LABEL_PATTERN,
+            label_error=STATEMENT_LABEL_ERROR,
         )
         args.line_items = validate_reviewed_inventory(
             split_csv_values(args.line_item),
@@ -480,12 +548,22 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="billing_cycle",
             count_option="--line-item-count",
             errors=errors,
+            pattern=LINE_ITEM_LABEL_PATTERN,
+            label_error=LINE_ITEM_LABEL_ERROR,
         )
     elif args.kind == "statement_publication":
         require_kind_options(
             args,
             errors,
             (("--acknowledgement-probe-count", args.acknowledgement_probe_count),),
+        )
+        args.acknowledgement_probes = validate_reviewed_inventory(
+            split_csv_values(args.acknowledgement_probe),
+            expected_count=args.acknowledgement_probe_count or 0,
+            option="--acknowledgement-probe",
+            kind="statement_publication",
+            count_option="--acknowledgement-probe-count",
+            errors=errors,
         )
         args.routes = validate_name_set(
             split_csv_values(args.route),
@@ -512,6 +590,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="reconciliation",
             count_option="--line-item-count",
             errors=errors,
+            pattern=LINE_ITEM_LABEL_PATTERN,
+            label_error=LINE_ITEM_LABEL_ERROR,
         )
     elif args.kind == "metrics_alerts":
         args.metrics = validate_name_set(
@@ -595,12 +675,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:
@@ -648,6 +730,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--statement-digest-hex", action="append", default=[])
     parser.add_argument("--statement", action="append", default=[])
     parser.add_argument("--acknowledgement-probe-count", type=positive_int_arg)
+    parser.add_argument("--acknowledgement-probe", action="append", default=[])
     parser.add_argument("--route", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
     parser.add_argument("--source", action="append", default=[])

@@ -35,9 +35,12 @@ summary: Implemented SF-14 timed-retrieval receipt capture, validation, and repl
 > replay, reputation integration, observability, and governance approval
 > evidence. The builder requires reviewed deployment context, complete
 > hot/warm tier, proof-stream route, and metric coverage where applicable,
+> rejects duplicate or unknown tier, route, and metric inputs before writing,
+> derived `tier_count` for the reviewed hot/warm tier inventory,
 > proof-stream `route_count` binding to the unique canonical `routes[].name`
-> inventory, duplicate route rejection, receipt-summary digest bindings,
-> provider and receipt minimum counts,
+> inventory, duplicate or unknown route rejection, receipt-summary digest bindings,
+> provider and receipt minimum counts, reviewed lowercase `provider-*` provider
+> labels without non-production markers,
 > route and hot/warm latency threshold facts, governed PQ key-roster and
 > reputation-weight policy digest bindings, config-backed governance metadata,
 > reviewed governance policy digests surfaced as `valid_policy_digests`,
@@ -167,16 +170,29 @@ reviewed `policy_digest_hex` values as `valid_policy_digests` for the aggregate
 production-readiness gate. Receipt summary, PQ key-roster, and reputation-weight
 policy binding failures are recorded on the offending artifact before
 required-kind validity is computed, so the JSON summary matches the fail-closed
-process result. Multi-provider probes bind `provider_count` to the unique
-canonical `providers[].name` inventory and `receipt_count` to the unique
-canonical `receipts[].name` inventory, rejecting duplicate provider or receipt
-labels before promotion. The proof-stream gate applies the same
-proof-stream `route_count` binding to the unique canonical `routes[].name`
-inventory, duplicate route rejection, and per-route status/latency/Norito
-checks. The collection planner exposes those exact required payload fields
-through `--dry-run` and validates the schema-closed collection plan, required
-kinds, thresholds, external evidence map, evidence contract, and command steps
-before contacting live PoTR services. The shared runner plan guard rejects
+process result. Multi-provider probes require `tier_count`, bind it to the
+unique canonical `tiers_observed` inventory, and reject missing, inflated,
+duplicate, or unknown hot/warm tier evidence before promotion. They also bind
+`provider_count` to the unique canonical `providers[].name` inventory and
+`receipt_count` to the unique canonical `receipts[].name` inventory, rejecting
+duplicate provider or receipt labels before promotion. Provider inventory labels
+must use reviewed lowercase `provider-*` IDs without non-production markers, and
+receipt inventory labels must use reviewed lowercase `potr-receipt-*` labels
+without non-production markers. The
+proof-stream gate applies the same proof-stream `route_count` binding to the
+unique canonical `routes[].name` inventory, duplicate or unknown route
+rejection, and per-route
+status/latency/Norito checks. Observability artifacts also bind `metric_count`
+to the unique canonical `metrics` inventory, require the reviewed PoTR metric
+set, and reject duplicate or unknown metric labels before promotion can report
+ready. The summary exports the sorted reviewed `metrics` inventory plus
+`metric_count_values`, and the aggregate production-readiness gate requires
+those fields to match the observability artifact fingerprint before final
+promotion can report ready. The collection planner exposes those exact required
+payload fields through `--dry-run` and validates the schema-closed collection
+plan, required kinds, thresholds, external evidence map, evidence contract, and
+command steps before contacting live PoTR services. The shared runner plan
+guard rejects
 non-canonical nested required-kind, threshold, external-evidence,
 evidence-contract, and command-step shapes before any live PoTR contact.
 

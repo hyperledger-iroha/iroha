@@ -1115,6 +1115,42 @@ def test_summary_input_path_components_must_be_plan_safe(
     assert "private_key" not in captured.err
 
 
+def test_encoded_summary_input_path_components_must_be_plan_safe(
+    tmp_path: Path, capsys
+) -> None:
+    unsafe_summary = write_json(tmp_path / "gateway_%70rivate_key_summary.json")
+
+    exit_code = MODULE.main(
+        [
+            "--out-dir",
+            str(tmp_path / "out"),
+            "--verifier",
+            str(CHECKER_PATH),
+            "--gateway-load-summary",
+            str(unsafe_summary),
+            "--require-gate",
+            "gateway_load",
+            "--deployment-id",
+            "sorafs-mainnet-2026-06",
+            "--environment",
+            "production",
+            "--dry-run",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert (
+        "production readiness runner summary input paths must not contain "
+        "secret-looking, control-character, parent, current, or platform-specific components"
+        in captured.err
+    )
+    assert captured.out == ""
+    assert "gateway_%70rivate_key_summary" not in captured.err
+    assert "%70rivate_key" not in captured.err
+    assert "private_key" not in captured.err
+
+
 def test_plan_rendered_output_path_components_must_be_plan_safe(
     tmp_path: Path, capsys
 ) -> None:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -39,11 +40,13 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
+    hashable_evidence_values,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
+    record_observed_evidence_value,
     validate_bound_evidence_digest_references,
     require_2xx_status,
     require_bool_true,
@@ -87,6 +90,29 @@ DEFAULT_MAX_HEAD_AGE_SECS = 30 * 60
 DEFAULT_MIN_BLOCKS = 4
 DEFAULT_MIN_PAYLOAD_KINDS = 6
 HEX64_LEN = 64
+BLOCK_REF_LABEL_PATTERN = re.compile(
+    r"^governance-dag-block-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+BLOCK_REF_LABEL_ERROR = (
+    "block_refs entries must match canonical lowercase `governance-dag-block-name`"
+)
+FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "local",
+        "mock",
+        "placeholder",
+        "sample",
+        "sandbox",
+        "test",
+        "todo",
+    )
+)
 
 REQUIRED_PAYLOAD_KINDS = (
     "deal-settlement",
@@ -125,6 +151,7 @@ PUBLIC_HEAD_BOUND_KINDS = (
     "governance_approval",
 )
 POLICY_BOUND_KINDS = ("governance_approval",)
+REQUIRED_PAYLOAD_KIND_SET = frozenset(REQUIRED_PAYLOAD_KINDS)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -216,7 +243,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "pin_lag_seconds",
         "head_age_seconds",
         "block_count",
+        "block_refs",
         "payload_kind_count",
+        "payload_kinds",
         "raw_head_included",
         "raw_car_included",
     ),
@@ -263,6 +292,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "ipfs_ipns_metrics_present",
         "critical_alerts_firing",
         "metrics",
+        "metric_count",
         "response_bodies_included",
     ),
     "ipfs_ipns_e2e": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -276,7 +306,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "pinning_outage_tested",
         "publisher_key_failure_tested",
         "block_count",
+        "block_refs",
         "payload_kind_count",
+        "payload_kinds",
         "raw_blocks_included",
     ),
     "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -318,6 +350,8 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "public_head_cid_hex",
     "checkpoint_digest_hex",
     "policy_digest_hex",
+    "metric_count",
+    "metrics",
 )
 
 
@@ -341,6 +375,78 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             require_bool_true(record, field, errors, path=f"routes[{index}].{field}")
 
 
+def require_only_required_payload_kinds(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Reject payload-kind rows outside the reviewed Governance DAG inventory."""
+
+    values = payload.get("payload_kinds")
+    if not isinstance(values, list):
+        return
+    if any(
+        not isinstance(value, str) or value.strip() not in REQUIRED_PAYLOAD_KIND_SET
+        for value in values
+    ):
+        errors.append("payload_kinds must not include unknown values")
+
+
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
+
+
+def require_scalar_inventory_labels(
+    payload: dict[str, Any],
+    field: str,
+    errors: list[str],
+    *,
+    pattern: re.Pattern[str],
+    label_error: str,
+) -> None:
+    """Require reviewed production labels for scalar inventory entries."""
+
+    values = payload.get(field)
+    if not isinstance(values, list):
+        return
+    for index, value in enumerate(values):
+        if not isinstance(value, str):
+            continue
+        if pattern.fullmatch(value) is None:
+            errors.append(label_error)
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in value.split("-")
+        )
+        if forbidden:
+            errors.append(
+                f"{field}[{index}] must not contain non-production markers "
+                f"{forbidden}"
+            )
+
+
 def validate_ingest_service(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "daemonized", errors)
     require_bool_true(payload, "payload_validation_enabled", errors)
@@ -349,6 +455,7 @@ def validate_ingest_service(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "quarantine_invalid_blocks", errors)
     require_positive_int(payload, "source_count", errors)
     require_string_coverage(payload, "payload_kinds", "", REQUIRED_PAYLOAD_KINDS, errors)
+    require_only_required_payload_kinds(payload, errors)
     require_string_inventory_count_match(
         payload,
         "payload_kinds",
@@ -374,10 +481,31 @@ def validate_publisher_service(
     require_maximum_number(payload, "pin_lag_seconds", options.max_pin_lag_secs, errors)
     require_maximum_number(payload, "head_age_seconds", options.max_head_age_secs, errors)
     require_minimum_int(payload, "block_count", options.min_blocks, errors)
+    require_string_inventory_count_match(
+        payload,
+        "block_refs",
+        "block_count",
+        errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "block_refs",
+        errors,
+        pattern=BLOCK_REF_LABEL_PATTERN,
+        label_error=BLOCK_REF_LABEL_ERROR,
+    )
     require_minimum_int(
         payload,
         "payload_kind_count",
         options.min_payload_kinds,
+        errors,
+    )
+    require_string_coverage(payload, "payload_kinds", "", REQUIRED_PAYLOAD_KINDS, errors)
+    require_only_required_payload_kinds(payload, errors)
+    require_string_inventory_count_match(
+        payload,
+        "payload_kinds",
+        "payload_kind_count",
         errors,
     )
     require_false(payload, "raw_head_included", errors)
@@ -417,6 +545,7 @@ def validate_dashboard_api(
     require_hex(payload, "public_head_cid_hex", HEX64_LEN, errors)
     require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_string_coverage(payload, "routes", "name", REQUIRED_DASHBOARD_ROUTES, errors)
+    require_only_required_values(payload, "routes", "name", REQUIRED_DASHBOARD_ROUTES, errors)
     require_string_inventory_count_match(
         payload,
         "routes",
@@ -438,6 +567,9 @@ def validate_observability(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "ipfs_ipns_metrics_present", errors)
     require_false(payload, "critical_alerts_firing", errors)
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_positive_int(payload, "metric_count", errors)
+    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
     require_false(payload, "response_bodies_included", errors)
 
 
@@ -455,10 +587,31 @@ def validate_ipfs_ipns_e2e(
     require_bool_true(payload, "pinning_outage_tested", errors)
     require_bool_true(payload, "publisher_key_failure_tested", errors)
     require_minimum_int(payload, "block_count", options.min_blocks, errors)
+    require_string_inventory_count_match(
+        payload,
+        "block_refs",
+        "block_count",
+        errors,
+    )
+    require_scalar_inventory_labels(
+        payload,
+        "block_refs",
+        errors,
+        pattern=BLOCK_REF_LABEL_PATTERN,
+        label_error=BLOCK_REF_LABEL_ERROR,
+    )
     require_minimum_int(
         payload,
         "payload_kind_count",
         options.min_payload_kinds,
+        errors,
+    )
+    require_string_coverage(payload, "payload_kinds", "", REQUIRED_PAYLOAD_KINDS, errors)
+    require_only_required_payload_kinds(payload, errors)
+    require_string_inventory_count_match(
+        payload,
+        "payload_kinds",
+        "payload_kind_count",
         errors,
     )
     require_false(payload, "raw_blocks_included", errors)
@@ -541,6 +694,8 @@ def build_summary(
     valid_policy_digests: set[str] = set()
     policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_checkpoint_digests: set[str] = set()
+    metric_counts: set[int] = set()
+    metric_names: set[str] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -569,6 +724,9 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
+        if kind_name == "observability":
+            record_observed_evidence_value(metric_counts, payload.get("metric_count"))
+            metric_names.update(hashable_evidence_values(payload.get("metrics")))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
@@ -649,6 +807,8 @@ def build_summary(
         "valid_checkpoint_digests": sorted(valid_checkpoint_digests),
         "valid_public_head_cids": sorted(valid_public_head_cids),
         "valid_policy_digests": sorted(valid_policy_digests),
+        "metrics": sorted(metric_names),
+        "metric_count_values": sorted(metric_counts),
         "required": required,
         "errors": errors,
     }

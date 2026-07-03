@@ -235,6 +235,9 @@ async fn sumeragi_status_endpoint_shape() {
     assert!(v.get("block_created_hint_mismatch_total").is_some());
     assert!(v.get("block_created_proposal_mismatch_total").is_some());
     assert!(v.get("pacemaker_backpressure_deferrals_total").is_some());
+    let proposal_gate = v.get("proposal_gate").and_then(|x| x.as_object()).unwrap();
+    assert!(proposal_gate.get("height").is_some());
+    assert!(proposal_gate.get("should_defer").is_some());
     let view_change_causes = v
         .get("view_change_causes")
         .and_then(|x| x.as_object())
@@ -419,6 +422,22 @@ async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
     assert_eq!(
         locked_qc.get("view").and_then(norito::json::Value::as_u64),
         Some(norito_wire.locked_qc_view)
+    );
+    let proposal_gate = json_root
+        .get("proposal_gate")
+        .and_then(norito::json::Value::as_object)
+        .expect("proposal_gate object");
+    assert_eq!(
+        proposal_gate
+            .get("height")
+            .and_then(norito::json::Value::as_u64),
+        Some(norito_wire.proposal_gate.height)
+    );
+    assert_eq!(
+        proposal_gate
+            .get("should_defer")
+            .and_then(norito::json::Value::as_bool),
+        Some(norito_wire.proposal_gate.should_defer)
     );
 
     let json_relay_envelopes = json_root

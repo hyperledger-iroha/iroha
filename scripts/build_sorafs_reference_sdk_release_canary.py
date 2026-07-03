@@ -18,6 +18,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
+    ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS,
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_MAX_SMOKE_DURATION_SECS,
     DEFAULT_MIN_DOWNSTREAM_PACKAGES,
@@ -33,6 +34,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -123,6 +126,17 @@ def validate_canonical_string(value: str | None, *, label: str, errors: list[str
         or any(ord(character) < 32 or ord(character) == 127 for character in value)
     ):
         errors.append(f"{label} must be a non-empty canonical string")
+
+
+def validate_signature_algorithm(value: str | None, *, errors: list[str]) -> None:
+    """Require a governed release manifest signature algorithm label."""
+
+    validate_canonical_string(value, label="--signature-algorithm", errors=errors)
+    if value not in ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS:
+        allowed = " or ".join(
+            f"`{algorithm}`" for algorithm in ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS
+        )
+        errors.append(f"--signature-algorithm must be {allowed}")
 
 
 def require_kind_options(
@@ -263,11 +277,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             option="--public-key-fingerprint-hex",
             errors=errors,
         )
-        validate_canonical_string(
-            args.signature_algorithm,
-            label="--signature-algorithm",
-            errors=errors,
-        )
+        validate_signature_algorithm(args.signature_algorithm, errors=errors)
     elif args.kind in RELEASE_MANIFEST_BOUND_KINDS:
         validate_hex64(
             args.release_manifest_digest_hex,
@@ -377,12 +387,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:

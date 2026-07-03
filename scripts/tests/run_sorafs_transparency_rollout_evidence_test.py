@@ -560,6 +560,57 @@ def test_deployment_context_write_retries_short_os_write(
     assert payload["deployment_context_reviewed"] is True
 
 
+def test_deployment_context_write_fsyncs_descriptor_before_close(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = write_payload(tmp_path / "artifact.json")
+    original_fsync = os.fsync
+    fsynced: list[int] = []
+
+    def fsync(fd: int) -> None:
+        fsynced.append(fd)
+        original_fsync(fd)
+
+    monkeypatch.setattr(MODULE.os, "fsync", fsync)
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == []
+    assert len(fsynced) == 2
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert payload["deployment_context_reviewed"] is True
+
+
+def test_deployment_context_parent_fsync_error_is_sanitized(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = write_payload(tmp_path / "bad\nartifact.json")
+    bad_message = "parent fsync denied\nsecret"
+
+    def fail_parent_sync(_path: Path, *, label: str) -> list[str]:
+        assert label == "deployment-context artifact"
+        return [bad_message]
+
+    monkeypatch.setattr(MODULE, "load_evidence_json", lambda _path, _max_bytes: {})
+    monkeypatch.setattr(MODULE, "fsync_checker_output_parent", fail_parent_sync)
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == ["deployment context cannot be written into generated artifact"]
+    assert str(artifact) not in "\n".join(errors)
+    assert bad_message not in "\n".join(errors)
+
+
 def test_deployment_context_write_error_is_sanitized(
     tmp_path: Path,
     monkeypatch,
@@ -575,6 +626,30 @@ def test_deployment_context_write_error_is_sanitized(
 
     monkeypatch.setattr(MODULE, "load_evidence_json", lambda _path, _max_bytes: {})
     monkeypatch.setattr(MODULE.os, "open", open_raises)
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == ["deployment context cannot be written into generated artifact"]
+    assert str(artifact) not in "\n".join(errors)
+    assert bad_message not in "\n".join(errors)
+
+
+def test_deployment_context_fsync_error_is_sanitized(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = write_payload(tmp_path / "artifact.json")
+    bad_message = "fsync denied\nsecret"
+
+    def fsync(_fd: int) -> None:
+        raise OSError(bad_message)
+
+    monkeypatch.setattr(MODULE, "load_evidence_json", lambda _path, _max_bytes: {})
+    monkeypatch.setattr(MODULE.os, "fsync", fsync)
 
     errors = MODULE.annotate_evidence_artifact(
         artifact,

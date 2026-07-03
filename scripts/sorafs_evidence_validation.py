@@ -8,18 +8,79 @@ from collections.abc import Callable, Collection, Hashable, Mapping, Sequence
 from pathlib import Path
 from string import Formatter
 from typing import Any, TypeVar
+from urllib.parse import unquote
 
 from sorafs_checker_preflight import record_artifact_error
 from sorafs_evidence_fingerprint import artifact_fingerprint
 from sorafs_evidence_paths import is_explicit_evidence_path
 from sorafs_evidence_sensitivity import visit_sensitive_fields
 from sorafs_path_identity import resolve_path_identity
+from sorafs_runner_preflight import runner_url_arg_is_plan_safe
 
 
 _T = TypeVar("_T")
 
 SHA256_HEX_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 UNKNOWN_REQUIRED_EVIDENCE_KIND = "<unknown>"
+EVIDENCE_URL_FIELD_ERROR = (
+    "SoraFS rollout evidence URL fields must not contain userinfo, query strings, "
+    "fragments, control characters, encoded traversal, separators, drive prefixes, "
+    "URI-scheme-like path tokens, or secret-looking host/path components"
+)
+EVIDENCE_PATH_FIELD_ERROR = (
+    "SoraFS rollout evidence path fields must be archive-relative without "
+    "absolute, empty, current, parent, encoded, URI-scheme-like, or "
+    "platform-specific segments"
+)
+
+
+def _decoded_text_variants(value: str) -> tuple[str, ...]:
+    """Return raw plus repeatedly percent-decoded text variants."""
+
+    variants = [value]
+    seen = {value}
+    current = value
+    for _ in range(4):
+        decoded = unquote(current)
+        if decoded == current or decoded in seen:
+            break
+        variants.append(decoded)
+        seen.add(decoded)
+        current = decoded
+    return tuple(variants)
+
+
+def _path_component_has_windows_drive_prefix(component: str) -> bool:
+    """Return whether a path component starts with a Windows drive prefix."""
+
+    return len(component) >= 2 and component[1] == ":" and component[0].isalpha()
+
+
+def _path_component_has_uri_scheme_prefix(component: str) -> bool:
+    """Return whether a path component starts with a URI-like scheme."""
+
+    head, separator, _tail = component.partition(":")
+    if not separator:
+        return False
+    return re.fullmatch(r"[A-Za-z][A-Za-z0-9+.-]*", head) is not None
+
+
+def _archive_path_component_is_portable(component: str) -> bool:
+    """Return whether an archive path component is safe in raw or decoded form."""
+
+    for variant in _decoded_text_variants(component):
+        if (
+            not variant
+            or variant != variant.strip()
+            or variant in {".", ".."}
+            or "/" in variant
+            or "\\" in variant
+            or any(ord(character) < 32 or ord(character) == 127 for character in variant)
+            or _path_component_has_windows_drive_prefix(variant)
+            or _path_component_has_uri_scheme_prefix(variant)
+        ):
+            return False
+    return True
 
 
 def is_archive_portable_artifact_path(label: str) -> bool:
@@ -35,7 +96,7 @@ def is_archive_portable_artifact_path(label: str) -> bool:
         return False
     if len(label) >= 2 and label[1] == ":" and label[0].isalpha():
         return False
-    return all(part and part not in {".", ".."} for part in label.split("/"))
+    return all(_archive_path_component_is_portable(part) for part in label.split("/"))
 
 
 def archive_artifact_path_label(path: Path, evidence_dirs: list[Path]) -> Path:
@@ -313,6 +374,74 @@ def require_string_type(
     if value_label is None:
         return None
     return value_label
+
+
+def require_safe_url(
+    payload: Mapping[str, Any],
+    field: str,
+    errors: list[str],
+    *,
+    path: str | None = None,
+    required: bool = True,
+) -> str:
+    """Return a canonical safe URL field or append a no-leak validation error."""
+
+    if not isinstance(payload, Mapping):
+        errors.append("payload must be an object")
+        return ""
+    field_name = _require_validation_label(
+        field,
+        errors,
+        label_name="validation field",
+    )
+    if field_name is None:
+        return ""
+    if not required and field_name not in payload:
+        return ""
+    if required:
+        value = require_string(payload, field_name, errors)
+    else:
+        value = require_string_type(payload, field_name, errors, path=path) or ""
+    if value and not runner_url_arg_is_plan_safe(value):
+        if EVIDENCE_URL_FIELD_ERROR not in errors:
+            errors.append(EVIDENCE_URL_FIELD_ERROR)
+        return ""
+    return value
+
+
+def require_archive_portable_path(
+    payload: Mapping[str, Any],
+    field: str,
+    errors: list[str],
+    *,
+    path: str | None = None,
+    required: bool = True,
+) -> str:
+    """Return an archive-portable path label or append a no-leak validation error."""
+
+    if not isinstance(payload, Mapping):
+        errors.append("payload must be an object")
+        return ""
+    field_name = _require_validation_label(
+        field,
+        errors,
+        label_name="validation field",
+    )
+    if field_name is None:
+        return ""
+    if not required and field_name not in payload:
+        return ""
+    if required:
+        value = require_string(payload, field_name, errors)
+    else:
+        value = require_string_type(payload, field_name, errors, path=path) or ""
+    if value and not is_archive_portable_artifact_path(value):
+        if path is None:
+            errors.append(f"{field_name}: {EVIDENCE_PATH_FIELD_ERROR}")
+        else:
+            errors.append(f"{path}: {EVIDENCE_PATH_FIELD_ERROR}")
+        return ""
+    return value
 
 
 def require_known_schema(

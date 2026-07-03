@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = SCRIPT_ROOT / "build_sorafs_pop_credentials_canary.py"
@@ -169,6 +171,21 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     return args
 
 
+def assert_rejected_without_artifact(
+    args: list[str],
+    *,
+    kind: str,
+    tmp_path: Path,
+    capsys,
+    expected_error: str,
+) -> None:
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
+    assert not canary_path(tmp_path, kind).exists()
+
+
 def test_builds_payload_free_verifier_service_canary(tmp_path: Path) -> None:
     assert MODULE.main(args_for("verifier_service", tmp_path)) == 0
 
@@ -187,6 +204,8 @@ def test_builds_payload_free_verifier_service_canary(tmp_path: Path) -> None:
         {"name": "invalid-proof-01", "accepted": False},
         {"name": "invalid-proof-02", "accepted": False},
     ]
+    assert payload["route_count"] == len(MODULE.REQUIRED_VERIFIER_ROUTES)
+    assert payload["passed_route_count"] == len(MODULE.REQUIRED_VERIFIER_ROUTES)
     assert [route["name"] for route in payload["routes"]] == list(
         MODULE.REQUIRED_VERIFIER_ROUTES
     )
@@ -269,6 +288,47 @@ def test_response_file_can_build_issuer_bundle_canary(tmp_path: Path) -> None:
     ]
 
 
+def test_issuer_id_rejects_malformed_value_before_write(tmp_path: Path, capsys) -> None:
+    args = args_for("issuer_bundle", tmp_path)
+    issuer_index = args.index("--issuer-id")
+    args[issuer_index + 1] = "pop-issuer-prod-a"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert CHECKER.ISSUER_ID_ERROR.replace("issuer_id", "--issuer-id") in captured.err
+    assert not canary_path(tmp_path, "issuer_bundle").exists()
+
+
+def test_issuer_id_rejects_non_production_marker_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("issuer_bundle", tmp_path)
+    issuer_index = args.index("--issuer-id")
+    args[issuer_index + 1] = "issuer-dev-a"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--issuer-id must not contain non-production markers ['dev']" in captured.err
+    assert not canary_path(tmp_path, "issuer_bundle").exists()
+
+
+def test_issuer_id_accepts_reviewed_future_label(tmp_path: Path) -> None:
+    args = args_for("issuer_bundle", tmp_path)
+    issuer_index = args.index("--issuer-id")
+    args[issuer_index + 1] = "issuer-governance-12"
+
+    assert MODULE.main(args) == 0
+
+    payload = json.loads(canary_path(tmp_path, "issuer_bundle").read_text("utf-8"))
+    assert payload["issuer_id"] == "issuer-governance-12"
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "issuer_bundle"
+    assert errors == []
+
+
 def test_issuer_credential_inventory_must_match_credential_count(
     tmp_path: Path,
     capsys,
@@ -298,6 +358,42 @@ def test_issuer_credential_inventory_must_not_duplicate(
     assert not canary_path(tmp_path, "issuer_bundle").exists()
 
 
+def test_issuer_credential_inventory_must_use_reviewed_labels_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("issuer_bundle", tmp_path)
+    credential_index = args.index("--credential") + 1
+    args[credential_index] = "credential_00"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="issuer_bundle",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--credential must match canonical lowercase `credential-name`",
+    )
+
+
+def test_issuer_credential_inventory_rejects_non_production_markers_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("issuer_bundle", tmp_path)
+    credential_index = args.index("--credential") + 1
+    args[credential_index] = "credential-placeholder"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="issuer_bundle",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--credential must not contain non-production markers ['placeholder']"
+        ),
+    )
+
+
 def test_missing_verified_claim_fails_closed(tmp_path: Path, capsys) -> None:
     args = args_for("issuer_bundle", tmp_path)
     index = args.index("--verified-claim")
@@ -322,6 +418,66 @@ def test_missing_metric_coverage_fails_closed(tmp_path: Path, capsys) -> None:
     assert not canary_path(tmp_path, "metrics_alerts").exists()
 
 
+@pytest.mark.parametrize(
+    ("kind", "option", "duplicate_value", "unknown_value"),
+    (
+        (
+            "issuer_bundle",
+            "--verified-claim",
+            MODULE.TRUE_CLAIMS["issuer_bundle"][0],
+            "unreviewed-pop-claim",
+        ),
+        (
+            "enrollment_portal",
+            "--route",
+            MODULE.REQUIRED_ENROLLMENT_ROUTES[0],
+            "unreviewed-enrollment-route",
+        ),
+        (
+            "verifier_service",
+            "--route",
+            MODULE.REQUIRED_VERIFIER_ROUTES[0],
+            "unreviewed-verifier-route",
+        ),
+        (
+            "metrics_alerts",
+            "--metric",
+            MODULE.REQUIRED_METRICS[0],
+            "unreviewed-pop-metric",
+        ),
+    ),
+)
+def test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write(
+    kind: str,
+    option: str,
+    duplicate_value: str,
+    unknown_value: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    duplicate_args = args_for(kind, tmp_path)
+    duplicate_args.extend([option, duplicate_value])
+    assert_rejected_without_artifact(
+        duplicate_args,
+        kind=kind,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=f"{option} must not contain duplicates",
+    )
+
+    unknown_dir = tmp_path / "unknown"
+    unknown_dir.mkdir()
+    unknown_args = args_for(kind, unknown_dir)
+    unknown_args.extend([option, unknown_value])
+    assert_rejected_without_artifact(
+        unknown_args,
+        kind=kind,
+        tmp_path=unknown_dir,
+        capsys=capsys,
+        expected_error=f"{option} contains an unknown value",
+    )
+
+
 def test_verifier_service_requires_policy_digest(tmp_path: Path, capsys) -> None:
     args = args_for("verifier_service", tmp_path)
     index = args.index("--policy-digest-hex")
@@ -331,6 +487,20 @@ def test_verifier_service_requires_policy_digest(tmp_path: Path, capsys) -> None
 
     captured = capsys.readouterr()
     assert "--policy-digest-hex is required for verifier_service" in captured.err
+    assert not canary_path(tmp_path, "verifier_service").exists()
+
+
+def test_verifier_route_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("verifier_service", tmp_path)
+    args.extend(["--route", MODULE.REQUIRED_VERIFIER_ROUTES[0]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route must not contain duplicates" in captured.err
     assert not canary_path(tmp_path, "verifier_service").exists()
 
 
@@ -364,6 +534,54 @@ def test_verifier_rejected_probe_inventory_must_not_duplicate(
 
     captured = capsys.readouterr()
     assert "--rejected-proof-probe must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "verifier_service").exists()
+
+
+def test_verifier_probe_inventory_must_use_partitioned_labels_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("verifier_service", tmp_path)
+    accepted_index = args.index("--accepted-proof-probe") + 1
+    rejected_index = args.index("--rejected-proof-probe") + 1
+    args[accepted_index] = "invalid-proof-on-accepted-side"
+    args[rejected_index] = "valid-proof-on-rejected-side"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--accepted-proof-probe must match canonical lowercase `valid-proof-name`"
+        in captured.err
+    )
+    assert (
+        "--rejected-proof-probe must match canonical lowercase `invalid-proof-name`"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "verifier_service").exists()
+
+
+def test_verifier_probe_inventory_rejects_non_production_markers_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("verifier_service", tmp_path)
+    accepted_index = args.index("--accepted-proof-probe") + 1
+    rejected_index = args.index("--rejected-proof-probe") + 1
+    args[accepted_index] = "valid-proof-placeholder"
+    args[rejected_index] = "invalid-proof-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--accepted-proof-probe must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
+    assert (
+        "--rejected-proof-probe must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
     assert not canary_path(tmp_path, "verifier_service").exists()
 
 
@@ -402,6 +620,45 @@ def test_moderation_sortition_probe_inventory_must_match_count(
     assert not canary_path(tmp_path, "moderation_integration").exists()
 
 
+def test_moderation_sortition_probe_must_use_reviewed_label_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("moderation_integration", tmp_path)
+    probe_index = args.index("--sortition-probe") + 1
+    args[probe_index] = "sortition_probe_00"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="moderation_integration",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--sortition-probe must match canonical lowercase "
+            "`sortition-probe-name`"
+        ),
+    )
+
+
+def test_moderation_sortition_probe_rejects_non_production_markers_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("moderation_integration", tmp_path)
+    probe_index = args.index("--sortition-probe") + 1
+    args[probe_index] = "sortition-probe-placeholder"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="moderation_integration",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--sortition-probe must not contain non-production markers ['placeholder']"
+        ),
+    )
+
+
 def test_moderation_commit_reveal_probe_inventory_must_not_duplicate(
     tmp_path: Path,
     capsys,
@@ -415,6 +672,46 @@ def test_moderation_commit_reveal_probe_inventory_must_not_duplicate(
     captured = capsys.readouterr()
     assert "--commit-reveal-probe must not contain duplicates" in captured.err
     assert not canary_path(tmp_path, "moderation_integration").exists()
+
+
+def test_moderation_commit_reveal_probe_must_use_reviewed_label_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("moderation_integration", tmp_path)
+    probe_index = args.index("--commit-reveal-probe") + 1
+    args[probe_index] = "commit_reveal_probe_00"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="moderation_integration",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--commit-reveal-probe must match canonical lowercase "
+            "`commit-reveal-probe-name`"
+        ),
+    )
+
+
+def test_moderation_commit_reveal_probe_rejects_non_production_markers_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("moderation_integration", tmp_path)
+    probe_index = args.index("--commit-reveal-probe") + 1
+    args[probe_index] = "commit-reveal-probe-placeholder"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="moderation_integration",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--commit-reveal-probe must not contain non-production markers "
+            "['placeholder']"
+        ),
+    )
 
 
 def test_transcript_digest_privacy_backend_fails_before_write(
@@ -454,3 +751,15 @@ def test_output_symlink_is_rejected(tmp_path: Path, capsys) -> None:
     assert "--out" in captured.err
     assert "must not be a symlink" in captured.err
     assert not target.exists()
+
+
+def test_output_directory_is_rejected(tmp_path: Path, capsys) -> None:
+    output_dir = canary_path(tmp_path, "issuer_bundle")
+    output_dir.mkdir()
+
+    assert MODULE.main(args_for("issuer_bundle", tmp_path)) == 2
+
+    captured = capsys.readouterr()
+    assert "--out" in captured.err
+    assert "must not be a directory" in captured.err
+    assert output_dir.is_dir()

@@ -17226,6 +17226,67 @@ mod torii_routed_read_tests {
         (inactive_lane, inactive_dataspace)
     }
 
+    pub(super) fn configure_future_created_autoscale_route_for_test(
+        app: &mut SharedAppState,
+    ) -> (LaneId, DataSpaceId) {
+        let future_lane = LaneId::new(1);
+        let future_dataspace = DataSpaceId::UNIVERSAL;
+        let mut lane = iroha_data_model::nexus::LaneConfig {
+            id: future_lane,
+            dataspace_id: future_dataspace,
+            alias: "elastic-lane-1".to_owned(),
+            visibility: iroha_data_model::nexus::LaneVisibility::Public,
+            ..iroha_data_model::nexus::LaneConfig::default()
+        };
+        lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_MANAGED.to_owned(),
+            "true".to_owned(),
+        );
+        lane.metadata.insert(
+            iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+            "7".to_owned(),
+        );
+        assert!(
+            lane.is_autoscale_managed_elastic(),
+            "fixture must be a valid-looking autoscale elastic lane"
+        );
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![iroha_data_model::nexus::LaneConfig::default(), lane],
+        )
+        .expect("future-created lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        nexus.autoscale.enabled = true;
+        nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
+        nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+
+        let app_state = Arc::get_mut(app).expect("unique app state");
+        let state = Arc::get_mut(&mut app_state.state).expect("unique state");
+        {
+            let mut current = state.nexus.write();
+            *current = nexus;
+        }
+        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+            NonZeroU64::new(1).expect("nonzero authority height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        assert!(
+            !state.is_lane_active_for_authority(future_lane),
+            "future-created autoscale fixture must be inactive before creation height"
+        );
+        (future_lane, future_dataspace)
+    }
+
     #[test]
     fn torii_route_resolution_rejects_inactive_autoscale_range_lane() {
         let authority = routed_read_test_account(0x7c);
@@ -59318,6 +59379,19 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
     #[tokio::test]
+    async fn incoming_read_proxy_rejects_future_created_autoscale_lane_hint() {
+        let mut app = mk_app_state_for_tests();
+        let (future_lane, future_dataspace) =
+            torii_routed_read_tests::configure_future_created_autoscale_route_for_test(&mut app);
+        let route = RoutingDecision::new(future_lane, future_dataspace);
+
+        let response = incoming_read_proxy_response_for_route(app, route).await;
+
+        assert_incoming_proxy_stale_route_rejection(&response, route);
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
     async fn incoming_verified_query_proxy_rejects_retired_lane_hint() {
         let app = mk_app_state_for_tests();
         let route = RoutingDecision::new(LaneId::new(43), DataSpaceId::UNIVERSAL);
@@ -59348,6 +59422,19 @@ pub(crate) mod tests_runtime_handlers {
                 &mut app,
             );
         let route = RoutingDecision::new(inactive_lane, inactive_dataspace);
+
+        let response = incoming_verified_query_proxy_response_for_route(app, route).await;
+
+        assert_incoming_proxy_stale_route_rejection(&response, route);
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
+    async fn incoming_verified_query_proxy_rejects_future_created_autoscale_lane_hint() {
+        let mut app = mk_app_state_for_tests();
+        let (future_lane, future_dataspace) =
+            torii_routed_read_tests::configure_future_created_autoscale_route_for_test(&mut app);
+        let route = RoutingDecision::new(future_lane, future_dataspace);
 
         let response = incoming_verified_query_proxy_response_for_route(app, route).await;
 
@@ -59458,6 +59545,100 @@ pub(crate) mod tests_runtime_handlers {
                 .peers
                 .iter()
                 .any(|candidate| candidate.peer_id() == &fallback_peer_id)
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn torii_proxy_candidate_peers_reject_future_created_autoscale_manifest_authority() {
+        let local_keypair = checked_torii_test_ed25519_keypair(
+            0x61,
+            "derive future-created candidate local fixture key",
+        );
+        let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
+            0x62,
+            "derive future-created candidate manifest validator fixture key",
+        );
+        let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
+            0x63,
+            Algorithm::BlsNormal,
+            "derive future-created candidate manifest peer fixture key",
+        );
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let authoritative_validator =
+            AccountId::new(authoritative_validator_keypair.public_key().clone());
+        let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        let (future_lane, future_dataspace) =
+            torii_routed_read_tests::configure_future_created_autoscale_route_for_test(&mut app);
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            online_tx
+                .send(std::collections::HashSet::from([
+                    Peer::new(
+                        "127.0.0.1:10001".parse().expect("valid local address"),
+                        local_keypair.public_key().clone(),
+                    ),
+                    Peer::new(
+                        "127.0.0.1:10002"
+                            .parse()
+                            .expect("valid authoritative address"),
+                        authoritative_keypair.public_key().clone(),
+                    ),
+                ]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &authoritative_validator,
+                &authoritative_keypair,
+                "authoritative",
+            );
+            {
+                let mut topology = state.commit_topology.block();
+                topology.clear();
+                topology.push(local_peer_id.clone());
+                topology.push(authoritative_peer_id.clone());
+                topology.commit();
+            }
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(
+                    future_lane,
+                    vec![(authoritative_validator, authoritative_peer_id.clone())],
+                )],
+            );
+            assert!(
+                !state.is_lane_active_for_authority(future_lane),
+                "fixture lane should remain inactive after manifest binding setup"
+            );
+        }
+
+        let route = RoutingDecision::new(future_lane, future_dataspace);
+        assert!(
+            super::authoritative_lane_peers(app.as_ref(), route)
+                .authoritative
+                .is_empty(),
+            "future-created autoscale manifest bindings must not become proxy authority early"
+        );
+
+        let candidates =
+            super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
+
+        assert_eq!(candidates.authoritative_count, 0);
+        assert_eq!(candidates.authoritative_total_count, 0);
+        assert_eq!(candidates.offline_authoritative_count, 0);
+        assert_eq!(candidates.bridge_authoritative_count, 0);
+        assert!(candidates.peers.is_empty());
+        assert_eq!(
+            candidates.unavailable_reason,
+            Some(ToriiProxyUnavailableReason::MissingAuthoritativeBinding)
         );
     }
 

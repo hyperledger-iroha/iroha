@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import sys
 from collections.abc import Iterable, Sequence
@@ -18,12 +19,15 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_governance_dag_rollout_evidence import (  # noqa: E402
+    BLOCK_REF_LABEL_ERROR,
+    BLOCK_REF_LABEL_PATTERN,
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_MAX_HEAD_AGE_SECS,
     DEFAULT_MAX_PIN_LAG_SECS,
     DEFAULT_MAX_ROUTE_LATENCY_MS,
     DEFAULT_MIN_BLOCKS,
     DEFAULT_MIN_PAYLOAD_KINDS,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
     KIND_BY_NAME,
     REQUIRED_DASHBOARD_ROUTES,
     REQUIRED_METRICS,
@@ -35,6 +39,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -152,6 +158,53 @@ def validate_name_set(
     if missing:
         errors.append(f"{option} must include every required value")
     return [name for name in allowed if name in value_set]
+
+
+def validate_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    kind: str,
+    count_option: str,
+    errors: list[str],
+    pattern: re.Pattern[str] | None = None,
+    label_error: str | None = None,
+) -> list[str]:
+    """Return reviewed unique inventory labels whose count matches a CLI count."""
+
+    items = list(values)
+    if not items:
+        errors.append(f"{option} is required for {kind}")
+    for index, item in enumerate(items):
+        validate_canonical_string(item, option=f"{option}[{index}]", errors=errors)
+        if pattern is None:
+            continue
+        if pattern.fullmatch(item) is None:
+            if label_error is None:
+                errors.append(f"{option} has malformed inventory label")
+            else:
+                errors.append(render_inventory_label_error(label_error, option))
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in item.split("-")
+        )
+        if forbidden:
+            errors.append(f"{option} must not contain non-production markers {forbidden}")
+    unique_items = set(items)
+    if len(unique_items) != len(items):
+        errors.append(f"{option} must not contain duplicates")
+    if len(unique_items) != expected_count:
+        errors.append(f"{option} unique values must match {count_option}")
+    return items
+
+
+def render_inventory_label_error(label_error: str, option: str) -> str:
+    """Render checker inventory-label diagnostics against a CLI option."""
+
+    return label_error.replace("block_refs entries", option)
 
 
 def validate_output_path(path: Path, errors: list[str]) -> None:
@@ -273,7 +326,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "pin_lag_seconds": args.pin_lag_seconds,
                 "head_age_seconds": args.head_age_seconds,
                 "block_count": args.block_count,
+                "block_refs": args.block_refs,
                 "payload_kind_count": len(args.payload_kinds),
+                "payload_kinds": args.payload_kinds,
             }
         )
     elif args.kind == "mirror_datastore":
@@ -290,12 +345,19 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     elif args.kind == "observability":
-        payload["metrics"] = args.metrics
+        payload.update(
+            {
+                "metrics": args.metrics,
+                "metric_count": len(args.metrics),
+            }
+        )
     elif args.kind == "ipfs_ipns_e2e":
         payload.update(
             {
                 "block_count": args.block_count,
+                "block_refs": args.block_refs,
                 "payload_kind_count": len(args.payload_kinds),
+                "payload_kinds": args.payload_kinds,
             }
         )
     elif args.kind == "governance_approval":
@@ -346,7 +408,17 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
     elif args.kind == "publisher_service":
         required_positive(args.pin_lag_seconds, option="--pin-lag-seconds", errors=errors)
         required_positive(args.head_age_seconds, option="--head-age-seconds", errors=errors)
-        required_positive(args.block_count, option="--block-count", errors=errors)
+        block_count = required_positive(args.block_count, option="--block-count", errors=errors)
+        args.block_refs = validate_reviewed_inventory(
+            split_csv_values(args.block_ref),
+            expected_count=block_count,
+            option="--block-ref",
+            kind="publisher_service",
+            count_option="--block-count",
+            pattern=BLOCK_REF_LABEL_PATTERN,
+            label_error=BLOCK_REF_LABEL_ERROR,
+            errors=errors,
+        )
         args.payload_kinds = validate_name_set(
             split_csv_values(args.payload_kind),
             allowed=REQUIRED_PAYLOAD_KINDS,
@@ -374,7 +446,17 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             errors=errors,
         )
     elif args.kind == "ipfs_ipns_e2e":
-        required_positive(args.block_count, option="--block-count", errors=errors)
+        block_count = required_positive(args.block_count, option="--block-count", errors=errors)
+        args.block_refs = validate_reviewed_inventory(
+            split_csv_values(args.block_ref),
+            expected_count=block_count,
+            option="--block-ref",
+            kind="ipfs_ipns_e2e",
+            count_option="--block-count",
+            pattern=BLOCK_REF_LABEL_PATTERN,
+            label_error=BLOCK_REF_LABEL_ERROR,
+            errors=errors,
+        )
         args.payload_kinds = validate_name_set(
             split_csv_values(args.payload_kind),
             allowed=REQUIRED_PAYLOAD_KINDS,
@@ -447,12 +529,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:
@@ -486,6 +570,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pin-lag-seconds", type=non_negative_int_arg)
     parser.add_argument("--head-age-seconds", type=non_negative_int_arg)
     parser.add_argument("--block-count", type=positive_int_arg)
+    parser.add_argument("--block-ref", action="append", default=[])
     parser.add_argument("--checkpoint-digest-hex")
     parser.add_argument("--route", action="append", default=[])
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=200)

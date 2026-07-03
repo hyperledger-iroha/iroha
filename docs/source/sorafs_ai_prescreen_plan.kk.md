@@ -4,12 +4,10 @@ direction: ltr
 source: docs/source/sorafs_ai_prescreen_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8a8c5d65644da6fc4a73ae66abedeb2a44a8147d773b89c5d1adabdc874fbdfe
-source_last_modified: "2026-07-02T10:57:19.727066+00:00"
-translation_last_reviewed: 2026-07-02
-title: SoraFS AI Pre-screening & Quarantine
-summary: SFM-4a implementation status for moderation reproducibility, honey-audit tooling, and remaining quarantine service gates.
-source_mtime: 2026-07-02T10:57:19.727066+00:00
+source_hash: c847501289d67fb736ac66171188fe7300033d9dbadbebf9abba74ac8e14b93b
+source_last_modified: "2026-07-03T11:16:50.829265+00:00"
+translation_last_reviewed: 2026-07-03
+source_mtime: 2026-07-03T11:16:50.829265+00:00
 ---
 
 # SoraFS AI Pre-screening & Quarantine
@@ -75,22 +73,44 @@ fingerprints instead of trusting summary-only metadata.
 Committee artifacts also bind `result_count` to the unique canonical
 `results[].name` inventory and reject duplicate committee-result entries before
 promotion can report ready.
+Operator workflow artifacts also bind `route_count` and `passed_route_count` to
+the unique canonical `routes[].name` inventory and reject duplicate or unknown
+route entries before promotion can report ready.
+Runner, committee, operator workflow, optional operator-route, and juror
+notification webhook URL fields are validated with the shared SoraFS URL
+preflight before external evidence can report ready, so userinfo, query strings,
+encoded traversal, encoded separators, encoded drive prefixes, and
+secret-looking host/path components cannot enter accepted staged evidence.
 Juror notification transport artifacts also bind `probe_count` and
 `accepted_count` to the unique canonical `probes[].delivery_id` inventory and
-reject duplicate notification delivery probes before promotion can report
-ready. Transparency publication artifacts also bind `probe_count`,
+require at least one accepted notification delivery before promotion can report
+ready. Duplicate notification delivery probes are rejected before promotion can
+report ready. Transparency publication artifacts also bind `probe_count`,
 `passed_probe_count`, and `source_entry_probe_count` to the unique canonical
-`probes[].source_kind` inventory and reject duplicate source-entry probes before
-promotion can report ready.
+`probes[].source_kind` inventory, require source-entry probe coverage for every
+required transparency source kind, and reject duplicate or unknown source-entry
+probes before promotion can report ready.
 Commit/reveal executor artifacts also bind `artifact_count` and
 `passed_artifact_count` to the unique canonical `artifacts[].name` inventory and
-reject duplicate artifact entries before promotion can report ready.
+require the reviewed executor bundle to cover `executor.env` and `run.sh`.
+Duplicate or unknown artifact entries are rejected before promotion can report
+ready.
+Notification manifest paths, commit/reveal executor artifact paths,
+execution-summary paths, and transparency payload paths must also be
+archive-portable after repeated percent-decoding, so encoded traversal, hidden
+separators, drive prefixes, and URI-scheme-like components cannot enter
+accepted staged evidence.
 Governance DAG artifacts also bind `producer_count` to the unique canonical
-`producers[].name` inventory and reject duplicate producer entries before
-promotion can report ready. End-to-end workflow artifacts also bind
-`step_count` and `passed_step_count` to the unique canonical `steps[].name`
-inventory and reject duplicate workflow-step entries before promotion can
-report ready.
+`producers[].name` inventory and `edge_count` to the unique canonical
+`edges[].name` inventory and the required governance producer inventory,
+require reviewed edges to cover every required producer, and reject duplicate
+or unknown producer entries plus duplicate edge or inflated edge-count entries
+before promotion can report ready. End-to-end workflow artifacts also require
+`workflow_id` to match a reviewed lowercase `sfm-4a-*` label without
+non-production markers, bind `step_count` and `passed_step_count` to the unique
+canonical `steps[].name` inventory, require reviewed steps to cover every
+required end-to-end workflow phase, and reject duplicate or unknown
+workflow-step entries before promotion can report ready.
 
 Implemented locally:
 
@@ -861,10 +881,19 @@ Completed local foundations:
   cross-artifact runner/workflow binding failures are reflected on the
   offending artifacts in the emitted summary. Committee artifacts also bind
   `result_count` to the unique canonical `results[].name` inventory and reject
-  duplicate committee-result entries before promotion can report ready. Operator workflow artifacts also
+  duplicate committee-result entries before promotion can report ready. Runner
+  and committee artifacts must use reviewed `cid:*` subject references without
+  non-production markers before promotion can report ready. Operator workflow artifacts also
   bind `route_count` and `passed_route_count` to the unique canonical
-  `routes[].name` inventory and reject duplicate route entries before promotion
-  can report ready. The checker exports its required top-level payload fields
+  `routes[].name` inventory and reject duplicate or unknown route entries
+  before promotion can report ready. Juror notification transport artifacts
+  require at least one accepted delivery, commit/reveal executor artifacts
+  require the reviewed `executor.env` and `run.sh` bundle files while rejecting
+  unknown artifact names, transparency publication artifacts require every
+  required source-entry probe and reject unknown source kinds, Governance DAG
+  artifacts reject unknown producers, and end-to-end workflow artifacts require
+  every required workflow phase while rejecting unknown step names before
+  promotion can report ready. The checker exports its required top-level payload fields
   as `EVIDENCE_REQUIRED_FIELDS`.
 - Provide `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` as the
   collection planner/runner that composes existing runner, committee, operator,
@@ -880,9 +909,19 @@ Completed local foundations:
   operator workflow, juror notification transport, commit/reveal executor,
   transparency publication, Governance DAG, and end-to-end workflow artifacts.
   The builder requires reviewed deployment context, runner tuple digests,
-  workflow digest bindings, reviewed committee-result labels whose unique
-  inventory matches `--result-count`, complete operator route/transparency
-  source/Governance DAG producer/workflow-step coverage where applicable, and
+  reviewed `--subject` references matching the gate's `cid:*` production
+  shape, workflow digest bindings, reviewed committee-result labels whose
+  unique inventory matches `--result-count`, complete operator route/transparency
+  source/Governance DAG producer/workflow-step coverage where applicable,
+  reviewed `--workflow-id` labels matching the gate's `sfm-4a-*` production
+  shape,
+  duplicate/unknown rejection for reviewed operator routes, transparency
+  source kinds, Governance DAG producers, and workflow steps before writing,
+  Governance DAG `--edge-count` binding to the required producer inventory, and
+  shared URL preflight for runner, committee, operator, and webhook URLs so
+  userinfo, query strings, fragments, encoded traversal/separators/drive
+  prefixes, URI-like path tokens, and secret-looking host/path components fail
+  before evidence is written, and
   validates every generated artifact through
   `scripts/check_sorafs_ai_prescreen_rollout_evidence.py` before writing.
   Checked-in response-file examples cover the end-to-end workflow anchor,

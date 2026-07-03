@@ -50,9 +50,12 @@ def multi_provider_probe(
 ) -> dict:
     payload = base("sorafs.potr.multi_provider_probe_canary.v1")
     providers = [{"name": f"provider-{index:02d}"} for index in range(provider_count)]
-    receipts = [{"name": f"receipt-{index:02d}"} for index in range(receipt_count)]
+    receipts = [
+        {"name": f"potr-receipt-{index:02d}"} for index in range(receipt_count)
+    ]
     payload.update(
         {
+            "tier_count": len(["hot", "warm"] if tiers is None else tiers),
             "tiers_observed": ["hot", "warm"] if tiers is None else tiers,
             "gateway_receipts_captured": True,
             "range_fetch_verified": True,
@@ -172,6 +175,7 @@ def observability(*, critical: bool = False) -> dict:
                 "torii_sorafs_proof_health_potr_breaches",
                 "torii_da_potr_bonus_micro_total",
             ],
+            "metric_count": len(MODULE.REQUIRED_METRICS),
             "receipt_summary_digest_hex": DIGEST,
             "response_bodies_included": False,
         }
@@ -228,6 +232,15 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["status"] == "ready"
     assert payload["valid_policy_digests"] == [DIGEST]
     assert payload["required"]["multi_provider_probe"]["valid"] is True
+    assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
+    assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
+    observability_artifact = payload["required"]["observability"]["artifacts"][0]
+    assert observability_artifact["fingerprint"]["metric_count"] == len(
+        MODULE.REQUIRED_METRICS
+    )
+    assert observability_artifact["fingerprint"]["metrics"] == list(
+        MODULE.REQUIRED_METRICS
+    )
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -329,6 +342,98 @@ def test_probe_providers_must_not_duplicate(tmp_path: Path) -> None:
     assert "provider_count must match unique providers count" in artifact["errors"]
 
 
+def test_probe_provider_names_must_be_reviewed_labels(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_provider_probe()
+    payload["providers"][0] = {"name": "provider_00"}
+    write_json(tmp_path / "multi-provider-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_provider_probe"]["artifacts"][0]
+    assert (
+        "providers[].name must match canonical lowercase `provider-name`"
+        in artifact["errors"]
+    )
+
+
+def test_probe_provider_names_reject_non_production_markers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_provider_probe()
+    payload["providers"][0] = {"name": "provider-placeholder"}
+    write_json(tmp_path / "multi-provider-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_provider_probe"]["artifacts"][0]
+    assert (
+        "providers[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_probe_tiers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_provider_probe()
+    payload["tiers_observed"].append(payload["tiers_observed"][0])
+    write_json(tmp_path / "multi-provider-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_provider_probe"]["artifacts"][0]
+    assert "tiers_observed must not contain duplicate values" in artifact["errors"]
+
+
+def test_probe_tiers_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_provider_probe()
+    payload["tiers_observed"].append("archive")
+    payload["tier_count"] = len(payload["tiers_observed"])
+    write_json(tmp_path / "multi-provider-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_provider_probe"]["artifacts"][0]
+    assert "tiers_observed must not include unknown values" in artifact["errors"]
+
+
+def test_probe_tier_count_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_provider_probe()
+    del payload["tier_count"]
+    write_json(tmp_path / "multi-provider-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_provider_probe"]["artifacts"][0]
+    assert "tier_count must be a positive integer" in artifact["errors"]
+    assert "tier_count must be at least 2" in artifact["errors"]
+
+
+def test_probe_tier_count_must_match_inventory(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_provider_probe()
+    payload["tier_count"] += 1
+    write_json(tmp_path / "multi-provider-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_provider_probe"]["artifacts"][0]
+    assert "tier_count must match unique tiers_observed count" in artifact["errors"]
+
+
 def test_probe_receipt_count_must_match_unique_receipts(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = multi_provider_probe()
@@ -357,6 +462,37 @@ def test_probe_receipts_must_not_duplicate(tmp_path: Path) -> None:
     artifact = result["required"]["multi_provider_probe"]["artifacts"][0]
     assert "receipts must not contain duplicate values" in artifact["errors"]
     assert "receipt_count must match unique receipts count" in artifact["errors"]
+
+
+def test_probe_receipt_names_must_be_reviewed_labels(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_provider_probe()
+    payload["receipts"][0]["name"] = "receipt-00"
+    write_json(tmp_path / "multi-provider-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_provider_probe"]["artifacts"][0]
+    assert MODULE.RECEIPT_LABEL_ERROR in artifact["errors"]
+
+
+def test_probe_receipt_names_reject_non_production_markers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = multi_provider_probe()
+    payload["receipts"][0]["name"] = "potr-receipt-placeholder"
+    write_json(tmp_path / "multi-provider-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["multi_provider_probe"]["artifacts"][0]
+    assert (
+        "receipts[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
 
 
 def test_hot_latency_above_threshold_fails(tmp_path: Path) -> None:
@@ -444,6 +580,22 @@ def test_proof_stream_routes_must_not_duplicate(tmp_path: Path) -> None:
     assert "route_count must match unique routes count" in artifact["errors"]
 
 
+def test_proof_stream_routes_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = proof_stream()
+    payload["routes"].append(route("proof_stream_debug"))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "proof-stream.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["proof_stream"]["artifacts"][0]
+    assert "routes must not include unknown values" in artifact["errors"]
+
+
 def test_reputation_receipt_summary_digest_must_match(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
@@ -499,6 +651,35 @@ def test_observability_critical_alert_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "observability.json", observability(critical=True))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_observability_metrics_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = observability()
+    payload["metrics"].append(payload["metrics"][0])
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "observability.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["observability"]["artifacts"][0]
+    assert "metrics must not contain duplicate values" in artifact["errors"]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
+
+
+def test_observability_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = observability()
+    payload["metrics"].append("torii_sorafs_potr_debug_metric")
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "observability.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["observability"]["artifacts"][0]
+    assert "metrics must not include unknown values" in artifact["errors"]
 
 
 def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:

@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = SCRIPT_ROOT / "build_sorafs_por_canary.py"
@@ -87,6 +89,21 @@ def checker_options() -> object:
         min_providers=CHECKER.DEFAULT_MIN_PROVIDERS,
         min_challenges=CHECKER.DEFAULT_MIN_CHALLENGES,
     )
+
+
+def assert_rejected_without_artifact(
+    args: list[str],
+    *,
+    kind: str,
+    tmp_path: Path,
+    capsys,
+    expected_error: str,
+) -> None:
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
+    assert not canary_path(tmp_path, kind).exists()
 
 
 def test_builds_payload_free_scheduler_runtime_canary(tmp_path: Path) -> None:
@@ -189,6 +206,39 @@ def test_randomness_provider_inventory_must_not_duplicate(
     assert not canary_path(tmp_path, "randomness").exists()
 
 
+def test_randomness_provider_inventory_must_use_reviewed_labels_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("randomness", tmp_path)
+    first_provider_index = args.index("--provider")
+    args[first_provider_index + 1] = "provider_00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider must match canonical lowercase `provider-name`" in captured.err
+    assert not canary_path(tmp_path, "randomness").exists()
+
+
+def test_randomness_provider_inventory_rejects_non_production_markers_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("randomness", tmp_path)
+    first_provider_index = args.index("--provider")
+    args[first_provider_index + 1] = "provider-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--provider must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "randomness").exists()
+
+
 def test_missing_runtime_route_coverage_fails_closed(tmp_path: Path, capsys) -> None:
     args = args_for("scheduler_runtime", tmp_path)
     index = args.index("--runtime-route")
@@ -199,6 +249,156 @@ def test_missing_runtime_route_coverage_fails_closed(tmp_path: Path, capsys) -> 
     captured = capsys.readouterr()
     assert "--runtime-route must include every required value" in captured.err
     assert not canary_path(tmp_path, "scheduler_runtime").exists()
+
+
+def test_scheduler_runtime_routes_must_not_duplicate_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("scheduler_runtime", tmp_path)
+    args.extend(["--runtime-route", MODULE.REQUIRED_RUNTIME_ROUTES[0]])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="scheduler_runtime",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--runtime-route must not contain duplicates",
+    )
+
+
+def test_scheduler_runtime_routes_must_not_include_unknown_values_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("scheduler_runtime", tmp_path)
+    args.extend(["--runtime-route", "unreviewed-runtime-route"])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="scheduler_runtime",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--runtime-route contains an unknown value",
+    )
+
+
+def test_reporting_archive_routes_must_not_duplicate_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("reporting_archive", tmp_path)
+    args.extend(["--reporting-route", MODULE.REQUIRED_REPORTING_ROUTES[0]])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="reporting_archive",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--reporting-route must not contain duplicates",
+    )
+
+
+def test_reporting_archive_routes_must_not_include_unknown_values_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("reporting_archive", tmp_path)
+    args.extend(["--reporting-route", "unreviewed-reporting-route"])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="reporting_archive",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--reporting-route contains an unknown value",
+    )
+
+
+def test_observability_metrics_must_not_duplicate_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("observability", tmp_path)
+    args.extend(["--metric", MODULE.REQUIRED_METRICS[0]])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="observability",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--metric must not contain duplicates",
+    )
+
+
+def test_observability_metrics_must_not_include_unknown_values_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("observability", tmp_path)
+    args.extend(["--metric", "unreviewed-por-metric"])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="observability",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--metric contains an unknown value",
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "option", "duplicate_value", "unknown_value"),
+    (
+        (
+            "scheduler_runtime",
+            "--runtime-route",
+            MODULE.REQUIRED_RUNTIME_ROUTES[0],
+            "unreviewed-runtime-route",
+        ),
+        (
+            "reporting_archive",
+            "--reporting-route",
+            MODULE.REQUIRED_REPORTING_ROUTES[0],
+            "unreviewed-reporting-route",
+        ),
+        (
+            "observability",
+            "--metric",
+            MODULE.REQUIRED_METRICS[0],
+            "unreviewed-por-metric",
+        ),
+    ),
+)
+def test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write(
+    kind: str,
+    option: str,
+    duplicate_value: str,
+    unknown_value: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    duplicate_args = args_for(kind, tmp_path)
+    duplicate_args.extend([option, duplicate_value])
+    assert_rejected_without_artifact(
+        duplicate_args,
+        kind=kind,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=f"{option} must not contain duplicates",
+    )
+
+    unknown_dir = tmp_path / "unknown"
+    unknown_dir.mkdir()
+    unknown_args = args_for(kind, unknown_dir)
+    unknown_args.extend([option, unknown_value])
+    assert_rejected_without_artifact(
+        unknown_args,
+        kind=kind,
+        tmp_path=unknown_dir,
+        capsys=capsys,
+        expected_error=f"{option} contains an unknown value",
+    )
 
 
 def test_scheduler_and_report_thresholds_fail_before_write(
@@ -243,3 +443,17 @@ def test_output_symlink_is_refused(tmp_path: Path, capsys) -> None:
     captured = capsys.readouterr()
     assert "must not be a symlink" in captured.err
     assert not target.exists()
+
+
+def test_output_directory_is_rejected(tmp_path: Path, capsys) -> None:
+    output_dir = tmp_path / "randomness-output"
+    output_dir.mkdir()
+    args = args_for("randomness", tmp_path)
+    args[args.index("--out") + 1] = str(output_dir)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--out" in captured.err
+    assert "must not be a directory" in captured.err
+    assert output_dir.is_dir()

@@ -149,6 +149,11 @@ def test_archive_artifact_path_rejects_nonportable_labels() -> None:
     assert is_archive_portable_artifact_path("C:/rollout.json") is False
     assert is_archive_portable_artifact_path("nested\\rollout.json") is False
     assert is_archive_portable_artifact_path("bad\nname.json") is False
+    assert is_archive_portable_artifact_path("nested/%2e%2e/rollout.json") is False
+    assert is_archive_portable_artifact_path("nested/bad%2Fname.json") is False
+    assert is_archive_portable_artifact_path("nested/C%3A/rollout.json") is False
+    assert is_archive_portable_artifact_path("nested/http%3A/rollout.json") is False
+    assert is_archive_portable_artifact_path("nested/%252e%252e/rollout.json") is False
 
 
 def test_build_evidence_artifact_records_payload_free_fingerprint() -> None:

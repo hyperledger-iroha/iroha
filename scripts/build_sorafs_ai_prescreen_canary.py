@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import sys
 from collections.abc import Iterable, Sequence
@@ -18,18 +19,28 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
+    ALLOWED_PRESCREEN_VERDICTS,
+    FORBIDDEN_SUBJECT_REFERENCE_MARKERS,
+    FORBIDDEN_WORKFLOW_ID_MARKERS,
     KIND_BY_NAME,
     REQUIRED_E2E_STEPS,
+    REQUIRED_GOVERNANCE_EDGE_COUNT,
     REQUIRED_GOVERNANCE_PRODUCERS,
     REQUIRED_OPERATOR_ROUTES,
     REQUIRED_OPERATOR_SCHEMAS,
     REQUIRED_TRANSPARENCY_SOURCE_KINDS,
+    SUBJECT_REFERENCE_ERROR,
+    SUBJECT_REFERENCE_PATTERN,
+    WORKFLOW_ID_ERROR,
+    WORKFLOW_ID_PATTERN,
     validate_evidence_payload,
 )
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -39,6 +50,8 @@ from sorafs_response_args import (  # noqa: E402
     non_negative_int_arg,
     positive_int_arg,
 )
+from sorafs_evidence_validation import is_archive_portable_artifact_path  # noqa: E402
+from sorafs_runner_preflight import runner_url_arg_is_plan_safe  # noqa: E402
 
 
 CANARY_KINDS = tuple(KIND_BY_NAME)
@@ -54,6 +67,17 @@ WORKFLOW_DIGEST_KINDS = (
 HEX32_LEN = 32
 HEX64_LEN = 64
 RUNNER_STATUS_KINDS = {"runner", "committee"}
+CANARY_URL_ARG_ERROR = (
+    "SoraFS AI pre-screen canary URL arguments must not contain userinfo, "
+    "query strings, fragments, control characters, encoded traversal, "
+    "separators, drive prefixes, URI-scheme-like path tokens, or "
+    "secret-looking host/path components"
+)
+CANARY_PATH_ARG_ERROR = (
+    "SoraFS AI pre-screen canary path arguments must be archive-relative without "
+    "absolute, empty, current, parent, encoded, URI-scheme-like, or "
+    "platform-specific segments"
+)
 
 
 def split_csv_values(values: Sequence[str]) -> list[str]:
@@ -90,6 +114,16 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_verdict(value: str, *, option: str, errors: list[str]) -> None:
+    """Require a shipped moderation screening verdict label."""
+
+    if value not in ALLOWED_PRESCREEN_VERDICTS:
+        allowed = ", ".join(ALLOWED_PRESCREEN_VERDICTS[:-1])
+        errors.append(
+            f"{option} must be {allowed}, or {ALLOWED_PRESCREEN_VERDICTS[-1]}"
+        )
+
+
 def validate_reviewed_inventory(
     values: Iterable[str],
     *,
@@ -112,6 +146,57 @@ def validate_reviewed_inventory(
     if len(unique_items) != expected_count:
         errors.append(f"{option} unique values must match {count_option}")
     return items
+
+
+def validate_governance_edges(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    errors: list[str],
+) -> list[dict[str, str]]:
+    """Return reviewed governance DAG edge rows from PRODUCER:NAME values."""
+
+    items = list(values)
+    if not items:
+        errors.append("--governance-edge is required for governance_dag")
+    records: list[dict[str, str]] = []
+    names: list[str] = []
+    producers: list[str] = []
+    for index, item in enumerate(items):
+        if ":" not in item:
+            errors.append("--governance-edge values must use <producer>:<name>")
+            continue
+        producer, name = item.split(":", 1)
+        producer = producer.strip()
+        name = name.strip()
+        validate_canonical_string(
+            producer,
+            label=f"--governance-edge[{index}].producer",
+            errors=errors,
+        )
+        validate_canonical_string(
+            name,
+            label=f"--governance-edge[{index}].name",
+            errors=errors,
+        )
+        if producer and producer not in REQUIRED_GOVERNANCE_PRODUCERS:
+            errors.append("--governance-edge producer must be a required producer")
+        if producer and name:
+            records.append({"producer": producer, "name": name})
+            names.append(name)
+            producers.append(producer)
+    if len(set(names)) != len(names):
+        errors.append("--governance-edge names must not contain duplicates")
+    if len(set(names)) != expected_count:
+        errors.append("--governance-edge unique names must match --edge-count")
+    missing_producers = [
+        producer
+        for producer in REQUIRED_GOVERNANCE_PRODUCERS
+        if producer not in set(producers)
+    ]
+    if missing_producers:
+        errors.append("--governance-edge must include every required producer")
+    return records
 
 
 def validate_output_path(path: Path, errors: list[str]) -> None:
@@ -161,6 +246,84 @@ def validate_canonical_string(value: str | None, *, label: str, errors: list[str
         or any(ord(character) < 32 or ord(character) == 127 for character in value)
     ):
         errors.append(f"{label} must be a non-empty canonical string")
+
+
+def validate_canary_url(
+    value: str | None,
+    *,
+    label: str,
+    errors: list[str],
+    required: bool,
+) -> None:
+    """Require a canary URL to be canonical and safe for evidence payloads."""
+
+    if value is None and not required:
+        return
+    previous_error_count = len(errors)
+    validate_canonical_string(value, label=label, errors=errors)
+    if len(errors) != previous_error_count:
+        return
+    if not runner_url_arg_is_plan_safe(value):
+        if CANARY_URL_ARG_ERROR not in errors:
+            errors.append(CANARY_URL_ARG_ERROR)
+
+
+def validate_canary_path_label(
+    value: str | None,
+    *,
+    label: str,
+    errors: list[str],
+) -> None:
+    """Require a canary path label to be canonical and archive-portable."""
+
+    previous_error_count = len(errors)
+    validate_canonical_string(value, label=label, errors=errors)
+    if len(errors) != previous_error_count:
+        return
+    if not is_archive_portable_artifact_path(value):
+        if CANARY_PATH_ARG_ERROR not in errors:
+            errors.append(CANARY_PATH_ARG_ERROR)
+
+
+def validate_workflow_id_arg(value: str | None, *, errors: list[str]) -> None:
+    """Require a reviewed lowercase SFM-4a workflow identifier."""
+
+    validate_canonical_string(value, label="--workflow-id", errors=errors)
+    if not isinstance(value, str):
+        return
+    if WORKFLOW_ID_PATTERN.fullmatch(value) is None:
+        errors.append(WORKFLOW_ID_ERROR.replace("workflow_id", "--workflow-id"))
+        return
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_WORKFLOW_ID_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(
+            f"--workflow-id must not contain non-production markers {forbidden}"
+        )
+
+
+def validate_subject_arg(value: str | None, *, errors: list[str]) -> None:
+    """Require a reviewed lowercase payload-free content subject reference."""
+
+    validate_canonical_string(value, label="--subject", errors=errors)
+    if not isinstance(value, str):
+        return
+    if SUBJECT_REFERENCE_PATTERN.fullmatch(value) is None:
+        errors.append(SUBJECT_REFERENCE_ERROR.replace("subject", "--subject"))
+        return
+    subject_tokens = frozenset(
+        token for token in re.split(r"[^a-z0-9]+", value) if token
+    )
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_SUBJECT_REFERENCE_MARKERS
+        if marker in subject_tokens
+    )
+    if forbidden:
+        errors.append(f"--subject must not contain non-production markers {forbidden}")
 
 
 def require_kind_options(
@@ -443,6 +606,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "producer_count": len(producers),
                 "edge_count": args.edge_count,
                 "producers": producers,
+                "edges": args.governance_edges,
                 "payload_bytes_included": False,
                 "private_payloads_included": False,
             }
@@ -529,7 +693,8 @@ def validate_runner_binding_inputs(args: argparse.Namespace, errors: list[str]) 
         option="--subject-digest-hex",
         errors=errors,
     )
-    validate_canonical_string(args.subject, label="--subject", errors=errors)
+    validate_subject_arg(args.subject, errors=errors)
+    validate_verdict(args.verdict, option="--verdict", errors=errors)
     if args.evidence_digest_hex is not None:
         validate_hex(
             args.evidence_digest_hex,
@@ -544,14 +709,44 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
 
     if args.kind == "runner":
         require_kind_options(args, errors, (("--runner-url", args.runner_url),))
-        validate_canonical_string(args.runner_url, label="--runner-url", errors=errors)
+        validate_canary_url(
+            args.runner_url,
+            label="--runner-url",
+            errors=errors,
+            required=True,
+        )
+        validate_canary_url(
+            args.runner_status_url,
+            label="--runner-status-url",
+            errors=errors,
+            required=False,
+        )
+        validate_canary_url(
+            args.runner_screen_url,
+            label="--runner-screen-url",
+            errors=errors,
+            required=False,
+        )
         validate_runner_binding_inputs(args, errors)
     elif args.kind == "committee":
         require_kind_options(args, errors, (("--committee-url", args.committee_url),))
-        validate_canonical_string(
+        validate_canary_url(
             args.committee_url,
             label="--committee-url",
             errors=errors,
+            required=True,
+        )
+        validate_canary_url(
+            args.committee_status_url,
+            label="--committee-status-url",
+            errors=errors,
+            required=False,
+        )
+        validate_canary_url(
+            args.committee_aggregate_url,
+            label="--committee-aggregate-url",
+            errors=errors,
+            required=False,
         )
         validate_runner_binding_inputs(args, errors)
         if args.result_count < args.quorum:
@@ -574,10 +769,11 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--quarantine-id-hex", args.quarantine_id_hex),
             ),
         )
-        validate_canonical_string(
+        validate_canary_url(
             args.operator_url,
             label="--operator-url",
             errors=errors,
+            required=True,
         )
         validate_hex(
             args.workflow_digest_hex,
@@ -612,7 +808,17 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--workflow-digest-hex",
             errors=errors,
         )
-        validate_canonical_string(args.webhook_url, label="--webhook-url", errors=errors)
+        validate_canary_url(
+            args.webhook_url,
+            label="--webhook-url",
+            errors=errors,
+            required=True,
+        )
+        validate_canary_path_label(
+            args.manifest_path,
+            label="--manifest-path",
+            errors=errors,
+        )
     elif args.kind == "commit_reveal_executor":
         require_kind_options(
             args,
@@ -623,6 +829,11 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             args.workflow_digest_hex,
             length=HEX64_LEN,
             option="--workflow-digest-hex",
+            errors=errors,
+        )
+        validate_canary_path_label(
+            args.execution_summary_path,
+            label="--execution-summary-path",
             errors=errors,
         )
     elif args.kind == "transparency_publication":
@@ -664,8 +875,13 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--governance-producer",
             errors=errors,
         )
-        if args.edge_count < len(REQUIRED_GOVERNANCE_PRODUCERS):
-            errors.append("--edge-count must cover every required producer")
+        if args.edge_count != REQUIRED_GOVERNANCE_EDGE_COUNT:
+            errors.append("--edge-count must match required governance producer inventory")
+        args.governance_edges = validate_governance_edges(
+            split_csv_values(args.governance_edge),
+            expected_count=args.edge_count,
+            errors=errors,
+        )
     elif args.kind == "end_to_end_workflow":
         require_kind_options(
             args,
@@ -681,7 +897,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--workflow-digest-hex",
             errors=errors,
         )
-        validate_canonical_string(args.workflow_id, label="--workflow-id", errors=errors)
+        validate_workflow_id_arg(args.workflow_id, errors=errors)
         args.workflow_steps = validate_name_set(
             split_csv_values(args.workflow_step),
             allowed=REQUIRED_E2E_STEPS,
@@ -730,12 +946,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:
@@ -764,7 +982,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--body-digest-hex", required=True)
     parser.add_argument("--manifest-id-hex")
     parser.add_argument("--runner-hash-hex")
-    parser.add_argument("--subject", default="cid:example")
+    parser.add_argument("--subject")
     parser.add_argument("--subject-digest-hex")
     parser.add_argument("--workflow-digest-hex")
     parser.add_argument("--policy-digest-hex")
@@ -789,6 +1007,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--operator-route", action="append", default=[])
     parser.add_argument("--transparency-source-kind", action="append", default=[])
     parser.add_argument("--governance-producer", action="append", default=[])
+    parser.add_argument("--governance-edge", action="append", default=[])
     parser.add_argument("--workflow-step", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
     parser.add_argument("--notification-status-code", type=positive_int_arg, default=202)
@@ -815,7 +1034,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--commit-action-count", type=positive_int_arg, default=1)
     parser.add_argument("--reveal-action-count", type=positive_int_arg, default=1)
     parser.add_argument("--tally-action-count", type=positive_int_arg, default=1)
-    parser.add_argument("--edge-count", type=positive_int_arg, default=12)
+    parser.add_argument(
+        "--edge-count",
+        type=positive_int_arg,
+        default=REQUIRED_GOVERNANCE_EDGE_COUNT,
+    )
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

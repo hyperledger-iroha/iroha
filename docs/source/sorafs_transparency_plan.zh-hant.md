@@ -4,11 +4,10 @@ direction: ltr
 source: docs/source/sorafs_transparency_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ee8f2ddf5c80dc7f51a20c18a11d6a460f6fd16e39da69442b88ceaa09460f4a
-source_last_modified: "2026-07-01T20:59:26.946931+00:00"
-translation_last_reviewed: 2026-07-02
-title: Transparency Dashboards & Enforcement Receipts
-summary: SFM-4c implementation status for GAR receipts, moderation dashboards, privacy metrics, and remaining transparency ledger services.
+source_hash: eca9b2f171604b28e8e11f1d32d1a8207d0f7fc003cc6692e40eefdf01561ed7
+source_last_modified: "2026-07-03T06:57:04.080552+00:00"
+translation_last_reviewed: 2026-07-03
+source_mtime: 2026-07-03T06:57:04.080552+00:00
 ---
 
 # Transparency Dashboards & Enforcement Receipts
@@ -304,10 +303,18 @@ moderation ledger publication service described by the original plan.
   response hash binding for publication and explorer route evidence, checks the
   explorer snapshot/UI/proof-token index routes, binds publication and explorer
   `route_count` to the unique canonical `routes[].name` inventories with
-  duplicate route rejection, keeps probe-based `probe_count` values equal to
+  duplicate route rejection, binds publication `cycle_detail_probe_count` to
+  the unique canonical `cycle_detail_probes[].name` inventory with duplicate
+  cycle-detail probe rejection, keeps probe-based `probe_count` values equal to
   the `probes[]` inventory length, requires source-entry, source-event,
   publish-due, and proof-token issuance sub-counts to match the corresponding
-  `probes[]` role inventory, and
+  `probes[]` role inventory, binds privacy aggregate and proof-token issuance
+  `probe_count` values to the unique canonical `probes[].action` inventory
+  with duplicate action rejection, binds source-entry
+  `source_entry_probe_count` to the unique canonical `probes[].source_kind`
+  inventory with duplicate source-kind rejection, rejects unknown values outside
+  the reviewed source-kind, route, cycle-detail-probe, privacy-action, and
+  proof-token action inventories, and
   recursively rejects raw
   payload, request/response body, bearer-token, signed-transaction,
   proof-token frame, private-key, and private digest-key fields. Publication
@@ -320,14 +327,16 @@ moderation ledger publication service described by the original plan.
   evidence contract before live collection. It supports shell-style `@ARGFILE`
   inputs for direct replay of reviewed artifact directories.
 - `scripts/build_sorafs_transparency_canary.py` is the checked-in
-  payload-free SFM-4c transparency canary builder for reviewed source-entry,
-  publication, privacy-aggregate, proof-token issuance, and explorer rollout
-  artifacts. It requires complete source kind, publication route, privacy action,
-  and explorer route coverage where applicable, enforces reviewed
-  deployment/environment context, source-batch and cycle digest bindings, and
-  validates every generated artifact through the transparency rollout checker
-  before atomically writing JSON without following output symlinks. The source
-  entry and publication response-file examples are
+	  payload-free SFM-4c transparency canary builder for reviewed source-entry,
+	  publication, privacy-aggregate, proof-token issuance, and explorer rollout
+	  artifacts. It requires complete source kind, publication route,
+	  publication cycle-detail probe, privacy action, and explorer route coverage
+	  where applicable, rejects duplicate or unknown operator inventory names
+	  before writing, enforces reviewed deployment/environment context,
+	  source-batch and cycle digest bindings, and validates every generated
+	  artifact through the transparency rollout checker before atomically writing
+	  JSON without following output symlinks or output directories. The source
+	  entry and publication response-file examples are
   `scripts/examples/sorafs_transparency_source_entry_canary.args.example` and
   `scripts/examples/sorafs_transparency_publication_canary.args.example`.
 - `scripts/run_sorafs_transparency_rollout_evidence.py --torii-url URL

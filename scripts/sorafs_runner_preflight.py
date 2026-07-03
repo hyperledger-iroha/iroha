@@ -129,21 +129,133 @@ def is_payload_free_sensitive_reference(normalized_key: str) -> bool:
     )
 
 
+def _decoded_text_variants(value: str) -> tuple[str, ...]:
+    """Return raw plus repeatedly percent-decoded text variants."""
+
+    variants = [value]
+    seen = {value}
+    current = value
+    for _ in range(4):
+        decoded = unquote(current)
+        if decoded == current or decoded in seen:
+            break
+        variants.append(decoded)
+        seen.add(decoded)
+        current = decoded
+    return tuple(variants)
+
+
+def _path_component_has_windows_drive_prefix(component: str) -> bool:
+    """Return whether a path component starts with a Windows drive prefix."""
+
+    return (
+        len(component) >= 2
+        and component[1] == ":"
+        and component[0].isascii()
+        and component[0].isalpha()
+    )
+
+
+def _path_component_has_uri_scheme_prefix(component: str) -> bool:
+    """Return whether a path component looks like a URI scheme prefix."""
+
+    scheme, separator, _rest = component.partition(":")
+    return bool(
+        separator
+        and scheme
+        and scheme[0].isalpha()
+        and all(character.isalnum() or character in "+-." for character in scheme)
+    )
+
+
 def is_sensitive_path_component(component: str) -> bool:
     """Return whether a path component looks like runtime secret material."""
 
     exact_keys = frozenset(key.lower() for key in COMMON_SENSITIVE_KEYS)
     normalized_keys = frozenset(normalize_sensitive_key(key) for key in exact_keys)
-    component_lower = component.lower()
-    normalized_component = normalize_sensitive_key(component)
-    return (
-        component_lower in exact_keys
-        or normalized_component in normalized_keys
-        or any(
-            fragment in normalized_component
-            and not is_payload_free_sensitive_reference(normalized_component)
-            for fragment in HIGH_RISK_SENSITIVE_KEY_FRAGMENTS
-        )
+    for variant in _decoded_text_variants(component):
+        component_lower = variant.lower()
+        normalized_component = normalize_sensitive_key(variant)
+        if (
+            component_lower in exact_keys
+            or normalized_component in normalized_keys
+            or any(
+                fragment in normalized_component
+                and not is_payload_free_sensitive_reference(normalized_component)
+                for fragment in HIGH_RISK_SENSITIVE_KEY_FRAGMENTS
+            )
+        ):
+            return True
+    return False
+
+
+def _path_component_is_plan_safe(component: str) -> bool:
+    """Return whether a path component is safe in raw or decoded form."""
+
+    for variant in _decoded_text_variants(component):
+        if (
+            variant in {".", "..", ""}
+            or "/" in variant
+            or "\\" in variant
+            or _path_component_has_windows_drive_prefix(variant)
+            or _path_component_has_uri_scheme_prefix(variant)
+            or any(ord(character) < 32 or ord(character) == 127 for character in variant)
+            or is_sensitive_path_component(variant)
+        ):
+            return False
+    return True
+
+
+def _url_host_component_is_plan_safe(component: str) -> bool:
+    """Return whether a URL host label is safe in raw or decoded form."""
+
+    for variant in _decoded_text_variants(component):
+        if (
+            variant in {".", "..", ""}
+            or "/" in variant
+            or "\\" in variant
+            or any(ord(character) < 32 or ord(character) == 127 for character in variant)
+            or is_sensitive_path_component(variant)
+        ):
+            return False
+    return True
+
+
+def _value_variants_are_passthrough_safe(value: str) -> bool:
+    """Return whether raw or percent-decoded passthrough values are safe."""
+
+    for variant in _decoded_text_variants(value):
+        if variant.startswith(("http://", "https://")):
+            if not runner_url_arg_is_plan_safe(variant):
+                return False
+            continue
+        if (
+            any(separator in variant for separator in ("/", "\\"))
+            or _path_component_has_uri_scheme_prefix(variant)
+        ):
+            if not plan_rendered_path_is_safe(Path(variant)):
+                return False
+            continue
+        if is_sensitive_path_component(variant):
+            return False
+    return True
+
+
+def _key_variants_are_passthrough_safe(value: str) -> bool:
+    """Return whether raw or percent-decoded passthrough key names are safe."""
+
+    return all(
+        not is_sensitive_path_component(variant)
+        for variant in _decoded_text_variants(value)
+    )
+
+
+def _option_variants_are_passthrough_safe(value: str) -> bool:
+    """Return whether raw or percent-decoded option names are safe."""
+
+    return all(
+        not is_sensitive_path_component(variant.lstrip("-").replace("-", "_"))
+        for variant in _decoded_text_variants(value)
     )
 
 
@@ -155,19 +267,7 @@ def plan_rendered_path_is_safe(path: Path) -> bool:
     for component in path.parts:
         if component in {path.anchor, "/", ""}:
             continue
-        has_windows_drive_prefix = (
-            len(component) >= 2
-            and component[1] == ":"
-            and component[0].isascii()
-            and component[0].isalpha()
-        )
-        if (
-            component in {".", ".."}
-            or "\\" in component
-            or has_windows_drive_prefix
-            or any(ord(character) < 32 or ord(character) == 127 for character in component)
-            or is_sensitive_path_component(component)
-        ):
+        if not _path_component_is_plan_safe(component):
             return False
     return True
 
@@ -206,10 +306,10 @@ def runner_url_arg_is_plan_safe(value: str) -> bool:
         return False
     host = parsed.hostname or ""
     for component in host.split("."):
-        if component and is_sensitive_path_component(unquote(component)):
+        if component and not _url_host_component_is_plan_safe(component):
             return False
     for component in parsed.path.split("/"):
-        if component and is_sensitive_path_component(unquote(component)):
+        if component and not _path_component_is_plan_safe(component):
             return False
     return True
 
@@ -248,25 +348,16 @@ def runner_passthrough_arg_is_plan_safe(value: str) -> bool:
 
     key, separator, raw_value = value.partition("=")
     if value.startswith("-"):
-        option_name = key.lstrip("-").replace("-", "_")
-        if is_sensitive_path_component(option_name):
+        if not _option_variants_are_passthrough_safe(key):
             return False
-    elif separator and is_sensitive_path_component(key):
+    elif separator and not _key_variants_are_passthrough_safe(key):
         return False
 
     checked_values = [raw_value] if separator else [value]
     for checked_value in checked_values:
         if not checked_value:
             continue
-        if checked_value.startswith(("http://", "https://")):
-            if not runner_url_arg_is_plan_safe(checked_value):
-                return False
-            continue
-        if any(separator in checked_value for separator in ("/", "\\")):
-            if not plan_rendered_path_is_safe(Path(checked_value)):
-                return False
-            continue
-        if is_sensitive_path_component(checked_value):
+        if not _value_variants_are_passthrough_safe(checked_value):
             return False
     return True
 

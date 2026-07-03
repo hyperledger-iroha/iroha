@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = SCRIPT_ROOT / "build_sorafs_evidence_viewer_canary.py"
@@ -33,6 +35,10 @@ CHECKER_SPEC.loader.exec_module(CHECKER)
 
 DIGEST = "a" * 64
 GENERATED_AT = 1_800_100_000
+
+
+def canary_path(tmp_path: Path) -> Path:
+    return tmp_path / "evidence-viewer.json"
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -166,19 +172,39 @@ def complete_args(tmp_path: Path) -> list[str]:
     return args
 
 
+def assert_rejected_without_artifact(
+    args: list[str],
+    *,
+    tmp_path: Path,
+    capsys,
+    expected_error: str,
+) -> None:
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
+    assert not canary_path(tmp_path).exists()
+
+
 def test_builds_payload_free_evidence_viewer_canary(tmp_path: Path) -> None:
     assert MODULE.main(complete_args(tmp_path)) == 0
 
-    payload = json.loads((tmp_path / "evidence-viewer.json").read_text("utf-8"))
+    payload = json.loads(canary_path(tmp_path).read_text("utf-8"))
 
     assert payload["schema"] == "sorafs.moderation_panel.evidence_viewer_canary.v1"
     assert payload["status"] == "passed"
     assert payload["deployment_context_reviewed"] is True
+    assert payload["role_count"] == len(MODULE.REQUIRED_VIEWER_ROLES)
     assert payload["roles_tested"] == list(MODULE.REQUIRED_VIEWER_ROLES)
+    assert payload["security_control_count"] == len(
+        MODULE.REQUIRED_VIEWER_SECURITY_CONTROLS
+    )
     assert payload["viewer_security_controls"] == list(
         MODULE.REQUIRED_VIEWER_SECURITY_CONTROLS
     )
+    assert payload["access_event_kind_count"] == len(MODULE.REQUIRED_VIEWER_EVENT_KINDS)
     assert payload["access_event_kinds"] == list(MODULE.REQUIRED_VIEWER_EVENT_KINDS)
+    assert payload["export_target_count"] == len(MODULE.REQUIRED_VIEWER_EXPORT_TARGETS)
     assert payload["export_targets"] == list(MODULE.REQUIRED_VIEWER_EXPORT_TARGETS)
     assert payload["session_count"] == 3
     assert payload["attested_session_count"] == 3
@@ -248,7 +274,7 @@ def test_response_file_can_build_canary(tmp_path: Path) -> None:
 
     assert MODULE.main([f"@{args_file}"]) == 0
 
-    payload = json.loads((tmp_path / "evidence-viewer.json").read_text("utf-8"))
+    payload = json.loads(canary_path(tmp_path).read_text("utf-8"))
     assert payload["access_log_digest_hex"] == DIGEST
 
 
@@ -261,7 +287,7 @@ def test_missing_verified_claim_fails_closed(tmp_path: Path, capsys) -> None:
 
     captured = capsys.readouterr()
     assert "--verified-claim must include every required value" in captured.err
-    assert not (tmp_path / "evidence-viewer.json").exists()
+    assert not canary_path(tmp_path).exists()
 
 
 def test_missing_access_event_coverage_fails_closed(tmp_path: Path, capsys) -> None:
@@ -273,7 +299,65 @@ def test_missing_access_event_coverage_fails_closed(tmp_path: Path, capsys) -> N
 
     captured = capsys.readouterr()
     assert "--access-event-kind must include every required value" in captured.err
-    assert not (tmp_path / "evidence-viewer.json").exists()
+    assert not canary_path(tmp_path).exists()
+
+
+@pytest.mark.parametrize(
+    ("option", "duplicate_value", "unknown_value"),
+    (
+        (
+            "--verified-claim",
+            MODULE.VERIFIED_TRUE_CLAIMS[0],
+            "unreviewed-viewer-claim",
+        ),
+        (
+            "--role",
+            MODULE.REQUIRED_VIEWER_ROLES[0],
+            "unreviewed-viewer-role",
+        ),
+        (
+            "--security-control",
+            MODULE.REQUIRED_VIEWER_SECURITY_CONTROLS[0],
+            "unreviewed-security-control",
+        ),
+        (
+            "--access-event-kind",
+            MODULE.REQUIRED_VIEWER_EVENT_KINDS[0],
+            "unreviewed-access-event-kind",
+        ),
+        (
+            "--export-target",
+            MODULE.REQUIRED_VIEWER_EXPORT_TARGETS[0],
+            "unreviewed-export-target",
+        ),
+    ),
+)
+def test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write(
+    option: str,
+    duplicate_value: str,
+    unknown_value: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    duplicate_args = complete_args(tmp_path)
+    duplicate_args.extend([option, duplicate_value])
+    assert_rejected_without_artifact(
+        duplicate_args,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=f"{option} must not contain duplicates",
+    )
+
+    unknown_dir = tmp_path / "unknown"
+    unknown_dir.mkdir()
+    unknown_args = complete_args(unknown_dir)
+    unknown_args.extend([option, unknown_value])
+    assert_rejected_without_artifact(
+        unknown_args,
+        tmp_path=unknown_dir,
+        capsys=capsys,
+        expected_error=f"{option} contains an unknown value",
+    )
 
 
 def test_session_count_drift_fails_before_write(tmp_path: Path, capsys) -> None:
@@ -300,6 +384,91 @@ def test_duplicate_session_inventory_fails_before_write(
     captured = capsys.readouterr()
     assert "--viewer-session must not contain duplicates" in captured.err
     assert not (tmp_path / "evidence-viewer.json").exists()
+
+
+def test_unknown_and_duplicate_role_coverage_fails_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    args.extend(["--role", MODULE.REQUIRED_VIEWER_ROLES[0]])
+    args.extend(["--role", "debug_operator"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--role must not contain duplicates" in captured.err
+    assert "--role contains an unknown value" in captured.err
+    assert not (tmp_path / "evidence-viewer.json").exists()
+
+
+def test_unknown_security_control_fails_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    args.extend(["--security-control", "developer_console"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--security-control contains an unknown value" in captured.err
+    assert not (tmp_path / "evidence-viewer.json").exists()
+
+
+def test_duplicate_export_target_fails_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    args.extend(["--export-target", MODULE.REQUIRED_VIEWER_EXPORT_TARGETS[0]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--export-target must not contain duplicates" in captured.err
+    assert not (tmp_path / "evidence-viewer.json").exists()
+
+
+def test_digest_must_be_exact_lowercase_hex_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    args[args.index("--case-digest-hex") + 1] = "A" * 64
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--case-digest-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not (tmp_path / "evidence-viewer.json").exists()
+
+
+def test_long_lived_url_ttl_fails_before_write(tmp_path: Path, capsys) -> None:
+    args = complete_args(tmp_path)
+    args[args.index("--max-url-ttl-secs") + 1] = str(
+        MODULE.DEFAULT_MAX_VIEWER_URL_TTL_SECS + 1
+    )
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        f"--max-url-ttl-secs must be <= {MODULE.DEFAULT_MAX_VIEWER_URL_TTL_SECS}"
+        in captured.err
+    )
+    assert not (tmp_path / "evidence-viewer.json").exists()
+
+
+def test_output_directory_is_rejected(tmp_path: Path, capsys) -> None:
+    args = complete_args(tmp_path)
+    args[args.index("--out") + 1] = str(tmp_path)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--out" in captured.err
+    assert "must not be a directory" in captured.err
 
 
 def test_output_symlink_is_rejected(tmp_path: Path, capsys) -> None:

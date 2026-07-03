@@ -6128,6 +6128,23 @@ pub mod tests {
         block_hashes.commit_for_tests();
     }
 
+    fn install_active_single_lane_nexus(state: &State) {
+        let lane_catalog =
+            LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
+        let mut nexus = state.nexus.write();
+        nexus.enabled = true;
+        nexus.autoscale.enabled = false;
+        nexus.lane_catalog = lane_catalog;
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = DataSpaceCatalog::default();
+        nexus.routing_policy = iroha_config::parameters::actual::LaneRoutingPolicy::default();
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+    }
+
     fn state_with_future_created_autoscale_lane(
         created_height: u64,
         committed_height: u64,
@@ -14852,6 +14869,7 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
+        install_active_single_lane_nexus(&state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let tx = accepted_tx_by_someone(&time_source);

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     count_evidence_files,
     count_recognized_evidence_artifacts,
     finalize_custom_required_evidence_rows,
+    hashable_evidence_values,
     record_consistent_evidence_value,
     record_custom_required_evidence_artifact,
     record_inconsistent_evidence_values_error,
@@ -62,6 +64,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     recognized_evidence_artifacts_are_valid,
     require_status_in,
     require_string,
+    require_string_coverage,
     require_string_inventory_count_match,
     require_string_equal,
     require_string_value_equal,
@@ -85,12 +88,41 @@ DEFAULT_MAX_SNAPSHOT_AGE_SECS = 8 * 24 * 60 * 60
 DEFAULT_MAX_INGEST_LAG_SECS = 15 * 60
 HEX32_LEN = 32
 HEX64_LEN = 64
+REQUIRED_METRICS = (
+    "sorafs_reputation_ingest_lag_seconds",
+    "sorafs_reputation_snapshot_age_seconds",
+    "sorafs_reputation_snapshot_generated_at_unix",
+    "sorafs_reputation_provider_count",
+    "sorafs_reputation_low_score_providers",
+    "sorafs_reputation_score",
+    "sorafs_reputation_threshold_crossings_total",
+    "sorafs_reputation_iteration_count",
+    "sorafs_reputation_penalty_applied_total",
+)
 EXPLICIT_KIND_CONFLICT_DIAGNOSTIC = "explicit evidence kind conflicts with previous kind"
 UNKNOWN_SCHEMA_DIAGNOSTIC = "unknown reputation evidence schema"
 EXPLICIT_KIND_SCHEMA_MISMATCH_DIAGNOSTIC = (
     "evidence schema does not match explicit kind"
 )
 INFER_KIND_DIAGNOSTIC = "cannot infer evidence kind"
+PROVIDER_ID_PATTERN = re.compile(r"^provider-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+PROVIDER_ID_ERROR = "provider_id must match canonical lowercase `provider-name`"
+FORBIDDEN_PROVIDER_ID_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "private",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -172,6 +204,8 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "merkle_root_hex",
         "provider_count",
         "providers",
+        "metric_count",
+        "metrics",
         "snapshot_age_seconds",
         "ingest_lag_seconds",
     ),
@@ -184,7 +218,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "snapshot_id_hex",
         "merkle_root_hex",
         "sse_event_count",
+        "sse_events",
         "websocket_event_count",
+        "websocket_events",
     ),
     "consumption": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
@@ -241,7 +277,34 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_context_reviewed",
     "provider_count",
     "provider_id",
+    "metric_count",
+    "metrics",
 )
+
+
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
 
 
 @dataclass(frozen=True)
@@ -406,7 +469,13 @@ def validate_provider_inventory(payload: dict[str, Any], errors: list[str]) -> N
         allow_scalar_items=False,
     )
     for _, provider in require_object_array(payload, "providers", errors):
-        require_string(provider, "name", errors)
+        provider_name = require_string(provider, "name", errors)
+        if provider_name:
+            validate_provider_id_value(
+                provider_name,
+                errors,
+                path="providers[].name",
+            )
 
 
 def validate_common_rollout_context(
@@ -454,14 +523,47 @@ def validate_publish_or_latest(
     )
 
 
+def validate_provider_id_value(
+    provider_id: str,
+    errors: list[str],
+    *,
+    path: str,
+) -> str:
+    """Require a reviewed lowercase production provider identifier value."""
+
+    if not provider_id:
+        return ""
+    if PROVIDER_ID_PATTERN.fullmatch(provider_id) is None:
+        errors.append(PROVIDER_ID_ERROR.replace("provider_id", path))
+        return ""
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_PROVIDER_ID_MARKERS
+        if marker in provider_id.split("-")
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+        return ""
+    return provider_id
+
+
+def require_provider_id(
+    payload: dict[str, Any], errors: list[str], *, path: str = "provider_id"
+) -> str:
+    """Require a reviewed lowercase production provider identifier."""
+
+    provider_id = require_string(payload, "provider_id", errors)
+    return validate_provider_id_value(provider_id, errors, path=path)
+
+
 def validate_provider(evidence: LoadedEvidence, errors: list[str]) -> tuple[str, str, str]:
     payload = evidence.payload
     snapshot_id = require_hex(payload, "snapshot_id_hex", HEX32_LEN, errors)
     merkle_root = require_hex(payload, "merkle_root_hex", HEX64_LEN, errors)
     provider = require_object(payload.get("provider"), "provider", errors)
     proof = require_object(payload.get("proof"), "proof", errors)
-    provider_id = require_string(provider, "provider_id", errors)
-    proof_provider_id = require_string(proof, "provider_id", errors)
+    provider_id = require_provider_id(provider, errors, path="provider.provider_id")
+    proof_provider_id = require_provider_id(proof, errors, path="proof.provider_id")
     require_string_value_equal(
         proof_provider_id,
         "proof.provider_id",
@@ -506,7 +608,21 @@ def validate_events(evidence: LoadedEvidence, errors: list[str]) -> tuple[str, s
     if not event_records:
         return "", "", count
     event = event_records[-1][1]
-    sequence = require_positive_int(event, "sequence", errors)
+    sequences: list[int] = []
+    for _index, event_record in event_records:
+        event_sequence = require_positive_int(event_record, "sequence", errors)
+        if event_sequence:
+            sequences.append(event_sequence)
+    unique_sequences = set(sequences)
+    if len(unique_sequences) != len(sequences):
+        errors.append("events must not contain duplicate sequence values")
+    if (
+        isinstance(count, int)
+        and not isinstance(count, bool)
+        and count != len(unique_sequences)
+    ):
+        errors.append("count must match unique events sequence count")
+    sequence = sequences[-1] if sequences else 0
     snapshot_id = require_hex(event, "snapshot_id_hex", HEX32_LEN, errors)
     merkle_root = require_hex(event, "merkle_root_hex", HEX64_LEN, errors)
     require_minimum_int(event, "provider_count", 1, errors)
@@ -522,7 +638,7 @@ def validate_verify(evidence: LoadedEvidence, errors: list[str]) -> tuple[str, s
     merkle_root = require_hex(payload, "merkle_root_hex", HEX64_LEN, errors)
     require_minimum_int(payload, "provider_count", 1, errors)
     validate_provider_inventory(payload, errors)
-    provider_id = require_string(payload, "provider_id", errors)
+    provider_id = require_provider_id(payload, errors)
     require_int_range(
         payload,
         "provider_score_bps",
@@ -556,6 +672,10 @@ def validate_metrics(
     merkle_root = require_hex(payload, "merkle_root_hex", HEX64_LEN, errors)
     provider_count = require_minimum_int(payload, "provider_count", 1, errors)
     validate_provider_inventory(payload, errors)
+    require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_positive_int(payload, "metric_count", errors)
+    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
+    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
     require_maximum_number(
         payload,
         "snapshot_age_seconds",
@@ -588,7 +708,27 @@ def validate_transport(evidence: LoadedEvidence, errors: list[str]) -> tuple[str
     snapshot_id = require_hex(payload, "snapshot_id_hex", HEX32_LEN, errors)
     merkle_root = require_hex(payload, "merkle_root_hex", HEX64_LEN, errors)
     sse_count = require_positive_int(payload, "sse_event_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "sse_events",
+        "sse_event_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "sse_events", errors):
+        require_string(record, "name", errors)
     websocket_count = require_positive_int(payload, "websocket_event_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "websocket_events",
+        "websocket_event_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "websocket_events", errors):
+        require_string(record, "name", errors)
     return snapshot_id, merkle_root, sse_count, websocket_count
 
 
@@ -633,6 +773,8 @@ def validate_evidence_set(
     snapshot_bound_artifacts: list[dict[str, Any]] = []
     provider_ids: set[str] = set()
     provider_counts: set[int] = set()
+    metric_counts: set[int] = set()
+    metric_names: set[str] = set()
 
     for evidence in loaded:
         errors: list[str] = []
@@ -674,6 +816,8 @@ def validate_evidence_set(
                 max_snapshot_age_secs=max_snapshot_age_secs,
                 max_ingest_lag_secs=max_ingest_lag_secs,
             )
+            record_observed_evidence_value(metric_counts, payload.get("metric_count"))
+            metric_names.update(hashable_evidence_values(payload.get("metrics")))
         elif evidence.kind == "transport":
             snapshot_id, merkle_root, _sse, _websocket = validate_transport(evidence, errors)
         elif evidence.kind == "consumption":
@@ -827,6 +971,8 @@ def validate_evidence_set(
         "required": required,
         "provider_ids": sorted(provider_ids),
         "provider_count_values": sorted(provider_counts),
+        "metrics": sorted(metric_names),
+        "metric_count_values": sorted(metric_counts),
         "errors": errors,
     }
 

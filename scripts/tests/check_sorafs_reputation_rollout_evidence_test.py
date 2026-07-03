@@ -136,6 +136,8 @@ def metrics_evidence(*, snapshot_age: int = 120, ingest_lag: int = 60) -> dict:
         "ingest_lag_seconds": ingest_lag,
         "provider_count": 2,
         "providers": provider_inventory(),
+        "metric_count": len(MODULE.REQUIRED_METRICS),
+        "metrics": list(MODULE.REQUIRED_METRICS),
         "response_bodies_included": False,
     }
 
@@ -149,8 +151,10 @@ def transport_evidence() -> dict:
         "merkle_root_hex": MERKLE_ROOT,
         "sse_connected": True,
         "sse_event_count": 1,
+        "sse_events": [{"name": "sse-snapshot-00"}],
         "websocket_connected": True,
         "websocket_event_count": 1,
+        "websocket_events": [{"name": "websocket-snapshot-00"}],
         "response_bodies_included": False,
     }
 
@@ -223,12 +227,19 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
             assert artifact["fingerprint"]["environment"] == ENVIRONMENT
             assert artifact["fingerprint"]["deployment_context_reviewed"] is True
     assert payload["provider_ids"] == ["provider-a"]
+    assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
+    assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
     assert payload["valid_snapshot_bindings"] == [
         {
             "snapshot_id_hex": SNAPSHOT_ID,
             "merkle_root_hex": MERKLE_ROOT,
         }
     ]
+    metrics_artifact = payload["required"]["metrics"]["artifacts"][0]
+    assert metrics_artifact["fingerprint"]["metric_count"] == len(
+        MODULE.REQUIRED_METRICS
+    )
+    assert metrics_artifact["fingerprint"]["metrics"] == list(MODULE.REQUIRED_METRICS)
     production_readiness = load_production_readiness_module()
     _aggregate_row, aggregate_errors = production_readiness.validate_gate_summary(
         production_readiness.GATE_BY_NAME["reputation"],
@@ -383,6 +394,42 @@ def test_snapshot_providers_must_not_duplicate(tmp_path: Path) -> None:
     assert "provider_count must match unique providers count" in artifact["errors"]
 
 
+def test_snapshot_provider_inventory_must_use_provider_ids(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = snapshot_summary()
+    payload["providers"][0] = {"name": "provider_alpha"}
+    write_json(tmp_path / "latest.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["latest"]["artifacts"][0]
+    assert (
+        "providers[].name must match canonical lowercase `provider-name`"
+        in artifact["errors"]
+    )
+
+
+def test_snapshot_provider_inventory_rejects_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = snapshot_summary()
+    payload["providers"][0] = {"name": "provider-placeholder"}
+    write_json(tmp_path / "latest.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["latest"]["artifacts"][0]
+    assert (
+        "providers[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
 def test_events_must_carry_positive_limit(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
@@ -425,6 +472,33 @@ def test_events_count_must_not_exceed_limit(tmp_path: Path) -> None:
     assert "count must be <= limit" in artifact["errors"]
 
 
+def test_events_sequences_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = events_evidence()
+    payload["events"].append(
+        {
+            "version": 1,
+            "sequence": 1,
+            "snapshot_id_hex": SNAPSHOT_ID,
+            "generated_at_unix": GENERATED_AT,
+            "merkle_root_hex": MERKLE_ROOT,
+            "provider_count": 2,
+        }
+    )
+    payload["count"] = 2
+    payload["next_since"] = 2
+    write_json(tmp_path / "events.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["events"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "events must not contain duplicate sequence values" in artifact["errors"]
+    assert "count must match unique events sequence count" in artifact["errors"]
+
+
 def test_provider_proof_provider_id_must_match_provider(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
@@ -438,6 +512,96 @@ def test_provider_proof_provider_id_must_match_provider(tmp_path: Path) -> None:
     artifact = payload["required"]["provider"]["artifacts"][0]
     assert artifact["valid"] is False
     assert "proof.provider_id must match provider.provider_id" in artifact["errors"]
+
+
+def test_provider_id_must_be_canonical(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "provider-provider-a.json",
+        provider_evidence(provider_id="provider_alpha"),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "provider.provider_id must match canonical lowercase `provider-name`"
+        in artifact["errors"]
+    )
+
+
+def test_provider_id_rejects_non_production_markers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "provider-provider-a.json",
+        provider_evidence(provider_id="provider-prod-placeholder"),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "provider.provider_id must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+    assert (
+        "proof.provider_id must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_verify_provider_id_rejects_non_production_markers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "verify-provider-a.json",
+        verify_evidence(provider_id="provider-prod-placeholder"),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["verify"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "provider_id must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_provider_id_accepts_future_production_label(tmp_path: Path) -> None:
+    provider_id = "provider-prod-a-202607"
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "provider-provider-a.json",
+        provider_evidence(provider_id=provider_id),
+    )
+    write_json(
+        tmp_path / "verify-provider-a.json",
+        verify_evidence(provider_id=provider_id),
+    )
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-provider",
+            provider_id,
+            "--summary-out",
+            str(summary),
+        )
+        == 0
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["status"] == "ready"
+    assert payload["provider_ids"] == [provider_id]
 
 
 def test_provider_proof_siblings_must_be_unique(tmp_path: Path) -> None:
@@ -560,6 +724,80 @@ def test_metrics_schema_must_match(tmp_path: Path) -> None:
     )
 
 
+def test_metrics_metric_count_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = metrics_evidence()
+    payload.pop("metric_count")
+    write_json(tmp_path / "metrics.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["metrics"]["artifacts"][0]
+    assert "metric_count must be a positive integer" in artifact["errors"]
+
+
+def test_metrics_metric_count_must_match_unique_metrics(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = metrics_evidence()
+    payload["metric_count"] += 1
+    write_json(tmp_path / "metrics.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["metrics"]["artifacts"][0]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
+
+
+def test_metrics_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = metrics_evidence()
+    payload["metrics"].append(payload["metrics"][0])
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "metrics.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["metrics"]["artifacts"][0]
+    assert "metrics must not contain duplicate values" in artifact["errors"]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
+
+
+def test_metrics_must_cover_required_metrics(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = metrics_evidence()
+    missing = payload["metrics"].pop()
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "metrics.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["metrics"]["artifacts"][0]
+    assert f"metrics must include value `{missing}`" in artifact["errors"]
+
+
+def test_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = metrics_evidence()
+    payload["metrics"].append("sorafs_reputation_unknown_metric_total")
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "metrics.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["metrics"]["artifacts"][0]
+    assert "metrics must not include unknown values" in artifact["errors"]
+
+
 def test_metrics_requires_merkle_root_binding(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = metrics_evidence()
@@ -604,6 +842,74 @@ def test_transport_schema_must_match(tmp_path: Path) -> None:
     artifact = payload["required"]["transport"]["artifacts"][0]
     assert (
         "transport.schema must be sorafs.reputation.transport_canary.v1"
+        in artifact["errors"]
+    )
+
+
+def test_transport_sse_event_count_must_match_unique_events(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = transport_evidence()
+    payload["sse_event_count"] += 1
+    write_json(tmp_path / "transport.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["transport"]["artifacts"][0]
+    assert "sse_event_count must match unique sse_events count" in artifact["errors"]
+
+
+def test_transport_sse_events_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = transport_evidence()
+    payload["sse_events"].append(dict(payload["sse_events"][0]))
+    payload["sse_event_count"] = len(payload["sse_events"])
+    write_json(tmp_path / "transport.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["transport"]["artifacts"][0]
+    assert "sse_events must not contain duplicate values" in artifact["errors"]
+    assert "sse_event_count must match unique sse_events count" in artifact["errors"]
+
+
+def test_transport_websocket_event_count_must_match_unique_events(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = transport_evidence()
+    payload["websocket_event_count"] += 1
+    write_json(tmp_path / "transport.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["transport"]["artifacts"][0]
+    assert (
+        "websocket_event_count must match unique websocket_events count"
+        in artifact["errors"]
+    )
+
+
+def test_transport_websocket_events_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = transport_evidence()
+    payload["websocket_events"].append(dict(payload["websocket_events"][0]))
+    payload["websocket_event_count"] = len(payload["websocket_events"])
+    write_json(tmp_path / "transport.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["transport"]["artifacts"][0]
+    assert "websocket_events must not contain duplicate values" in artifact["errors"]
+    assert (
+        "websocket_event_count must match unique websocket_events count"
         in artifact["errors"]
     )
 

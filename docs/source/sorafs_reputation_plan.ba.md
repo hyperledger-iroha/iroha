@@ -4,10 +4,12 @@ direction: ltr
 source: docs/source/sorafs_reputation_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7c3f376f7d47433fe76ec64a9d1fc560497b67a0d45031fecac6f874ee6f968a
-source_last_modified: "2026-07-02T11:08:03.489917+00:00"
-translation_last_reviewed: 2026-07-02
+source_hash: 4334261e59bd0969217cac6fe08385201104647e8eede293f9ade0bdefeb99e9
+source_last_modified: "2026-07-03T11:59:18.567095+00:00"
+translation_last_reviewed: 2026-07-03
+source_mtime: 2026-07-03T11:59:18.567095+00:00
 ---
+
 # SoraFS Provider Reputation Oracle
 
 ## Status
@@ -23,10 +25,13 @@ or verifier foundations. `scripts/build_sorafs_reputation_canary.py` builds
 individual payload-free SFM-3 canary artifacts for publish/latest snapshots,
 provider proofs, events, proof verification, metrics, transport, and
 routing/incentive consumption evidence. The builder requires reviewed
-deployment context, snapshot id/root bindings, provider proof inputs where
-applicable, reviewed provider names whose unique inventory matches
+deployment context, snapshot id/root bindings, reviewed lowercase production
+provider IDs, provider proof inputs where applicable, reviewed provider names
+using the same `provider-*` production shape whose unique inventory matches
 `provider_count`, unique provider proof sibling hashes, snapshot-age and
-ingest-lag threshold facts, bounded event-watch `limit`/`count` facts, and validates every generated artifact through
+ingest-lag threshold facts, duplicate/unknown metric rejection before writes,
+bounded event-watch `limit`/`count` facts with duplicate-free sequence
+inventories, and validates every generated artifact through
 `scripts/check_sorafs_reputation_rollout_evidence.py` before writing.
 Checked-in response-file examples cover provider and metrics canaries.
 
@@ -223,9 +228,25 @@ CREATE TABLE reputation_snapshots (
   live collection. Publish/latest snapshot, proof verification, metrics, and
   routing/incentive consumption artifacts must bind `provider_count` to the
   unique canonical `providers[].name` inventory and reject duplicate provider
-  entries before promotion can report ready. Event-watch evidence must carry a
-  positive `limit`, keep `count` equal to the `events[]` length, and reject
-  `count` values above that limit before transport evidence can report ready.
+  entries before promotion can report ready. Those `providers[].name` entries
+  must use reviewed lowercase `provider-*` IDs without non-production markers,
+  matching the provider-proof and verification `provider_id` policy. Metrics
+  artifacts also bind `metric_count` to the unique canonical `metrics`
+  inventory, require the reviewed reputation metrics set, and reject duplicate
+  or unknown metric entries before promotion can report ready. The summary
+  exports the sorted reviewed `metrics` inventory plus `metric_count_values`,
+  and the aggregate production-readiness gate requires those fields to match
+  the metrics artifact fingerprint before final promotion can report ready.
+  Provider proof and verification artifacts must use reviewed lowercase
+  `provider-*` IDs and must not contain non-production markers in
+  provider/proof/verify `provider_id` fields. Event-watch evidence
+  must carry a positive `limit`, keep `count` equal to the `events[]` length,
+  bind `count` to duplicate-free `events[].sequence` values, and reject `count`
+  values above that limit before transport evidence can report ready.
+  Transport evidence must bind `sse_event_count` and `websocket_event_count` to
+  the unique canonical `sse_events[].name` and `websocket_events[].name`
+  inventories and reject duplicate transport-event entries before promotion can
+  report ready.
   It supports shell-style `@ARGFILE` inputs for direct replay of reviewed
   evidence directories and explicit artifacts.
 - `scripts/run_sorafs_reputation_rollout_evidence.py` collects the deployed
@@ -375,13 +396,23 @@ Completed local foundations:
   subset.
 - `scripts/build_sorafs_reputation_canary.py` provides checked-in payload-free
   canary generation for the local SFM-3 rollout gate. Count-bearing reputation
-  canaries bind `provider_count` to reviewed `providers[].name` inventory before
-  writing. Provider proof canaries reject duplicate Merkle sibling hashes before
-  writing, and the rollout checker enforces the same uniqueness on externally
+  canaries bind `provider_count` to reviewed `provider-*` `providers[].name`
+  inventory before writing, and metrics canaries derive `metric_count` from the
+  reviewed required metric inventory before writing. The rollout summary now
+  carries the reviewed metric inventory and `metric_count_values` as
+  aggregate-gate metadata so final production readiness cannot promote a
+  reputation summary whose metrics evidence is absent, truncated, unknown,
+  unsorted, or untethered from the
+  metrics artifact fingerprint. The builder rejects non-canonical or
+  non-production `--provider-id` values before writing. Provider proof canaries
+  reject duplicate Merkle sibling hashes before writing, and the rollout
+  checker enforces the same uniqueness on externally
   supplied provider proof evidence. Event-watch canaries and externally supplied
   event artifacts must also prove a positive polling `limit`, exact
-  `count`/`events[]` length agreement, and `count <= limit` before readiness is
-  reported.
+  `count`/`events[]` length agreement, duplicate-free `events[].sequence`
+  inventory binding, and `count <= limit` before readiness is reported.
+  Transport canaries also require reviewed SSE and WebSocket event labels
+  matching `sse_event_count` and `websocket_event_count` before writing.
 - Rollout evidence collection harness that publishes, reads back, watches, proof
   replays, and verifies the deployed reputation evidence bundle from one
   response-file driven operator command.

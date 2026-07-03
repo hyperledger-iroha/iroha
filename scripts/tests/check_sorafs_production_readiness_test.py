@@ -87,6 +87,14 @@ def default_gate_metadata(
         add_hex_list("valid_workflow_digests", "workflow_digest_hex")
         add_policy()
     elif gate_name == "appeal_finance":
+        metadata["metric_count_values"] = [len(MODULE.APPEAL_FINANCE_REQUIRED_METRICS)]
+        metadata["metrics"] = sorted(MODULE.APPEAL_FINANCE_REQUIRED_METRICS)
+        fingerprints.update(
+            {
+                "metric_count": len(MODULE.APPEAL_FINANCE_REQUIRED_METRICS),
+                "metrics": list(MODULE.APPEAL_FINANCE_REQUIRED_METRICS),
+            }
+        )
         add_hex_list("valid_config_digests", "config_digest_hex")
         add_policy()
         metadata["valid_multi_peer_runs"] = [
@@ -102,17 +110,51 @@ def default_gate_metadata(
         ]
         fingerprints.update({"case_count": 1, "peer_count": 4, "validator_count": 4})
     elif gate_name == "gateway_compliance":
+        metadata["metric_count_values"] = [
+            len(MODULE.GATEWAY_COMPLIANCE_REQUIRED_METRICS)
+        ]
+        metadata["metrics"] = sorted(MODULE.GATEWAY_COMPLIANCE_REQUIRED_METRICS)
+        fingerprints.update(
+            {
+                "metric_count": len(MODULE.GATEWAY_COMPLIANCE_REQUIRED_METRICS),
+                "metrics": list(MODULE.GATEWAY_COMPLIANCE_REQUIRED_METRICS),
+            }
+        )
         add_hex_list("valid_bundle_digests", "bundle_digest_hex")
         add_policy()
     elif gate_name == "gateway_load":
+        metadata["metric_count_values"] = [len(MODULE.GATEWAY_LOAD_REQUIRED_METRICS)]
+        metadata["metrics"] = sorted(MODULE.GATEWAY_LOAD_REQUIRED_METRICS)
+        fingerprints.update(
+            {
+                "metric_count": len(MODULE.GATEWAY_LOAD_REQUIRED_METRICS),
+                "metrics": list(MODULE.GATEWAY_LOAD_REQUIRED_METRICS),
+            }
+        )
         add_policy()
         add_hex_list("valid_staging_report_digests", "staging_report_digest_hex")
         add_hex_list("valid_suite_report_digests", "suite_report_digest_hex")
     elif gate_name == "governance_dag":
+        metadata["metric_count_values"] = [len(MODULE.GOVERNANCE_DAG_REQUIRED_METRICS)]
+        metadata["metrics"] = sorted(MODULE.GOVERNANCE_DAG_REQUIRED_METRICS)
+        fingerprints.update(
+            {
+                "metric_count": len(MODULE.GOVERNANCE_DAG_REQUIRED_METRICS),
+                "metrics": list(MODULE.GOVERNANCE_DAG_REQUIRED_METRICS),
+            }
+        )
         add_hex_list("valid_checkpoint_digests", "checkpoint_digest_hex")
         add_policy()
         add_hex_list("valid_public_head_cids", "public_head_cid_hex")
     elif gate_name == "hedging_billing":
+        metadata["metric_count_values"] = [len(MODULE.HEDGING_BILLING_REQUIRED_METRICS)]
+        metadata["metrics"] = sorted(MODULE.HEDGING_BILLING_REQUIRED_METRICS)
+        fingerprints.update(
+            {
+                "metric_count": len(MODULE.HEDGING_BILLING_REQUIRED_METRICS),
+                "metrics": list(MODULE.HEDGING_BILLING_REQUIRED_METRICS),
+            }
+        )
         metadata["valid_billing_cycles"] = [
             {
                 "cycle_id": "cycle-1",
@@ -147,6 +189,14 @@ def default_gate_metadata(
         add_policy()
         add_hex_list("valid_reference_decision_ids", "decision_id_hex")
     elif gate_name == "moderation_panel":
+        metadata["metric_count_values"] = [len(MODULE.MODERATION_PANEL_REQUIRED_METRICS)]
+        metadata["metrics"] = sorted(MODULE.MODERATION_PANEL_REQUIRED_METRICS)
+        fingerprints.update(
+            {
+                "metric_count": len(MODULE.MODERATION_PANEL_REQUIRED_METRICS),
+                "metrics": list(MODULE.MODERATION_PANEL_REQUIRED_METRICS),
+            }
+        )
         metadata["deployment_context"] = {
             "deployment_id": deployment_id,
             "environment": environment,
@@ -201,13 +251,37 @@ def default_gate_metadata(
         )
         fingerprints.update({"case_count": 1, "peer_count": 4, "validator_count": 4})
     elif gate_name == "orderbook":
+        metadata["metric_count_values"] = [len(MODULE.ORDERBOOK_REQUIRED_METRICS)]
+        metadata["metrics"] = sorted(MODULE.ORDERBOOK_REQUIRED_METRICS)
+        fingerprints.update(
+            {
+                "metric_count": len(MODULE.ORDERBOOK_REQUIRED_METRICS),
+                "metrics": list(MODULE.ORDERBOOK_REQUIRED_METRICS),
+            }
+        )
         add_hex_list("valid_contract_digests", "contract_digest_hex")
         add_policy()
     elif gate_name == "pdp":
+        metadata["metric_count_values"] = [len(MODULE.PDP_REQUIRED_METRICS)]
+        metadata["metrics"] = sorted(MODULE.PDP_REQUIRED_METRICS)
+        fingerprints.update(
+            {
+                "metric_count": len(MODULE.PDP_REQUIRED_METRICS),
+                "metrics": list(MODULE.PDP_REQUIRED_METRICS),
+            }
+        )
         add_policy()
         add_hex_list("valid_proof_summary_digests", "proof_summary_digest_hex")
         add_hex_list("valid_provider_roster_digests", "provider_roster_digest_hex")
     elif gate_name == "pop_credentials":
+        metadata["metric_count_values"] = [len(MODULE.POP_CREDENTIALS_REQUIRED_METRICS)]
+        metadata["metrics"] = sorted(MODULE.POP_CREDENTIALS_REQUIRED_METRICS)
+        fingerprints.update(
+            {
+                "metric_count": len(MODULE.POP_CREDENTIALS_REQUIRED_METRICS),
+                "metrics": list(MODULE.POP_CREDENTIALS_REQUIRED_METRICS),
+            }
+        )
         metadata["valid_juror_sync_bindings"] = [
             {
                 "synced_root_digest_hex": SHA256,
@@ -225,9 +299,25 @@ def default_gate_metadata(
         add_hex_list("valid_revocation_list_digests", "revocation_list_digest_hex")
         add_hex_list("valid_root_digests", "root_digest_hex")
     elif gate_name == "por":
+        metadata["metric_count_values"] = [len(MODULE.POR_REQUIRED_METRICS)]
+        metadata["metrics"] = sorted(MODULE.POR_REQUIRED_METRICS)
+        fingerprints.update(
+            {
+                "metric_count": len(MODULE.POR_REQUIRED_METRICS),
+                "metrics": list(MODULE.POR_REQUIRED_METRICS),
+            }
+        )
         add_policy()
         add_hex_list("valid_seed_replay_digests", "seed_replay_digest_hex")
     elif gate_name == "potr":
+        metadata["metric_count_values"] = [len(MODULE.POTR_REQUIRED_METRICS)]
+        metadata["metrics"] = sorted(MODULE.POTR_REQUIRED_METRICS)
+        fingerprints.update(
+            {
+                "metric_count": len(MODULE.POTR_REQUIRED_METRICS),
+                "metrics": list(MODULE.POTR_REQUIRED_METRICS),
+            }
+        )
         add_policy()
         add_hex_list("valid_pq_key_roster_digests", "pq_key_roster_digest_hex")
         add_hex_list("valid_receipt_summary_digests", "receipt_summary_digest_hex")
@@ -252,11 +342,21 @@ def default_gate_metadata(
         )
         add_hex_list("valid_smoke_output_digests", "smoke_output_digest_hex")
     elif gate_name == "repair":
+        metadata["metric_count_values"] = [len(MODULE.REPAIR_REQUIRED_METRICS)]
+        metadata["metrics"] = sorted(MODULE.REPAIR_REQUIRED_METRICS)
+        fingerprints.update(
+            {
+                "metric_count": len(MODULE.REPAIR_REQUIRED_METRICS),
+                "metrics": list(MODULE.REPAIR_REQUIRED_METRICS),
+            }
+        )
         add_hex_list("valid_failure_bundle_digests", "evidence_bundle_digest_hex")
         add_hex_list("valid_handoff_digests", "handoff_digest_hex")
         add_policy()
         add_hex_list("valid_roster_digests", "roster_digest_hex")
     elif gate_name == "reputation":
+        metadata["metric_count_values"] = [len(MODULE.REPUTATION_REQUIRED_METRICS)]
+        metadata["metrics"] = sorted(MODULE.REPUTATION_REQUIRED_METRICS)
         metadata["merkle_root_hex"] = SHA256
         metadata["provider_count_values"] = [1]
         metadata["provider_ids"] = ["provider-a"]
@@ -267,12 +367,16 @@ def default_gate_metadata(
         fingerprints.update(
             {
                 "merkle_root_hex": SHA256,
+                "metric_count": len(MODULE.REPUTATION_REQUIRED_METRICS),
+                "metrics": list(MODULE.REPUTATION_REQUIRED_METRICS),
                 "provider_count": 1,
                 "provider_id": "provider-a",
                 "snapshot_id_hex": SNAPSHOT_ID,
             }
         )
     elif gate_name == "reserve_rent":
+        metadata["metric_count_values"] = [len(MODULE.RESERVE_RENT_REQUIRED_METRICS)]
+        metadata["metrics"] = sorted(MODULE.RESERVE_RENT_REQUIRED_METRICS)
         add_policy()
         metadata["valid_policy_matrix_bindings"] = [
             {"policy_digest_hex": SHA256, "matrix_digest_hex": SHA256}
@@ -303,6 +407,8 @@ def default_gate_metadata(
                 "completed_at_unix": generated_at_unix,
                 "ledger_digest_hex": SHA256,
                 "matrix_digest_hex": SHA256,
+                "metric_count": len(MODULE.RESERVE_RENT_REQUIRED_METRICS),
+                "metrics": list(MODULE.RESERVE_RENT_REQUIRED_METRICS),
                 "provider_count": 1,
                 "started_at_unix": generated_at_unix - 60,
             }
@@ -607,6 +713,9 @@ def test_payload_free_summary_metadata_fields_have_validator_coverage() -> None:
         MODULE.PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS
     )
     string_list_fields = set(MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS)
+    string_array_list_fields = set(
+        MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS
+    )
     scalar_hex_fields = set(MODULE.PAYLOAD_FREE_SUMMARY_STRING_METADATA_FIELDS)
     object_fields = set(MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS)
 
@@ -630,17 +739,22 @@ def test_payload_free_summary_metadata_fields_have_validator_coverage() -> None:
         | object_list_fields
         | positive_int_list_fields
         | string_list_fields
+        | string_array_list_fields
         | scalar_hex_fields
         | object_fields
     )
     assert set(MODULE.PAYLOAD_FREE_SUMMARY_LIST_METADATA_FIELDS) == (
-        valid_fields | positive_int_list_fields | string_list_fields
+        valid_fields
+        | positive_int_list_fields
+        | string_list_fields
+        | string_array_list_fields
     )
     assert set(MODULE.PAYLOAD_FREE_SUMMARY_ORDERED_LIST_METADATA_FIELDS) == (
         hex_list_fields
         | binding_list_fields
         | positive_int_list_fields
         | string_list_fields
+        | string_array_list_fields
     )
     assert set(MODULE.PAYLOAD_FREE_SUMMARY_HEX_METADATA_LENGTHS) == scalar_hex_fields
     assert set(MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_BINDINGS) == (
@@ -658,6 +772,20 @@ def test_payload_free_summary_metadata_fields_have_validator_coverage() -> None:
             MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS
         )
     } == string_list_fields
+    assert {
+        field
+        for _gate_name, field in (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS
+        )
+    } == string_array_list_fields
+    assert {
+        field
+        for _gate_name, field in MODULE.PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES
+    } <= (string_list_fields | string_array_list_fields)
+    assert {
+        field
+        for _gate_name, field in MODULE.PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS
+    } <= (string_list_fields | string_array_list_fields)
     assert {
         field
         for _gate_name, field in (
@@ -1214,9 +1342,15 @@ def test_artifact_paths_must_be_archive_portable(tmp_path: Path) -> None:
     first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
     absolute_path = "/tmp/private-sorafs-evidence.json"
     parent_path = "../private-sorafs-evidence.json"
+    encoded_parent_path = "nested/%2e%2e/private_key.json"
+    encoded_separator_path = "nested/bad%2Fprivate_key.json"
+    encoded_drive_path = "nested/C%3A/private_key.json"
     payload["required"][first_required]["artifacts"][0]["path"] = absolute_path
     payload["recognized_artifacts"][0]["path"] = absolute_path
     payload["recognized_artifacts"][1]["path"] = parent_path
+    payload["recognized_artifacts"][2]["path"] = encoded_parent_path
+    payload["recognized_artifacts"][3]["path"] = encoded_separator_path
+    payload["recognized_artifacts"][4]["path"] = encoded_drive_path
     summary = tmp_path / "summary.json"
     write_json(tmp_path / "gateway_load.json", payload)
 
@@ -1235,11 +1369,17 @@ def test_artifact_paths_must_be_archive_portable(tmp_path: Path) -> None:
     errors = "\n".join(result["errors"])
     assert (
         ".path must be archive-relative without absolute, empty, current, "
-        "parent, or platform-specific segments"
+        "parent, encoded, URI-scheme-like, or platform-specific segments"
         in errors
     )
+    assert "recognized_artifacts[2].path" in errors
+    assert "recognized_artifacts[3].path" in errors
+    assert "recognized_artifacts[4].path" in errors
     assert absolute_path not in errors
     assert parent_path not in errors
+    assert encoded_parent_path not in errors
+    assert encoded_separator_path not in errors
+    assert encoded_drive_path not in errors
 
 
 def test_artifact_paths_reject_platform_specific_segments(tmp_path: Path) -> None:
@@ -1268,7 +1408,7 @@ def test_artifact_paths_reject_platform_specific_segments(tmp_path: Path) -> Non
     errors = "\n".join(result["errors"])
     assert (
         ".path must be archive-relative without absolute, empty, current, "
-        "parent, or platform-specific segments"
+        "parent, encoded, URI-scheme-like, or platform-specific segments"
         in errors
     )
     assert windows_path not in errors
@@ -2741,6 +2881,65 @@ def test_gateway_compliance_policy_metadata_for_gate_passes(tmp_path: Path) -> N
     assert run_gate(tmp_path, "--require-gate", "gateway_compliance") == 0
 
 
+def test_gateway_compliance_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_compliance")
+    remove_fingerprint_metadata(
+        payload,
+        "metric_count",
+        "metrics",
+        kind_name="observability",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_compliance.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_compliance",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_gateway_compliance_metrics_metadata_must_cover_required_values(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_compliance")
+    missing = payload["metrics"].pop()
+    payload["metric_count_values"] = [len(payload["metrics"])]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=len(payload["metrics"]),
+        metrics=payload["metrics"],
+        kind_name="observability",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_compliance.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_compliance",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert f"metrics must include metadata value `{missing}`" in errors
+
+
 def test_appeal_finance_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     payload = gate_summary("appeal_finance")
     payload["valid_policy_digests"] = [SHA256]
@@ -2748,6 +2947,65 @@ def test_appeal_finance_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     write_json(tmp_path / "appeal_finance.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "appeal_finance") == 0
+
+
+def test_appeal_finance_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("appeal_finance")
+    remove_fingerprint_metadata(
+        payload,
+        "metric_count",
+        "metrics",
+        kind_name="dashboard_metrics",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "appeal_finance.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "appeal_finance",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_appeal_finance_metrics_metadata_must_cover_required_values(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("appeal_finance")
+    missing = payload["metrics"].pop()
+    payload["metric_count_values"] = [len(payload["metrics"])]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=len(payload["metrics"]),
+        metrics=payload["metrics"],
+        kind_name="dashboard_metrics",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "appeal_finance.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "appeal_finance",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert f"metrics must include metadata value `{missing}`" in errors
 
 
 def test_gateway_load_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
@@ -2768,6 +3026,63 @@ def test_orderbook_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     assert run_gate(tmp_path, "--require-gate", "orderbook") == 0
 
 
+def test_orderbook_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("orderbook")
+    remove_fingerprint_metadata(
+        payload,
+        "metric_count",
+        "metrics",
+        kind_name="observability",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "orderbook.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "orderbook",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_orderbook_metrics_metadata_must_cover_required_values(tmp_path: Path) -> None:
+    payload = gate_summary("orderbook")
+    missing = payload["metrics"].pop()
+    payload["metric_count_values"] = [len(payload["metrics"])]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=len(payload["metrics"]),
+        metrics=payload["metrics"],
+        kind_name="observability",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "orderbook.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "orderbook",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert f"metrics must include metadata value `{missing}`" in errors
+
+
 def test_pdp_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     payload = gate_summary("pdp")
     payload["valid_policy_digests"] = [SHA256]
@@ -2784,6 +3099,63 @@ def test_pdp_provider_roster_metadata_for_gate_passes(tmp_path: Path) -> None:
     write_json(tmp_path / "pdp.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "pdp") == 0
+
+
+def test_pdp_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("pdp")
+    remove_fingerprint_metadata(
+        payload,
+        "metric_count",
+        "metrics",
+        kind_name="observability",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pdp.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pdp",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_pdp_metrics_metadata_must_cover_required_values(tmp_path: Path) -> None:
+    payload = gate_summary("pdp")
+    missing = payload["metrics"].pop()
+    payload["metric_count_values"] = [len(payload["metrics"])]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=len(payload["metrics"]),
+        metrics=payload["metrics"],
+        kind_name="observability",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pdp.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pdp",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert f"metrics must include metadata value `{missing}`" in errors
 
 
 def test_por_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
@@ -2817,6 +3189,65 @@ def test_pop_credentials_policy_metadata_for_gate_passes(tmp_path: Path) -> None
     assert run_gate(tmp_path, "--require-gate", "pop_credentials") == 0
 
 
+def test_pop_credentials_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("pop_credentials")
+    remove_fingerprint_metadata(
+        payload,
+        "metric_count",
+        "metrics",
+        kind_name="metrics_alerts",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pop_credentials.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pop_credentials",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_pop_credentials_metrics_metadata_must_cover_required_values(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("pop_credentials")
+    missing = payload["metrics"].pop()
+    payload["metric_count_values"] = [len(payload["metrics"])]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=len(payload["metrics"]),
+        metrics=payload["metrics"],
+        kind_name="metrics_alerts",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pop_credentials.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pop_credentials",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert f"metrics must include metadata value `{missing}`" in errors
+
+
 def test_repair_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     payload = gate_summary("repair")
     payload["valid_policy_digests"] = [SHA256]
@@ -2824,6 +3255,63 @@ def test_repair_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     write_json(tmp_path / "repair.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "repair") == 0
+
+
+def test_repair_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("repair")
+    remove_fingerprint_metadata(
+        payload,
+        "metric_count",
+        "metrics",
+        kind_name="observability",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "repair.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "repair",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_repair_metrics_metadata_must_cover_required_values(tmp_path: Path) -> None:
+    payload = gate_summary("repair")
+    missing = payload["metrics"].pop()
+    payload["metric_count_values"] = [len(payload["metrics"])]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=len(payload["metrics"]),
+        metrics=payload["metrics"],
+        kind_name="observability",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "repair.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "repair",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert f"metrics must include metadata value `{missing}`" in errors
 
 
 def test_reference_sdk_release_policy_metadata_for_gate_passes(
@@ -2872,6 +3360,63 @@ def test_potr_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     write_json(tmp_path / "potr.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "potr") == 0
+
+
+def test_potr_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("potr")
+    remove_fingerprint_metadata(
+        payload,
+        "metric_count",
+        "metrics",
+        kind_name="observability",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "potr.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "potr",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_potr_metrics_metadata_must_cover_required_values(tmp_path: Path) -> None:
+    payload = gate_summary("potr")
+    missing = payload["metrics"].pop()
+    payload["metric_count_values"] = [len(payload["metrics"])]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=len(payload["metrics"]),
+        metrics=payload["metrics"],
+        kind_name="observability",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "potr.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "potr",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert f"metrics must include metadata value `{missing}`" in errors
 
 
 def test_hex_binding_metadata_must_match_recognized_artifact_fingerprints(
@@ -3246,6 +3791,65 @@ def test_hedging_billing_policy_metadata_for_gate_passes(tmp_path: Path) -> None
     assert run_gate(tmp_path, "--require-gate", "hedging_billing") == 0
 
 
+def test_hedging_billing_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("hedging_billing")
+    remove_fingerprint_metadata(
+        payload,
+        "metric_count",
+        "metrics",
+        kind_name="metrics_alerts",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "hedging_billing.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "hedging_billing",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_hedging_billing_metrics_metadata_must_cover_required_values(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("hedging_billing")
+    missing = payload["metrics"].pop()
+    payload["metric_count_values"] = [len(payload["metrics"])]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=len(payload["metrics"]),
+        metrics=payload["metrics"],
+        kind_name="metrics_alerts",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "hedging_billing.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "hedging_billing",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert f"metrics must include metadata value `{missing}`" in errors
+
+
 def test_provider_count_values_metadata_entries_are_positive_ints(
     tmp_path: Path,
 ) -> None:
@@ -3372,6 +3976,35 @@ def test_every_string_list_metadata_field_has_owner_kind_tether() -> None:
         assert set(source_kinds) <= required_kinds[gate_name]
 
 
+def test_every_string_array_list_metadata_field_has_owner_kind_tether() -> None:
+    expected = {
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in (
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS.keys()
+        )
+    }
+    configured = set(
+        MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS
+    )
+    assert configured == expected
+
+    required_kinds = {
+        gate.name: set(gate.required_kinds) for gate in MODULE.GATE_SUMMARY_KINDS
+    }
+    for gate_name, metadata_field in sorted(configured):
+        source_kinds = (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS[
+                (gate_name, metadata_field)
+            ]
+        )
+        assert isinstance(source_kinds, tuple)
+        assert source_kinds
+        assert len(source_kinds) == len(set(source_kinds))
+        assert set(source_kinds) <= required_kinds[gate_name]
+
+
 def test_string_list_metadata_without_owner_kind_tether_fails_closed(
     tmp_path: Path,
     monkeypatch,
@@ -3399,6 +4032,33 @@ def test_string_list_metadata_without_owner_kind_tether_fails_closed(
     assert "provider_ids source-kind tether is not configured for `reputation`" in errors
 
 
+def test_string_array_list_metadata_without_owner_kind_tether_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    payload = gate_summary("reputation")
+    monkeypatch.delitem(
+        MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS,
+        ("reputation", "metrics"),
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics source-kind tether is not configured for `reputation`" in errors
+
+
 def test_string_list_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
@@ -3421,6 +4081,245 @@ def test_string_list_metadata_must_match_owner_kind_fingerprints(
     errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
     assert "provider_ids must match recognized artifact fingerprints" in errors
     assert "provider_count_values must match recognized artifact fingerprints" not in errors
+
+
+def test_reputation_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reputation")
+    remove_fingerprint_metadata(payload, "metric_count", "metrics", kind_name="metrics")
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_reputation_metrics_metadata_must_cover_required_values(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reputation")
+    missing = payload["metrics"].pop()
+    payload["metric_count_values"] = [len(payload["metrics"])]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=len(payload["metrics"]),
+        metrics=payload["metrics"],
+        kind_name="metrics",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert f"metrics must include metadata value `{missing}`" in errors
+
+
+def test_reputation_metrics_metadata_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reputation")
+    payload["metrics"] = sorted(
+        [*MODULE.REPUTATION_REQUIRED_METRICS, "sorafs_reputation_unknown_total"]
+    )
+    payload["metric_count_values"] = [len(payload["metrics"])]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=len(payload["metrics"]),
+        metrics=payload["metrics"],
+        kind_name="metrics",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must not include unknown metadata values" in errors
+
+
+def test_reputation_metrics_metadata_must_be_unique_sorted_and_counted(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reputation")
+    payload["metrics"] = [
+        MODULE.REPUTATION_REQUIRED_METRICS[1],
+        MODULE.REPUTATION_REQUIRED_METRICS[0],
+        MODULE.REPUTATION_REQUIRED_METRICS[0],
+    ]
+    payload["metric_count_values"] = [len(MODULE.REPUTATION_REQUIRED_METRICS) + 1]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=payload["metric_count_values"][0],
+        metrics=payload["metrics"],
+        kind_name="metrics",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must not contain duplicate metadata entries" in errors
+    assert "metrics must be sorted in canonical order" in errors
+    assert "metric_count_values must include the unique metrics count" in errors
+
+
+def test_governance_dag_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("governance_dag")
+    remove_fingerprint_metadata(
+        payload,
+        "metric_count",
+        "metrics",
+        kind_name="observability",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "governance_dag.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "governance_dag",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_governance_dag_metrics_metadata_must_cover_required_values(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("governance_dag")
+    missing = payload["metrics"].pop()
+    payload["metric_count_values"] = [len(payload["metrics"])]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=len(payload["metrics"]),
+        metrics=payload["metrics"],
+        kind_name="observability",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "governance_dag.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "governance_dag",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert f"metrics must include metadata value `{missing}`" in errors
+
+
+def test_gateway_load_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    remove_fingerprint_metadata(
+        payload,
+        "metric_count",
+        "metrics",
+        kind_name="telemetry_slo",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_por_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("por")
+    remove_fingerprint_metadata(
+        payload,
+        "metric_count",
+        "metrics",
+        kind_name="observability",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "por.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "por",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
 
 
 def test_every_positive_int_list_metadata_field_has_owner_kind_tether() -> None:
@@ -3602,6 +4501,24 @@ def test_every_object_list_metadata_field_has_owner_kind_tether() -> None:
                 metadata_field
             ]
         )
+
+
+def test_every_object_list_metadata_field_has_domain_identity() -> None:
+    assert set(MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS) == set(
+        MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS
+    )
+
+    for field, identity_fields in sorted(
+        MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS.items()
+    ):
+        schema = MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field]
+        allowed_fields = (
+            set(schema.get("strings", frozenset()))
+            | set(schema.get("positive_ints", frozenset()))
+            | set(schema.get("hex", {}))
+        )
+        assert identity_fields
+        assert set(identity_fields) <= allowed_fields
 
 
 def test_object_list_metadata_without_owner_kind_tether_fails_closed(
@@ -3883,6 +4800,156 @@ def test_object_list_metadata_entries_must_not_duplicate(tmp_path: Path) -> None
     assert SHA256 not in errors
 
 
+def test_object_list_metadata_domain_identities_must_not_duplicate() -> None:
+    other_digest = "bc" * 32
+    third_digest = "cd" * 32
+    cases = [
+        (
+            "valid_multi_peer_runs",
+            [
+                {
+                    "deployment_id": DEPLOYMENT_ID,
+                    "environment": ENVIRONMENT,
+                    "generated_at_unix": GENERATED_AT,
+                    "peer_count": 4,
+                    "validator_count": 4,
+                    "case_count": 2,
+                    "config_digest_hex": SHA256,
+                },
+                {
+                    "deployment_id": DEPLOYMENT_ID,
+                    "environment": ENVIRONMENT,
+                    "generated_at_unix": GENERATED_AT,
+                    "peer_count": 5,
+                    "validator_count": 5,
+                    "case_count": 3,
+                    "config_digest_hex": other_digest,
+                },
+            ],
+        ),
+        (
+            "valid_billing_cycles",
+            [
+                {
+                    "cycle_id": "cycle-1",
+                    "cycle_index": 1,
+                    "deployment_id": DEPLOYMENT_ID,
+                    "environment": ENVIRONMENT,
+                    "generated_at_unix": GENERATED_AT,
+                    "policy_digest_hex": SHA256,
+                    "reconciliation_digest_hex": SHA256,
+                    "reference_decision_id_hex": SHA256,
+                    "statement_bundle_digest_hex": SHA256,
+                    "statement_count": 1,
+                },
+                {
+                    "cycle_id": "cycle-1",
+                    "cycle_index": 2,
+                    "deployment_id": DEPLOYMENT_ID,
+                    "environment": ENVIRONMENT,
+                    "generated_at_unix": GENERATED_AT + 60,
+                    "policy_digest_hex": SHA256,
+                    "reconciliation_digest_hex": other_digest,
+                    "reference_decision_id_hex": SHA256,
+                    "statement_bundle_digest_hex": third_digest,
+                    "statement_count": 2,
+                },
+            ],
+        ),
+        (
+            "valid_e2e_runs",
+            [
+                {
+                    "case_count": 1,
+                    "case_digest_hex": SHA256,
+                    "deployment_id": DEPLOYMENT_ID,
+                    "environment": ENVIRONMENT,
+                    "generated_at_unix": GENERATED_AT,
+                    "peer_count": 4,
+                    "roster_hash_hex": SHA256,
+                    "tally_digest_hex": SHA256,
+                    "validator_count": 4,
+                },
+                {
+                    "case_count": 2,
+                    "case_digest_hex": SHA256,
+                    "deployment_id": DEPLOYMENT_ID,
+                    "environment": ENVIRONMENT,
+                    "generated_at_unix": GENERATED_AT + 60,
+                    "peer_count": 5,
+                    "roster_hash_hex": SHA256,
+                    "tally_digest_hex": SHA256,
+                    "validator_count": 5,
+                },
+            ],
+        ),
+        (
+            "valid_evidence_viewer_digest_sets",
+            [
+                {
+                    "access_log_digest_hex": SHA256,
+                    "audit_digest_hex": SHA256,
+                    "case_digest_hex": SHA256,
+                    "legal_hold_receipt_digest_hex": SHA256,
+                    "roster_hash_hex": SHA256,
+                    "session_manifest_digest_hex": SHA256,
+                    "transparency_report_digest_hex": SHA256,
+                    "watermark_metadata_digest_hex": SHA256,
+                },
+                {
+                    "access_log_digest_hex": other_digest,
+                    "audit_digest_hex": third_digest,
+                    "case_digest_hex": SHA256,
+                    "legal_hold_receipt_digest_hex": other_digest,
+                    "roster_hash_hex": SHA256,
+                    "session_manifest_digest_hex": third_digest,
+                    "transparency_report_digest_hex": other_digest,
+                    "watermark_metadata_digest_hex": third_digest,
+                },
+            ],
+        ),
+        (
+            "valid_provider_bakes",
+            [
+                {
+                    "bake_id": "reserve-bake-001",
+                    "completed_at_unix": GENERATED_AT,
+                    "deployment_id": DEPLOYMENT_ID,
+                    "environment": ENVIRONMENT,
+                    "ledger_digest_hex": SHA256,
+                    "matrix_digest_hex": SHA256,
+                    "policy_digest_hex": SHA256,
+                    "provider_count": 3,
+                    "started_at_unix": GENERATED_AT - 60,
+                },
+                {
+                    "bake_id": "reserve-bake-001",
+                    "completed_at_unix": GENERATED_AT + 120,
+                    "deployment_id": DEPLOYMENT_ID,
+                    "environment": ENVIRONMENT,
+                    "ledger_digest_hex": other_digest,
+                    "matrix_digest_hex": third_digest,
+                    "policy_digest_hex": SHA256,
+                    "provider_count": 4,
+                    "started_at_unix": GENERATED_AT + 60,
+                },
+            ],
+        ),
+    ]
+
+    for field, entries in cases:
+        errors: list[str] = []
+        MODULE.validate_payload_free_object_list_metadata(
+            field,
+            entries,
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field],
+            errors,
+        )
+
+        assert f"{field} must not contain duplicate metadata identities" in errors
+        assert f"{field} must not contain duplicate metadata entries" not in errors
+
+
 def test_provider_bake_metadata_completed_at_must_not_precede_start(
     tmp_path: Path,
 ) -> None:
@@ -3922,6 +4989,65 @@ def test_provider_bake_metadata_completed_at_must_not_precede_start(
     )
 
 
+def test_reserve_rent_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reserve_rent")
+    remove_fingerprint_metadata(
+        payload,
+        "metric_count",
+        "metrics",
+        kind_name="metrics_alerts",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_reserve_rent_metrics_metadata_must_cover_required_values(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reserve_rent")
+    missing = payload["metrics"].pop()
+    payload["metric_count_values"] = [len(payload["metrics"])]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=len(payload["metrics"]),
+        metrics=payload["metrics"],
+        kind_name="metrics_alerts",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert f"metrics must include metadata value `{missing}`" in errors
+
+
 def test_deployment_context_metadata_for_gate_passes(tmp_path: Path) -> None:
     payload = gate_summary("moderation_panel")
     payload["deployment_context"] = {
@@ -3934,6 +5060,65 @@ def test_deployment_context_metadata_for_gate_passes(tmp_path: Path) -> None:
     write_json(tmp_path / "moderation_panel.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "moderation_panel") == 0
+
+
+def test_moderation_panel_metrics_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("moderation_panel")
+    remove_fingerprint_metadata(
+        payload,
+        "metric_count",
+        "metrics",
+        kind_name="metrics_alerts",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "metrics must match recognized artifact fingerprints" in errors
+    assert "metric_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_moderation_panel_metrics_metadata_must_cover_required_values(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("moderation_panel")
+    missing = payload["metrics"].pop()
+    payload["metric_count_values"] = [len(payload["metrics"])]
+    add_fingerprint_metadata(
+        payload,
+        metric_count=len(payload["metrics"]),
+        metrics=payload["metrics"],
+        kind_name="metrics_alerts",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert f"metrics must include metadata value `{missing}`" in errors
 
 
 def test_deployment_context_metadata_mismatch_fails(tmp_path: Path) -> None:
@@ -4689,7 +5874,7 @@ def test_evidence_file_count_ignores_unsafe_recognized_artifact_paths(
     assert "evidence_file_count must match recognized artifact path count" in diagnostics
     assert (
         ".path must be archive-relative without absolute, empty, current, "
-        "parent, or platform-specific segments"
+        "parent, encoded, URI-scheme-like, or platform-specific segments"
         in diagnostics
     )
     assert unsafe_path not in diagnostics

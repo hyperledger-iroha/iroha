@@ -113,6 +113,7 @@ def telemetry_slo() -> dict:
             "cold_cache_baseline_recorded": True,
             "critical_alerts_firing": False,
             "metrics": list(MODULE.REQUIRED_METRICS),
+            "metric_count": len(MODULE.REQUIRED_METRICS),
             "response_bodies_included": False,
         }
     )
@@ -168,6 +169,19 @@ def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
 
+def validation_options() -> object:
+    return MODULE.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_evidence_age_secs=MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS,
+        min_staging_duration_secs=MODULE.DEFAULT_MIN_STAGING_DURATION_SECS,
+        min_streams=MODULE.DEFAULT_MIN_STREAMS,
+        min_success_rate_bps=MODULE.DEFAULT_MIN_SUCCESS_RATE_BPS,
+        max_error_rate_bps=MODULE.DEFAULT_MAX_ERROR_RATE_BPS,
+        max_p95_latency_ms=MODULE.DEFAULT_MAX_P95_LATENCY_MS,
+        max_p99_latency_ms=MODULE.DEFAULT_MAX_P99_LATENCY_MS,
+    )
+
+
 def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
@@ -181,6 +195,37 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["valid_suite_report_digests"] == [SUITE_DIGEST]
     assert payload["valid_staging_report_digests"] == [STAGING_DIGEST]
     assert payload["valid_policy_digests"] == [POLICY_DIGEST]
+    assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
+    assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
+    telemetry_artifact = payload["required"]["telemetry_slo"]["artifacts"][0]
+    assert telemetry_artifact["fingerprint"]["metric_count"] == len(
+        MODULE.REQUIRED_METRICS
+    )
+    assert telemetry_artifact["fingerprint"]["metrics"] == list(
+        MODULE.REQUIRED_METRICS
+    )
+
+
+def test_staging_gateway_version_must_be_concrete() -> None:
+    for version in ("iroha-gateway 1.0.0", "iroha-gateway 1.0.0-rc.1"):
+        payload = staging_load()
+        payload["gateway_version"] = version
+        kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
+        assert kind == "staging_load"
+        assert errors == []
+
+    for version in (
+        "latest",
+        "1.0.0",
+        "iroha-gateway 01.0.0",
+        "iroha-gateway 1.0.0-rc.0",
+        "iroha-gateway 1.0.0-dev",
+    ):
+        payload = staging_load()
+        payload["gateway_version"] = version
+        kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
+        assert kind == "staging_load"
+        assert MODULE.GATEWAY_VERSION_ERROR in errors
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -192,6 +237,35 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
     )
 
     assert MODULE.main([f"@{args}"]) == 0
+
+
+def test_local_conformance_cargo_command_must_be_reviewed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = local_conformance()
+    payload["cargo_command"] = MODULE.LOCKED_GATEWAY_CONFORMANCE_CARGO_COMMAND
+    write_json(tmp_path / "local-conformance.json", payload)
+    assert run_gate(tmp_path) == 0
+
+    for command in (
+        "echo sorafs_gateway_conformance",
+        (
+            f"{MODULE.DEFAULT_GATEWAY_CONFORMANCE_CARGO_COMMAND} "
+            "&& cat /tmp/private-key"
+        ),
+    ):
+        payload = local_conformance()
+        payload["cargo_command"] = command
+        write_json(tmp_path / "local-conformance.json", payload)
+        summary = tmp_path / "summary.json"
+        summary.unlink(missing_ok=True)
+
+        assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"]["local_conformance"]["artifacts"][0]
+        assert "cargo_command must be cargo test" in "\n".join(
+            artifact["errors"]
+        )
 
 
 def test_raw_report_leakage_fails(tmp_path: Path) -> None:
@@ -233,6 +307,35 @@ def test_telemetry_requires_gateway_metrics(tmp_path: Path) -> None:
     )
 
 
+def test_telemetry_metrics_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = telemetry_slo()
+    payload["metrics"].append(payload["metrics"][0])
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "telemetry-slo.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["telemetry_slo"]["artifacts"][0]
+    assert "metrics must not contain duplicate values" in artifact["errors"]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
+
+
+def test_telemetry_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = telemetry_slo()
+    payload["metrics"].append("sorafs_gateway_debug_metric")
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "telemetry-slo.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["telemetry_slo"]["artifacts"][0]
+    assert "metrics must not include unknown values" in artifact["errors"]
+
+
 def test_local_conformance_scenario_count_must_match_unique_scenarios(
     tmp_path: Path,
 ) -> None:
@@ -263,6 +366,23 @@ def test_local_conformance_scenarios_must_not_duplicate(tmp_path: Path) -> None:
     artifact = payload["required"]["local_conformance"]["artifacts"][0]
     assert "scenarios must not contain duplicate values" in artifact["errors"]
     assert "scenario_count must match unique scenarios count" in artifact["errors"]
+
+
+def test_local_conformance_scenarios_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = local_conformance()
+    payload["scenarios"].append("debug_gateway_path")
+    payload["scenario_count"] = len(payload["scenarios"])
+    write_json(tmp_path / "local-conformance.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["local_conformance"]["artifacts"][0]
+    assert "scenarios must not include unknown values" in artifact["errors"]
 
 
 def test_staging_load_stream_count_must_match_unique_streams(tmp_path: Path) -> None:
@@ -323,6 +443,82 @@ def test_staging_load_providers_must_not_duplicate(tmp_path: Path) -> None:
     artifact = payload["required"]["staging_load"]["artifacts"][0]
     assert "providers must not contain duplicate values" in artifact["errors"]
     assert "provider_count must match unique providers count" in artifact["errors"]
+
+
+def test_staging_hardware_profile_must_be_reviewed_label(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["hardware_profile"] = {"name": "placeholder-hardware"}
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert (
+        "hardware_profile.name must not contain non-production markers "
+        "['placeholder']"
+    ) in artifact["errors"]
+
+
+def test_staging_hardware_profile_must_be_object(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["hardware_profile"] = "staging-c6i-2xlarge"
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert "hardware_profile must be an object" in artifact["errors"]
+
+
+def test_staging_cache_state_must_be_reviewed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["cache_state"] = {"mode": "debug-cache"}
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert MODULE.CACHE_STATE_ERROR in artifact["errors"]
+
+
+def test_staging_stream_names_must_be_generated_labels(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["streams"][0] = {"name": "debug-stream"}
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert MODULE.STREAM_NAME_ERROR in artifact["errors"]
+
+
+def test_staging_provider_names_must_be_reviewed_labels(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["providers"][0] = {"name": "provider-placeholder"}
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert (
+        "providers[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
 
 
 def test_http3_committed_requires_passed_scenarios(tmp_path: Path) -> None:

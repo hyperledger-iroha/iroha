@@ -1046,6 +1046,10 @@ impl Actor {
         let Some(lock) = self.same_height_vote_lock_blocking_candidate(height, view, None) else {
             return false;
         };
+        if self.same_height_vote_lock_superseded_by_committed_frontier_new_view(height, view, &lock)
+        {
+            return false;
+        }
         if self.same_height_block_has_observed_qc(lock.block_hash, height, lock.view) {
             return false;
         }
@@ -2736,6 +2740,20 @@ impl Actor {
                     || pending.is_retry_aborted()
                     || pending.validation_status == ValidationStatus::Invalid
             });
+        let stale_pending_repair_window_elapsed = self
+            .pending
+            .pending_blocks
+            .get(&existing_vote.block_hash)
+            .filter(|pending| {
+                pending.height == proposal_height && pending.view == existing_vote.view
+            })
+            .is_some_and(|pending| {
+                !pending.commit_qc_observed()
+                    && pending
+                        .progress_age(now)
+                        .max(now.saturating_duration_since(pending.inserted_at))
+                        >= repair_window
+            });
         let pending_allows_stale_branch_rotation = self
             .pending
             .pending_blocks
@@ -2753,7 +2771,7 @@ impl Actor {
                             .max(now.saturating_duration_since(pending.inserted_at))
                             >= repair_window)
             });
-        (stale_branch_terminal || missing_qc_liveness_active)
+        (stale_branch_terminal || missing_qc_liveness_active || stale_pending_repair_window_elapsed)
             && pending_allows_stale_branch_rotation
     }
 
@@ -3277,7 +3295,7 @@ impl Actor {
             tx_sizes,
             height,
             view,
-        );
+        )?;
         tx_guards = filtered_guards;
         transactions = filtered_transactions;
         routing_decisions = filtered_routing;
@@ -4658,6 +4676,7 @@ impl Actor {
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
         let ingress_grace = self.frontier_ingress_drain_grace(self.runtime_da_enabled());
+        let quorum_timeout = self.quorum_timeout(self.runtime_da_enabled());
         let (pending_votes_or_qc, live_pending_under_congestion, recent_pending_consensus_progress) =
             self.pending.pending_blocks.values().fold(
                 (false, false, false),
@@ -4681,8 +4700,10 @@ impl Actor {
                         || self.pending_block_has_qc(block_hash, pending.height, pending.view);
                     let recent_consensus_progress =
                         has_consensus_progress && pending.progress_age(now) < ingress_grace;
+                    let consensus_evidence_blocks_proposals = self
+                        .pending_consensus_evidence_blocks_proposals(pending, now, quorum_timeout);
                     (
-                        has_votes_or_qc || has_consensus_progress,
+                        has_votes_or_qc || consensus_evidence_blocks_proposals,
                         // In normal operation, payload-only pending blocks stay on the fast path.
                         // Under saturation, live pending blocks at or beyond the frontier become
                         // a proposal pacing signal so targeted load cannot churn around recovery.
@@ -4770,14 +4791,29 @@ impl Actor {
         tx_sizes: Vec<usize>,
         height: u64,
         view: u64,
-    ) -> (
+    ) -> Result<(
         Vec<crate::queue::TransactionGuard>,
         Vec<AcceptedTransaction<'static>>,
         Vec<RoutingDecision>,
         Vec<crate::queue::RoutingPlan>,
         Vec<usize>,
         usize,
-    ) {
+    )> {
+        if tx_guards.len() != transactions.len()
+            || transactions.len() != routing_decisions.len()
+            || transactions.len() != routing_plans.len()
+            || transactions.len() != tx_sizes.len()
+        {
+            return Err(eyre!(
+                "proposal committed-filter vector length mismatch: guards={} txs={} routes={} plans={} sizes={}",
+                tx_guards.len(),
+                transactions.len(),
+                routing_decisions.len(),
+                routing_plans.len(),
+                tx_sizes.len()
+            ));
+        }
+
         let mut retained_guards = Vec::with_capacity(tx_guards.len());
         let mut retained_transactions = Vec::with_capacity(transactions.len());
         let mut retained_routing = Vec::with_capacity(routing_decisions.len());
@@ -4813,14 +4849,14 @@ impl Actor {
             );
         }
 
-        (
+        Ok((
             retained_guards,
             retained_transactions,
             retained_routing,
             retained_routing_plans,
             retained_sizes,
             dropped,
-        )
+        ))
     }
 
     pub(super) fn maybe_rebroadcast_cached_proposal(
@@ -5175,6 +5211,66 @@ impl Actor {
         }
     }
 
+    pub(super) fn recent_pending_validation_for_slot(
+        &self,
+        height: u64,
+        view: u64,
+        expected_hash: Option<HashOf<BlockHeader>>,
+        now: Instant,
+        freshness_window: Duration,
+    ) -> Option<(HashOf<BlockHeader>, Duration)> {
+        if freshness_window == Duration::ZERO {
+            return None;
+        }
+
+        let mut youngest = None;
+        for (block_hash, pending) in &self.pending.pending_blocks {
+            if pending.aborted
+                || pending.is_retired_same_height()
+                || pending.validation_status != ValidationStatus::Pending
+                || pending.height != height
+                || pending.view != view
+                || expected_hash.is_some_and(|expected| expected != *block_hash)
+            {
+                continue;
+            }
+
+            let age = pending
+                .progress_age(now)
+                .max(now.saturating_duration_since(pending.inserted_at));
+            if age < freshness_window && youngest.is_none_or(|(_, current_age)| age < current_age) {
+                youngest = Some((*block_hash, age));
+            }
+        }
+        youngest
+    }
+
+    pub(super) fn validation_inflight_for_slot(
+        &self,
+        height: u64,
+        view: u64,
+        expected_hash: Option<HashOf<BlockHeader>>,
+    ) -> bool {
+        self.subsystems
+            .validation
+            .inflight
+            .keys()
+            .any(|block_hash| {
+                expected_hash.is_none_or(|expected| expected == *block_hash)
+                    && self
+                        .pending
+                        .pending_blocks
+                        .get(block_hash)
+                        .is_some_and(|pending| {
+                            !pending.aborted
+                                && !pending.is_retired_same_height()
+                                && pending.validation_status != ValidationStatus::Invalid
+                                && pending.height == height
+                                && pending.view == view
+                        })
+            })
+    }
+
     pub(super) fn maybe_progress_existing_slot_proposal(
         &mut self,
         height: u64,
@@ -5256,7 +5352,7 @@ impl Actor {
         progressed
     }
 
-    fn same_height_frontier_owner_blocks_proposal(
+    pub(super) fn same_height_frontier_owner_blocks_proposal(
         &mut self,
         height: u64,
         view_idx: u64,
@@ -5413,7 +5509,7 @@ impl Actor {
         (view_age >= stale_window).then_some((view_age, stale_window))
     }
 
-    fn stale_slot_proposal_evidence_allows_recovery_rotation(
+    pub(super) fn stale_slot_proposal_evidence_allows_recovery_rotation(
         &self,
         height: u64,
         view: u64,
@@ -5422,12 +5518,21 @@ impl Actor {
         precommit_votes_at_view: usize,
         highest_qc: crate::sumeragi::consensus::QcHeaderRef,
     ) -> Option<(Duration, Duration)> {
+        let stale_window = self
+            .quorum_timeout(self.runtime_da_enabled())
+            .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
+            .max(self.frontier_slot_lag_window())
+            .max(Duration::from_millis(1));
         if !self.config.resilience.enabled
             || height != self.committed_height_snapshot().saturating_add(1)
             || view == 0
             || precommit_votes_at_view > 0
             || !self.frontier_missing_qc_liveness_active(height, view)
             || self.same_height_has_recoverable_qc(height)
+            || self.validation_inflight_for_slot(height, view, None)
+            || self
+                .recent_pending_validation_for_slot(height, view, None, now, stale_window)
+                .is_some()
             || self
                 .subsystems
                 .commit
@@ -5469,11 +5574,6 @@ impl Actor {
             return None;
         }
 
-        let stale_window = self
-            .quorum_timeout(self.runtime_da_enabled())
-            .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
-            .max(self.frontier_slot_lag_window())
-            .max(Duration::from_millis(1));
         let view_age = self.phase_tracker.view_age(height, now)?;
         (view_age >= stale_window).then_some((view_age, stale_window))
     }
@@ -6563,6 +6663,13 @@ impl Actor {
                                 && *deferred_hash == hint.block_hash
                         },
                     );
+                    let pending_validation = self.recent_pending_validation_for_slot(
+                        height,
+                        view_idx,
+                        Some(hint.block_hash),
+                        now,
+                        repair_window,
+                    );
                     let pending_processing_only = pending_processing
                         && !validation_inflight
                         && !commit_inflight
@@ -6574,7 +6681,8 @@ impl Actor {
                     if (validation_inflight
                         || commit_inflight
                         || pending_processing
-                        || deferred_body)
+                        || deferred_body
+                        || pending_validation.is_some())
                         && !stale_pending_processing_only
                     {
                         self.subsystems.propose.pacemaker.next_deadline = now
@@ -6588,6 +6696,8 @@ impl Actor {
                             commit_inflight,
                             pending_processing,
                             deferred_body,
+                            pending_validation_age_ms =
+                                pending_validation.map(|(_, age)| age.as_millis()),
                             queue_len = pending_queue_len,
                             "cached proposal has no live pending body but local processing still owns it; deferring rotation"
                         );
@@ -8547,6 +8657,35 @@ mod tests {
             routing_plan_batch,
             vec![RoutingPlan::single(RoutingDecision::default())],
             "failed refresh must not mutate plan vector"
+        );
+    }
+
+    #[test]
+    fn filter_committed_transactions_for_proposal_rejects_vector_length_drift() {
+        let state = blank_state();
+        let tx = accepted_log_transaction("committed-filter-route-drift");
+        let route = RoutingDecision::default();
+        let plan = RoutingPlan::single(route);
+        let size = tx.encoded_len();
+
+        let err = match super::Actor::filter_committed_transactions_for_proposal(
+            &state,
+            Vec::new(),
+            vec![tx],
+            Vec::new(),
+            vec![plan],
+            vec![size],
+            1,
+            0,
+        ) {
+            Ok(_) => panic!("proposal metadata vector drift must fail closed"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("proposal committed-filter vector length mismatch"),
+            "unexpected error: {err}"
         );
     }
 

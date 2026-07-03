@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = SCRIPT_ROOT / "build_sorafs_appeal_finance_canary.py"
@@ -79,6 +81,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 str(len(MODULE.REQUIRED_APPEAL_CLASSES)),
             ]
         )
+        for appeal_class in MODULE.REQUIRED_APPEAL_CLASSES:
+            args.extend(["--appeal-class", appeal_class])
     elif kind == "quote_api":
         args.extend(["--quote-count", "8", "--max-route-latency-ms", "250"])
         for route in MODULE.REQUIRED_QUOTE_ROUTES:
@@ -108,6 +112,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(["--settlement-probe-count", "7", "--instruction-step-count", "2"])
         for route in MODULE.REQUIRED_SETTLEMENT_ROUTES:
             args.extend(["--settlement-route", route])
+        for instruction_step in MODULE.REQUIRED_SETTLEMENT_INSTRUCTION_STEPS:
+            args.extend(["--instruction-step", instruction_step])
         for outcome in MODULE.REQUIRED_OUTCOMES:
             args.extend(["--outcome", outcome])
         for status in MODULE.REQUIRED_RECONCILIATION_STATUSES:
@@ -182,9 +188,9 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             ]
         )
         for index in range(CHECKER.DEFAULT_MIN_PEERS):
-            args.extend(["--peer", f"peer-{index:02d}"])
+            args.extend(["--peer", f"appeal-finance-peer-{index:02d}"])
         for index in range(CHECKER.DEFAULT_MIN_PEERS):
-            args.extend(["--validator", f"validator-{index:02d}"])
+            args.extend(["--validator", f"appeal-finance-validator-{index:02d}"])
         args.extend(
             [
                 "--reconciliation-case",
@@ -200,6 +206,21 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     return args
 
 
+def assert_rejected_without_artifact(
+    args: list[str],
+    *,
+    kind: str,
+    tmp_path: Path,
+    capsys,
+    expected_error: str,
+) -> None:
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
+    assert not canary_path(tmp_path, kind).exists()
+
+
 def test_builds_payload_free_dashboard_metrics_canary(tmp_path: Path) -> None:
     assert MODULE.main(args_for("dashboard_metrics", tmp_path)) == 0
 
@@ -208,6 +229,7 @@ def test_builds_payload_free_dashboard_metrics_canary(tmp_path: Path) -> None:
     assert payload["schema"] == "sorafs.appeal_finance.dashboard_metrics_canary.v1"
     assert payload["config_digest_hex"] == CONFIG_DIGEST
     assert payload["metrics"] == list(MODULE.REQUIRED_METRICS)
+    assert payload["payload_kind_count"] == len(MODULE.REQUIRED_PAYLOAD_KINDS)
     assert payload["payload_kinds"] == list(MODULE.REQUIRED_PAYLOAD_KINDS)
     for claim in MODULE.TRUE_CLAIMS["dashboard_metrics"]:
         assert payload[claim] is True
@@ -287,6 +309,8 @@ def test_builds_payload_free_governance_dag_publication_canary(
         {"name": "appeal-finance-settlement-receipt-00"},
         {"name": "appeal-finance-settlement-receipt-01"},
     ]
+    assert payload["payload_kind_count"] == len(MODULE.REQUIRED_PAYLOAD_KINDS)
+    assert payload["payload_kinds"] == list(MODULE.REQUIRED_PAYLOAD_KINDS)
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "governance_dag_publication"
     assert errors == []
@@ -325,10 +349,12 @@ def test_generated_canaries_pass_full_appeal_finance_gate(tmp_path: Path) -> Non
         canary_path(tmp_path, "multi_peer_reconciliation").read_text("utf-8")
     )
     assert [peer["name"] for peer in reconciliation_payload["peers"]] == [
-        f"peer-{index:02d}" for index in range(CHECKER.DEFAULT_MIN_PEERS)
+        f"appeal-finance-peer-{index:02d}"
+        for index in range(CHECKER.DEFAULT_MIN_PEERS)
     ]
     assert [validator["name"] for validator in reconciliation_payload["validators"]] == [
-        f"validator-{index:02d}" for index in range(CHECKER.DEFAULT_MIN_PEERS)
+        f"appeal-finance-validator-{index:02d}"
+        for index in range(CHECKER.DEFAULT_MIN_PEERS)
     ]
     assert reconciliation_payload["cases"] == [
         {"name": "appeal-finance-case-00", "reconciled": True},
@@ -352,6 +378,57 @@ def test_response_file_can_build_pricing_config_canary(tmp_path: Path) -> None:
     assert payload["config_version"] == "baseline-v1"
     assert payload["policy_digest_hex"] == POLICY_DIGEST
     assert payload["class_count"] == len(MODULE.REQUIRED_APPEAL_CLASSES)
+    assert payload["classes"] == list(MODULE.REQUIRED_APPEAL_CLASSES)
+
+
+def test_config_version_rejects_malformed_value_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("pricing_config", tmp_path)
+    version_index = args.index("--config-version")
+    args[version_index + 1] = "latest"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        CHECKER.CONFIG_VERSION_ERROR.replace("config_version", "--config-version")
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "pricing_config").exists()
+
+
+def test_config_version_rejects_non_production_marker_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("pricing_config", tmp_path)
+    version_index = args.index("--config-version")
+    args[version_index + 1] = "dev-baseline-v1"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--config-version must not contain non-production markers ['dev']"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "pricing_config").exists()
+
+
+def test_config_version_accepts_reviewed_future_label(tmp_path: Path) -> None:
+    args = args_for("pricing_config", tmp_path)
+    version_index = args.index("--config-version")
+    args[version_index + 1] = "governance-baseline-v12"
+
+    assert MODULE.main(args) == 0
+
+    payload = json.loads(canary_path(tmp_path, "pricing_config").read_text("utf-8"))
+    assert payload["config_version"] == "governance-baseline-v12"
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "pricing_config"
+    assert errors == []
 
 
 def test_missing_verified_claim_fails_closed(tmp_path: Path, capsys) -> None:
@@ -376,6 +453,182 @@ def test_missing_quote_route_coverage_fails_closed(tmp_path: Path, capsys) -> No
     captured = capsys.readouterr()
     assert "--quote-route must include every required value" in captured.err
     assert not canary_path(tmp_path, "quote_api").exists()
+
+
+def test_missing_pricing_class_coverage_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("pricing_config", tmp_path)
+    index = args.index("--appeal-class")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--appeal-class must include every required value" in captured.err
+    assert not canary_path(tmp_path, "pricing_config").exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "option", "duplicate_value", "unknown_value"),
+    (
+        (
+            "settlement_submitter",
+            "--verified-claim",
+            MODULE.TRUE_CLAIMS["settlement_submitter"][0],
+            "unreviewed-appeal-finance-claim",
+        ),
+        (
+            "pricing_config",
+            "--appeal-class",
+            MODULE.REQUIRED_APPEAL_CLASSES[0],
+            "unreviewed-appeal-class",
+        ),
+        (
+            "quote_api",
+            "--quote-route",
+            MODULE.REQUIRED_QUOTE_ROUTES[0],
+            "unreviewed-quote-route",
+        ),
+        (
+            "quote_api",
+            "--urgency",
+            MODULE.REQUIRED_URGENCIES[0],
+            "unreviewed-urgency",
+        ),
+        (
+            "deposit_lifecycle",
+            "--deposit-route",
+            MODULE.REQUIRED_DEPOSIT_ROUTES[0],
+            "unreviewed-deposit-route",
+        ),
+        (
+            "settlement_execution",
+            "--settlement-route",
+            MODULE.REQUIRED_SETTLEMENT_ROUTES[0],
+            "unreviewed-settlement-route",
+        ),
+        (
+            "settlement_execution",
+            "--outcome",
+            MODULE.REQUIRED_OUTCOMES[0],
+            "unreviewed-settlement-outcome",
+        ),
+        (
+            "settlement_execution",
+            "--instruction-step",
+            MODULE.REQUIRED_SETTLEMENT_INSTRUCTION_STEPS[0],
+            "unreviewed-instruction-step",
+        ),
+        (
+            "settlement_execution",
+            "--reconciliation-status",
+            MODULE.REQUIRED_RECONCILIATION_STATUSES[0],
+            "unreviewed-reconciliation-status",
+        ),
+        (
+            "governance_dag_publication",
+            "--payload-kind",
+            MODULE.REQUIRED_PAYLOAD_KINDS[0],
+            "unreviewed-payload-kind",
+        ),
+        (
+            "dashboard_metrics",
+            "--metric",
+            MODULE.REQUIRED_METRICS[0],
+            "unreviewed-appeal-finance-metric",
+        ),
+    ),
+)
+def test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write(
+    kind: str,
+    option: str,
+    duplicate_value: str,
+    unknown_value: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    duplicate_args = args_for(kind, tmp_path)
+    duplicate_args.extend([option, duplicate_value])
+    assert_rejected_without_artifact(
+        duplicate_args,
+        kind=kind,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=f"{option} must not contain duplicates",
+    )
+
+    unknown_dir = tmp_path / "unknown"
+    unknown_dir.mkdir()
+    unknown_args = args_for(kind, unknown_dir)
+    unknown_args.extend([option, unknown_value])
+    assert_rejected_without_artifact(
+        unknown_args,
+        kind=kind,
+        tmp_path=unknown_dir,
+        capsys=capsys,
+        expected_error=f"{option} contains an unknown value",
+    )
+
+
+def test_pricing_class_count_must_match_inventory(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("pricing_config", tmp_path)
+    args[args.index("--class-count") + 1] = str(len(MODULE.REQUIRED_APPEAL_CLASSES) + 1)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--class-count must match --appeal-class inventory" in captured.err
+    assert not canary_path(tmp_path, "pricing_config").exists()
+
+
+def test_quote_count_must_match_required_class_urgency_product(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("quote_api", tmp_path)
+    args[args.index("--quote-count") + 1] = str(MODULE.REQUIRED_QUOTE_API_QUOTES - 1)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--quote-count must match required class/urgency product" in captured.err
+    assert not canary_path(tmp_path, "quote_api").exists()
+
+
+def test_missing_settlement_instruction_step_coverage_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("settlement_execution", tmp_path)
+    index = args.index("--instruction-step")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--instruction-step must include every required value" in captured.err
+    assert not canary_path(tmp_path, "settlement_execution").exists()
+
+
+def test_settlement_instruction_step_count_must_match_inventory(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("settlement_execution", tmp_path)
+    args[args.index("--instruction-step-count") + 1] = str(
+        len(MODULE.REQUIRED_SETTLEMENT_INSTRUCTION_STEPS) + 1
+    )
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "instruction_step_count must match unique instruction_steps count" in captured.err
+    assert not canary_path(tmp_path, "settlement_execution").exists()
 
 
 def test_pricing_config_requires_policy_digest_before_write(
@@ -434,6 +687,42 @@ def test_multi_peer_peer_inventory_must_not_duplicate(
     assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
 
 
+def test_multi_peer_peer_inventory_must_use_production_family(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_peer_reconciliation", tmp_path)
+    first_peer = args.index("--peer") + 1
+    args[first_peer] = "peer-00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--peer must match canonical lowercase `appeal-finance-peer-name`"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
+
+
+def test_multi_peer_peer_inventory_rejects_placeholder_marker(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_peer_reconciliation", tmp_path)
+    first_peer = args.index("--peer") + 1
+    args[first_peer] = "appeal-finance-peer-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--peer must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
+
+
 def test_multi_peer_validator_inventory_must_match_validator_count(
     tmp_path: Path,
     capsys,
@@ -463,6 +752,25 @@ def test_multi_peer_validator_inventory_must_not_duplicate(
     assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
 
 
+def test_multi_peer_validator_inventory_rejects_peer_family(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_peer_reconciliation", tmp_path)
+    first_validator = args.index("--validator") + 1
+    args[first_validator] = "appeal-finance-peer-00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--validator must match canonical lowercase "
+        "`appeal-finance-validator-name`"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
+
+
 def test_multi_peer_case_inventory_must_match_case_count(
     tmp_path: Path,
     capsys,
@@ -489,6 +797,25 @@ def test_multi_peer_case_inventory_must_not_duplicate(
 
     captured = capsys.readouterr()
     assert "--reconciliation-case must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
+
+
+def test_multi_peer_case_inventory_must_be_canonical(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_peer_reconciliation", tmp_path)
+    first_case = args.index("--reconciliation-case") + 1
+    args[first_case] = "appeal_finance_case_00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--reconciliation-case must match canonical lowercase "
+        "`appeal-finance-case-name`"
+        in captured.err
+    )
     assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
 
 
@@ -670,3 +997,15 @@ def test_output_symlink_is_rejected(tmp_path: Path, capsys) -> None:
     assert "--out" in captured.err
     assert "must not be a symlink" in captured.err
     assert not target.exists()
+
+
+def test_output_directory_is_rejected(tmp_path: Path, capsys) -> None:
+    output_dir = canary_path(tmp_path, "pricing_config")
+    output_dir.mkdir()
+
+    assert MODULE.main(args_for("pricing_config", tmp_path)) == 2
+
+    captured = capsys.readouterr()
+    assert "--out" in captured.err
+    assert "must not be a directory" in captured.err
+    assert output_dir.is_dir()

@@ -202,6 +202,39 @@ binary_sha_path="${out_dir}/${package_name}.sha256"
 archive_sha_path="${archive_path}.sha256"
 header_path="${workspace}/crates/sorafs_manifest/include/sorafs_reference.h"
 
+safe_remove_manifest_signature_output() {
+  local output_path="$1"
+  python3 - "$output_path" <<'PY'
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+
+def fail(message):
+    print(f"error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    if path.is_symlink():
+        fail(f"release manifest signature output `{path}` must not be a symlink")
+    for parent in (path.parent, *path.parent.parents):
+        if parent.is_symlink():
+            fail(f"release manifest signature output parent `{parent}` must not be a symlink")
+        if parent.exists() and not parent.is_dir():
+            fail(f"release manifest signature output parent `{parent}` must be a directory")
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        raise SystemExit(0)
+    if not stat.S_ISREG(path_stat.st_mode):
+        fail(f"release manifest signature output `{path}` must be a regular file")
+    path.unlink()
+except OSError as error:
+    fail(f"failed to inspect release manifest signature output `{path}`: {error}")
+PY
+}
+
 if [[ ! -f "$header_path" ]]; then
   echo "error: SoraFS reference FFI header not found at $header_path" >&2
   exit 1
@@ -209,7 +242,7 @@ fi
 
 rm -rf "$stage_dir" "$archive_path" "$manifest_path" "$manifest_sha_path" \
   "$binary_sha_path" "$archive_sha_path"
-rm -f "$manifest_signature_path"
+safe_remove_manifest_signature_output "$manifest_signature_path"
 mkdir -p "$stage_dir/include"
 cp "$binary_path" "${stage_dir}/sorafs-validate"
 cp "$header_path" "${stage_dir}/include/sorafs_reference.h"
@@ -236,8 +269,85 @@ else
   smoke_bundle_sha=""
 fi
 
+write_sha256_sidecar() {
+  local output_path="$1"
+  local digest="$2"
+  local file_name="$3"
+  python3 - "$output_path" "$digest" "$file_name" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+digest = sys.argv[2]
+file_name = sys.argv[3]
+
+def fail(message):
+    print(f"error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+def write_open_flags():
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    return flags
+
+def sync_output_parent(path):
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+def write_all(fd, chunk):
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write SoraFS release checksum sidecar")
+        view = view[written:]
+
+def validate_output_path(path):
+    try:
+        if path.is_symlink():
+            fail(f"release checksum sidecar `{path}` must not be a symlink")
+        for parent in (path.parent, *path.parent.parents):
+            if parent.is_symlink():
+                fail(f"release checksum sidecar parent `{parent}` must not be a symlink")
+            if parent.exists() and not parent.is_dir():
+                fail(f"release checksum sidecar parent `{parent}` must be a directory")
+    except OSError as error:
+        fail(f"failed to inspect release checksum sidecar `{path}`: {error}")
+
+if not digest or any(character not in "0123456789abcdef" for character in digest):
+    fail("release checksum sidecar digest must be lowercase hex")
+if not file_name or "/" in file_name or "\\" in file_name or file_name in {".", ".."}:
+    fail("release checksum sidecar filename must be a basename")
+
+validate_output_path(path)
+body = f"{digest}  {file_name}\n".encode("utf-8")
+fd = -1
+try:
+    fd = os.open(path, write_open_flags(), 0o666)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        fail(f"release checksum sidecar `{path}` must be a regular file")
+    write_all(fd, body)
+    os.fsync(fd)
+finally:
+    if fd >= 0:
+        os.close(fd)
+sync_output_parent(path)
+PY
+}
+
 binary_sha="$(sha256_file "${stage_dir}/sorafs-validate")"
-printf '%s  %s\n' "$binary_sha" "sorafs-validate" > "$binary_sha_path"
+write_sha256_sidecar "$binary_sha_path" "$binary_sha" "sorafs-validate"
 
 python3 - "$stage_dir" "$archive_path" "$package_name" <<'PY'
 import gzip
@@ -268,6 +378,17 @@ def write_open_flags():
     if nofollow:
         flags |= nofollow
     return flags
+
+def sync_output_parent(path):
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 def validate_archive_path(path, label):
     try:
@@ -335,12 +456,15 @@ try:
                 for path in scan_stage_entries(stage_dir):
                     relative = path.relative_to(stage_dir).as_posix()
                     add_entry(tar, path, f"{package_name}/{relative}")
+        raw.flush()
+        os.fsync(raw.fileno())
 finally:
     if archive_fd >= 0:
         os.close(archive_fd)
+sync_output_parent(archive_path)
 PY
 archive_sha="$(sha256_file "$archive_path")"
-printf '%s  %s\n' "$archive_sha" "$(basename "$archive_path")" > "$archive_sha_path"
+write_sha256_sidecar "$archive_sha_path" "$archive_sha" "$(basename "$archive_path")"
 
 export SORAFS_VALIDATE_PACKAGE_VERSION="$version"
 export SORAFS_VALIDATE_PACKAGE_TARGET="$target"
@@ -381,6 +505,17 @@ def write_all(fd, chunk):
             raise OSError("failed to write SoraFS release manifest")
         view = view[written:]
 
+def sync_output_parent(path):
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
 def validate_manifest_output_path(path):
     try:
         if path.is_symlink():
@@ -405,9 +540,11 @@ def write_manifest_no_follow(path, payload):
         if not stat.S_ISREG(descriptor_stat.st_mode):
             fail(f"release manifest output `{path}` must be a regular file")
         write_all(fd, rendered)
+        os.fsync(fd)
     finally:
         if fd >= 0:
             os.close(fd)
+    sync_output_parent(path)
 
 stage_files = [
     {
@@ -466,12 +603,141 @@ manifest = {
 write_manifest_no_follow(manifest_path, manifest)
 PY
 manifest_sha="$(sha256_file "$manifest_path")"
-printf '%s  %s\n' "$manifest_sha" "$(basename "$manifest_path")" > "$manifest_sha_path"
+write_sha256_sidecar "$manifest_sha_path" "$manifest_sha" "$(basename "$manifest_path")"
+
+install_manifest_signature() {
+  local source_path="$1"
+  local target_path="$2"
+  local signed_manifest_path="$3"
+  python3 - "$source_path" "$target_path" "$signed_manifest_path" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+source_path = Path(sys.argv[1])
+target_path = Path(sys.argv[2])
+manifest_path = Path(sys.argv[3])
+
+def fail(message):
+    print(f"error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+def read_open_flags():
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    return flags
+
+def write_open_flags():
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_CLOEXEC", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    return flags
+
+def sync_output_parent(path):
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+def write_all(fd, chunk):
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write SoraFS release manifest signature")
+        view = view[written:]
+
+def validate_source(path):
+    try:
+        if path.is_symlink():
+            fail(f"release manifest signature source `{path}` must not be a symlink")
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        fail(f"release manifest signature source `{path}` is missing")
+    except OSError as error:
+        fail(f"failed to inspect release manifest signature source `{path}`: {error}")
+    if not stat.S_ISREG(path_stat.st_mode):
+        fail(f"release manifest signature source `{path}` must be a regular file")
+    if path_stat.st_size <= 0:
+        fail(f"release manifest signature source `{path}` must not be empty")
+
+def validate_target(path):
+    try:
+        if path.is_symlink():
+            fail(f"release manifest signature output `{path}` must not be a symlink")
+        for parent in (path.parent, *path.parent.parents):
+            if parent.is_symlink():
+                fail(f"release manifest signature output parent `{parent}` must not be a symlink")
+            if parent.exists() and not parent.is_dir():
+                fail(f"release manifest signature output parent `{parent}` must be a directory")
+    except OSError as error:
+        fail(f"failed to inspect release manifest signature output `{path}`: {error}")
+
+def same_existing_file(left, right):
+    try:
+        left_stat = left.lstat()
+        right_stat = right.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        fail(f"failed to compare release manifest signature output `{left}`: {error}")
+    return (left_stat.st_dev, left_stat.st_ino) == (
+        right_stat.st_dev,
+        right_stat.st_ino,
+    )
+
+validate_source(source_path)
+validate_target(target_path)
+target_path.parent.mkdir(parents=True, exist_ok=True)
+validate_target(target_path)
+if same_existing_file(target_path, manifest_path):
+    fail("release manifest signature output must not overwrite the manifest")
+
+read_fd = -1
+write_fd = -1
+try:
+    read_fd = os.open(source_path, read_open_flags())
+    if not stat.S_ISREG(os.fstat(read_fd).st_mode):
+        fail(f"release manifest signature source `{source_path}` must be a regular file")
+    write_fd = os.open(target_path, write_open_flags(), 0o666)
+    if not stat.S_ISREG(os.fstat(write_fd).st_mode):
+        fail(f"release manifest signature output `{target_path}` must be a regular file")
+    while True:
+        chunk = os.read(read_fd, 1024 * 1024)
+        if not chunk:
+            break
+        write_all(write_fd, chunk)
+    os.fsync(write_fd)
+finally:
+    if read_fd >= 0:
+        os.close(read_fd)
+    if write_fd >= 0:
+        os.close(write_fd)
+sync_output_parent(target_path)
+PY
+}
 
 if [[ -n "$manifest_signing_key" ]]; then
-  mkdir -p "$(dirname "$manifest_signature_path")"
-  openssl dgst -sha256 -sign "$manifest_signing_key" \
-    -out "$manifest_signature_path" "$manifest_path"
+  signature_tmp_path="$(mktemp "${out_dir}/.sorafs-manifest-signature.XXXXXX")"
+  if ! openssl dgst -sha256 -sign "$manifest_signing_key" \
+    -out "$signature_tmp_path" "$manifest_path"; then
+    rm -f "$signature_tmp_path"
+    exit 1
+  fi
+  if ! install_manifest_signature "$signature_tmp_path" "$manifest_signature_path" "$manifest_path"; then
+    rm -f "$signature_tmp_path"
+    exit 1
+  fi
+  rm -f "$signature_tmp_path"
   if [[ -n "$manifest_public_key" ]]; then
     openssl dgst -sha256 -verify "$manifest_public_key" \
       -signature "$manifest_signature_path" "$manifest_path" >/dev/null

@@ -253,8 +253,12 @@ the expected layout and feeds directly into the sample gateway denylist.
   manifest UUID, runner hash, model digests, threshold set, and seed material.
   `ModerationReproManifestV1::validate` enforces schema version
   (`MODERATION_REPRO_MANIFEST_VERSION_V1`), ensures every manifest carries at
-  least one model and signer, and verifies each `SignatureOf<ModerationReproBodyV1>`
-  before returning a machine-readable summary.
+  least one model and signer, requires non-zero manifest/runner/nonce/model
+  digests, rejects duplicate model IDs or artefact/weights digests, enforces
+  `opset=17`, keeps thresholds and model weights inside `0..=10000` basis
+  points with at least one positive model weight, and verifies each
+  `SignatureOf<ModerationReproBodyV1>` before returning a machine-readable
+  summary.
 - Operators can invoke the shared validator via
   `sorafs_cli moderation validate-repro --manifest=PATH [--format=json|norito]`
   (implemented in `crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`). The CLI
@@ -268,7 +272,9 @@ the expected layout and feeds directly into the sample gateway denylist.
 - Adversarial corpus bundles follow the same pattern:
   `sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]`
   parses `AdversarialCorpusManifestV1`, enforces the schema version, and refuses
-  manifests that omit families, variants, or fingerprint metadata. Successful
+  manifests that omit families, variants, or fingerprint metadata, repeat
+  family/variant identifiers, or reuse perceptual hashes/embedding digests
+  across variants. Successful
   runs emit the issued-at timestamp, cohort label, and the family/variant counts
   so operators can pin the evidence before updating the gateway denylist entries
   described in Section 4.3.
@@ -277,8 +283,9 @@ the expected layout and feeds directly into the sample gateway denylist.
 - Monthly recalibration windows after 2026-03-02 continue to follow the
   procedure in Section 6; publish `ai_moderation_calibration_<YYYYMM>.md`
   alongside updated manifest/scorecard bundles.
-- MINFO-1b and MINFO-1c (reproducibility manifest validators plus adversarial
-  corpus registry) remain tracked separately in the roadmap.
+- MINFO-1b/MINFO-1c validation and registry plumbing are implemented locally;
+  future work is publishing each governance-signed recalibration/corpus cohort
+  on the cadence in Sections 6 and 14.
 
 ## 14. Governance Wiring & Publication Cadence (MINFO-1c)
 

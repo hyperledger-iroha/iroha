@@ -89,6 +89,22 @@ def checker_summary_write_open_flags() -> int:
     return flags
 
 
+def checker_output_parent_sync_open_flags() -> int:
+    """Return descriptor flags for syncing checker output parent directories."""
+
+    flags = os.O_RDONLY
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if directory:
+        flags |= directory
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    cloexec = getattr(os, "O_CLOEXEC", 0)
+    if cloexec:
+        flags |= cloexec
+    return flags
+
+
 def write_all_checker_summary_bytes(fd: int, payload: bytes) -> None:
     """Write every checker summary byte, including after short writes."""
 
@@ -98,6 +114,32 @@ def write_all_checker_summary_bytes(fd: int, payload: bytes) -> None:
         if written <= 0:
             raise OSError("failed to write checker summary")
         view = view[written:]
+
+
+def fsync_checker_output_parent(path: Path, *, label: str) -> list[str]:
+    """Persist the directory entry for a checker output artifact."""
+
+    output_label = _require_label(label)
+    if not isinstance(path, Path):
+        return [f"{output_label} `{path_diagnostic_label(path)}` must be a path"]
+    parent = path.parent
+    fd = -1
+    try:
+        fd = os.open(parent, checker_output_parent_sync_open_flags())
+        os.fsync(fd)
+    except (OSError, RuntimeError) as error:
+        parent_label = path_diagnostic_label(parent)
+        return [
+            "failed to fsync {} parent `{}`: {}".format(
+                output_label,
+                parent_label,
+                error_diagnostic_label(error, path_label=parent_label),
+            )
+        ]
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    return []
 
 
 def _checker_artifact_error_message(message: Any, *, label: str) -> str:
@@ -508,6 +550,7 @@ def write_checker_summary(summary_out: Path | None, summary_text: str) -> list[s
     try:
         fd = os.open(summary_out, checker_summary_write_open_flags(), 0o666)
         write_all_checker_summary_bytes(fd, summary_text.encode("utf-8"))
+        os.fsync(fd)
     except (OSError, RuntimeError) as error:
         summary_label = path_diagnostic_label(summary_out)
         return [
@@ -519,6 +562,11 @@ def write_checker_summary(summary_out: Path | None, summary_text: str) -> list[s
     finally:
         if fd >= 0:
             os.close(fd)
+    parent_sync_errors = fsync_checker_output_parent(
+        summary_out, label="--summary-out"
+    )
+    if parent_sync_errors:
+        return parent_sync_errors
     return []
 
 

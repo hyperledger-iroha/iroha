@@ -36,6 +36,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -210,9 +212,13 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         "logged_session_count": args.session_count,
         "sessions": build_session_records(args.viewer_sessions),
         "max_url_ttl_secs": args.max_url_ttl_secs,
+        "role_count": len(args.roles),
         "roles_tested": args.roles,
+        "security_control_count": len(args.security_controls),
         "viewer_security_controls": args.security_controls,
+        "access_event_kind_count": len(args.access_event_kinds),
         "access_event_kinds": args.access_event_kinds,
+        "export_target_count": len(args.export_targets),
         "export_targets": args.export_targets,
     }
     for claim in VERIFIED_TRUE_CLAIMS:
@@ -329,12 +335,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:

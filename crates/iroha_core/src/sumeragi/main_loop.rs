@@ -6571,6 +6571,22 @@ impl Actor {
         )
     }
 
+    fn same_height_vote_lock_superseded_by_committed_frontier_new_view(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        lock: &SameHeightVoteLock,
+    ) -> bool {
+        self.latest_committed_qc().is_some_and(|highest_qc| {
+            self.new_view_qc_supersedes_same_height_vote_lock(
+                proposal_height,
+                proposal_view,
+                highest_qc,
+                lock,
+            )
+        })
+    }
+
     fn new_view_qc_supersedes_noncommit_same_height_vote_conflict(
         &self,
         proposal_height: u64,
@@ -9635,7 +9651,14 @@ impl Actor {
             .then(|| {
                 self.same_height_vote_lock_blocking_candidate(frontier_height, requested_view, None)
             })
-            .flatten();
+            .flatten()
+            .filter(|lock| {
+                !self.same_height_vote_lock_superseded_by_committed_frontier_new_view(
+                    frontier_height,
+                    requested_view,
+                    lock,
+                )
+            });
 
         let retarget_vote_locked_seed = self.frontier_slot.as_ref().and_then(|slot| {
             let lock = vote_locked_seed.as_ref()?;
@@ -10173,6 +10196,24 @@ impl Actor {
             .count()
     }
 
+    fn pending_consensus_evidence_blocks_proposals(
+        &self,
+        pending: &PendingBlock,
+        now: Instant,
+        quorum_timeout: Duration,
+    ) -> bool {
+        let block_hash = pending.block.hash();
+        let has_precommit_votes = pending.local_commit_vote_emitted()
+            || self.pending_block_has_votes(block_hash, pending.height, pending.view);
+        let has_commit_qc = pending.commit_qc_observed()
+            || self.pending_block_has_qc(block_hash, pending.height, pending.view);
+        if has_commit_qc {
+            return true;
+        }
+        has_precommit_votes
+            && (quorum_timeout == Duration::ZERO || pending.progress_age(now) < quorum_timeout)
+    }
+
     fn blocking_pending_blocks_len_with_progress(&self, now: Instant) -> usize {
         let da_enabled = self.runtime_da_enabled();
         let quorum_timeout = self.quorum_timeout(da_enabled);
@@ -10201,12 +10242,7 @@ impl Actor {
                 ) {
                     return false;
                 }
-                let block_hash = pending.block.hash();
-                let has_precommit_votes = pending.local_commit_vote_emitted()
-                    || self.pending_block_has_votes(block_hash, pending.height, pending.view);
-                let has_commit_qc = pending.commit_qc_observed()
-                    || self.pending_block_has_qc(block_hash, pending.height, pending.view);
-                if has_precommit_votes || has_commit_qc {
+                if self.pending_consensus_evidence_blocks_proposals(pending, now, quorum_timeout) {
                     return true;
                 }
                 if pending.last_quorum_reschedule.is_some() {
@@ -22772,6 +22808,70 @@ impl Actor {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.proposal_backpressure");
             self.proposal_backpressure_at(now)
         };
+        {
+            let committed_height = self.committed_height_snapshot();
+            let committed_qc = self.latest_committed_qc();
+            let gate_height = active_round_height(self.highest_qc, committed_qc, committed_height)
+                .min(committed_height.saturating_add(1));
+            let gate_view = self.phase_tracker.current_view(gate_height).unwrap_or(0);
+            let tip_height = self.state.committed_height();
+            let tip_hash = self.state.latest_block_hash_fast();
+            let age_ms = |timestamp: Option<Instant>| {
+                timestamp
+                    .map(|last| {
+                        u64::try_from(now.saturating_duration_since(last).as_millis())
+                            .unwrap_or(u64::MAX)
+                    })
+                    .unwrap_or(0)
+            };
+            super::status::set_proposal_gate_snapshot(super::status::ProposalGateSnapshot {
+                height: gate_height,
+                view: gate_view,
+                queue_len: u64::try_from(queue_len).unwrap_or(u64::MAX),
+                pending_blocks_total: u64::try_from(self.pending.pending_blocks.len())
+                    .unwrap_or(u64::MAX),
+                pending_blocks_blocking: u64::try_from(
+                    self.blocking_pending_blocks_len_with_progress(now),
+                )
+                .unwrap_or(u64::MAX),
+                active_pending_for_tip: u64::try_from(
+                    self.active_pending_blocks_len_for_tip(tip_height, tip_hash),
+                )
+                .unwrap_or(u64::MAX),
+                queue_saturated: proposal_backpressure.queue_state.is_saturated(),
+                active_pending: proposal_backpressure.active_pending,
+                rbc_backlog: proposal_backpressure.rbc_backlog,
+                relay_backpressure: proposal_backpressure.relay_backpressure,
+                consensus_queue_backpressure: proposal_backpressure.consensus_queue_backpressure,
+                should_defer: proposal_backpressure.should_defer(),
+                only_pacing_backpressure: proposal_backpressure.only_pacing_backpressure(),
+                commit_inflight_active: self.subsystems.commit.inflight.is_some(),
+                cached_proposal_present: self
+                    .subsystems
+                    .propose
+                    .proposal_cache
+                    .get_proposal(gate_height, gate_view)
+                    .is_some(),
+                cached_proposal_hint_present: self
+                    .subsystems
+                    .propose
+                    .proposal_cache
+                    .get_hint(gate_height, gate_view)
+                    .is_some(),
+                round_liveness_present: self.slot_has_round_liveness(gate_height, gate_view),
+                frontier_owner_present: self
+                    .frontier_slot_live_local_owner_for_round(gate_height, gate_view)
+                    .is_some(),
+                missing_qc_liveness_active: self
+                    .frontier_missing_qc_liveness_active(gate_height, gate_view),
+                last_pacemaker_attempt_age_ms: age_ms(
+                    self.subsystems.propose.last_pacemaker_attempt,
+                ),
+                last_successful_proposal_age_ms: age_ms(
+                    self.subsystems.propose.last_successful_proposal,
+                ),
+            });
+        }
         if let Some(telemetry) = self.telemetry_handle() {
             let pending_blocks_total = self.pending.pending_blocks.len() as u64;
             let pending_blocks_blocking = if pending_blocks_total == 0 {
@@ -41593,6 +41693,9 @@ impl Actor {
                 .validation
                 .inflight
                 .contains_key(&block_hash);
+        let availability_validation_ready = pending.validation_status == ValidationStatus::Pending
+            && (self.pending_block_has_delivered_rbc(block_hash, pending)
+                || self.pending_block_has_rbc_ready_quorum(block_hash, pending));
         let commit_qc_repair_active = self.missing_commit_qc_repair_active_for_round(
             block_hash,
             pending.height,
@@ -41615,6 +41718,7 @@ impl Actor {
             || backlog_signals.residual_round_backlog
             || backlog_signals.unresolved_rbc_backlog
             || validation_recovery_active
+            || availability_validation_ready
             || commit_pipeline_backlog_active
             || commit_qc_repair_active
             || same_block_recovery_active;
