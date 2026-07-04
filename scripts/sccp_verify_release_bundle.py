@@ -5157,6 +5157,14 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "canonical source-state preflight FASTPQ parameter set",
             "canonical open proof with opaque backend",
             "canonical open proof with compressed backend",
+            "fn sccp_checked_bundle_encoder_rejects_structure_drift()",
+            "checked bundle bytes must reject version drift",
+            "checked bundle bytes must reject opaque SORA finality bytes",
+            "checked bundle bytes must reject SORA finality commitment-root drift",
+            "checked bundle bytes must reject commitment payload-hash drift",
+            "checked bundle bytes must reject Merkle commitment-root drift",
+            "checked bundle bytes must reject payload structure drift",
+            "checked bundle bytes must reject opaque non-SORA source proofs",
             "fn sccp_checked_source_envelope_encoder_rejects_base_shape_drift()",
             "checked source envelope encoder must reject empty consensus proof bytes",
             "checked source envelope hash must reject empty consensus proof bytes",
@@ -10414,7 +10422,9 @@ SCCP_UNREADY_SOURCE_PROOF_BYPASS_CALL_SITE_MARKER = (
 SCCP_UNREADY_SOURCE_PROOF_EXPECTED_BYPASS_CALL_SITES = 4
 SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_BYPASS_GATES = (
     'allow_unready && cfg!(any(test, feature = "test-fixtures"))',
+    'allow_unready && cfg!(feature = "test-fixtures")',
 )
+SCCP_UNREADY_TRANSPARENT_PROOF_BYPASS_FEATURE_WINDOW_LINES = 4
 SCCP_UNREADY_TORII_ROUTE_BYPASS_CALL_SITE_MARKER = (
     "let allow_unready = sccp_allow_unready_torii_route_bypass_enabled(allow_unready);"
 )
@@ -10630,7 +10640,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "built-in placeholder source material must not build jobs for configured source proofs",
             "fn sccp_proof_requests_reject_sora_bundle_finality_drift",
             "valid SORA-origin proof request fixture must still build",
+            "checked canonical bundle bytes must reject opaque SORA finality",
             "proof-request bundle matcher must reject opaque SORA finality bytes",
+            "checked canonical bundle bytes must reject SORA finality commitment-root drift",
             "proof-request bundle matcher must reject SORA finality commitment-root drift",
             "proof-request bundle matcher must reject SORA finality height drift",
             "proof-request bundle matcher must reject SORA finality block-hash drift",
@@ -11146,6 +11158,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
         (
             "internal object SccpMessageProofBundles",
             "internal fun requireMatchesPublicInputs",
+            "NEXUS_FINALITY_PROOF_SCHEMA",
+            "$label must decode as NexusBridgeFinalityProofV1",
+            "bundleBytes.finality_proof must match SORA publicInputs",
+            "signersBitmapHasValidSigner",
             "sourceProofBytes must be empty for SORA source bundle",
             "sourceProofBytes required for non-SORA source bundle",
             "$label must decode as SccpSourceChainProofEnvelopeV1",
@@ -11181,6 +11197,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "hexWord(publicInputs.messageId.removePrefix(\"0x\"))",
             "testCanonicalSccpSourceProofBytes",
             "replayedCanonicalSourceProof",
+            "testNexusBridgeFinalityProofBytes",
+            "bundleBytes.finality_proof must decode as NexusBridgeFinalityProofV1",
+            "bundleBytes.finality_proof must match SORA publicInputs",
             "sourceProofBytes must match bundleBytes finality proof",
             "sourceProofBytes must be empty for SORA source bundle",
             "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
@@ -11205,6 +11224,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "hexWord(publicInputs.messageId.removePrefix(\"0x\"))",
             "testCanonicalSccpSourceProofBytes",
             "replayedCanonicalSourceProof",
+            "testNexusBridgeFinalityProofBytes",
+            "bundleBytes.finality_proof must decode as NexusBridgeFinalityProofV1",
+            "bundleBytes.finality_proof must match SORA publicInputs",
             "sourceProofBytes must match bundleBytes finality proof",
             "sourceProofBytes must be empty for SORA source bundle",
             "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
@@ -11218,6 +11240,10 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
         (
             "final class SccpMessageProofBundles",
             "static BundleSummary requireMatchesPublicInputs",
+            "NEXUS_FINALITY_PROOF_SCHEMA",
+            "must decode as NexusBridgeFinalityProofV1",
+            "bundleBytes.finality_proof must match SORA publicInputs",
+            "signersBitmapHasValidSigner",
             "sourceProofBytes must be empty for SORA source bundle",
             "sourceProofBytes required for non-SORA source bundle",
             "must decode as SccpSourceChainProofEnvelopeV1",
@@ -11244,6 +11270,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "hexWord(stripHex(publicInputs.messageId()))",
             "testCanonicalSccpSourceProofBytes",
             "replayBoundSourceFixture",
+            "testNexusBridgeFinalityProofBytes",
+            "bundleBytes.finality_proof must decode as NexusBridgeFinalityProofV1",
+            "bundleBytes.finality_proof must match SORA publicInputs",
             "sourceProofBytes must match bundleBytes finality proof",
             "sourceProofBytes must be empty for SORA source bundle",
             "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
@@ -11268,6 +11297,9 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "hexWord(stripHex(publicInputs.messageId()))",
             "testCanonicalSccpSourceProofBytes",
             "replayBoundSourceFixture",
+            "testNexusBridgeFinalityProofBytes",
+            "bundleBytes.finality_proof must decode as NexusBridgeFinalityProofV1",
+            "bundleBytes.finality_proof must match SORA publicInputs",
             "sourceProofBytes must match bundleBytes finality proof",
             "sourceProofBytes must be empty for SORA source bundle",
             "sourceProofBytes must decode as SccpSourceChainProofEnvelopeV1",
@@ -23002,6 +23034,28 @@ def _sccp_unready_widened_bypass_gate_errors(
                     f"{display_path} contains forbidden widened allow_unready "
                     f"gate: {forbidden_gate}"
                 )
+
+        for source_text in source_texts:
+            identifier_lines = [
+                _source_identifier_scan_text(line) for line in source_text.splitlines()
+            ]
+            for start in range(len(identifier_lines)):
+                window = "".join(
+                    identifier_lines[
+                        start : start
+                        + SCCP_UNREADY_TRANSPARENT_PROOF_BYPASS_FEATURE_WINDOW_LINES
+                    ]
+                )
+                if all(
+                    token in window
+                    for token in ("allowunready", "cfg", "feature", "testfixtures")
+                ):
+                    errors.append(
+                        "SCCP unready transparent-proof removed-surface source "
+                        f"inventory {display_path} contains forbidden widened "
+                        "allow_unready gate using the test-fixtures feature"
+                    )
+                    break
     return errors
 
 

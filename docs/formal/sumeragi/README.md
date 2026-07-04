@@ -18364,12 +18364,35 @@ so repeated TLC invocations cannot inflate or obscure the direct TLC evidence
 inventory.
 Formal coverage audit must run before Apalache, TLC, and expected-failure evidence commands,
 so stale inventory wiring cannot execute proof jobs before the guard fails.
-Formal workflow triggers must keep the checked PR and scheduled/manual surfaces,
-so PR evidence remains on `pull_request` for `main` and nightly evidence remains
-both manually dispatchable and scheduled at the reviewed cron.
+Formal workflow triggers must keep the checked PR and scheduled/manual surfaces
+as exact top-level `on:` blocks, so PR evidence remains on `pull_request` for
+`main` without extra nested filters and nightly evidence remains both manually
+dispatchable and scheduled at the reviewed cron.
+Formal workflow names must stay exact,
+so the `${{ github.workflow }}` concurrency group and evidence identity cannot
+drift while proof commands stay unchanged.
+Formal workflow header key inventories must stay exact,
+so `run-name`, duplicate `env`, or other unreviewed top-level controls cannot
+change proof metadata or inherited workflow behavior.
+Formal workflow trigger event inventories must stay exact,
+so extra `push`, `pull_request_target`, or inline trigger forms cannot run
+checked proof jobs outside the reviewed PR and scheduled/manual surfaces.
 Formal workflow path filters must keep the reviewed ignored-path set,
 so PR proof evidence cannot be skipped for formal specs, scripts, or workflow
 edits by adding broader `paths_ignore` entries.
+Formal workflow concurrency must keep reviewed cancellation behavior as an exact
+top-level block, so PR evidence can supersede stale branch pushes while
+scheduled/manual nightly evidence cannot be canceled by an extra, duplicate, or
+drifted concurrency policy.
+Formal workflow headers must not set defaults or token permissions,
+so checked proof jobs cannot inherit a different shell, working directory, or
+workflow-wide token scope while their job-level proof commands stay unchanged.
+Formal workflow top-level env keys must stay reviewed,
+so checked proof jobs inherit only the approved PR CI variables and no
+scheduled/manual nightly workflow environment.
+Formal workflow top-level env bindings must stay exact,
+so approved inherited PR CI variables cannot change values while keeping the
+same keys.
 Workflow Apalache install and toolchain version pins must come from active commands,
 so comments or step names cannot satisfy the pinned model-checker install contract.
 Formal workflows must verify the pinned Apalache binary before running proof jobs,

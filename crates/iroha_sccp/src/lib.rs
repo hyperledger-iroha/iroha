@@ -38341,15 +38341,109 @@ pub mod tests {
 
     #[test]
     fn sccp_checked_bundle_encoder_matches_legacy_canonical_bytes() {
-        let bundle = sample_taira_tron_xor_diagnostic_bundle(
-            SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.as_bytes(),
-            SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes(),
-        );
+        let bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON, 371);
 
         assert_eq!(
             canonical_nexus_sccp_message_bundle_bytes_checked(&bundle)
-                .expect("sample bundle is length-canonical"),
+                .expect("sample bundle is structurally canonical"),
             canonical_nexus_sccp_message_bundle_bytes(&bundle),
+        );
+    }
+
+    #[test]
+    fn sccp_checked_bundle_encoder_rejects_structure_drift() {
+        let valid = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON, 372);
+        assert!(verify_message_bundle_structure(&valid));
+        assert!(
+            canonical_nexus_sccp_message_bundle_bytes_checked(&valid).is_some(),
+            "valid SORA-origin bundle must remain encodable"
+        );
+
+        let assert_sora_bundle_rejected =
+            |label: &str, expected_marker: &str, mutate: fn(&mut NexusSccpMessageProofV1)| {
+                let mut drifted = valid.clone();
+                mutate(&mut drifted);
+                let len_only = canonical_nexus_sccp_message_bundle_bytes_len_checked(&drifted)
+                    .expect("drifted bundle remains length-serializable");
+                assert!(
+                    !len_only.is_empty(),
+                    "{label} fixture should exercise serialized adversarial bytes"
+                );
+                assert!(
+                    !verify_message_bundle_structure(&drifted),
+                    "{label} must break the bundle structure gate"
+                );
+                assert!(
+                    canonical_nexus_sccp_message_bundle_bytes_checked(&drifted).is_none(),
+                    "{expected_marker}"
+                );
+                assert!(
+                    canonical_nexus_sccp_message_bundle_bytes(&drifted).is_empty(),
+                    "unchecked compatibility facade must fail closed for {label}"
+                );
+            };
+
+        assert_sora_bundle_rejected(
+            "version drift",
+            "checked bundle bytes must reject version drift",
+            |bundle| bundle.version = 2,
+        );
+        assert_sora_bundle_rejected(
+            "opaque SORA finality bytes",
+            "checked bundle bytes must reject opaque SORA finality bytes",
+            |bundle| {
+                bundle.finality_proof = vec![0xA5; 32];
+            },
+        );
+        assert_sora_bundle_rejected(
+            "SORA finality commitment-root drift",
+            "checked bundle bytes must reject SORA finality commitment-root drift",
+            |bundle| {
+                bundle.finality_proof = sample_finality_proof([0xAB; 32]);
+            },
+        );
+        assert_sora_bundle_rejected(
+            "commitment payload-hash drift",
+            "checked bundle bytes must reject commitment payload-hash drift",
+            |bundle| {
+                bundle.commitment.payload_hash[0] ^= 0x01;
+            },
+        );
+        assert_sora_bundle_rejected(
+            "Merkle commitment-root drift",
+            "checked bundle bytes must reject Merkle commitment-root drift",
+            |bundle| {
+                bundle.commitment_root[0] ^= 0x01;
+            },
+        );
+        assert_sora_bundle_rejected(
+            "payload structure drift",
+            "checked bundle bytes must reject payload structure drift",
+            |bundle| {
+                let SccpPayloadV1::Transfer(transfer) = &mut bundle.payload else {
+                    unreachable!("sample SORA-origin bundle is a transfer");
+                };
+                transfer.amount = 0;
+            },
+        );
+
+        let valid_remote = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_TON, 373);
+        assert!(verify_message_bundle_structure(&valid_remote));
+        let mut opaque_remote_source_proof = valid_remote.clone();
+        opaque_remote_source_proof.finality_proof = vec![0x5A; 32];
+        assert!(
+            !verify_message_bundle_structure(&opaque_remote_source_proof),
+            "remote-source bundles must decode canonical source-proof envelopes"
+        );
+        assert!(
+            !canonical_nexus_sccp_message_bundle_bytes_len_checked(&opaque_remote_source_proof)
+                .expect("opaque remote source proof remains length-serializable")
+                .is_empty()
+        );
+        assert!(
+            canonical_nexus_sccp_message_bundle_bytes_checked(&opaque_remote_source_proof)
+                .is_none(),
+            "checked bundle bytes must reject opaque non-SORA source proofs"
         );
     }
 
@@ -60578,7 +60672,13 @@ pub mod tests {
 
         let mut opaque_finality = bundle.clone();
         opaque_finality.finality_proof = vec![0xA5; 32];
-        let opaque_finality_bytes = canonical_nexus_sccp_message_bundle_bytes(&opaque_finality);
+        assert!(
+            canonical_nexus_sccp_message_bundle_bytes_checked(&opaque_finality).is_none(),
+            "checked canonical bundle bytes must reject opaque SORA finality"
+        );
+        let opaque_finality_bytes =
+            canonical_nexus_sccp_message_bundle_bytes_len_checked(&opaque_finality)
+                .expect("opaque SORA finality fixture remains length-serializable");
         assert!(
             build_sccp_ton_proof_request(
                 &public_inputs,
@@ -60595,7 +60695,12 @@ pub mod tests {
 
         let mut wrong_root = bundle.clone();
         wrong_root.finality_proof = sample_finality_proof([0xAB; 32]);
-        let wrong_root_bytes = canonical_nexus_sccp_message_bundle_bytes(&wrong_root);
+        assert!(
+            canonical_nexus_sccp_message_bundle_bytes_checked(&wrong_root).is_none(),
+            "checked canonical bundle bytes must reject SORA finality commitment-root drift"
+        );
+        let wrong_root_bytes = canonical_nexus_sccp_message_bundle_bytes_len_checked(&wrong_root)
+            .expect("SORA finality root-drift fixture remains length-serializable");
         assert!(
             build_sccp_ton_proof_request(
                 &public_inputs,
@@ -60792,6 +60897,65 @@ pub mod tests {
             .is_none(),
             "TON proof requests must reject arbitrary non-canonical SCCP bundle bytes"
         );
+
+        let diagnostic_zero_deployment_binding = SccpSourceAdapterDeploymentBindingV1 {
+            source_adapter_deployment_hash: [0u8; 32],
+            source_adapter_deployment_receipt_hash: [0u8; 32],
+            ..deployment_binding.clone()
+        };
+        assert!(
+            sccp_source_adapter_deployment_binding_hash(&diagnostic_zero_deployment_binding)
+                .is_some(),
+            "zero/zero deployment bindings remain canonical for structural fixtures"
+        );
+        assert!(
+            build_sccp_ton_proof_request(
+                &public_inputs,
+                &bundle_bytes,
+                None,
+                inner.statement_hash,
+                manifest.destination_binding.binding_hash,
+                source_state_verifier_hash,
+                &diagnostic_zero_deployment_binding,
+            )
+            .is_none(),
+            "TON proof requests must reject diagnostic zero/zero source-adapter deployment bindings"
+        );
+
+        let mut wrong_source_deployment_binding = deployment_binding.clone();
+        wrong_source_deployment_binding.source_domain = SCCP_DOMAIN_SOL;
+        assert!(
+            build_sccp_ton_proof_request(
+                &public_inputs,
+                &bundle_bytes,
+                None,
+                inner.statement_hash,
+                manifest.destination_binding.binding_hash,
+                source_state_verifier_hash,
+                &wrong_source_deployment_binding,
+            )
+            .is_none(),
+            "TON proof requests must reject source-adapter deployment bindings from another source lane"
+        );
+
+        let mut stale_deployment_binding_hash = request.clone();
+        stale_deployment_binding_hash.source_adapter_deployment_binding_hash[0] ^= 0x01;
+        stale_deployment_binding_hash.request_hash = sccp_ton_proof_request_hash(
+            &stale_deployment_binding_hash.public_inputs_bytes,
+            &stale_deployment_binding_hash.bundle_bytes,
+            &stale_deployment_binding_hash.source_proof_bytes,
+            &stale_deployment_binding_hash.source_state_verifier_id,
+            stale_deployment_binding_hash.source_state_verifier_hash,
+            stale_deployment_binding_hash.statement_hash,
+            stale_deployment_binding_hash.destination_binding_hash,
+            stale_deployment_binding_hash.source_adapter_deployment_binding_hash,
+        );
+        assert!(
+            wrap_sccp_ton_proof_result(&recursive_proof_bytes, &stale_deployment_binding_hash)
+                .is_none(),
+            "wrapped TON proof results must recompute and bind source-adapter deployment binding hashes"
+        );
+
         let swapped_bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON, 29);
         let swapped_bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&swapped_bundle);
         assert!(

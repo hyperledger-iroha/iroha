@@ -85473,22 +85473,22 @@ mod tests {
             decode_bfv_full_bootstrap_proof_public_input_schema_bytes_v1(
                 &binary_split_placeholder_schema_bytes,
             ),
-            "Norito-encoded BFV material",
-            "proof public-input schema byte admission must reject non-Norito placeholder-looking bytes",
+            "placeholder text",
+            "proof public-input schema byte admission must reject placeholder-looking bytes before Norito decoding",
         );
         assert_error_contains(
             bfv_full_bootstrap_proof_public_input_schema_payload_digest_from_bytes_v1(
                 &binary_split_placeholder_schema_bytes,
             ),
-            "Norito-encoded BFV material",
-            "proof public-input schema byte digesting must reject non-Norito placeholder-looking bytes",
+            "placeholder text",
+            "proof public-input schema byte digesting must reject placeholder-looking bytes before Norito decoding",
         );
         assert_error_contains(
             bfv_full_bootstrap_proof_public_input_schema_and_payload_digest_from_bytes_v1(
                 &binary_split_placeholder_schema_bytes,
             ),
-            "Norito-encoded BFV material",
-            "proof public-input schema byte digest helper must reject non-Norito placeholder-looking bytes",
+            "placeholder text",
+            "proof public-input schema byte digest helper must reject placeholder-looking bytes before Norito decoding",
         );
         let schema_artifact_payload =
             norito::decode_from_bytes::<BfvFullBootstrapCircuitArtifactPayloadV1>(&schema_artifact)

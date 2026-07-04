@@ -18955,6 +18955,24 @@ mod commit {
             block
         }
 
+        fn axt_policy_snapshot_for_validation_test(state: &State) -> AxtPolicySnapshot {
+            let mut entries: Vec<_> = state
+                .world
+                .axt_policies
+                .view()
+                .iter()
+                .map(|(dsid, policy)| AxtPolicyBinding {
+                    dsid: *dsid,
+                    policy: *policy,
+                })
+                .collect();
+            entries.sort_by_key(|binding| binding.dsid);
+            AxtPolicySnapshot {
+                version: AxtPolicySnapshot::compute_version(&entries),
+                entries,
+            }
+        }
+
         fn expect_axt_error(
             err: BlockValidationError,
             reason: AxtRejectReason,
@@ -19050,7 +19068,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
@@ -19105,7 +19123,7 @@ mod commit {
                 handles: vec![handle.clone(), handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
@@ -19168,7 +19186,7 @@ mod commit {
                 ],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
             let result = validate_axt_envelopes(&block, &state_block);
@@ -19221,7 +19239,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19274,7 +19292,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19321,7 +19339,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19374,7 +19392,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19424,7 +19442,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19483,7 +19501,7 @@ mod commit {
                 handles: vec![handle, other],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19540,7 +19558,7 @@ mod commit {
                 handles: vec![first, second],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19579,7 +19597,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19623,7 +19641,7 @@ mod commit {
                 handles: Vec::new(),
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19710,7 +19728,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19756,7 +19774,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19811,7 +19829,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(2),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19866,7 +19884,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(2),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19913,7 +19931,7 @@ mod commit {
                 handles: vec![handle_one, handle_two],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19955,7 +19973,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -20001,7 +20019,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -20047,7 +20065,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -20093,7 +20111,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -20136,7 +20154,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -20235,7 +20253,7 @@ mod commit {
                 commit_height: Some(1),
             };
 
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -20423,7 +20441,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
             let result = validate_axt_envelopes(&block, &state_block);
@@ -20484,7 +20502,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 

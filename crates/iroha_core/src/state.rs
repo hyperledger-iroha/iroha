@@ -5807,7 +5807,8 @@ impl GovernanceProposalRecord {
             iroha_data_model::governance::types::ProposalKind::DeployContract(payload) => {
                 Some(payload)
             }
-            iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_) => None,
+            iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteManifest(_) => None,
         }
     }
 
@@ -5819,7 +5820,21 @@ impl GovernanceProposalRecord {
             iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(payload) => {
                 Some(payload)
             }
-            iroha_data_model::governance::types::ProposalKind::DeployContract(_) => None,
+            iroha_data_model::governance::types::ProposalKind::DeployContract(_)
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteManifest(_) => None,
+        }
+    }
+
+    /// Access the SCCP route-manifest payload when the proposal represents route publication.
+    pub fn as_sccp_route_manifest(
+        &self,
+    ) -> Option<&iroha_data_model::governance::types::SccpRouteManifestProposal> {
+        match &self.kind {
+            iroha_data_model::governance::types::ProposalKind::SccpRouteManifest(payload) => {
+                Some(payload)
+            }
+            iroha_data_model::governance::types::ProposalKind::DeployContract(_)
+            | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_) => None,
         }
     }
 
@@ -9729,7 +9744,8 @@ mod stake_snapshot_tests {
     #[test]
     fn nexus_active_lanes_require_catalog_geometry_and_dataspace_agreement() {
         let stale_lane = LaneId::new(1);
-        let disabled_nexus = iroha_config::parameters::actual::Nexus::default();
+        let mut disabled_nexus = iroha_config::parameters::actual::Nexus::default();
+        disabled_nexus.enabled = false;
         assert_eq!(nexus_active_lane_ids(&disabled_nexus), BTreeSet::new());
         assert_eq!(
             nexus_active_lane_dataspace(LaneId::SINGLE, &disabled_nexus),
@@ -20084,6 +20100,14 @@ impl From<&iroha_data_model::parameter::system::SumeragiParameters> for Sumeragi
 }
 
 impl State {
+    fn disable_nexus_fees_for_testing(&mut self) {
+        let nexus = self.nexus.get_mut();
+        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+    }
+
     /// Snapshot the current Nexus configuration.
     ///
     /// This is intended for API/telemetry paths that need a consistent view of the lane catalog
@@ -21874,7 +21898,8 @@ impl State {
         let initial_crypto = iroha_config::parameters::actual::Crypto::default();
         let settlement_cfg = iroha_config::parameters::actual::Settlement::default();
         let settlement_engine = SettlementEngine::from_router_config(&settlement_cfg.router);
-        let nexus = iroha_config::parameters::actual::Nexus::default();
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = iroha_config::parameters::defaults::nexus::ENABLED;
         let streaming = iroha_config::parameters::actual::Streaming {
             key_material: default_streaming_key_material(),
             session_store_dir: PathBuf::from(
@@ -22497,6 +22522,7 @@ impl State {
         }
         s.chain_id = iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000");
         s.gov.citizenship_bond_amount = 0;
+        s.disable_nexus_fees_for_testing();
         s
     }
 
@@ -22519,6 +22545,7 @@ impl State {
         );
         s.chain_id = chain_id;
         s.gov.citizenship_bond_amount = 0;
+        s.disable_nexus_fees_for_testing();
         s
     }
 
@@ -22534,12 +22561,16 @@ impl State {
     ) -> Self {
         #[cfg(feature = "telemetry")]
         {
-            Self::new_inner(world, kura, query_handle, telemetry)
+            let mut state = Self::new_inner(world, kura, query_handle, telemetry);
+            state.disable_nexus_fees_for_testing();
+            state
         }
         #[cfg(not(feature = "telemetry"))]
         {
             let _ = telemetry;
-            Self::new_inner(world, kura, query_handle)
+            let mut state = Self::new_inner(world, kura, query_handle);
+            state.disable_nexus_fees_for_testing();
+            state
         }
     }
 
@@ -22595,6 +22626,7 @@ impl State {
         s.pipeline_parallelism = PipelineParallelism::new(&s.pipeline);
         // Disable citizenship gating by default in unit tests; individual tests can override.
         s.gov.citizenship_bond_amount = 0;
+        s.disable_nexus_fees_for_testing();
         s
     }
 
@@ -22840,7 +22872,8 @@ impl State {
                                             ParliamentBody::PolicyJury,
                                             ParliamentBody::OversightCommittee,
                                         ],
-                                        iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_) => &[
+                                        iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+                                        | iroha_data_model::governance::types::ProposalKind::SccpRouteManifest(_) => &[
                                             ParliamentBody::RulesCommittee,
                                             ParliamentBody::AgendaCouncil,
                                             ParliamentBody::InterestPanel,
@@ -23437,6 +23470,15 @@ impl State {
 
     fn update_latest_block_header_cache(&self, header: BlockHeader) {
         *self.latest_block_header.write() = Some(header);
+    }
+
+    /// Revert block metadata after snapshot reconciliation discards the current tip.
+    pub(crate) fn revert_latest_block_metadata_for_snapshot_reconcile(
+        &self,
+        latest_block_header: Option<BlockHeader>,
+    ) {
+        self.block_hashes.block_and_revert().commit();
+        *self.latest_block_header.write() = latest_block_header;
     }
 
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -25159,12 +25201,6 @@ impl State {
                 actual: envelope.dataspace_id,
             });
         }
-        if nexus_active_lane_dataspace_at_height(envelope.lane_id, &nexus, envelope.block_height)
-            != Some(envelope.dataspace_id)
-        {
-            return Err(LaneRelayError::UnknownLane(envelope.lane_id));
-        }
-
         let fault_tolerance = nexus
             .dataspace_catalog
             .entries()
@@ -25172,6 +25208,11 @@ impl State {
             .find(|entry| entry.id == envelope.dataspace_id)
             .map(|entry| entry.fault_tolerance)
             .ok_or(LaneRelayError::UnknownDataspace(envelope.dataspace_id))?;
+        if nexus_active_lane_dataspace_at_height(envelope.lane_id, &nexus, envelope.block_height)
+            != Some(envelope.dataspace_id)
+        {
+            return Err(LaneRelayError::UnknownLane(envelope.lane_id));
+        }
         let committee_size = fault_tolerance
             .checked_mul(3)
             .and_then(|value| value.checked_add(1))
@@ -39620,13 +39661,6 @@ impl StateTransaction<'_, '_> {
     fn record_axt_replay_entries(&mut self, record: &AxtEnvelopeRecord) {
         let current_slot = self.axt_current_slot();
         let retention_slots = self.nexus.axt.replay_retention_slots.get();
-        #[cfg(test)]
-        eprintln!(
-            "record_axt_replay_entries current_slot={} retention_slots={} existing={}",
-            current_slot,
-            retention_slots,
-            self.world.axt_replay_ledger.iter().count()
-        );
         let stale_keys: Vec<_> = self
             .world
             .axt_replay_ledger
@@ -39641,13 +39675,6 @@ impl StateTransaction<'_, '_> {
         for handle in &record.handles {
             let retain_until_slot = retain_until_slot_for_handle(handle, &self.nexus, current_slot);
             let key = AxtHandleReplayKey::from_handle(&handle.handle);
-            #[cfg(test)]
-            eprintln!(
-                "recording replay entry dsid={} used_slot={} retain_until_slot={}",
-                handle.intent.asset_dsid.as_u64(),
-                current_slot,
-                retain_until_slot
-            );
             self.world.axt_replay_ledger.insert(
                 key,
                 AxtReplayRecord {
@@ -47460,8 +47487,10 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -47653,6 +47682,25 @@ mod tests {
         block
     }
 
+    fn store_block_for_state_commit(kura: &Arc<Kura>, block: &SignedBlock) {
+        kura.store_block(Arc::new(block.clone()))
+            .expect("store block before committing its StateBlock");
+    }
+
+    fn insert_empty_transaction_block_for_state_commit(
+        state_block: &mut StateBlock<'_>,
+        block: &SignedBlock,
+    ) {
+        let block_height = block
+            .header()
+            .height()
+            .try_into()
+            .expect("test block height must fit transaction storage height");
+        state_block
+            .transactions
+            .insert_block(std::collections::HashSet::new(), block_height);
+    }
+
     fn autoscale_transition_test_nexus(
         lanes: Vec<LaneConfig>,
         min_lanes: u32,
@@ -47710,6 +47758,27 @@ mod tests {
             ));
         }
         block_hashes.commit_for_tests();
+    }
+
+    fn seed_predecessor_height_for_state_commit(state: &State, block: &SignedBlock) {
+        let predecessor_height = block.header().height().get().saturating_sub(1);
+        seed_committed_height_for_state_test(state, predecessor_height);
+        seed_empty_transaction_height_for_state_test(state, predecessor_height);
+    }
+
+    fn seed_empty_transaction_height_for_state_test(state: &State, height: u64) {
+        let target = usize::try_from(height).expect("test block height must fit usize");
+        let current = state.transactions.latest_height();
+        for next in current.saturating_add(1)..=target {
+            let Some(block_height) = NonZeroUsize::new(next) else {
+                continue;
+            };
+            let mut transactions = state.transactions.block();
+            transactions.insert_block(std::collections::HashSet::new(), block_height);
+            transactions
+                .commit()
+                .expect("seed predecessor transaction block");
+        }
     }
 
     fn dataspace_catalog_with_extra(dataspace_id: DataSpaceId) -> DataSpaceCatalog {
@@ -47778,6 +47847,7 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
 
         let mut state_block = state.block(second.header());
         state_block.add_committed_fragments(20);
@@ -47988,6 +48058,7 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
 
         let mut state_block = state.block(second.header());
         state_block.add_committed_fragments(20);
@@ -48031,6 +48102,7 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
 
         let mut state_block = state.block(second.header());
         state_block.add_committed_fragments(20);
@@ -50006,6 +50078,7 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
 
         let mut state_block = state.block(second.header());
         state_block.add_committed_fragments(20);
@@ -50061,8 +50134,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -50107,6 +50183,7 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
 
         let mut state_block = state.block(second.header());
         state_block.add_committed_fragments(20);
@@ -50162,8 +50239,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -50209,6 +50289,7 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
 
         let mut state_block = state.block(second.header());
         state_block.add_committed_fragments(20);
@@ -50264,8 +50345,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -50803,6 +50887,7 @@ mod tests {
             .expect("store previous autoscale block");
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -51134,10 +51219,10 @@ mod tests {
             seeded_nexus.autoscale.min_lanes.get(),
             seeded_nexus.autoscale.max_lanes.get(),
         );
-        assert_eq!(seeded_capacity, 5);
+        assert_eq!(seeded_capacity, 3);
         assert!(
-            seeded_capacity >= u64::from(seeded_nexus.autoscale.max_lanes.get()),
-            "public-profile capacity can meet numeric max_lanes while the elastic id range is full"
+            seeded_capacity < u64::from(seeded_nexus.autoscale.max_lanes.get()),
+            "the elastic id range can be full even when default-route capacity is below max_lanes"
         );
         assert_eq!(
             autoscale_next_lane_id(
@@ -51338,6 +51423,7 @@ mod tests {
             .expect("store previous autoscale block");
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -51798,6 +51884,7 @@ mod tests {
             .expect("store previous autoscale block");
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -51973,6 +52060,7 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -52077,6 +52165,7 @@ mod tests {
             .expect("store previous autoscale block");
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -52131,6 +52220,7 @@ mod tests {
             .expect("store previous autoscale block");
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -52289,6 +52379,7 @@ mod tests {
             .expect("store previous autoscale block");
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -52455,8 +52546,11 @@ mod tests {
             .expect("commit previous autoscale block before scale-in cleanup");
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -52739,8 +52833,10 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -53010,8 +53106,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         {
             let mut tx = state_block.transaction();
             tx.world
@@ -53243,8 +53342,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         state_block.world.lane_relay_emergency_validators.insert(
             retired_lane_id,
             LaneRelayEmergencyValidatorSet {
@@ -53489,8 +53591,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         state_block.world.public_lane_validators.insert(
             direct_validator_key.clone(),
             validator_record(retired_lane_id, &direct_validator, &direct_peer),
@@ -53751,7 +53856,7 @@ mod tests {
                 AxtReplayRecord {
                     dataspace: DataSpaceId::UNIVERSAL,
                     used_slot: 1,
-                    retain_until_slot: 100,
+                    retain_until_slot: 10_000,
                 },
             );
             block.commit();
@@ -53795,8 +53900,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -54555,8 +54663,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -55295,8 +55406,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -55377,8 +55491,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -55455,8 +55572,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -55573,8 +55693,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -55709,8 +55832,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -55777,8 +55903,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -55879,8 +56008,11 @@ mod tests {
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
         kura.store_block(Arc::new(first))
             .expect("store previous autoscale block");
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
 
         let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
         let committed_second = ValidBlock::new_unverified_for_tests(second)
             .commit_unchecked()
             .unpack(|_| {});
@@ -59917,6 +60049,7 @@ mod tests {
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = false;
         nexus.lane_relay_emergency.enabled = true;
 
         let err = state
@@ -59935,6 +60068,7 @@ mod tests {
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = false;
         nexus.autoscale.enabled = true;
 
         let err = state
@@ -59954,6 +60088,7 @@ mod tests {
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = false;
         nexus.relay_worker.enabled = true;
 
         let err = state
@@ -66587,6 +66722,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = false;
 
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
             additions: vec![LaneConfig::default()],
@@ -67552,8 +67688,28 @@ mod tests {
     fn commit_staged_verified_lane_relay_record(state: &State, record: VerifiedLaneRelayRecord) {
         let key = State::verified_lane_relay_state_key(&record.relay_envelope).expect("state key");
         let encoded = encode_verified_lane_relay_record(&record);
-        let block = ValidBlock::new_dummy(&crate::state::checked_keypair().into_parts().1);
+        let leader_keypair = crate::state::checked_keypair();
+        let predecessor: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(leader_keypair.private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+            })
+            .into();
+        let block =
+            ValidBlock::new_dummy_and_modify_header(leader_keypair.private_key(), |header| {
+                header.set_prev_block_hash(Some(predecessor.hash()));
+            });
+        state
+            .kura
+            .store_block(Arc::new(predecessor))
+            .expect("store predecessor before committing staged verified lane relay record");
+        state
+            .kura
+            .store_block(Arc::new(block.as_ref().clone()))
+            .expect("store block before committing staged verified lane relay record");
+        seed_predecessor_height_for_state_commit(state, block.as_ref());
         let mut state_block = state.block(block.as_ref().header().clone());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, block.as_ref());
         let mut state_transaction = state_block.transaction();
         state_transaction
             .world
@@ -68651,6 +68807,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = false;
         let (_, validator_keypair) = bls_account_in("validators");
         let signers = [&validator_keypair];
 
@@ -70145,7 +70302,8 @@ mod tests {
         let state = State::new_for_testing(World::default(), kura, query_handle);
         state.nexus.write().enabled = true;
 
-        let validator = ALICE_ID.clone();
+        let (validator, validator_keypair) = bls_account_in("validators");
+        seed_consensus_keys_with_pops(&state, std::slice::from_ref(&validator_keypair));
         let mut wb = state.world.block();
         wb.public_lane_validators.insert(
             (LaneId::SINGLE, validator.clone()),
@@ -70176,10 +70334,10 @@ mod tests {
             &manifest_registry,
             &nexus,
         );
-        assert_eq!(pool, vec![validator]);
+        assert_eq!(pool, vec![validator.clone()]);
         assert_eq!(
             state.authoritative_lane_validator_accounts(LaneId::SINGLE),
-            vec![ALICE_ID.clone()]
+            vec![validator]
         );
     }
 
@@ -73502,7 +73660,7 @@ mod tests {
 
         state
             .ensure_da_indexes_hydrated()
-            .expect("hydration should retain unknown-lane bundle but skip active indexes");
+            .expect("unknown historical lane should not poison DA hydration");
         {
             let commitments = state.da_commitments();
             let stored_bundle = commitments
@@ -73514,8 +73672,18 @@ mod tests {
                 "unknown-lane commitment identity should stay available for committed validation"
             );
             assert!(
-                commitments.get_by_lane_epoch_sequence(9, 0, 0).is_none(),
-                "unknown-lane commitment should not be query-visible"
+                commitments
+                    .get_by_lane_epoch_sequence(
+                        LaneId::new(9).as_u32(),
+                        record.epoch,
+                        record.sequence,
+                    )
+                    .is_none(),
+                "unknown-lane commitment must not be query-visible"
+            );
+            assert!(
+                commitments.get_by_manifest(&record.manifest_hash).is_none(),
+                "unknown-lane manifest must not be query-visible"
             );
         }
         assert!(
@@ -79311,8 +79479,6 @@ mod tests {
         stx.current_lane_id = Some(lane);
         stx.record_axt_envelope(envelope);
         stx.apply();
-        #[cfg(test)]
-        eprintln!("after first apply");
 
         let key = AxtHandleReplayKey::from_handle(&handle);
         let entry = block
@@ -79322,12 +79488,6 @@ mod tests {
             .expect("replay entry recorded");
         assert_eq!(entry.used_slot, 1);
         assert_eq!(entry.retain_until_slot, 3, "retention horizon applies");
-        #[cfg(test)]
-        eprintln!(
-            "ledger after first apply len={} entry={:?}",
-            block.world.axt_replay_ledger.iter().count(),
-            entry
-        );
         drop(block);
 
         // Advance to a far-future slot and ensure stale entries are pruned before recording.
@@ -79337,17 +79497,9 @@ mod tests {
             ..handle
         };
         let future_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 10, 0);
-        #[cfg(test)]
-        eprintln!("starting second block");
         let mut block = state.block(future_header);
-        #[cfg(test)]
-        eprintln!("second block created");
         let mut stx = block.transaction();
-        #[cfg(test)]
-        eprintln!("second transaction created");
         stx.current_lane_id = Some(lane);
-        #[cfg(test)]
-        eprintln!("recording second envelope");
         stx.record_axt_envelope(AxtEnvelopeRecord {
             handles: vec![AxtHandleFragment {
                 handle: new_handle.clone(),
@@ -79375,12 +79527,6 @@ mod tests {
             commit_height: Some(2),
         });
         stx.apply();
-        #[cfg(test)]
-        eprintln!(
-            "after second apply len={} stale_pruned={}",
-            block.world.axt_replay_ledger.iter().count(),
-            block.world.axt_replay_ledger.get(&key).is_none()
-        );
 
         assert!(
             block.world.axt_replay_ledger.get(&key).is_none(),
@@ -79502,6 +79648,13 @@ mod tests {
         let mut nexus = iroha_config::parameters::actual::Nexus {
             lane_catalog: lane_catalog.clone(),
             lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: dsid,
+                alias: "axt-replay".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("axt replay dataspace catalog"),
             ..Default::default()
         };
         nexus.axt.slot_length_ms = NonZeroU64::new(10).expect("slot length");
@@ -83196,10 +83349,8 @@ mod tests {
                 authority: ALICE_ID.clone(),
                 args: Json::from_string_unchecked(args_json),
             };
-            eprintln!("before execute_called_trigger");
             stx.execute_called_trigger(&trigger_id, &event)
                 .expect("staged-mint-like trigger should accept live create args");
-            eprintln!("after execute_called_trigger");
             stx.apply();
             state_block.commit().unwrap();
         }
@@ -84213,8 +84364,11 @@ mod tests {
         let mut world_block = state.world.block();
         {
             let mut peers = world_block.peers_mut_for_testing().transaction();
-            peers.clear();
-            peers.extend(committed_peers);
+            for peer in committed_peers {
+                if !peers.iter().any(|existing| existing == &peer) {
+                    peers.push(peer);
+                }
+            }
             peers.apply();
         }
         world_block.commit();
@@ -85350,6 +85504,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
+        state.nexus.write().enabled = false;
         let commit_keypairs = configure_commit_topology(&state, 1);
         let (_, validator_keypair) = bls_account_in("validators");
         let signers = [&validator_keypair];

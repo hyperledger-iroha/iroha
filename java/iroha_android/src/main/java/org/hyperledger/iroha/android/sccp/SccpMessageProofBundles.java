@@ -18,6 +18,14 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 final class SccpMessageProofBundles {
   private static final String SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA =
       "iroha_sccp::SccpSourceChainProofEnvelopeV1";
+  private static final String NEXUS_FINALITY_PROOF_SCHEMA =
+      "iroha_sccp::NexusBridgeFinalityProofV1";
+  private static final String SCCP_NEXUS_FINALITY_CHAIN_ID_V1 =
+      "00000000-0000-0000-0000-000000000753";
+  private static final String SCCP_TAIRA_FINALITY_CHAIN_ID_V1 =
+      "809574f5-fee7-5e69-bfcf-52451e42d50f";
+  private static final int NEXUS_CONSENSUS_PHASE_COMMIT = 2;
+  private static final int VALIDATOR_SET_HASH_VERSION_V1 = 1;
   private static final String SOURCE_EVENT_DIGEST_PREFIX_V1 = "sccp:source:event:v1";
   private static final int MAX_SOURCE_MERKLE_BRANCH_NODES = 64;
   private static final String MSG_PREFIX_ASSET_REGISTER_V1 = "sccp:asset:register:v1";
@@ -65,9 +73,22 @@ final class SccpMessageProofBundles {
       final String finalityHeight,
       final String finalityBlockHash,
       final byte[] sourceProofBytes) {
+    final BigInteger normalizedFinalityHeight =
+        normalizeU64(finalityHeight, "publicInputs.finalityHeight");
+    final String normalizedFinalityBlockHash =
+        normalizeHex32(finalityBlockHash, "publicInputs.finalityBlockHash");
     if (summary.sourceDomain == SourceSccpProofs.DOMAIN_SORA) {
       if (sourceProofBytes.length != 0) {
         throw new IllegalArgumentException("sourceProofBytes must be empty for SORA source bundle");
+      }
+      final NexusFinalityProofSummary finalityProof =
+          decodeNexusBridgeFinalityProofSummary(
+              summary.finalityProofBytes, "bundleBytes.finality_proof");
+      if (!finalityProof.commitmentRoot.equals(summary.commitmentRoot)
+          || !finalityProof.height.equals(normalizedFinalityHeight)
+          || !finalityProof.blockHash.equals(normalizedFinalityBlockHash)) {
+        throw new IllegalArgumentException(
+            "bundleBytes.finality_proof must match SORA publicInputs");
       }
       return;
     }
@@ -79,10 +100,6 @@ final class SccpMessageProofBundles {
     }
     final SourceProofSummary sourceProof =
         decodeSourceChainProofSummary(sourceProofBytes, "sourceProofBytes");
-    final BigInteger normalizedFinalityHeight =
-        normalizeU64(finalityHeight, "publicInputs.finalityHeight");
-    final String normalizedFinalityBlockHash =
-        normalizeHex32(finalityBlockHash, "publicInputs.finalityBlockHash");
     if (sourceProof.sourceDomain != summary.sourceDomain
         || sourceProof.targetDomain != summary.targetDomain
         || !sourceProof.messageId.equals(summary.messageId)
@@ -206,6 +223,96 @@ final class SccpMessageProofBundles {
             proof.sourceDomain, proof.targetDomain, proof.messageId, proof.payloadHash))) {
       throw new IllegalArgumentException(
           label + ".source_event_digest must match source domains and message");
+    }
+    return proof;
+  }
+
+  private static NexusFinalityProofSummary decodeNexusBridgeFinalityProofSummary(
+      final byte[] finalityProofBytes, final String label) {
+    final NexusFinalityProofSummary proof;
+    try {
+      proof =
+          NoritoCodec.decode(
+              finalityProofBytes, NEXUS_FINALITY_PROOF_ADAPTER, NEXUS_FINALITY_PROOF_SCHEMA);
+    } catch (RuntimeException ex) {
+      throw new IllegalArgumentException(
+          label + " must decode as NexusBridgeFinalityProofV1", ex);
+    }
+    if (proof.version != 1) {
+      throw new IllegalArgumentException(label + ".version must be 1");
+    }
+    if (!proof.chainId.equals(SCCP_NEXUS_FINALITY_CHAIN_ID_V1)
+        && !proof.chainId.equals(SCCP_TAIRA_FINALITY_CHAIN_ID_V1)) {
+      throw new IllegalArgumentException(label + ".chain_id must be supported");
+    }
+    if (proof.height.signum() <= 0) {
+      throw new IllegalArgumentException(label + ".height must not be zero");
+    }
+    requireNonZeroHex32(proof.blockHash, label + ".block_hash");
+    requireNonZeroHex32(proof.commitmentRoot, label + ".commitment_root");
+    if (proof.blockHeaderBytes.length == 0) {
+      throw new IllegalArgumentException(label + ".block_header_bytes must not be empty");
+    }
+    final NexusCommitQcSummary qc = proof.commitQc;
+    if (qc.version != 1) {
+      throw new IllegalArgumentException(label + ".commit_qc.version must be 1");
+    }
+    if (qc.phase != NEXUS_CONSENSUS_PHASE_COMMIT) {
+      throw new IllegalArgumentException(label + ".commit_qc.phase must be Commit");
+    }
+    if (!qc.height.equals(proof.height)) {
+      throw new IllegalArgumentException(label + ".commit_qc.height must match proof height");
+    }
+    if (!qc.subjectBlockHash.equals(proof.blockHash)) {
+      throw new IllegalArgumentException(
+          label + ".commit_qc.subject_block_hash must match proof block_hash");
+    }
+    if (qc.modeTag.isEmpty()) {
+      throw new IllegalArgumentException(label + ".commit_qc.mode_tag must not be empty");
+    }
+    requireNonZeroHex32(qc.validatorSetHash, label + ".commit_qc.validator_set_hash");
+    if (qc.validatorSetHashVersion != VALIDATOR_SET_HASH_VERSION_V1) {
+      throw new IllegalArgumentException(
+          label + ".commit_qc.validator_set_hash_version must be 1");
+    }
+    if (qc.validatorPublicKeys.isEmpty()) {
+      throw new IllegalArgumentException(
+          label + ".commit_qc.validator_public_keys must not be empty");
+    }
+    if (qc.validatorSetPops.size() != qc.validatorPublicKeys.size()) {
+      throw new IllegalArgumentException(
+          label + ".commit_qc.validator_set_pops must match validator_public_keys");
+    }
+    final List<String> seenKeys = new ArrayList<>();
+    for (int index = 0; index < qc.validatorPublicKeys.size(); index++) {
+      final String publicKey = qc.validatorPublicKeys.get(index);
+      if (publicKey.isEmpty()) {
+        throw new IllegalArgumentException(
+            label + ".commit_qc.validator_public_keys[" + index + "] must not be empty");
+      }
+      if (seenKeys.contains(publicKey)) {
+        throw new IllegalArgumentException(
+            label + ".commit_qc.validator_public_keys[" + index + "] must be unique");
+      }
+      seenKeys.add(publicKey);
+    }
+    for (int index = 0; index < qc.validatorSetPops.size(); index++) {
+      if (qc.validatorSetPops.get(index).length == 0) {
+        throw new IllegalArgumentException(
+            label + ".commit_qc.validator_set_pops[" + index + "] must not be empty");
+      }
+    }
+    if (!signersBitmapHasValidSigner(qc.signersBitmap, qc.validatorPublicKeys.size())) {
+      throw new IllegalArgumentException(
+          label + ".commit_qc.signers_bitmap must select at least one validator");
+    }
+    if (qc.blsAggregateSignature.length == 0) {
+      throw new IllegalArgumentException(
+          label + ".commit_qc.bls_aggregate_signature must not be empty");
+    }
+    if (!containsNonZero(qc.blsAggregateSignature)) {
+      throw new IllegalArgumentException(
+          label + ".commit_qc.bls_aggregate_signature must not be zero");
     }
     return proof;
   }
@@ -1015,6 +1122,103 @@ final class SccpMessageProofBundles {
         }
       };
 
+  private static final TypeAdapter<NexusFinalityProofSummary> NEXUS_FINALITY_PROOF_ADAPTER =
+      new TypeAdapter<NexusFinalityProofSummary>() {
+        @Override
+        public void encode(final NoritoEncoder encoder, final NexusFinalityProofSummary value) {
+          throw new UnsupportedOperationException(
+              "Nexus finality proof encoding is not supported here");
+        }
+
+        @Override
+        public NexusFinalityProofSummary decode(final NoritoDecoder decoder) {
+          final String label = "bundleBytes.finality_proof";
+          final int version =
+              readNoritoField(decoder, label + ".version", child -> (int) child.readUInt(8));
+          final String chainId =
+              readNoritoField(
+                  decoder,
+                  label + ".chain_id",
+                  child -> readNoritoString(child, label + ".chain_id"));
+          final BigInteger height = readNoritoU64Field(decoder, label + ".height");
+          final String blockHash = readNoritoHex32Field(decoder, label + ".block_hash");
+          final String commitmentRoot =
+              readNoritoHex32Field(decoder, label + ".commitment_root");
+          final byte[] blockHeaderBytes =
+              readNoritoField(
+                  decoder,
+                  label + ".block_header_bytes",
+                  child -> readNoritoRawByteVec(child, label + ".block_header_bytes"));
+          final NexusCommitQcSummary commitQc =
+              readNoritoField(
+                  decoder,
+                  label + ".commit_qc",
+                  child -> readNexusCommitQc(child, label + ".commit_qc"));
+          return new NexusFinalityProofSummary(
+              version, chainId, height, blockHash, commitmentRoot, blockHeaderBytes, commitQc);
+        }
+      };
+
+  private static NexusCommitQcSummary readNexusCommitQc(
+      final NoritoDecoder decoder, final String label) {
+    final int version =
+        readNoritoField(decoder, label + ".version", child -> (int) child.readUInt(8));
+    final int phase = readNoritoU32Field(decoder, label + ".phase");
+    final BigInteger height = readNoritoU64Field(decoder, label + ".height");
+    readNoritoU64Field(decoder, label + ".view");
+    readNoritoU64Field(decoder, label + ".epoch");
+    final String modeTag =
+        readNoritoField(
+            decoder, label + ".mode_tag", child -> readNoritoString(child, label + ".mode_tag"));
+    final String subjectBlockHash = readNoritoHex32Field(decoder, label + ".subject_block_hash");
+    readNoritoHex32Field(decoder, label + ".parent_state_root");
+    readNoritoHex32Field(decoder, label + ".post_state_root");
+    readNoritoHex32Field(decoder, label + ".chain_order_hash");
+    readNoritoU64Field(decoder, label + ".rechain_seq");
+    readNoritoField(
+        decoder,
+        label + ".highest_qc",
+        child -> {
+          readNexusQcRefOption(child, label + ".highest_qc");
+          return null;
+        });
+    final String validatorSetHash = readNoritoHex32Field(decoder, label + ".validator_set_hash");
+    final int validatorSetHashVersion =
+        readNoritoU16Field(decoder, label + ".validator_set_hash_version");
+    final List<String> validatorPublicKeys =
+        readNoritoField(
+            decoder,
+            label + ".validator_public_keys",
+            child -> readNoritoStringSequence(child, label + ".validator_public_keys"));
+    final List<byte[]> validatorSetPops =
+        readNoritoField(
+            decoder,
+            label + ".validator_set_pops",
+            child -> readNoritoRawByteVecSequence(child, label + ".validator_set_pops"));
+    final byte[] signersBitmap =
+        readNoritoField(
+            decoder,
+            label + ".signers_bitmap",
+            child -> readNoritoRawByteVec(child, label + ".signers_bitmap"));
+    final byte[] blsAggregateSignature =
+        readNoritoField(
+            decoder,
+            label + ".bls_aggregate_signature",
+            child -> readNoritoRawByteVec(child, label + ".bls_aggregate_signature"));
+    return new NexusCommitQcSummary(
+        version,
+        phase,
+        height,
+        modeTag,
+        subjectBlockHash,
+        validatorSetHash,
+        validatorSetHashVersion,
+        validatorPublicKeys,
+        validatorSetPops,
+        signersBitmap,
+        blsAggregateSignature);
+  }
+
   private static int readNoritoU32Field(final NoritoDecoder decoder, final String label) {
     return readNoritoField(
         decoder,
@@ -1026,6 +1230,14 @@ final class SccpMessageProofBundles {
           }
           return (int) value;
         });
+  }
+
+  private static int readNoritoU16Field(final NoritoDecoder decoder, final String label) {
+    return readNoritoField(decoder, label, child -> (int) child.readUInt(16));
+  }
+
+  private static BigInteger readNoritoU64Field(final NoritoDecoder decoder, final String label) {
+    return readNoritoField(decoder, label, child -> readNoritoU64(child, label));
   }
 
   private static String readNoritoHex32Field(final NoritoDecoder decoder, final String label) {
@@ -1054,6 +1266,24 @@ final class SccpMessageProofBundles {
     return value;
   }
 
+  private static List<String> readNoritoStringSequence(
+      final NoritoDecoder decoder, final String label) {
+    final int count = checkedLength(decoder.readLength(false), label);
+    final List<String> out = new ArrayList<>(count);
+    for (int index = 0; index < count; index++) {
+      final int elementLength =
+          checkedLength(decoder.readLength(decoder.compactLenActive()), label + "[" + index + "]");
+      final NoritoDecoder child =
+          new NoritoDecoder(decoder.readBytes(elementLength), decoder.flags(), decoder.flagsHint());
+      final String value = readNoritoString(child, label + "[" + index + "]");
+      if (child.remaining() != 0) {
+        throw new IllegalArgumentException(label + "[" + index + "] must not contain trailing bytes");
+      }
+      out.add(value);
+    }
+    return out;
+  }
+
   private static byte[] readNoritoRawByteVec(final NoritoDecoder decoder, final String label) {
     final int length = checkedLength(decoder.readLength(false), label);
     return decoder.readBytes(length);
@@ -1077,6 +1307,38 @@ final class SccpMessageProofBundles {
     return out;
   }
 
+  private static void readNexusQcRefOption(final NoritoDecoder decoder, final String label) {
+    final int tag = decoder.readByte();
+    if (tag == 0) {
+      return;
+    }
+    if (tag != 1) {
+      throw new IllegalArgumentException(label + " must be a valid Option");
+    }
+    final int length = checkedLength(decoder.readLength(decoder.compactLenActive()), label);
+    final NoritoDecoder child =
+        new NoritoDecoder(decoder.readBytes(length), decoder.flags(), decoder.flagsHint());
+    readNexusQcRef(child, label);
+    if (child.remaining() != 0) {
+      throw new IllegalArgumentException(label + " must not contain trailing bytes");
+    }
+  }
+
+  private static void readNexusQcRef(final NoritoDecoder decoder, final String label) {
+    final BigInteger height = readNoritoU64Field(decoder, label + ".height");
+    readNoritoU64Field(decoder, label + ".view");
+    readNoritoU64Field(decoder, label + ".epoch");
+    final String subjectBlockHash = readNoritoHex32Field(decoder, label + ".subject_block_hash");
+    final int phase = readNoritoU32Field(decoder, label + ".phase");
+    if (height.signum() <= 0) {
+      throw new IllegalArgumentException(label + ".height must not be zero");
+    }
+    requireNonZeroHex32(subjectBlockHash, label + ".subject_block_hash");
+    if (phase < 1 || phase > 3) {
+      throw new IllegalArgumentException(label + ".phase must be known");
+    }
+  }
+
   private static BigInteger readNoritoU64(final NoritoDecoder decoder, final String label) {
     return readU64LeAt(decoder.readBytes(8), 0, label);
   }
@@ -1091,11 +1353,102 @@ final class SccpMessageProofBundles {
     return (int) value;
   }
 
+  private static boolean signersBitmapHasValidSigner(final byte[] bitmap, final int rosterLen) {
+    if (rosterLen <= 0 || bitmap.length != (rosterLen + 7) / 8) {
+      return false;
+    }
+    boolean selected = false;
+    for (int byteIndex = 0; byteIndex < bitmap.length; byteIndex++) {
+      final int value = bitmap[byteIndex] & 0xff;
+      if (value == 0) {
+        continue;
+      }
+      for (int bit = 0; bit < 8; bit++) {
+        if (((value >>> bit) & 1) == 0) {
+          continue;
+        }
+        final int index = byteIndex * 8 + bit;
+        if (index >= rosterLen) {
+          return false;
+        }
+        selected = true;
+      }
+    }
+    return selected;
+  }
+
   private interface FieldReader<T> {
     T read(NoritoDecoder decoder);
   }
 
   private static final BigInteger MAX_U64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+
+  private static final class NexusFinalityProofSummary {
+    final int version;
+    final String chainId;
+    final BigInteger height;
+    final String blockHash;
+    final String commitmentRoot;
+    final byte[] blockHeaderBytes;
+    final NexusCommitQcSummary commitQc;
+
+    NexusFinalityProofSummary(
+        final int version,
+        final String chainId,
+        final BigInteger height,
+        final String blockHash,
+        final String commitmentRoot,
+        final byte[] blockHeaderBytes,
+        final NexusCommitQcSummary commitQc) {
+      this.version = version;
+      this.chainId = chainId;
+      this.height = height;
+      this.blockHash = blockHash;
+      this.commitmentRoot = commitmentRoot;
+      this.blockHeaderBytes = Arrays.copyOf(blockHeaderBytes, blockHeaderBytes.length);
+      this.commitQc = commitQc;
+    }
+  }
+
+  private static final class NexusCommitQcSummary {
+    final int version;
+    final int phase;
+    final BigInteger height;
+    final String modeTag;
+    final String subjectBlockHash;
+    final String validatorSetHash;
+    final int validatorSetHashVersion;
+    final List<String> validatorPublicKeys;
+    final List<byte[]> validatorSetPops;
+    final byte[] signersBitmap;
+    final byte[] blsAggregateSignature;
+
+    NexusCommitQcSummary(
+        final int version,
+        final int phase,
+        final BigInteger height,
+        final String modeTag,
+        final String subjectBlockHash,
+        final String validatorSetHash,
+        final int validatorSetHashVersion,
+        final List<String> validatorPublicKeys,
+        final List<byte[]> validatorSetPops,
+        final byte[] signersBitmap,
+        final byte[] blsAggregateSignature) {
+      this.version = version;
+      this.phase = phase;
+      this.height = height;
+      this.modeTag = modeTag;
+      this.subjectBlockHash = subjectBlockHash;
+      this.validatorSetHash = validatorSetHash;
+      this.validatorSetHashVersion = validatorSetHashVersion;
+      this.validatorPublicKeys = new ArrayList<>(validatorPublicKeys);
+      this.validatorSetPops = validatorSetPops;
+      this.signersBitmap = Arrays.copyOf(signersBitmap, signersBitmap.length);
+      this.blsAggregateSignature =
+          Arrays.copyOf(blsAggregateSignature, blsAggregateSignature.length);
+    }
+  }
 
   private static final class SourceProofSummary {
     final int sourceDomain;

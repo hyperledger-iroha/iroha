@@ -90,7 +90,11 @@ also applies that denylist before rebuilt OpenVerify wrappers can return adapter
 verifier commitments. Adapter proof and transcript hashes in source-verifier
 evidence now stay role-separated from source/deployment hashes and reject
 built-in or profile-template source-verifier component replay even on
-material-only diagnostic evidence. Source-proof envelopes now also reject
+material-only diagnostic evidence. Checked SCCP message-bundle serialization now
+shares the message-bundle structure gate before public canonical bundle bytes
+are emitted, including payload/commitment/Merkle binding, SORA Nexus finality,
+and non-SORA source-proof envelope decoding, while opaque TAIRA/TRON bundle
+serialization stays fixture-only. Source-proof envelopes now also reject
 outer hash-role aliasing between message ids, payload hashes,
 source-event digests, commitment roots, finality block/header hashes, and
 receipt/message roots before material or OpenVerify checks run, and checked
@@ -98,10 +102,13 @@ source-proof envelope serialization now requires that same base wrapper shape
 before canonical bytes or hashes are emitted. Checked source-adapter
 statement/context encoding now also rejects zero transcript/evidence hashes,
 role-hash replays, transcript/evidence aliasing, and source-envelope header
-drift before FastPQ batch construction. Source-message
-and ETH SSZ Merkle inclusion proofs now reject non-canonical high-bit leaf
-indexes that would otherwise reconstruct the same root after unused index bits
-are shifted away, and ETH source-adapter preflight now rejects stale or
+drift before FastPQ batch construction. Kotlin/JVM and Java Android EVM/TRON
+proof-request helpers now mirror the SORA-origin Nexus finality binding by
+decoding `NexusBridgeFinalityProofV1` from bundle finality bytes and rejecting
+opaque or public-input-drifted finality proofs before local proving.
+Source-message and ETH SSZ Merkle inclusion proofs now reject non-canonical
+high-bit leaf indexes that would otherwise reconstruct the same root after
+unused index bits are shifted away, and ETH source-adapter preflight now rejects stale or
 non-fixed-depth execution payload branches before checked transcript encoding.
 BSC source-adapter preflight now rejects high-S or otherwise non-canonical
 validator-set seal signatures for both active and transition seals before
@@ -5669,11 +5676,12 @@ redistributable schemas, and official trust/revocation bundles.
 				  and stripped non-SORA source proofs; SCCP
 				  source-verifier template hashes and source-chain proof envelope
 				  shapes now reject unmapped source domains instead of falling back
-				  to empty source-chain keys, while
-				  diagnostic fixture builders remain available for structural fixtures, but
-				  `allow_unready` manifest/source-proof bypasses remain test-only and cannot
-				  be activated by non-test `test-fixtures` builds; config
-				  parsing for streaming identity, Torii receipt signer, and Torii
+					  to empty source-chain keys, while
+					  diagnostic fixture builders remain available for structural fixtures, but
+					  `allow_unready` manifest/source-proof bypasses remain test-only and cannot
+					  be activated by exact, escaped, feature-only, or line-split
+					  non-test `test-fixtures` gates; config
+					  parsing for streaming identity, Torii receipt signer, and Torii
 				  offline issuer public keys now also uses checked algorithm access
 				  before allow-list decisions; the Nexus app
 				  facade now classifies selected signing keys through checked

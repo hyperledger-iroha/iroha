@@ -30,7 +30,11 @@ roles: they must stay separated from verifier/deployment roles and cannot reuse
 built-in or profile-template source-verifier components. Source-verifier material
 and source-adapter deployment hashes in public cryptographic-evidence rows also
 remain role-separated across readiness JSON, bundle pre-rendering, and strict
-bundle verification. Source-proof envelopes now also reject outer hash-role
+bundle verification. Checked SCCP message-bundle serialization now shares the
+message-bundle structure gate before public canonical bundle bytes are emitted,
+including payload/commitment/Merkle binding, SORA Nexus finality, and non-SORA
+source-proof envelope decoding, while opaque TAIRA/TRON bundle serialization
+stays fixture-only. Source-proof envelopes now also reject outer hash-role
 aliasing between message ids, payload hashes, source-event digests, commitment
 roots, finality block/header hashes, and receipt/message roots before material
 or OpenVerify checks run, and checked source-proof envelope serialization now
@@ -38,11 +42,15 @@ requires that same base wrapper shape before canonical bytes or hashes are
 emitted. Checked source-adapter statement/context encoding now also rejects
 zero transcript/evidence hashes, role-hash replays, transcript/evidence
 aliasing, and source-envelope header drift before FastPQ batch construction.
-Source-message and ETH SSZ Merkle inclusion proofs now
-also reject non-canonical high-bit leaf indexes that would otherwise reconstruct
-the same root after unused index bits are shifted away, and ETH source-adapter
-preflight now rejects stale or non-fixed-depth execution payload branches before
-checked transcript encoding. BSC source-adapter preflight now rejects high-S or
+Kotlin/JVM and Java Android EVM/TRON proof-request helpers now mirror the
+SORA-origin Nexus finality binding by decoding `NexusBridgeFinalityProofV1` from
+bundle finality bytes and rejecting opaque or public-input-drifted finality
+proofs before local proving. Source-message and ETH SSZ Merkle inclusion proofs
+now also reject non-canonical high-bit leaf indexes that would otherwise
+reconstruct the same root after unused index bits are shifted away, and ETH
+source-adapter preflight now rejects stale or non-fixed-depth execution payload
+branches before checked transcript encoding. BSC source-adapter preflight now
+rejects high-S or
 otherwise non-canonical validator-set seal signatures for both active and
 transition seals and verifies that each seal signature recovers to the declared
 validator address before checked transcript encoding. Solana source-adapter
@@ -138,6 +146,9 @@ in non-test builds, Torii's private SCCP route/proof `allow_unready` helper
 paths are test-only, the `iroha_sccp/test-fixtures` feature exposes fixture
 APIs only and stays out of production SCCP dependencies and release/corridor
 Rust commands, including the JavaScript native host, and strict release-bundle
+inventory now rejects exact, escaped, feature-only, and line-split
+`test-fixtures` feature gates that would widen `allow_unready` bypasses outside
+`cfg(test)`. Strict release-bundle
 source-inventory verification pins the current Java
 Android TRON header-proof rejection calls through
 `tronHeaderSignature(unsupportedRecoveryId)`, and
@@ -411,9 +422,13 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   rejecting malformed opening Ed25519 `R` at signer-context verification, and
   Torii offline v1/v2 JSON/base64 signature ingress and RAM-LFE
   identifier-resolution output-opening admission now pin the same malformed-`R`
-  rejection for externally supplied Ed25519 signatures, and SoraFS orchestrator
-  Taikai cache admission envelopes and gossip messages now pin small-order and
-  noncanonical `R` rejection before custom protocol signature verification,
+  rejection for externally supplied Ed25519 signatures, Swift identifier-receipt
+  Ed25519 verification rejects short, all-zero, small-order-`R`, and
+  noncanonical-`R` signature material plus all-zero, small-order, and
+  noncanonical resolver public keys before CryptoKit verification, and SoraFS
+  orchestrator Taikai cache admission envelopes and gossip messages now pin
+  small-order and noncanonical `R` rejection before custom protocol signature
+  verification,
   SoraNet
   SRCv2 certificate verification now routes Ed25519 signatures through that
 		  strict `R` parser before backend verification, SoraFS manifest Ed25519
@@ -18115,12 +18130,34 @@ digest-bound pending-XSD source probe summaries for reviewed
   evidence commands, so stale inventory wiring cannot execute proof jobs before
   the guard fails.
   Formal workflow triggers must keep the checked PR and scheduled/manual
-  surfaces, so PR evidence remains on `pull_request` for `main` and nightly
-  evidence remains both manually dispatchable and scheduled at the reviewed
-  cron.
+  surfaces as exact top-level `on:` blocks, so PR evidence remains on
+  `pull_request` for `main` without extra nested filters and nightly evidence
+  remains both manually dispatchable and scheduled at the reviewed cron.
+  Formal workflow names must stay exact, so the `${{ github.workflow }}`
+  concurrency group and evidence identity cannot drift while proof commands
+  stay unchanged.
+  Formal workflow header key inventories must stay exact, so `run-name`,
+  duplicate `env`, or other unreviewed top-level controls cannot change proof
+  metadata or inherited workflow behavior.
+  Formal workflow trigger event inventories must stay exact, so extra `push`,
+  `pull_request_target`, or inline trigger forms cannot run checked proof jobs
+  outside the reviewed PR and scheduled/manual surfaces.
   Formal workflow path filters must keep the reviewed ignored-path set, so PR
   proof evidence cannot be skipped for formal specs, scripts, or workflow edits
   by adding broader `paths_ignore` entries.
+  Formal workflow concurrency must keep reviewed cancellation behavior as an
+  exact top-level block, so PR evidence can supersede stale branch pushes while
+  scheduled/manual nightly evidence cannot be canceled by an extra, duplicate,
+  or drifted concurrency policy.
+  Formal workflow headers must not set defaults or token permissions, so
+  checked proof jobs cannot inherit a different shell, working directory, or
+  workflow-wide token scope while their job-level proof commands stay
+  unchanged.
+  Formal workflow top-level env keys must stay reviewed, so checked proof jobs
+  inherit only the approved PR CI variables and no scheduled/manual nightly
+  workflow environment.
+  Formal workflow top-level env bindings must stay exact, so approved inherited
+  PR CI variables cannot change values while keeping the same keys.
   Workflow Apalache install and toolchain version pins must come from active
   commands, so comments and step names cannot satisfy the pinned model-checker
   install contract.

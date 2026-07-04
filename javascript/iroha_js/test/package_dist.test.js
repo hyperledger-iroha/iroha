@@ -3046,11 +3046,11 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(),
-    "",
+    undefined,
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(null),
-    "",
+    null,
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(""),
@@ -3622,6 +3622,12 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ),
     false,
   );
+  for (const outputProofCircuitId of [undefined, null, ""]) {
+    assert.equal(
+      canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId, 1),
+      false,
+    );
+  }
   for (const previousHopCount of [
     1.5,
     Number.NaN,

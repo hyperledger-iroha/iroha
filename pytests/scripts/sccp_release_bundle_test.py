@@ -59095,14 +59095,32 @@ def test_release_bundle_verifier_guards_sccp_unready_removed_surface_sources(
         for error in errors
     )
 
-    for fixture_name, widened_gate in (
+    for fixture_name, widened_gate, expected_error_fragment in (
         (
             "widened-bypass-gate",
+            'allow_unready && cfg!(any(test, feature = "test-fixtures"))',
             'allow_unready && cfg!(any(test, feature = "test-fixtures"))',
         ),
         (
             "escaped-widened-bypass-gate",
             'allow_unready && cfg!(any(\\x74est, feature = "test-fixtures"))',
+            'allow_unready && cfg!(any(test, feature = "test-fixtures"))',
+        ),
+        (
+            "feature-only-widened-bypass-gate",
+            'allow_unready && cfg!(feature = "test-fixtures")',
+            'allow_unready && cfg!(feature = "test-fixtures")',
+        ),
+        (
+            "split-feature-widened-bypass-gate",
+            "\n".join(
+                (
+                    "allow_unready",
+                    "    && (cfg!(test)",
+                    '        || cfg!(feature = "test-fixtures"))',
+                )
+            ),
+            "test-fixtures feature",
         ),
     ):
         widened_bypass_source = (
@@ -59135,8 +59153,7 @@ def test_release_bundle_verifier_guards_sccp_unready_removed_surface_sources(
             "SCCP unready transparent-proof removed-surface source inventory" in error
             and str(widened_bypass_source) in error
             and "contains forbidden widened allow_unready gate" in error
-            and 'allow_unready && cfg!(any(test, feature = "test-fixtures"))'
-            in error
+            and expected_error_fragment in error
             for error in errors
         )
 

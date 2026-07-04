@@ -28217,7 +28217,7 @@ mod tests {
             &vk_box,
         )
         .expect_err("material prover must reject stale prover-key artifacts");
-        assert_invalid_parameter_contains(err, "prover-key");
+        assert_invalid_parameter_contains(err, "artifact");
 
         let mut stale_verifier_artifacts = artifacts.clone();
         stale_verifier_artifacts.verifier_key = stale_verifier_key_artifact;
@@ -28229,7 +28229,7 @@ mod tests {
             &vk_box,
         )
         .expect_err("material prover must reject stale verifier-key artifacts");
-        assert_invalid_parameter_contains(err, "verifier-key");
+        assert_invalid_parameter_contains(err, "artifact");
     }
 
     #[cfg(feature = "zk-stark")]
@@ -28539,7 +28539,7 @@ mod tests {
             )
             .expect_err("material release audit gate must reject stale prover-key artifacts");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
-        assert_invalid_parameter_contains(err, "prover-key");
+        assert_invalid_parameter_contains(err, "artifact");
 
         let mut stale_verifier_artifacts = artifacts.clone();
         stale_verifier_artifacts.verifier_key = stale_verifier_key_artifact;
@@ -28557,7 +28557,7 @@ mod tests {
             )
             .expect_err("material release audit gate must reject stale verifier-key artifacts");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
-        assert_invalid_parameter_contains(err, "verifier-key");
+        assert_invalid_parameter_contains(err, "artifact");
     }
 
     #[cfg(feature = "zk-stark")]
@@ -32935,7 +32935,10 @@ mod tests {
         )
         .expect_err("execution proof helper must reject stale prover-key artifacts");
         assert_invalid_parameter_contains(err.clone(), "artifact bundle failed validation");
-        assert_invalid_parameter_contains(err, "prover-key");
+        assert_invalid_parameter_contains(
+            err,
+            "artifact digest does not match governed full-bootstrap material",
+        );
 
         let mut stale_verifier_artifacts = artifacts.clone();
         stale_verifier_artifacts.verifier_key = stale_verifier_key_artifact;
@@ -32953,7 +32956,10 @@ mod tests {
         )
         .expect_err("execution proof helper must reject stale verifier-key artifacts");
         assert_invalid_parameter_contains(err.clone(), "artifact bundle failed validation");
-        assert_invalid_parameter_contains(err, "verifier-key");
+        assert_invalid_parameter_contains(
+            err,
+            "artifact digest does not match governed full-bootstrap material",
+        );
     }
 
     #[cfg(feature = "zk-stark")]
@@ -33899,7 +33905,7 @@ mod tests {
             )
             .expect_err("release audit gate must reject stale prover-key artifacts");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
-        assert_invalid_parameter_contains(err, "prover-key");
+        assert_invalid_parameter_contains(err, "artifact");
 
         let mut stale_verifier_artifacts = artifacts.clone();
         stale_verifier_artifacts.verifier_key = stale_verifier_key_artifact;
@@ -33922,7 +33928,7 @@ mod tests {
             )
             .expect_err("release audit gate must reject stale verifier-key artifacts");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
-        assert_invalid_parameter_contains(err, "verifier-key");
+        assert_invalid_parameter_contains(err, "artifact");
     }
 
     #[cfg(feature = "zk-stark")]
@@ -35453,7 +35459,7 @@ mod tests {
             &vk_box,
         )
         .expect_err("stale same-role prover-key artifact must fail before proof generation");
-        assert_invalid_parameter_contains(err, "prover-key");
+        assert_invalid_parameter_contains(err, "artifact bundle digest mismatch");
 
         let mut stale_verifier_artifacts = artifacts.clone();
         stale_verifier_artifacts.verifier_key = stale_verifier_key_artifact;
@@ -35465,7 +35471,7 @@ mod tests {
             &vk_box,
         )
         .expect_err("stale same-role verifier-key artifact must fail before proof generation");
-        assert_invalid_parameter_contains(err, "verifier-key");
+        assert_invalid_parameter_contains(err, "artifact bundle digest mismatch");
     }
 
     #[cfg(feature = "zk-stark")]

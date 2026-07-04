@@ -2835,6 +2835,21 @@ mod tests {
             block.insert((record.lane_id, validator.clone()), record);
             block.commit();
         }
+        {
+            let mut block = state.world.public_lane_stake_shares.block();
+            block.insert(
+                (LaneId::new(1), validator.clone(), validator.clone()),
+                iroha_data_model::nexus::PublicLaneStakeShare {
+                    lane_id: LaneId::new(1),
+                    validator: validator.clone(),
+                    staker: validator.clone(),
+                    bonded: slash_amount.clone(),
+                    pending_unbonds: BTreeMap::new(),
+                    metadata: iroha_data_model::metadata::Metadata::default(),
+                },
+            );
+            block.commit();
+        }
 
         let tx_hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xB1; 32]));
         let payload = TransactionSubmissionReceiptPayload {

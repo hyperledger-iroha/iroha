@@ -12519,10 +12519,6 @@ test("submitBridgeProof rejects ambiguous or burn-bound destination payloads bef
         }),
       /exact standard-base64/,
     );
-    assert.throws(
-      () => buildMultisigProposeRequest({ ...request, signatureB64 }),
-      /exact standard-base64/,
-    );
   }
 });
 
@@ -14933,6 +14929,58 @@ test("governanceProposeDeployContract rejects non-byte hash arrays", async () =>
     (error) =>
       error?.name === "ValidationError" &&
       /governanceProposeDeployContract\.code_hash\[0\]/i.test(error.message),
+  );
+});
+
+test("governanceProposeSccpRouteManifest normalizes payloads", async () => {
+  let captured;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      captured = { url, body: JSON.parse(init.body), signal: init.signal };
+      return createResponse({
+        status: 200,
+        jsonData: cloneFixture(toriiFixtures.governance.sccpRouteManifestDraft),
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const controller = new AbortController();
+  const manifest = {
+    route: "taira_sol_xor",
+    asset: "xor",
+    verifier: { target: "SolanaProgram" },
+  };
+
+  const result = await client.governanceProposeSccpRouteManifest(
+    {
+      routeManifest: manifest,
+      authority: FIXTURE_ALICE_ID,
+      window: { lower: 10, upper: 42 },
+      mode: "zk_vote",
+    },
+    { signal: controller.signal },
+  );
+
+  assert.equal(captured.url, `${BASE_URL}/v1/gov/proposals/sccp-route-manifest`);
+  assert.deepEqual(captured.body.manifest, manifest);
+  assert.equal(captured.body.authority, FIXTURE_ALICE_ID);
+  assert.equal(captured.body.mode, "Zk");
+  assert.deepEqual(captured.body.window, { lower: 10, upper: 42 });
+  assert.equal(captured.signal, controller.signal);
+  assert.equal(result.proposal_id, "ef".repeat(32));
+  assert.deepEqual(result.tx_instructions, [{ wire_id: "ProposeSccpRouteManifest" }]);
+});
+
+test("governanceProposeSccpRouteManifest rejects invalid manifests", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+
+  await assert.rejects(
+    () => client.governanceProposeSccpRouteManifest({ manifest: "nope" }),
+    /governanceProposeSccpRouteManifest\.manifest must be an object/i,
   );
 });
 

@@ -207,7 +207,9 @@ fn route_uses_legacy_default_public_lane(route: RoutingDecision, nexus: &Nexus) 
     };
     if default_lane.dataspace_id != DataSpaceId::UNIVERSAL
         || default_lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
-        || default_lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
+        || default_lane
+            .metadata
+            .contains_key(AUTOSCALE_META_CREATED_HEIGHT)
     {
         return false;
     }
@@ -335,15 +337,7 @@ impl QueueLimits {
 
 impl Default for QueueLimits {
     fn default() -> Self {
-        let nexus_defaults = Nexus::default();
-        let fallback = LaneSchedulingLimits::new(
-            u64::from(nexus_defaults.fusion.exit_teu),
-            u64::from(nexus_defaults.da.rotation.window_slots.get()),
-        );
-        Self {
-            fallback,
-            per_lane: BTreeMap::new(),
-        }
+        Self::from_nexus(&Nexus::default())
     }
 }
 
@@ -5912,6 +5906,25 @@ impl Queue {
             && *self.nexus_limits.read() == expected_limits
     }
 
+    /// Align cached Nexus metadata around an explicitly supplied test router.
+    #[cfg(test)]
+    pub(crate) fn install_test_router_metadata_for_nexus(&self, nexus: &Nexus) {
+        let lane_catalog = Arc::new(nexus.lane_catalog.clone());
+        let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
+        *self.nexus_limits.write() = QueueLimits::from_nexus(nexus);
+        *self.lane_catalog.write() = Arc::clone(&lane_catalog);
+        *self.dataspace_catalog.write() = Arc::clone(&dataspace_catalog);
+        *self.routing_policy.write() = nexus.routing_policy.clone();
+        *self.routing_uses_config_router.write() = Self::nexus_uses_config_router(nexus);
+
+        let registry = Arc::new(LaneManifestRegistry::from_config(
+            &lane_catalog,
+            &nexus.governance,
+            &nexus.registry,
+        ));
+        self.install_lane_manifests(&registry);
+    }
+
     /// Ensure the queue router and cached catalogs match the committed Nexus state.
     ///
     /// Proposal leaders use cached queue routing to build block execution contexts, while
@@ -6256,7 +6269,9 @@ pub mod tests {
             time_source: &TimeSource,
             router: Arc<dyn LaneRouter>,
         ) -> Self {
-            Self::test_with_router_for_routes(cfg, time_source, router, &[])
+            let queue = Self::test_with_router_for_routes(cfg, time_source, router, &[]);
+            queue.install_test_router_metadata_for_nexus(&Nexus::default());
+            queue
         }
 
         /// Construct a `Queue` with synthetic Nexus catalogs matching static test routes.
@@ -6276,6 +6291,11 @@ pub mod tests {
                 &dataspace_catalog,
                 None,
             );
+            let mut nexus = Nexus::default();
+            nexus.lane_catalog = (*lane_catalog).clone();
+            nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
+            nexus.dataspace_catalog = (*dataspace_catalog).clone();
+            queue.install_test_router_metadata_for_nexus(&nexus);
             queue.time_source = time_source.clone();
             queue
         }
@@ -6294,9 +6314,9 @@ pub mod tests {
                 }
                 dataspaces.insert(*dataspace);
             }
-            if lanes_by_id.is_empty() {
-                lanes_by_id.insert(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-            }
+            lanes_by_id
+                .entry(LaneId::SINGLE)
+                .or_insert(DataSpaceId::UNIVERSAL);
             dataspaces.insert(DataSpaceId::UNIVERSAL);
 
             let max_lane_id = lanes_by_id
@@ -11714,10 +11734,8 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
-        let expected = RoutingPlan::single(RoutingDecision::new(
-            LaneId::SINGLE,
-            DataSpaceId::UNIVERSAL,
-        ));
+        let expected =
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
 
         assert_eq!(
             queue
@@ -13004,7 +13022,7 @@ pub mod tests {
     fn install_test_nexus_routes(state: &mut State, routes: &[(LaneId, DataSpaceId)]) {
         let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(routes);
         let mut nexus = state.nexus_snapshot();
-        nexus.enabled = false;
+        nexus.enabled = true;
         nexus.lane_catalog = (*lane_catalog).clone();
         nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = (*dataspace_catalog).clone();
@@ -13012,9 +13030,8 @@ pub mod tests {
         nexus.fees.per_byte_fee = Numeric::zero();
         nexus.fees.per_instruction_fee = Numeric::zero();
         nexus.fees.per_gas_unit_fee = Numeric::zero();
-        // These queue unit tests use synthetic routers/catalogs that are not valid
-        // runtime Nexus configurations. Keep the state snapshot aligned with the
-        // queue so sync checks do not replace the explicit test router.
+        // Keep the state snapshot aligned with the queue so route activity checks
+        // do not replace the explicit test router.
         *state.nexus.write() = nexus;
     }
 

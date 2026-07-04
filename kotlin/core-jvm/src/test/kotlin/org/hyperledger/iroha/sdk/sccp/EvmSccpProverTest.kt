@@ -26,6 +26,8 @@ class EvmSccpProverTest {
         (0 until 6).map { "0x" + (0x50 + it).toString(16).padStart(2, '0').repeat(32) }
     private val testSourceChainProofEnvelopeSchema =
         "iroha_sccp::SccpSourceChainProofEnvelopeV1"
+    private val testNexusBridgeFinalityProofSchema =
+        "iroha_sccp::NexusBridgeFinalityProofV1"
 
     @Test
     fun proofRequestBindsPublicSignalsAndRelayContext() {
@@ -53,7 +55,7 @@ class EvmSccpProverTest {
         )
         assertEquals("0x" + "56".repeat(32), request.statementHash)
         assertEquals("0x" + "78".repeat(32), request.destinationBindingHash)
-        assertEquals("0xe6082be4ad0d601651e761ee0df68e703f75a0bd9be8bcd5ec3c278ac354d4f1", request.requestHash)
+        assertEquals("0x60cb739b78c37151c150d3e911f2d61e7a68b09a8353409608d2a918ef299ad6", request.requestHash)
 
         val destinationBinding = sampleDestinationBinding()
         val boundRequest = SccpEvm.buildProofRequest(
@@ -94,6 +96,79 @@ class EvmSccpProverTest {
         }
         assertTrue(
             extraneousSoraSourceProof.message?.contains("sourceProofBytes must be empty for SORA source bundle") == true,
+        )
+        val opaqueSoraFinalityBundle = sampleBundleFixture(finalityProofBytes = byteArrayOf(0x01, 0x02, 0x03))
+        val opaqueSoraFinality = assertFailsWith<IllegalArgumentException> {
+            SccpEvm.buildProofRequest(
+                sampleProofRequestInput(
+                    publicInputs = opaqueSoraFinalityBundle.publicInputs,
+                    bundleBytes = opaqueSoraFinalityBundle.bundleBytes,
+                    sourceProofBytes = ByteArray(0),
+                ),
+            )
+        }
+        assertTrue(
+            opaqueSoraFinality.message?.contains(
+                "bundleBytes.finality_proof must decode as NexusBridgeFinalityProofV1",
+            ) == true,
+        )
+        val wrongSoraRootBundle = sampleBundleFixture(
+            finalityProofBytes = testNexusBridgeFinalityProofBytes(
+                commitmentRoot = "0x" + "ab".repeat(32),
+                finalityHeight = "19",
+                finalityBlockHash = "44".repeat(32),
+            ),
+        )
+        val wrongSoraRoot = assertFailsWith<IllegalArgumentException> {
+            SccpEvm.buildProofRequest(
+                sampleProofRequestInput(
+                    publicInputs = wrongSoraRootBundle.publicInputs,
+                    bundleBytes = wrongSoraRootBundle.bundleBytes,
+                    sourceProofBytes = ByteArray(0),
+                ),
+            )
+        }
+        assertTrue(
+            wrongSoraRoot.message?.contains("bundleBytes.finality_proof must match SORA publicInputs") == true,
+        )
+        val validSoraBundle = sampleBundleFixture()
+        val wrongSoraHeightBundle = sampleBundleFixture(
+            finalityProofBytes = testNexusBridgeFinalityProofBytes(
+                commitmentRoot = validSoraBundle.publicInputs.commitmentRoot,
+                finalityHeight = "20",
+                finalityBlockHash = validSoraBundle.publicInputs.finalityBlockHash,
+            ),
+        )
+        val wrongSoraHeight = assertFailsWith<IllegalArgumentException> {
+            SccpEvm.buildProofRequest(
+                sampleProofRequestInput(
+                    publicInputs = wrongSoraHeightBundle.publicInputs,
+                    bundleBytes = wrongSoraHeightBundle.bundleBytes,
+                    sourceProofBytes = ByteArray(0),
+                ),
+            )
+        }
+        assertTrue(
+            wrongSoraHeight.message?.contains("bundleBytes.finality_proof must match SORA publicInputs") == true,
+        )
+        val wrongSoraHashBundle = sampleBundleFixture(
+            finalityProofBytes = testNexusBridgeFinalityProofBytes(
+                commitmentRoot = validSoraBundle.publicInputs.commitmentRoot,
+                finalityHeight = validSoraBundle.publicInputs.finalityHeight,
+                finalityBlockHash = "45".repeat(32),
+            ),
+        )
+        val wrongSoraHash = assertFailsWith<IllegalArgumentException> {
+            SccpEvm.buildProofRequest(
+                sampleProofRequestInput(
+                    publicInputs = wrongSoraHashBundle.publicInputs,
+                    bundleBytes = wrongSoraHashBundle.bundleBytes,
+                    sourceProofBytes = ByteArray(0),
+                ),
+            )
+        }
+        assertTrue(
+            wrongSoraHash.message?.contains("bundleBytes.finality_proof must match SORA publicInputs") == true,
         )
         val nonSoraBundle = sampleBundleFixture(sourceDomain = SccpEvm.DOMAIN_BSC)
         val mismatchedNonSoraProof = assertFailsWith<IllegalArgumentException> {
@@ -5201,7 +5276,7 @@ class EvmSccpProverTest {
         targetDomain: Int = SccpEvm.DOMAIN_ETH,
         nonce: Long = 327L,
         recipient: String? = null,
-        finalityProofBytes: ByteArray = byteArrayOf(0x01, 0x02, 0x03),
+        finalityProofBytes: ByteArray? = null,
     ): ByteArray =
         sampleBundleFixture(
             sourceDomain = sourceDomain,
@@ -5216,7 +5291,7 @@ class EvmSccpProverTest {
         targetDomain: Int = SccpEvm.DOMAIN_ETH,
         nonce: Long = 327L,
         recipient: String? = null,
-        finalityProofBytes: ByteArray = byteArrayOf(0x01, 0x02, 0x03),
+        finalityProofBytes: ByteArray? = null,
     ): SampleBundleFixture {
         val recipientCodec = if (targetDomain == SccpTron.DOMAIN_TRON) 5 else 2
         val defaultRecipient = if (targetDomain == SccpTron.DOMAIN_TRON) {
@@ -5268,6 +5343,23 @@ class EvmSccpProverTest {
         val commitmentBytes = commitment.toByteArray()
         val currentRoot = Blake2b.digest256("sccp:hub:leaf:v1".toByteArray(Charsets.UTF_8) + commitmentBytes)
         val commitmentRoot = "0x" + hexLower(currentRoot)
+        val publicInputs = EvmSccpPublicInputsInput(
+            messageId = messageId,
+            payloadHash = payloadHash,
+            targetDomain = targetDomain,
+            commitmentRoot = commitmentRoot,
+            finalityHeight = "19",
+            finalityBlockHash = "44".repeat(32),
+        )
+        val resolvedFinalityProofBytes = finalityProofBytes ?: if (sourceDomain == SccpSolana.DOMAIN_SORA) {
+            testNexusBridgeFinalityProofBytes(
+                commitmentRoot = publicInputs.commitmentRoot,
+                finalityHeight = publicInputs.finalityHeight,
+                finalityBlockHash = publicInputs.finalityBlockHash,
+            )
+        } else {
+            byteArrayOf(0x01, 0x02, 0x03)
+        }
 
         val merkleProof = ByteArrayOutputStream()
         writeTestU32Le(merkleProof, 0)
@@ -5278,17 +5370,10 @@ class EvmSccpProverTest {
         writeTestBytes(bundle, commitmentBytes)
         writeTestBytes(bundle, merkleProof.toByteArray())
         writeTestBytes(bundle, payloadBytes)
-        writeTestBytes(bundle, finalityProofBytes)
+        writeTestBytes(bundle, resolvedFinalityProofBytes)
 
         return SampleBundleFixture(
-            publicInputs = EvmSccpPublicInputsInput(
-                messageId = messageId,
-                payloadHash = payloadHash,
-                targetDomain = targetDomain,
-                commitmentRoot = commitmentRoot,
-                finalityHeight = "19",
-                finalityBlockHash = "44".repeat(32),
-            ),
+            publicInputs = publicInputs,
             bundleBytes = bundle.toByteArray(),
         )
     }
@@ -5311,6 +5396,77 @@ class EvmSccpProverTest {
         val messageInclusionProofBytes: ByteArray,
         val inclusionBranch: List<ByteArray>,
     )
+
+    private data class TestNexusBridgeFinalityProof(
+        val commitmentRoot: String,
+        val finalityHeight: Long,
+        val finalityBlockHash: String,
+    )
+
+    private val testNexusBridgeFinalityProofAdapter = object : TypeAdapter<TestNexusBridgeFinalityProof> {
+        override fun encode(encoder: NoritoEncoder, value: TestNexusBridgeFinalityProof) {
+            writeTestNoritoField(encoder) { it.writeUInt(1, 8) }
+            writeTestNoritoField(encoder) { writeTestNoritoString(it, "00000000-0000-0000-0000-000000000753") }
+            writeTestNoritoField(encoder) { it.writeUInt(value.finalityHeight, 64) }
+            writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.finalityBlockHash.removePrefix("0x"))) }
+            writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.commitmentRoot.removePrefix("0x"))) }
+            writeTestNoritoField(encoder) { writeTestNoritoRawByteVec(it, byteArrayOf(0x21, 0x22)) }
+            writeTestNoritoField(encoder) { writeTestNexusCommitQc(it, value) }
+        }
+
+        override fun decode(decoder: NoritoDecoder): TestNexusBridgeFinalityProof =
+            throw UnsupportedOperationException("test Nexus finality proof decoding is not used")
+    }
+
+    private fun testNexusBridgeFinalityProofBytes(
+        commitmentRoot: String,
+        finalityHeight: String,
+        finalityBlockHash: String,
+    ): ByteArray =
+        NoritoCodec.encode(
+            TestNexusBridgeFinalityProof(
+                commitmentRoot = commitmentRoot,
+                finalityHeight = finalityHeight.toLong(),
+                finalityBlockHash = finalityBlockHash,
+            ),
+            testNexusBridgeFinalityProofSchema,
+            testNexusBridgeFinalityProofAdapter,
+        )
+
+    private fun writeTestNexusCommitQc(
+        encoder: NoritoEncoder,
+        value: TestNexusBridgeFinalityProof,
+    ) {
+        writeTestNoritoField(encoder) { it.writeUInt(1, 8) }
+        writeTestNoritoField(encoder) { it.writeUInt(2, 32) }
+        writeTestNoritoField(encoder) { it.writeUInt(value.finalityHeight, 64) }
+        writeTestNoritoField(encoder) { it.writeUInt(0, 64) }
+        writeTestNoritoField(encoder) { it.writeUInt(0, 64) }
+        writeTestNoritoField(encoder) {
+            writeTestNoritoString(it, "iroha2-consensus::permissioned-sumeragi@v1")
+        }
+        writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.finalityBlockHash.removePrefix("0x"))) }
+        writeTestNoritoField(encoder) { it.writeBytes(ByteArray(32)) }
+        writeTestNoritoField(encoder) { it.writeBytes(ByteArray(32)) }
+        writeTestNoritoField(encoder) { it.writeBytes(ByteArray(32)) }
+        writeTestNoritoField(encoder) { it.writeUInt(0, 64) }
+        writeTestNoritoField(encoder) { it.writeByte(0) }
+        writeTestNoritoField(encoder) { it.writeBytes(ByteArray(32) { 0x77.toByte() }) }
+        writeTestNoritoField(encoder) { it.writeUInt(1, 16) }
+        writeTestNoritoField(encoder) {
+            writeTestNoritoStringSequence(
+                it,
+                listOf(
+                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2",
+                ),
+            )
+        }
+        writeTestNoritoField(encoder) {
+            writeTestNoritoRawByteVecSequence(it, listOf(ByteArray(48) { 0x01.toByte() }))
+        }
+        writeTestNoritoField(encoder) { writeTestNoritoRawByteVec(it, byteArrayOf(0x01)) }
+        writeTestNoritoField(encoder) { writeTestNoritoRawByteVec(it, ByteArray(96) { 0x02.toByte() }) }
+    }
 
     private val testSourceChainProofAdapter = object : TypeAdapter<TestSccpSourceChainProofEnvelope> {
         override fun encode(encoder: NoritoEncoder, value: TestSccpSourceChainProofEnvelope) {
@@ -5433,6 +5589,17 @@ class EvmSccpProverTest {
         val bytes = value.toByteArray(Charsets.UTF_8)
         encoder.writeLength(bytes.size.toLong(), compact = true)
         encoder.writeBytes(bytes)
+    }
+
+    private fun writeTestNoritoStringSequence(encoder: NoritoEncoder, values: List<String>) {
+        encoder.writeLength(values.size.toLong(), compact = false)
+        values.forEach { value ->
+            val child = encoder.childEncoder()
+            writeTestNoritoString(child, value)
+            val payload = child.toByteArray()
+            encoder.writeLength(payload.size.toLong(), compact = true)
+            encoder.writeBytes(payload)
+        }
     }
 
     private fun writeTestNoritoRawByteVec(encoder: NoritoEncoder, value: ByteArray) {

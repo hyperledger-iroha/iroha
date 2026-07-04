@@ -1376,6 +1376,14 @@ FORMAL_WORKFLOW_JOB_NAMES = (
     (NIGHTLY_WORKFLOW, ("frontier-nightly",)),
 )
 FORMAL_WORKFLOW_ALLOWED_JOB_NAMES = dict(FORMAL_WORKFLOW_JOB_NAMES)
+FORMAL_WORKFLOW_NAME_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", "Pull Request CI"),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", "Nightly Sumeragi Formal"),
+)
+FORMAL_WORKFLOW_HEADER_KEY_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", ("name", "on", "concurrency", "env")),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ("name", "on", "concurrency")),
+)
 FORMAL_WORKFLOW_PROOF_COMMAND_FRAGMENTS = (
     FORMAL_APALACHE_VERSION_COMMAND,
     FORMAL_BASELINE_COMMAND,
@@ -1448,6 +1456,10 @@ FORMAL_WORKFLOW_TRIGGER_CONTRACTS = (
             "on:",
             "  pull_request:",
             "    branches: [main]",
+            "    paths_ignore:",
+            '      - ".github/workflows/publish*"',
+            '      - ".github/workflows/ci_image.yml"',
+            '      - "Dockerfile*"',
         ),
     ),
     (
@@ -1461,6 +1473,10 @@ FORMAL_WORKFLOW_TRIGGER_CONTRACTS = (
         ),
     ),
 )
+FORMAL_WORKFLOW_ON_EVENT_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", ("pull_request",)),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ("workflow_dispatch", "schedule")),
+)
 FORMAL_WORKFLOW_PR_PATHS_IGNORE = (
     ".github/workflows/publish*",
     ".github/workflows/ci_image.yml",
@@ -1468,6 +1484,55 @@ FORMAL_WORKFLOW_PR_PATHS_IGNORE = (
 )
 FORMAL_WORKFLOW_PATHS_IGNORE_CONTRACTS = (
     (PR_WORKFLOW, "PR formal workflow", FORMAL_WORKFLOW_PR_PATHS_IGNORE),
+)
+FORMAL_WORKFLOW_CONCURRENCY_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        "PR formal workflow",
+        (
+            "concurrency:",
+            "  group: ${{ github.workflow }}-${{ github.ref }}",
+            "  cancel-in-progress: true",
+        ),
+    ),
+    (
+        NIGHTLY_WORKFLOW,
+        "nightly formal workflow",
+        (
+            "concurrency:",
+            "  group: ${{ github.workflow }}-${{ github.ref }}",
+            "  cancel-in-progress: false",
+        ),
+    ),
+)
+FORMAL_WORKFLOW_FORBIDDEN_HEADER_FIELDS = ("defaults", "permissions")
+FORMAL_WORKFLOW_PR_HEADER_ENV_KEYS = (
+    "CARGO_TERM_COLOR",
+    "IROHA_CLI_DIR",
+    "DEFAULTS_DIR",
+    "WASM_TARGET_DIR",
+    "TEST_NETWORK_TMP_DIR",
+    "NEXTEST_PROFILE",
+)
+FORMAL_WORKFLOW_HEADER_ENV_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", FORMAL_WORKFLOW_PR_HEADER_ENV_KEYS),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ()),
+)
+FORMAL_WORKFLOW_PR_HEADER_ENV_BINDINGS = (
+    "CARGO_TERM_COLOR: always",
+    'IROHA_CLI_DIR: "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/test"',
+    "DEFAULTS_DIR: defaults",
+    "WASM_TARGET_DIR: wasm/target/prebuilt",
+    "TEST_NETWORK_TMP_DIR: /tmp",
+    "NEXTEST_PROFILE: ci",
+)
+FORMAL_WORKFLOW_HEADER_ENV_BINDING_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        "PR formal workflow",
+        FORMAL_WORKFLOW_PR_HEADER_ENV_BINDINGS,
+    ),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ()),
 )
 FORMAL_PREFIX_MATCH_COMMANDS = (
     APALACHE_COMMAND_PREFIX,
@@ -1629,7 +1694,14 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Active CI/workflow TLC modes must be duplicate-free",
     "Formal coverage audit must run before Apalache, TLC, and expected-failure evidence commands",
     "Formal workflow triggers must keep the checked PR and scheduled/manual surfaces",
+    "Formal workflow names must stay exact",
+    "Formal workflow header key inventories must stay exact",
+    "Formal workflow trigger event inventories must stay exact",
     "Formal workflow path filters must keep the reviewed ignored-path set",
+    "Formal workflow concurrency must keep reviewed cancellation behavior",
+    "Formal workflow headers must not set defaults or token permissions",
+    "Formal workflow top-level env keys must stay reviewed",
+    "Formal workflow top-level env bindings must stay exact",
     "Workflow Apalache install and toolchain version pins must come from active commands",
     "Formal workflows must verify the pinned Apalache binary before running proof jobs",
     "Formal baseline script must verify the pinned Apalache binary after coverage and before proof jobs",
@@ -21864,6 +21936,89 @@ def yaml_scalar_text(value: str) -> str:
     return scalar
 
 
+def workflow_header_name_lines(path: Path) -> list[tuple[int, str]]:
+    """Return top-level workflow name values from the workflow header."""
+
+    names: list[tuple[int, str]] = []
+    for line_number, line in workflow_header_lines(path):
+        if workflow_mapping_key(line, 0) != "name":
+            continue
+        name_value = workflow_field_value(line.strip(), "name")
+        if name_value is None:
+            continue
+        names.append((line_number, yaml_scalar_text(name_value)))
+    return names
+
+
+def workflow_header_top_level_key_lines(path: Path) -> list[tuple[int, str]]:
+    """Return top-level workflow header keys before the jobs block."""
+
+    keys: list[tuple[int, str]] = []
+    for line_number, line in workflow_header_lines(path):
+        key = workflow_mapping_key(line, 0)
+        if key is not None:
+            keys.append((line_number, key))
+    return keys
+
+
+def workflow_header_on_lines(path: Path) -> list[tuple[int, str]]:
+    """Return non-comment lines from top-level workflow trigger blocks."""
+
+    trigger_lines: list[tuple[int, str]] = []
+    in_on = False
+    for line_number, line in workflow_header_lines(path):
+        top_level_key = workflow_mapping_key(line, 0)
+        if top_level_key is not None:
+            in_on = top_level_key == "on"
+            if in_on:
+                trigger_lines.append((line_number, line))
+                on_value = workflow_field_value(line.strip(), "on")
+                if on_value is not None and on_value.strip():
+                    in_on = False
+            continue
+        if not in_on:
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line.startswith(" "):
+            trigger_lines.append((line_number, line))
+            continue
+        in_on = False
+    return trigger_lines
+
+
+def workflow_header_on_event_lines(path: Path) -> list[tuple[int, str]]:
+    """Return workflow event keys from the top-level on block."""
+
+    events: list[tuple[int, str]] = []
+    in_on = False
+    for line_number, line in workflow_header_lines(path):
+        top_level_key = workflow_mapping_key(line, 0)
+        if top_level_key is not None:
+            in_on = top_level_key == "on"
+            if in_on:
+                on_value = workflow_field_value(line.strip(), "on")
+                if on_value is not None and on_value.strip():
+                    events.append((line_number, f"<inline {line.strip()}>"))
+                    in_on = False
+            continue
+        if not in_on:
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        event_key = workflow_mapping_key(line, 2)
+        if event_key is not None:
+            events.append((line_number, event_key))
+            continue
+        list_item_match = re.match(r"^  -\s+(.+?)\s*$", line)
+        if list_item_match is not None:
+            events.append((line_number, yaml_scalar_text(list_item_match.group(1))))
+            continue
+        if line.strip() and not line.startswith("    "):
+            in_on = False
+    return events
+
+
 def workflow_header_paths_ignore_lines(path: Path) -> list[tuple[int, str]]:
     """Return PR trigger paths_ignore entries from the workflow header."""
 
@@ -21884,6 +22039,89 @@ def workflow_header_paths_ignore_lines(path: Path) -> list[tuple[int, str]]:
         if line.strip() and not line.startswith("      "):
             in_paths_ignore = False
     return ignored_paths
+
+
+def workflow_header_concurrency_lines(path: Path) -> list[tuple[int, str]]:
+    """Return non-comment lines from top-level workflow concurrency blocks."""
+
+    concurrency_lines: list[tuple[int, str]] = []
+    in_concurrency = False
+    for line_number, line in workflow_header_lines(path):
+        top_level_key = workflow_mapping_key(line, 0)
+        if top_level_key is not None:
+            in_concurrency = top_level_key == "concurrency"
+            if in_concurrency:
+                concurrency_lines.append((line_number, line))
+                concurrency_value = workflow_field_value(line.strip(), "concurrency")
+                if concurrency_value is not None and concurrency_value.strip():
+                    in_concurrency = False
+            continue
+        if not in_concurrency:
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line.startswith(" "):
+            concurrency_lines.append((line_number, line))
+            continue
+        in_concurrency = False
+    return concurrency_lines
+
+
+def workflow_header_env_key_lines(path: Path) -> list[tuple[int, str]]:
+    """Return top-level workflow env keys from the workflow header."""
+
+    env_keys: list[tuple[int, str]] = []
+    in_env = False
+    for line_number, line in workflow_header_lines(path):
+        top_level_key = workflow_mapping_key(line, 0)
+        if top_level_key is not None:
+            in_env = top_level_key == "env"
+            if in_env:
+                env_value = workflow_field_value(line.strip(), "env")
+                if env_value is not None and env_value.strip():
+                    env_keys.append((line_number, f"<inline {line.strip()}>"))
+                    in_env = False
+            continue
+        if not in_env:
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key_match = re.match(r"^  ([A-Za-z_][A-Za-z0-9_]*)\s*:", line)
+        if key_match is not None:
+            env_keys.append((line_number, key_match.group(1)))
+            continue
+        if line.strip() and not line.startswith("    "):
+            in_env = False
+    return env_keys
+
+
+def workflow_header_env_binding_lines(path: Path) -> list[tuple[int, str]]:
+    """Return top-level workflow env bindings from the workflow header."""
+
+    env_bindings: list[tuple[int, str]] = []
+    in_env = False
+    for line_number, line in workflow_header_lines(path):
+        top_level_key = workflow_mapping_key(line, 0)
+        if top_level_key is not None:
+            in_env = top_level_key == "env"
+            if in_env:
+                env_value = workflow_field_value(line.strip(), "env")
+                if env_value is not None and env_value.strip():
+                    env_bindings.append((line_number, f"<inline {line.strip()}>"))
+                    in_env = False
+            continue
+        if not in_env:
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        binding_match = re.match(r"^  ([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$", line)
+        if binding_match is not None:
+            key, value = binding_match.groups()
+            env_bindings.append((line_number, f"{key}: {value.strip()}"))
+            continue
+        if line.strip() and not line.startswith("    "):
+            in_env = False
+    return env_bindings
 
 
 def workflow_run_command_text(stripped_line: str) -> str | None:
@@ -22341,6 +22579,65 @@ def formal_workflow_run_inventory_errors(
     return errors
 
 
+def formal_workflow_name_errors(
+    contracts: tuple[
+        tuple[Path, str, str],
+        ...,
+    ] = FORMAL_WORKFLOW_NAME_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow top-level names drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_name in contracts:
+        name_lines = workflow_header_name_lines(path)
+        actual_names = tuple(name for _, name in name_lines)
+        if actual_names == (expected_name,):
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {name}" for line_number, name in name_lines]
+            )
+            if name_lines
+            else " no workflow name"
+        )
+        errors.append(
+            f"{owner} {display_path(path)} must set exact workflow name: "
+            f"{expected_name}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_header_key_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_HEADER_KEY_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow top-level header keys drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_keys in contracts:
+        key_lines = workflow_header_top_level_key_lines(path)
+        actual_keys = tuple(key for _, key in key_lines)
+        if actual_keys == expected_keys:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {key}" for line_number, key in key_lines]
+            )
+            if key_lines
+            else " no top-level header keys"
+        )
+        expected_summary = "\n" + format_items(list(expected_keys))
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact top-level header keys:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
 def formal_workflow_trigger_errors(
     contracts: tuple[
         tuple[Path, str, tuple[str, ...]],
@@ -22350,49 +22647,58 @@ def formal_workflow_trigger_errors(
     """Return errors when formal workflow trigger surfaces drift."""
 
     errors: list[str] = []
-    for path, owner, required_lines in contracts:
-        header_lines = workflow_header_lines(path)
-        line_indexes: dict[str, list[tuple[int, int, str]]] = {}
-        for index, (line_number, line) in enumerate(header_lines):
-            line_indexes.setdefault(line, []).append((index, line_number, line))
-
-        for required_line in required_lines:
-            matches = line_indexes.get(required_line, [])
-            if not matches:
-                errors.append(
-                    f"{owner} {display_path(path)} is missing trigger line: "
-                    f"{required_line}"
-                )
-                continue
-            if len(matches) > 1:
-                errors.append(
-                    f"{owner} {display_path(path)} must set trigger line "
-                    f"{required_line!r} at most once:\n"
-                    + format_items(
-                        [
-                            f"{line_number}: {line}"
-                            for _, line_number, line in matches
-                        ]
-                    )
-                )
-
-        present_order = [
-            (
-                required_line,
-                line_indexes[required_line][0][0],
+    for path, owner, expected_lines in contracts:
+        trigger_lines = workflow_header_on_lines(path)
+        actual_lines = tuple(line for _, line in trigger_lines)
+        if actual_lines == expected_lines:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {line}" for line_number, line in trigger_lines]
             )
-            for required_line in required_lines
-            if required_line in line_indexes
-        ]
-        for (first, first_index), (second, second_index) in zip(
-            present_order, present_order[1:]
-        ):
-            if first_index < second_index:
-                continue
-            errors.append(
-                f"{owner} {display_path(path)} must keep trigger line "
-                f"{first!r} before {second!r}"
+            if trigger_lines
+            else " no top-level on block"
+        )
+        expected_summary = "\n" + format_items(list(expected_lines))
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact top-level trigger "
+            f"block:{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_on_event_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_ON_EVENT_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow trigger event inventories drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_events in contracts:
+        event_lines = workflow_header_on_event_lines(path)
+        actual_events = tuple(event for _, event in event_lines)
+        if actual_events == expected_events:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {event}" for line_number, event in event_lines]
             )
+            if event_lines
+            else " no trigger events"
+        )
+        expected_summary = (
+            "\n" + format_items(list(expected_events))
+            if expected_events
+            else " no trigger events"
+        )
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact trigger events:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
     return errors
 
 
@@ -22424,6 +22730,123 @@ def formal_workflow_paths_ignore_errors(
         expected_summary = "\n" + format_items(list(expected_paths))
         errors.append(
             f"{owner} {display_path(path)} must keep exact paths_ignore entries:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_concurrency_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_CONCURRENCY_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow concurrency behavior drifts."""
+
+    errors: list[str] = []
+    for path, owner, expected_lines in contracts:
+        concurrency_lines = workflow_header_concurrency_lines(path)
+        actual_lines = tuple(line for _, line in concurrency_lines)
+        if actual_lines == expected_lines:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {line}" for line_number, line in concurrency_lines]
+            )
+            if concurrency_lines
+            else " no top-level concurrency block"
+        )
+        expected_summary = "\n" + format_items(list(expected_lines))
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact top-level "
+            f"concurrency block:{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_header_control_errors(
+    workflow_jobs: tuple[tuple[Path, tuple[str, ...]], ...] = FORMAL_WORKFLOW_JOB_NAMES,
+    forbidden_fields: tuple[str, ...] = FORMAL_WORKFLOW_FORBIDDEN_HEADER_FIELDS,
+) -> list[str]:
+    """Return errors when formal workflows set inherited header controls."""
+
+    errors: list[str] = []
+    for path, _ in workflow_jobs:
+        for line_number, line in workflow_header_lines(path):
+            key = workflow_mapping_key(line, 0)
+            if key not in forbidden_fields:
+                continue
+            errors.append(
+                f"formal workflow {display_path(path)}:{line_number} must not set "
+                f"top-level {key}: {line.strip()}"
+            )
+    return errors
+
+
+def formal_workflow_header_env_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_HEADER_ENV_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow top-level env keys drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_keys in contracts:
+        key_lines = workflow_header_env_key_lines(path)
+        actual_keys = tuple(key for _, key in key_lines)
+        if actual_keys == expected_keys:
+            continue
+        actual_summary = (
+            "\n" + format_items([f"{line_number}: {key}" for line_number, key in key_lines])
+            if key_lines
+            else " no top-level env keys"
+        )
+        expected_summary = (
+            "\n" + format_items(list(expected_keys))
+            if expected_keys
+            else " no top-level env keys"
+        )
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact top-level env keys:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_header_env_binding_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_HEADER_ENV_BINDING_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow top-level env bindings drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_bindings in contracts:
+        binding_lines = workflow_header_env_binding_lines(path)
+        actual_bindings = tuple(binding for _, binding in binding_lines)
+        if actual_bindings == expected_bindings:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [
+                    f"{line_number}: {binding}"
+                    for line_number, binding in binding_lines
+                ]
+            )
+            if binding_lines
+            else " no top-level env bindings"
+        )
+        expected_summary = (
+            "\n" + format_items(list(expected_bindings))
+            if expected_bindings
+            else " no top-level env bindings"
+        )
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact top-level env bindings:"
             f"{expected_summary}; found:{actual_summary}"
         )
     return errors
@@ -25326,8 +25749,19 @@ def main() -> int:
     formal_workflow_run_inventory_mismatches = (
         formal_workflow_run_inventory_errors()
     )
+    formal_workflow_name_mismatches = formal_workflow_name_errors()
+    formal_workflow_header_key_mismatches = formal_workflow_header_key_errors()
     formal_workflow_trigger_mismatches = formal_workflow_trigger_errors()
+    formal_workflow_on_event_mismatches = formal_workflow_on_event_errors()
     formal_workflow_paths_ignore_mismatches = formal_workflow_paths_ignore_errors()
+    formal_workflow_concurrency_mismatches = formal_workflow_concurrency_errors()
+    formal_workflow_header_control_mismatches = (
+        formal_workflow_header_control_errors()
+    )
+    formal_workflow_header_env_mismatches = formal_workflow_header_env_errors()
+    formal_workflow_header_env_binding_mismatches = (
+        formal_workflow_header_env_binding_errors()
+    )
     formal_workflow_action_step_mismatches = formal_workflow_action_step_errors()
     formal_workflow_action_inventory_mismatches = (
         formal_workflow_action_inventory_errors()
@@ -25930,15 +26364,50 @@ def main() -> int:
             "Sumeragi formal workflow run command inventory drifted:\n"
             + format_items(formal_workflow_run_inventory_mismatches)
         )
+    if formal_workflow_name_mismatches:
+        errors.append(
+            "Sumeragi formal workflow names drifted:\n"
+            + format_items(formal_workflow_name_mismatches)
+        )
+    if formal_workflow_header_key_mismatches:
+        errors.append(
+            "Sumeragi formal workflow header key inventory drifted:\n"
+            + format_items(formal_workflow_header_key_mismatches)
+        )
     if formal_workflow_trigger_mismatches:
         errors.append(
             "Sumeragi formal workflow triggers drifted:\n"
             + format_items(formal_workflow_trigger_mismatches)
         )
+    if formal_workflow_on_event_mismatches:
+        errors.append(
+            "Sumeragi formal workflow trigger event inventory drifted:\n"
+            + format_items(formal_workflow_on_event_mismatches)
+        )
     if formal_workflow_paths_ignore_mismatches:
         errors.append(
             "Sumeragi formal workflow path filters drifted:\n"
             + format_items(formal_workflow_paths_ignore_mismatches)
+        )
+    if formal_workflow_concurrency_mismatches:
+        errors.append(
+            "Sumeragi formal workflow concurrency drifted:\n"
+            + format_items(formal_workflow_concurrency_mismatches)
+        )
+    if formal_workflow_header_control_mismatches:
+        errors.append(
+            "Sumeragi formal workflow headers set inherited controls:\n"
+            + format_items(formal_workflow_header_control_mismatches)
+        )
+    if formal_workflow_header_env_mismatches:
+        errors.append(
+            "Sumeragi formal workflow top-level env drifted:\n"
+            + format_items(formal_workflow_header_env_mismatches)
+        )
+    if formal_workflow_header_env_binding_mismatches:
+        errors.append(
+            "Sumeragi formal workflow top-level env bindings drifted:\n"
+            + format_items(formal_workflow_header_env_binding_mismatches)
         )
     if formal_workflow_action_step_mismatches:
         errors.append(

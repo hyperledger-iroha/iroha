@@ -19,6 +19,63 @@ final class SigningKeyTests: XCTestCase {
         XCTAssertTrue(publicKey.isValidSignature(envelope.signature, for: message))
     }
 
+    func testEd25519SignatureAdmissionRejectsInertAndMalformedR() throws {
+        guard #available(macOS 10.15, iOS 13.0, *) else {
+            throw XCTSkip("Curve25519 requires macOS 10.15 / iOS 13")
+        }
+        let key = Curve25519.Signing.PrivateKey()
+        let message = Data("swift-ed25519-signature-admission".utf8)
+        let signature = try key.signature(for: message)
+        XCTAssertTrue(Ed25519SignatureAdmission.isValidSignature(signature))
+
+        let smallOrderR = Data([
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ])
+        let noncanonicalR = Data([
+            0xEE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F,
+        ])
+
+        XCTAssertFalse(Ed25519SignatureAdmission.isValidSignature(Data(repeating: 0, count: 64)))
+        XCTAssertFalse(Ed25519SignatureAdmission.isValidSignature(Data(signature.dropLast())))
+        for replacementR in [smallOrderR, noncanonicalR] {
+            var malformed = signature
+            malformed.replaceSubrange(0..<replacementR.count, with: replacementR)
+            XCTAssertFalse(Ed25519SignatureAdmission.isValidSignature(malformed))
+        }
+    }
+
+    func testEd25519PublicKeyAdmissionRejectsWeakOrNoncanonicalMaterial() throws {
+        guard #available(macOS 10.15, iOS 13.0, *) else {
+            throw XCTSkip("Curve25519 requires macOS 10.15 / iOS 13")
+        }
+        let key = Curve25519.Signing.PrivateKey()
+        XCTAssertTrue(Ed25519PublicKeyAdmission.isValidPublicKey(key.publicKey.rawRepresentation))
+
+        let smallOrderKey = Data([
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ])
+        let noncanonicalKey = Data([
+            0xEE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F,
+        ])
+
+        XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(Data(repeating: 0, count: 32)))
+        XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(Data(repeating: 0x42, count: 31)))
+        XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(smallOrderKey))
+        XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(noncanonicalKey))
+    }
+
     func testSm2SigningKeyPreservesMetadata() throws {
         let privateKey = Data(repeating: 0xAB, count: Sm2Keypair.privateKeyLength)
         let publicKey = Data(repeating: 0xCD, count: Sm2Keypair.publicKeyLength)

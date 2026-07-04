@@ -3478,6 +3478,9 @@ private enum ToriiIdentifierReceiptVerifier {
                 String(format: "resolverPublicKey uses unsupported multihash code 0x%X.", functionCode)
             )
         }
+        if algorithm == .ed25519, !Ed25519PublicKeyAdmission.isValidPublicKey(payload) {
+            throw ToriiClientError.invalidPayload("resolverPublicKey is not a valid Ed25519 public key.")
+        }
         return ParsedPublicKey(algorithm: algorithm, publicKey: payload)
     }
 
@@ -3509,6 +3512,12 @@ private enum ToriiIdentifierReceiptVerifier {
         case .ed25519:
             guard #available(macOS 10.15, iOS 13.0, *) else {
                 throw ToriiClientError.invalidPayload("Ed25519 receipt verification requires iOS 13/macOS 10.15.")
+            }
+            guard Ed25519SignatureAdmission.isValidSignature(signature) else {
+                return false
+            }
+            guard Ed25519PublicKeyAdmission.isValidPublicKey(publicKey) else {
+                throw ToriiClientError.invalidPayload("resolverPublicKey is not a valid Ed25519 public key.")
             }
             let ed25519Key: Curve25519.Signing.PublicKey
             do {
@@ -3559,11 +3568,11 @@ private enum ToriiIdentifierReceiptVerifier {
                 return verified
             }
             guard let verified = NoritoNativeBridge.shared.mldsaVerify(
-                    suiteId: suite.rawValue,
-                    publicKey: publicKey,
-                    message: message,
-                    signature: signature
-                  ) else {
+                suiteId: suite.rawValue,
+                publicKey: publicKey,
+                message: message,
+                signature: signature
+            ) else {
                 throw ToriiClientError.invalidPayload("ML-DSA receipt verification is unavailable.")
             }
             return verified

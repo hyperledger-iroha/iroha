@@ -1370,6 +1370,12 @@ impl From<crate::isi::governance::ProposeRuntimeUpgradeProposal> for Instruction
     }
 }
 #[cfg(feature = "governance")]
+impl From<crate::isi::governance::ProposeSccpRouteManifest> for InstructionBox {
+    fn from(i: crate::isi::governance::ProposeSccpRouteManifest) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+#[cfg(feature = "governance")]
 impl From<crate::isi::governance::CastZkBallot> for InstructionBox {
     fn from(i: crate::isi::governance::CastZkBallot) -> Self {
         InstructionBox(Box::new(i))

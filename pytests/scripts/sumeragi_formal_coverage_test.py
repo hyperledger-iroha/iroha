@@ -1334,6 +1334,170 @@ def test_formal_workflow_run_inventory_errors_rejects_order_or_extra_runs(
     ]
 
 
+def test_formal_workflow_name_errors_accepts_checked_names(tmp_path: Path) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_name_errors(
+        (
+            (pr_workflow, "PR formal workflow", "Pull Request CI"),
+            (nightly_workflow, "nightly formal workflow", "Nightly Sumeragi Formal"),
+        )
+    ) == []
+
+
+def test_formal_workflow_name_errors_rejects_name_drift(tmp_path: Path) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Sumeragi Formal",
+                "name: Nightly Sumeragi Formal Copy",
+                "on:",
+                "  workflow_dispatch:",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_name_errors(
+        ((workflow, "nightly formal workflow", "Nightly Sumeragi Formal"),)
+    ) == [
+        f"nightly formal workflow {workflow} must set exact workflow name: "
+        "Nightly Sumeragi Formal; found:\n"
+        "  - 1: Sumeragi Formal\n"
+        "  - 2: Nightly Sumeragi Formal Copy",
+    ]
+
+
+def test_formal_workflow_header_key_errors_accepts_checked_headers(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: false",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_key_errors(
+        (
+            (pr_workflow, "PR formal workflow", ("name", "on", "concurrency", "env")),
+            (
+                nightly_workflow,
+                "nightly formal workflow",
+                ("name", "on", "concurrency"),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_header_key_errors_rejects_extra_or_duplicate_keys(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "run-name: Sumeragi proof ${{ github.ref }}",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "env:",
+                "  NEXTEST_PROFILE: ci",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_key_errors(
+        ((workflow, "PR formal workflow", ("name", "on", "concurrency", "env")),)
+    ) == [
+        f"PR formal workflow {workflow} must keep exact top-level header keys:\n"
+        "  - name\n"
+        "  - on\n"
+        "  - concurrency\n"
+        "  - env; found:\n"
+        "  - 1: name\n"
+        "  - 2: run-name\n"
+        "  - 3: on\n"
+        "  - 5: concurrency\n"
+        "  - 8: env\n"
+        "  - 10: env",
+    ]
+
+
 def test_formal_workflow_trigger_errors_accepts_checked_triggers(
     tmp_path: Path,
 ) -> None:
@@ -1428,10 +1592,187 @@ def test_formal_workflow_trigger_errors_rejects_trigger_drift(
             ),
         )
     ) == [
-        f"nightly formal workflow {workflow} is missing trigger line: "
-        '    - cron: "43 3 * * *"',
-        f"nightly formal workflow {workflow} must keep trigger line "
-        "'  workflow_dispatch:' before '  schedule:'",
+        f"nightly formal workflow {workflow} must keep exact top-level trigger "
+        "block:\n"
+        "  - on:\n"
+        "  -   workflow_dispatch:\n"
+        "  -   schedule:\n"
+        '  -     - cron: "43 3 * * *"; found:\n'
+        "  - 2: on:\n"
+        "  - 3:   schedule:\n"
+        '  - 4:     - cron: "0 0 * * *"\n'
+        "  - 5:   workflow_dispatch:",
+    ]
+
+
+def test_formal_workflow_trigger_errors_rejects_extra_nested_pr_filters(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "    types: [opened]",
+                "    paths_ignore:",
+                '      - ".github/workflows/publish*"',
+                '      - ".github/workflows/ci_image.yml"',
+                '      - "Dockerfile*"',
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_trigger_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                (
+                    "on:",
+                    "  pull_request:",
+                    "    branches: [main]",
+                    "    paths_ignore:",
+                    '      - ".github/workflows/publish*"',
+                    '      - ".github/workflows/ci_image.yml"',
+                    '      - "Dockerfile*"',
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow {workflow} must keep exact top-level trigger "
+        "block:\n"
+        "  - on:\n"
+        "  -   pull_request:\n"
+        "  -     branches: [main]\n"
+        "  -     paths_ignore:\n"
+        '  -       - ".github/workflows/publish*"\n'
+        '  -       - ".github/workflows/ci_image.yml"\n'
+        '  -       - "Dockerfile*"; found:\n'
+        "  - 2: on:\n"
+        "  - 3:   pull_request:\n"
+        "  - 4:     branches: [main]\n"
+        "  - 5:     types: [opened]\n"
+        "  - 6:     paths_ignore:\n"
+        '  - 7:       - ".github/workflows/publish*"\n'
+        '  - 8:       - ".github/workflows/ci_image.yml"\n'
+        '  - 9:       - "Dockerfile*"',
+    ]
+
+
+def test_formal_workflow_on_event_errors_accepts_checked_events(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "  schedule:",
+                '    - cron: "43 3 * * *"',
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_on_event_errors(
+        (
+            (pr_workflow, "PR formal workflow", ("pull_request",)),
+            (
+                nightly_workflow,
+                "nightly formal workflow",
+                ("workflow_dispatch", "schedule"),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_on_event_errors_rejects_extra_events(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "  pull_request_target:",
+                "  push:",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_on_event_errors(
+        ((workflow, "PR formal workflow", ("pull_request",)),)
+    ) == [
+        f"PR formal workflow {workflow} must keep exact trigger events:\n"
+        "  - pull_request; found:\n"
+        "  - 3: pull_request\n"
+        "  - 5: pull_request_target\n"
+        "  - 6: push",
+    ]
+
+
+def test_formal_workflow_on_event_errors_rejects_inline_events(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on: [workflow_dispatch, schedule]",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_on_event_errors(
+        ((workflow, "nightly formal workflow", ("workflow_dispatch", "schedule")),)
+    ) == [
+        f"nightly formal workflow {workflow} must keep exact trigger events:\n"
+        "  - workflow_dispatch\n"
+        "  - schedule; found:\n"
+        "  - 2: <inline on: [workflow_dispatch, schedule]>",
     ]
 
 
@@ -1518,6 +1859,489 @@ def test_formal_workflow_paths_ignore_errors_rejects_broad_pr_filter(
         "  - 6: .github/workflows/publish*\n"
         "  - 7: docs/formal/**\n"
         "  - 8: scripts/formal/**",
+    ]
+
+
+def test_formal_workflow_concurrency_errors_accepts_checked_headers(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "  schedule:",
+                '    - cron: "43 3 * * *"',
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: false",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_concurrency_errors(
+        (
+            (
+                pr_workflow,
+                "PR formal workflow",
+                (
+                    "concurrency:",
+                    "  group: ${{ github.workflow }}-${{ github.ref }}",
+                    "  cancel-in-progress: true",
+                ),
+            ),
+            (
+                nightly_workflow,
+                "nightly formal workflow",
+                (
+                    "concurrency:",
+                    "  group: ${{ github.workflow }}-${{ github.ref }}",
+                    "  cancel-in-progress: false",
+                ),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_concurrency_errors_rejects_cancel_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "  schedule:",
+                '    - cron: "43 3 * * *"',
+                "concurrency:",
+                "  group: sumeragi-formal",
+                "  cancel-in-progress: true",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_concurrency_errors(
+        (
+            (
+                workflow,
+                "nightly formal workflow",
+                (
+                    "concurrency:",
+                    "  group: ${{ github.workflow }}-${{ github.ref }}",
+                    "  cancel-in-progress: false",
+                ),
+            ),
+        )
+    ) == [
+        f"nightly formal workflow {workflow} must keep exact top-level "
+        "concurrency block:\n"
+        "  - concurrency:\n"
+        "  -   group: ${{ github.workflow }}-${{ github.ref }}\n"
+        "  -   cancel-in-progress: false; found:\n"
+        "  - 6: concurrency:\n"
+        "  - 7:   group: sumeragi-formal\n"
+        "  - 8:   cancel-in-progress: true",
+    ]
+
+
+def test_formal_workflow_concurrency_errors_rejects_extra_duplicate_blocks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "  max-parallel: 1",
+                "concurrency: sumeragi-formal",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_concurrency_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                (
+                    "concurrency:",
+                    "  group: ${{ github.workflow }}-${{ github.ref }}",
+                    "  cancel-in-progress: true",
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow {workflow} must keep exact top-level "
+        "concurrency block:\n"
+        "  - concurrency:\n"
+        "  -   group: ${{ github.workflow }}-${{ github.ref }}\n"
+        "  -   cancel-in-progress: true; found:\n"
+        "  - 4: concurrency:\n"
+        "  - 5:   group: ${{ github.workflow }}-${{ github.ref }}\n"
+        "  - 6:   cancel-in-progress: true\n"
+        "  - 7:   max-parallel: 1\n"
+        "  - 8: concurrency: sumeragi-formal",
+    ]
+
+
+def test_formal_workflow_header_control_errors_allows_checked_headers(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: false",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_control_errors(
+        (
+            (pr_workflow, ("sumeragi_formal",)),
+            (nightly_workflow, ("frontier-nightly",)),
+        )
+    ) == []
+
+
+def test_formal_workflow_header_control_errors_rejects_inherited_controls(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "permissions: read-all",
+                "defaults:",
+                "  run:",
+                "    shell: bash",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_control_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow}:4 must not set top-level permissions: "
+        "permissions: read-all",
+        f"formal workflow {workflow}:5 must not set top-level defaults: "
+        "defaults:",
+    ]
+
+
+def test_formal_workflow_header_env_errors_accepts_reviewed_keys(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "  IROHA_CLI_DIR: /tmp/iroha",
+                "  DEFAULTS_DIR: defaults",
+                "  WASM_TARGET_DIR: wasm/target/prebuilt",
+                "  TEST_NETWORK_TMP_DIR: /tmp",
+                "  NEXTEST_PROFILE: ci",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_env_errors(
+        (
+            (
+                pr_workflow,
+                "PR formal workflow",
+                (
+                    "CARGO_TERM_COLOR",
+                    "IROHA_CLI_DIR",
+                    "DEFAULTS_DIR",
+                    "WASM_TARGET_DIR",
+                    "TEST_NETWORK_TMP_DIR",
+                    "NEXTEST_PROFILE",
+                ),
+            ),
+            (nightly_workflow, "nightly formal workflow", ()),
+        )
+    ) == []
+
+
+def test_formal_workflow_header_env_errors_rejects_inherited_env_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "  PATH: /tmp/fake/bin",
+                "  NEXTEST_PROFILE: ci",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "env: { BASH_ENV: /tmp/injected }",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_env_errors(
+        (
+            (
+                pr_workflow,
+                "PR formal workflow",
+                ("CARGO_TERM_COLOR", "NEXTEST_PROFILE"),
+            ),
+            (nightly_workflow, "nightly formal workflow", ()),
+        )
+    ) == [
+        f"PR formal workflow {pr_workflow} must keep exact top-level env keys:\n"
+        "  - CARGO_TERM_COLOR\n"
+        "  - NEXTEST_PROFILE; found:\n"
+        "  - 5: CARGO_TERM_COLOR\n"
+        "  - 6: PATH\n"
+        "  - 7: NEXTEST_PROFILE",
+        f"nightly formal workflow {nightly_workflow} must keep exact "
+        "top-level env keys: no top-level env keys; found:\n"
+        "  - 4: <inline env: { BASH_ENV: /tmp/injected }>",
+    ]
+
+
+def test_formal_workflow_header_env_binding_errors_accepts_reviewed_bindings(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                '  IROHA_CLI_DIR: "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/test"',
+                "  DEFAULTS_DIR: defaults",
+                "  WASM_TARGET_DIR: wasm/target/prebuilt",
+                "  TEST_NETWORK_TMP_DIR: /tmp",
+                "  NEXTEST_PROFILE: ci",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_env_binding_errors(
+        (
+            (
+                pr_workflow,
+                "PR formal workflow",
+                (
+                    "CARGO_TERM_COLOR: always",
+                    'IROHA_CLI_DIR: "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/test"',
+                    "DEFAULTS_DIR: defaults",
+                    "WASM_TARGET_DIR: wasm/target/prebuilt",
+                    "TEST_NETWORK_TMP_DIR: /tmp",
+                    "NEXTEST_PROFILE: ci",
+                ),
+            ),
+            (nightly_workflow, "nightly formal workflow", ()),
+        )
+    ) == []
+
+
+def test_formal_workflow_header_env_binding_errors_rejects_value_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "env:",
+                "  CARGO_TERM_COLOR: never",
+                "  NEXTEST_PROFILE: formal",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "env: { NEXTEST_PROFILE: nightly }",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_env_binding_errors(
+        (
+            (
+                pr_workflow,
+                "PR formal workflow",
+                ("CARGO_TERM_COLOR: always", "NEXTEST_PROFILE: ci"),
+            ),
+            (nightly_workflow, "nightly formal workflow", ()),
+        )
+    ) == [
+        f"PR formal workflow {pr_workflow} must keep exact top-level env bindings:\n"
+        "  - CARGO_TERM_COLOR: always\n"
+        "  - NEXTEST_PROFILE: ci; found:\n"
+        "  - 5: CARGO_TERM_COLOR: never\n"
+        "  - 6: NEXTEST_PROFILE: formal",
+        f"nightly formal workflow {nightly_workflow} must keep exact "
+        "top-level env bindings: no top-level env bindings; found:\n"
+        "  - 4: <inline env: { NEXTEST_PROFILE: nightly }>",
     ]
 
 

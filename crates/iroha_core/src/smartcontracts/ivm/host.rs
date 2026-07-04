@@ -6182,13 +6182,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Err(ivm::VMError::PermissionDenied);
         }
         let ds_ptr = vm.register(10);
-        let dsid: DataSpaceId = Self::decode_tlv_typed(vm, ds_ptr, PointerType::DataSpaceId)
-            .map_err(|err| {
-                #[cfg(test)]
-                eprintln!("decode dsid failed: {err:?}");
-                let _ = err;
-                err
-            })?;
+        let dsid: DataSpaceId = Self::decode_tlv_typed(vm, ds_ptr, PointerType::DataSpaceId)?;
         let expected = {
             let state_view = self.axt_state.as_ref().expect("axt_state checked above");
             state_view.expected_dsids().contains(&dsid)
@@ -6229,14 +6223,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let proof_tlv = Self::expect_tlv(vm, proof_ptr, PointerType::ProofBlob)?;
         let gas = Self::axt_verify_gas(proof_tlv.payload.len());
         let mut proof_payload = proof_tlv.payload;
-        #[cfg(test)]
-        eprintln!("proof payload len {}", proof_payload.len());
         let proof: ProofBlob = decode_from_bytes(proof_payload)
             .or_else(|_| ProofBlob::decode(&mut proof_payload))
-            .map_err(|err| {
-                #[cfg(test)]
-                eprintln!("decode proof failed: {err:?}");
-                let _ = err;
+            .map_err(|_err| {
                 self.record_axt_reject_detail(
                     AxtRejectReason::Proof,
                     Some(dsid),
@@ -8699,6 +8688,14 @@ mod pointer_abi_tests {
         v
     }
 
+    fn test_policy_snapshot(dsid: DataSpaceId, policy: AxtPolicyEntry) -> AxtPolicySnapshot {
+        let binding = AxtPolicyBinding { dsid, policy };
+        AxtPolicySnapshot {
+            version: AxtPolicySnapshot::compute_version(&[binding]),
+            entries: vec![binding],
+        }
+    }
+
     fn fixture_account(label: &str) -> AccountId {
         match label {
             "alice" => ALICE_ID.clone(),
@@ -9971,7 +9968,9 @@ mod pointer_abi_tests {
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::from_state(authority.clone(), &state);
+        let snapshot = test_policy_snapshot(dsid, policy);
+        let mut host =
+            CoreHost::from_state(authority.clone(), &state).with_axt_policy_snapshot(&snapshot);
 
         let handle = AssetHandle {
             scope: vec!["transfer".into()],
@@ -10231,7 +10230,9 @@ mod pointer_abi_tests {
         };
         state.prune_axt_replay_ledger_for_tests(retention_slots, retention_slots);
         let authority: AccountId = fixture_account("alice");
-        let mut host = CoreHost::from_state(authority.clone(), &state);
+        let snapshot = test_policy_snapshot(dsid, policy);
+        let mut host =
+            CoreHost::from_state(authority.clone(), &state).with_axt_policy_snapshot(&snapshot);
 
         let handle = AssetHandle {
             scope: vec!["transfer".into()],
@@ -21012,13 +21013,17 @@ seiyaku Vault {
             "coin".parse().unwrap(),
         );
         let amount = Numeric::from(1234_u64);
+        let dataspace = DataSpaceId::UNIVERSAL;
         let from_bytes = norito_blob(&from);
         let to_bytes = norito_blob(&to);
         let asset_bytes = norito_blob(&asset_def);
+        let dataspace_bytes = norito_blob(&dataspace);
         let from_tlv = pointer_abi_tests::make_tlv(ivm::PointerType::AccountId as u16, &from_bytes);
         let to_tlv = pointer_abi_tests::make_tlv(ivm::PointerType::AccountId as u16, &to_bytes);
         let asset_tlv =
             pointer_abi_tests::make_tlv(ivm::PointerType::AssetDefinitionId as u16, &asset_bytes);
+        let dataspace_tlv =
+            pointer_abi_tests::make_tlv(ivm::PointerType::DataSpaceId as u16, &dataspace_bytes);
         let amount_payload = norito::to_bytes(&amount).expect("encode amount");
         let amount_tlv =
             pointer_abi_tests::make_tlv(ivm::PointerType::NoritoBytes as u16, &amount_payload);
@@ -21028,25 +21033,12 @@ seiyaku Vault {
         let off_to = 256u64;
         let off_asset = 512u64;
         let off_amount = 768u64;
+        let off_dataspace = 1024u64;
         let ptr_from = ivm::Memory::INPUT_START + off_from;
         let ptr_to = ivm::Memory::INPUT_START + off_to;
         let ptr_asset = ivm::Memory::INPUT_START + off_asset;
         let ptr_amount = ivm::Memory::INPUT_START + off_amount;
-
-        // Assemble: SCALL TRANSFER_ASSET_SCOPED; HALT (set arg registers from host side)
-        let mut code = Vec::new();
-        code.extend_from_slice(
-            &encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED)
-                    .expect("syscall id fits in u8"),
-            )
-            .to_le_bytes(),
-        );
-        code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
-        // Build a program with metadata header (version 2.0, vector=4, max_cycles=0)
-        let program = build_program(&code, 4);
+        let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
 
         let mut vm = IVM::new(10_000);
         // Preload the INPUT region
@@ -21062,21 +21054,25 @@ seiyaku Vault {
         vm.memory
             .preload_input(off_amount, &amount_tlv)
             .expect("preload input");
+        vm.memory
+            .preload_input(off_dataspace, &dataspace_tlv)
+            .expect("preload input");
 
-        // Attach CoreHost and load program
-        vm.set_host(CoreHost::new(from.clone()));
-        vm.load_program(&program).unwrap();
+        let state =
+            scoped_transfer_state(&from, &to, asset_def.clone(), AssetBalancePolicy::Global);
+        let view = state.view();
+        let mut host: CoreHostImpl<QueryStateSlot<_>> = CoreHostImpl::new(from.clone());
+        host.set_query_state(&view);
 
         // Set arg registers to pointers and amount
         vm.set_register(10, ptr_from);
         vm.set_register(11, ptr_to);
         vm.set_register(12, ptr_asset);
         vm.set_register(13, ptr_amount);
+        vm.set_register(14, ptr_dataspace);
 
-        // Run and inspect queued ISIs
-        vm.run().unwrap();
-        let host_any = vm.host_mut_any().unwrap();
-        let host = host_any.downcast_mut::<CoreHost>().unwrap();
+        host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
+            .unwrap();
         let queued = host.drain_instructions();
         assert_eq!(queued.len(), 1);
         let instr = &queued[0];

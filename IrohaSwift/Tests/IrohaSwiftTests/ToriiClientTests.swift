@@ -2243,6 +2243,54 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(try overlongReceipt.verifyAttestation(using: policy), false)
     }
 
+    func testIdentifierReceiptRejectsMalformedEd25519AttestationRBeforeCryptoKit() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let policy = identifierPolicy(
+            owner: accountId,
+            resolverPublicKey: signed.resolverPublicKey
+        )
+        let validReceipt = try identifierReceipt(
+            payload: payload,
+            signatureHex: signed.signatureHex
+        )
+        XCTAssertEqual(try validReceipt.verifyAttestation(using: policy), true)
+
+        let smallOrderR = Data([
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ])
+        let noncanonicalR = Data([
+            0xEE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F,
+        ])
+
+        for (label, replacementR) in [
+            ("small-order", smallOrderR),
+            ("noncanonical", noncanonicalR),
+        ] {
+            var signature = try XCTUnwrap(Data(hexString: signed.signatureHex))
+            signature.replaceSubrange(0..<replacementR.count, with: replacementR)
+            let receipt = try identifierReceipt(
+                payload: payload,
+                signatureHex: signature.hexUppercased()
+            )
+
+            XCTAssertEqual(try receipt.verifyAttestation(using: policy), false, label)
+        }
+    }
+
     func testIdentifierReceiptRejectsUaidMutationAfterSigning() throws {
         let accountId = try canonicalOwnerLiteral()
         let originalPayload = makeSignedIdentifierReceiptPayload(
@@ -2356,6 +2404,59 @@ final class ToriiClientTests: XCTestCase {
                 return
             }
             XCTAssertTrue(reason.contains("resolverPublicKey"))
+        }
+    }
+
+    func testIdentifierReceiptRejectsMalformedEd25519ResolverPublicKeyBeforeCryptoKit() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let signed = try signedIdentifierReceiptFixture(payload: payload)
+        let receipt = try identifierReceipt(payload: payload, signatureHex: signed.signatureHex)
+        let validPolicy = identifierPolicy(
+            owner: accountId,
+            resolverPublicKey: signed.resolverPublicKey
+        )
+        XCTAssertEqual(try receipt.verifyAttestation(using: validPolicy), true)
+
+        let smallOrderKey = Data([
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ])
+        let noncanonicalKey = Data([
+            0xEE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F,
+        ])
+
+        for (label, rawPublicKey) in [
+            ("all-zero", Data(repeating: 0, count: 32)),
+            ("small-order", smallOrderKey),
+            ("noncanonical", noncanonicalKey),
+        ] {
+            let multihash = OfflineNorito.publicKeyMultihash(
+                algorithm: .ed25519,
+                payload: rawPublicKey
+            )
+            let malformedPolicy = identifierPolicy(
+                owner: accountId,
+                resolverPublicKey: "ed25519:\(multihash)"
+            )
+            XCTAssertThrowsError(try receipt.verifyAttestation(using: malformedPolicy), label) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    XCTFail("expected invalid payload error, got \(error)")
+                    return
+                }
+                XCTAssertTrue(reason.contains("valid Ed25519 public key"), label)
+            }
         }
     }
 
