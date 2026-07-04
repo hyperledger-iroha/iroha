@@ -7,6 +7,7 @@ from array import array
 
 import pytest
 from norito.crc64 import crc64
+from norito.varint import encode_varint
 
 import iroha_python
 import iroha_python.verange as verange_module
@@ -42,8 +43,13 @@ def _base_envelope() -> dict[str, object]:
     }
 
 
-def _field(payload: bytes) -> bytes:
-    return len(payload).to_bytes(8, "little") + payload
+def _field(payload: bytes, *, compact_len: bool = False) -> bytes:
+    prefix = (
+        encode_varint(len(payload))
+        if compact_len
+        else len(payload).to_bytes(8, "little")
+    )
+    return prefix + payload
 
 
 def _open_verify_frame(
@@ -58,17 +64,39 @@ def _open_verify_frame(
     proof_field: bytes | None = None,
     aux: bytes = b"",
     aux_field: bytes | None = None,
+    legacy_crc: bool = False,
+    compact_len: bool = False,
 ) -> bytes:
     payload = b"".join(
         [
-            _field(backend_tag.to_bytes(4, "little")),
-            _field(_field(circuit_id) if circuit_field is None else circuit_field),
-            _field(vk_hash),
-            _field(_field(public_inputs) if public_inputs_field is None else public_inputs_field),
-            _field(_field(proof_bytes) if proof_field is None else proof_field),
-            _field(_field(aux) if aux_field is None else aux_field),
+            _field(backend_tag.to_bytes(4, "little"), compact_len=compact_len),
+            _field(
+                _field(circuit_id, compact_len=compact_len)
+                if circuit_field is None
+                else circuit_field,
+                compact_len=compact_len,
+            ),
+            _field(vk_hash, compact_len=compact_len),
+            _field(
+                _field(public_inputs)
+                if public_inputs_field is None
+                else public_inputs_field,
+                compact_len=compact_len,
+            ),
+            _field(
+                _field(proof_bytes)
+                if proof_field is None
+                else proof_field,
+                compact_len=compact_len,
+            ),
+            _field(
+                _field(aux) if aux_field is None else aux_field,
+                compact_len=compact_len,
+            ),
         ]
     )
+    checksum = crc64(payload) if legacy_crc else verange_module._crc64_xz(payload)
+    flags = 0x02 if compact_len else 0
     return b"".join(
         [
             b"NRT0",
@@ -76,8 +104,8 @@ def _open_verify_frame(
             _OPEN_VERIFY_SCHEMA_HASH,
             b"\x00",
             len(payload).to_bytes(8, "little"),
-            crc64(payload).to_bytes(8, "little"),
-            b"\x00",
+            checksum.to_bytes(8, "little"),
+            bytes([flags]),
             payload,
         ]
     )
@@ -146,7 +174,6 @@ def test_verange_builders_normalize_commitments_and_dev_fixture() -> None:
         },
         "version": 1,
     }
-
     production_envelope = verange_module.build_verange_proof_v1(
         {
             "commitments": [commitment_a, commitment_b],
@@ -231,6 +258,32 @@ def test_verange_builders_normalize_commitments_and_dev_fixture() -> None:
         )
     assert verified["proof_bytes"] == len(fixture["proof_bytes"])
     assert verified["public_inputs"] == fixture["public_inputs"]
+
+
+def test_privacy_proof_envelope_uses_current_norito_crc_and_decodes_legacy_crc() -> None:
+    encoded = build_privacy_proof_envelope(
+        {
+            "backend": "stark/fri/sha256-goldilocks",
+            "circuitId": "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+            "vkHash": bytes([0x55]) * 32,
+            "publicInputs": b"\x01",
+            "proofBytes": b"\x02",
+        }
+    )
+    payload = encoded[40:]
+
+    assert int.from_bytes(encoded[31:39], "little") == verange_module._crc64_xz(payload)
+    assert decode_privacy_proof_envelope(encoded)["proof_bytes"] == b"\x02"
+
+    legacy_encoded = _open_verify_frame(legacy_crc=True)
+    assert decode_privacy_proof_envelope(legacy_encoded)["proof_bytes"] == b"\x02"
+
+    compact_encoded = _open_verify_frame(compact_len=True, proof_bytes=b"ZK1\x00proof")
+    compact_decoded = decode_privacy_proof_envelope(compact_encoded)
+    assert compact_decoded["circuit_id"] == (
+        "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0"
+    )
+    assert compact_decoded["proof_bytes"] == b"ZK1\x00proof"
 
 
 def test_verange_production_helpers_reject_dev_fixtures() -> None:

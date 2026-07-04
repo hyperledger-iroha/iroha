@@ -2116,6 +2116,84 @@ mod tests {
     }
 
     #[test]
+    fn multisig_proposal_context_fee_requires_signed_policy_metadata() {
+        let recipient = account(2);
+        let treasury = account(3);
+        let multisig = account(4);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let tx = tx(
+            1,
+            vec![
+                MultisigPropose::new(
+                    multisig.clone(),
+                    vec![
+                        transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                        transfer(&multisig, &fee_asset, minor_units(10), &treasury),
+                    ],
+                    None,
+                )
+                .into(),
+            ],
+            Metadata::default(),
+        );
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::MissingPolicyVersionMetadata)
+        );
+    }
+
+    #[test]
+    fn multisig_proposal_context_fee_rejects_wrong_amounts() {
+        let recipient = account(2);
+        let treasury = account(3);
+        let multisig = account(4);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+
+        for (observed, expected_error) in [
+            (
+                9,
+                ValidationFeeAdmissionError::WrongFeeAmount {
+                    expected_minor_units: 10,
+                    observed_minor_units: 9,
+                },
+            ),
+            (
+                11,
+                ValidationFeeAdmissionError::WrongFeeAmount {
+                    expected_minor_units: 10,
+                    observed_minor_units: 11,
+                },
+            ),
+        ] {
+            let tx = tx(
+                1,
+                vec![
+                    MultisigPropose::new(
+                        multisig.clone(),
+                        vec![
+                            transfer(
+                                &multisig,
+                                &fee_asset,
+                                Numeric::new(1u64, 0),
+                                &recipient,
+                            ),
+                            transfer(&multisig, &fee_asset, minor_units(observed), &treasury),
+                        ],
+                        None,
+                    )
+                    .into(),
+                ],
+                metadata_for(&policy),
+            );
+
+            assert_eq!(enforce_policy(&tx, &policy), Err(expected_error));
+        }
+    }
+
+    #[test]
     fn multisig_proposal_batch_entries_are_charged_per_entry() {
         let recipient_a = account(2);
         let recipient_b = account(3);

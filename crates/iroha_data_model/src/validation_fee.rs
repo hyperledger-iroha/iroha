@@ -16,6 +16,8 @@ pub const VALIDATION_FEE_POLICY_SCHEMA_VERSION: u16 = 1;
 pub const VALIDATION_FEE_SBD_SCALE: u8 = 2;
 /// Fee amount required by the initial SBD validation-fee policy, in minor units.
 pub const VALIDATION_FEE_INITIAL_MINOR_UNITS: u64 = 10;
+/// Only release exemption class implemented by validator admission.
+pub const VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS: &str = "TREASURY_PAYOUT";
 /// Domain separator for policy hashing.
 pub const VALIDATION_FEE_POLICY_HASH_DOMAIN: &[u8] = b"iroha.validation_fee.policy.v1";
 /// Domain separator carried in signed validation-fee policy payloads.
@@ -568,10 +570,11 @@ impl ValidationFeePolicyV1 {
         }
         let mut exemption_classes = BTreeSet::new();
         for class in &self.exemption_classes {
-            if class.trim().is_empty() || class.trim() != class || !exemption_classes.insert(class)
+            if class != VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS
+                || !exemption_classes.insert(class)
             {
                 return Some(
-                    "validation-fee policy exemption classes must be unique non-empty trimmed strings",
+                    "validation-fee policy exemption classes must be unique approved release classes: TREASURY_PAYOUT",
                 );
             }
         }
@@ -1015,10 +1018,8 @@ mod tests {
             ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
         ] {
             let mut invalid_signed = signed.clone();
-            invalid_signed.signatures[0].signature = signature_with_malformed_ed25519_r(
-                &signed.signatures[0].signature,
-                &replacement_r,
-            );
+            invalid_signed.signatures[0].signature =
+                signature_with_malformed_ed25519_r(&signed.signatures[0].signature, &replacement_r);
 
             assert_eq!(
                 invalid_signed.verify_against_keyset(&keyset),
@@ -1201,7 +1202,8 @@ mod tests {
     fn policy_invariants_reject_invalid_exemption_classes() {
         for exemption_classes in [
             vec![String::new()],
-            vec![" SYSTEM_INSTRUCTION".to_string()],
+            vec!["SYSTEM_INSTRUCTION".to_string()],
+            vec![" TREASURY_PAYOUT".to_string()],
             vec!["TREASURY_PAYOUT".to_string(), "TREASURY_PAYOUT".to_string()],
         ] {
             let mut policy = policy();
@@ -1210,7 +1212,7 @@ mod tests {
             assert_eq!(
                 policy.policy_invariant_error(),
                 Some(
-                    "validation-fee policy exemption classes must be unique non-empty trimmed strings"
+                    "validation-fee policy exemption classes must be unique approved release classes: TREASURY_PAYOUT"
                 )
             );
         }

@@ -3047,15 +3047,15 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ),
     false,
   );
-  assert.equal(
+  assert.strictEqual(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(),
-    "",
+    undefined,
   );
-  assert.equal(
+  assert.strictEqual(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(null),
-    "",
+    null,
   );
-  assert.equal(
+  assert.strictEqual(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(""),
     "",
   );

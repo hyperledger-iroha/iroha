@@ -1279,11 +1279,9 @@ def can_append_kagemusha_recursive_spend_witnessless_lineage(
 
 def normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
     output_proof_circuit_id: str | None,
-) -> str:
+) -> str | None:
     """Normalize an append output selector without accepting aliases."""
 
-    if output_proof_circuit_id in (None, ""):
-        return ""
     return output_proof_circuit_id
 
 

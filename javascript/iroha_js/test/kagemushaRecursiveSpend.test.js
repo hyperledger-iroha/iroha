@@ -5646,15 +5646,15 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1,
     "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1",
   );
-  assert.equal(
+  assert.strictEqual(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(),
-    "",
+    undefined,
   );
-  assert.equal(
+  assert.strictEqual(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(null),
-    "",
+    null,
   );
-  assert.equal(
+  assert.strictEqual(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(""),
     "",
   );
